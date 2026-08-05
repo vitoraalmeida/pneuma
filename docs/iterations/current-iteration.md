@@ -74,7 +74,7 @@ A aplicação deve aparecer como registrada e ainda não implantada.
 - [x] migration inicial limitada ao catálogo e à especificação do manifesto;
 - [x] abertura do banco configura foreign keys e aplica migrations;
 - [x] caso de uso de importação;
-- [ ] caso de uso de listagem;
+- [x] caso de uso de listagem;
 - [ ] comandos de CLI.
 
 ### Critérios de aceite
@@ -85,7 +85,7 @@ A aplicação deve aparecer como registrada e ainda não implantada.
 - [x] a aplicação e sua especificação atual são persistidas no SQLite;
 - [x] importar novamente a mesma aplicação não cria duplicidade;
 - [ ] `pneuma app list` apresenta a aplicação importada;
-- [ ] testes cobrem importação, falha, idempotência e listagem;
+- [x] testes cobrem importação, falha, idempotência e listagem;
 - [ ] formatação, Clippy, testes e build release passam sem warnings.
 
 ## Fora do escopo desta iteração

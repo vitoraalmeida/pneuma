@@ -1,0 +1,20 @@
+schema_version = 1
+
+[application]
+name = "another-site"
+
+[source]
+repository = "."
+branch = "trunk"
+
+[build]
+containerfile = "Containerfile"
+context = "."
+
+[runtime]
+container_port = 8080
+healthcheck_path = "/healthz"
+expected_status = 200
+
+[exposure]
+default_visibility = "internal"
