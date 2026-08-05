@@ -73,17 +73,17 @@ A aplicação deve aparecer como registrada e ainda não implantada.
 - [x] suporte síncrono a SQLite adicionado;
 - [x] migration inicial limitada ao catálogo e à especificação do manifesto;
 - [x] abertura do banco configura foreign keys e aplica migrations;
-- [ ] caso de uso de importação;
+- [x] caso de uso de importação;
 - [ ] caso de uso de listagem;
 - [ ] comandos de CLI.
 
 ### Critérios de aceite
 
-- [ ] um caminho local compatível pode ser importado;
-- [ ] manifesto ausente ou inválido produz erro compreensível;
+- [x] um caminho local compatível pode ser importado;
+- [x] manifesto ausente ou inválido produz erro compreensível;
 - [x] a migration inicial cria somente as tabelas necessárias para esse fluxo;
-- [ ] a aplicação e sua especificação atual são persistidas no SQLite;
-- [ ] importar novamente a mesma aplicação não cria duplicidade;
+- [x] a aplicação e sua especificação atual são persistidas no SQLite;
+- [x] importar novamente a mesma aplicação não cria duplicidade;
 - [ ] `pneuma app list` apresenta a aplicação importada;
 - [ ] testes cobrem importação, falha, idempotência e listagem;
 - [ ] formatação, Clippy, testes e build release passam sem warnings.
