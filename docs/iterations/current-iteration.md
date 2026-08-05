@@ -67,11 +67,21 @@ pneuma app list
 
 A aplicação deve aparecer como registrada e ainda não implantada.
 
+### Progresso
+
+- [x] tipo mínimo de aplicação definido;
+- [x] suporte síncrono a SQLite adicionado;
+- [x] migration inicial limitada ao catálogo e à especificação do manifesto;
+- [x] abertura do banco configura foreign keys e aplica migrations;
+- [ ] caso de uso de importação;
+- [ ] caso de uso de listagem;
+- [ ] comandos de CLI.
+
 ### Critérios de aceite
 
 - [ ] um caminho local compatível pode ser importado;
 - [ ] manifesto ausente ou inválido produz erro compreensível;
-- [ ] a migration inicial cria somente as tabelas necessárias para esse fluxo;
+- [x] a migration inicial cria somente as tabelas necessárias para esse fluxo;
 - [ ] a aplicação e sua especificação atual são persistidas no SQLite;
 - [ ] importar novamente a mesma aplicação não cria duplicidade;
 - [ ] `pneuma app list` apresenta a aplicação importada;
