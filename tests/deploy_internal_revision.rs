@@ -10,7 +10,9 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use pneuma::database;
-use pneuma::deploy_internal_revision::{DeployInternalRevisionError, deploy_internal_revision};
+use pneuma::deploy_internal_revision::{
+    DeployInternalRevisionError, deploy_internal_revision, deploy_internal_revision_with_progress,
+};
 use pneuma::import_application::import_application;
 
 const CHILD_CASE: &str = "PNEUMA_DEPLOY_TEST_CASE";
@@ -281,6 +283,108 @@ fn preserves_an_unhealthy_current_runtime_for_manual_recovery() {
 }
 
 #[test]
+fn reactivates_a_healthy_previous_runtime_without_rebuilding() {
+    let mut project = TestProject::new("internal");
+    project.second_revision = Some(project.commit("second revision"));
+    let (first_endpoint, first_server) = server_with_statuses(&[200, 200]);
+    let (second_endpoint, second_server) = server_with_statuses(&[200]);
+
+    project.run_child(
+        "reactivate-previous",
+        &[
+            ("PNEUMA_FAKE_FIRST_PORT", first_endpoint.port().to_string()),
+            (
+                "PNEUMA_FAKE_SECOND_PORT",
+                second_endpoint.port().to_string(),
+            ),
+        ],
+    );
+    first_server.join().unwrap();
+    second_server.join().unwrap();
+
+    let connection = database::open(&project.database_path).unwrap();
+    assert_eq!(
+        state_for_revision(&connection, &project.first_revision).1,
+        "current"
+    );
+    assert_eq!(
+        state_for_revision(&connection, project.second_revision.as_deref().unwrap()).1,
+        "previous"
+    );
+    let podman_log = fs::read_to_string(&project.podman_log).unwrap();
+    assert_eq!(
+        podman_log
+            .lines()
+            .filter(|line| line.starts_with("create "))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn restarts_a_stopped_previous_runtime_before_reactivation() {
+    let mut project = TestProject::new("internal");
+    project.second_revision = Some(project.commit("second revision"));
+    let (first_endpoint, first_server) = server_with_statuses(&[200, 200]);
+    let (second_endpoint, second_server) = server_with_statuses(&[200]);
+
+    project.run_child(
+        "reactivate-previous",
+        &[
+            ("PNEUMA_FAKE_FIRST_PORT", first_endpoint.port().to_string()),
+            (
+                "PNEUMA_FAKE_SECOND_PORT",
+                second_endpoint.port().to_string(),
+            ),
+            ("PNEUMA_FAKE_RECONCILE_STATE", "stopped-previous".to_owned()),
+        ],
+    );
+    first_server.join().unwrap();
+    second_server.join().unwrap();
+
+    let podman_log = fs::read_to_string(&project.podman_log).unwrap();
+    assert_eq!(
+        podman_log
+            .lines()
+            .filter(|line| line.starts_with("start "))
+            .count(),
+        3
+    );
+}
+
+#[test]
+fn preserves_roles_when_a_previous_runtime_is_unhealthy() {
+    let mut project = TestProject::new("internal");
+    project.second_revision = Some(project.commit("second revision"));
+    let first_statuses = [200, 503, 503, 503, 503, 503];
+    let (first_endpoint, first_server) = server_with_statuses(&first_statuses);
+    let (second_endpoint, second_server) = server_with_statuses(&[200]);
+
+    project.run_child(
+        "unhealthy-previous",
+        &[
+            ("PNEUMA_FAKE_FIRST_PORT", first_endpoint.port().to_string()),
+            (
+                "PNEUMA_FAKE_SECOND_PORT",
+                second_endpoint.port().to_string(),
+            ),
+        ],
+    );
+    first_server.join().unwrap();
+    second_server.join().unwrap();
+
+    let connection = database::open(&project.database_path).unwrap();
+    assert_eq!(
+        state_for_revision(&connection, &project.first_revision).1,
+        "previous"
+    );
+    assert_eq!(
+        state_for_revision(&connection, project.second_revision.as_deref().unwrap()).1,
+        "current"
+    );
+}
+
+#[test]
 fn refuses_a_public_application_before_external_work() {
     let project = TestProject::new("public");
     let mut connection = database::open(&project.database_path).unwrap();
@@ -477,7 +581,77 @@ fn deployment_child_process() {
             .unwrap_err();
             assert!(matches!(
                 error,
-                DeployInternalRevisionError::CurrentRuntimeUnhealthy { .. }
+                DeployInternalRevisionError::ExistingRuntimeUnhealthy { .. }
+            ));
+        }
+        "reactivate-previous" => {
+            let first = deploy_internal_revision(
+                &mut connection,
+                &application_id,
+                &repository_path,
+                &first_revision,
+                &workspace_path,
+            )
+            .unwrap();
+            let second_revision = required_string(SECOND_REVISION);
+            let second = deploy_internal_revision(
+                &mut connection,
+                &application_id,
+                &repository_path,
+                &second_revision,
+                &workspace_path,
+            )
+            .unwrap();
+            let mut progress = Vec::new();
+            let mut report = |event: pneuma::deploy_internal_revision::DeploymentProgress| {
+                progress.push(event.to_string());
+            };
+            let reactivated = deploy_internal_revision_with_progress(
+                &mut connection,
+                &application_id,
+                &repository_path,
+                &first_revision,
+                &workspace_path,
+                &mut report,
+            )
+            .unwrap();
+            assert_eq!(reactivated, first);
+            assert_ne!(reactivated.runtime_id, second.runtime_id);
+            assert!(
+                progress
+                    .iter()
+                    .any(|message| message.contains("reactivated as Current"))
+            );
+        }
+        "unhealthy-previous" => {
+            deploy_internal_revision(
+                &mut connection,
+                &application_id,
+                &repository_path,
+                &first_revision,
+                &workspace_path,
+            )
+            .unwrap();
+            let second_revision = required_string(SECOND_REVISION);
+            deploy_internal_revision(
+                &mut connection,
+                &application_id,
+                &repository_path,
+                &second_revision,
+                &workspace_path,
+            )
+            .unwrap();
+            let error = deploy_internal_revision(
+                &mut connection,
+                &application_id,
+                &repository_path,
+                &first_revision,
+                &workspace_path,
+            )
+            .unwrap_err();
+            assert!(matches!(
+                error,
+                DeployInternalRevisionError::ExistingRuntimeUnhealthy { .. }
             ));
         }
         unknown => panic!("unknown child case: {unknown}"),
@@ -723,7 +897,9 @@ case "$1" in
         ;;
     inspect)
         count=$(sed -n '1p' "$PNEUMA_FAKE_PODMAN_OBSERVE_COUNT")
-        if [ "${PNEUMA_FAKE_RECONCILE_STATE:-}" = "stopped" ] && [ "$count" -eq 2 ]; then
+        reconcile_state="${PNEUMA_FAKE_RECONCILE_STATE:-}"
+        if { [ "$reconcile_state" = "stopped" ] && [ "$count" -eq 2 ]; } ||
+           { [ "$reconcile_state" = "stopped-previous" ] && [ "$count" -eq 3 ]; }; then
             printf 'stopped\n'
         else
             printf 'running\n'

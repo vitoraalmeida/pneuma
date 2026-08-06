@@ -188,8 +188,8 @@ fn verbose_redeployment_reports_current_runtime_reconciliation() {
 
     assert_command_succeeded(&output);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("reconcile current runtime: started"));
-    assert!(stderr.contains("reconcile current runtime: completed"));
+    assert!(stderr.contains("reconcile existing runtime: started"));
+    assert!(stderr.contains("reconcile existing runtime: completed"));
     assert!(!stderr.contains("build image: started"));
 }
 
