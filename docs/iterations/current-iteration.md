@@ -1,47 +1,50 @@
-# Iteração atual — Reativação de runtime Previous
+# Iteração atual — Fragmento público gerenciado pelo Caddy
 
 **Status:** concluída
 
 **Atualizado em:** 6 de agosto de 2026
 
-**Commit de implementação:** `1daf8d8`
+**Commit de implementação:** `16cd34e`
 
-**Objetivo:** permitir que uma revisão anterior já materializada volte a ser Current sem novo build ou container.
+**Objetivo:** materializar com segurança um fragmento Caddy determinístico sem substituir uma rota válida por configuração inválida.
 
-## Trabalho atual — item 31 da sequência de implementação
+## Trabalho atual — item 32 da sequência de implementação
 
-Estender a reconciliação pré-deployment para runtimes ativos com papel `Previous`.
+Criar o primeiro adapter concreto de exposição pública, limitado à geração, validação e substituição atômica do fragmento gerenciado.
 
 ### Resultado esperado
 
-- runtime Previous existente é observado e reiniciado quando necessário;
-- health check ocorre antes de qualquer troca de papel;
-- Previous saudável e Current trocam de papel atomicamente;
-- falha de observação, start ou saúde preserva os papéis atuais;
-- nenhum deployment, build ou container duplicado é criado.
+- o fragmento usa domínio validado e endpoint exclusivamente loopback;
+- cada aplicação escreve somente em `<managed-dir>/<application-id>.caddy`;
+- a configuração temporária é validada pelo Caddy antes da ativação;
+- a substituição ocorre por rename na mesma filesystem;
+- falha de validação preserva o fragmento ativo anterior.
 
 ### Progresso
 
-- [x] consulta da revisão entre runtimes Current e Previous;
-- [x] reconciliação comum do estado do container;
-- [x] troca atômica de papéis após health check;
-- [x] progresso detalhado da reativação;
-- [x] testes de integração dos caminhos principais.
+- [x] geração determinística do fragmento;
+- [x] validação de identidade, domínio e endpoint;
+- [x] arquivo temporário na raiz gerenciada;
+- [x] execução de `caddy validate`;
+- [x] substituição atômica após sucesso;
+- [x] testes de integração com Caddy falso.
 
 ### Critérios de aceite
 
-- [x] revisão Previous saudável volta a ser Current;
-- [x] o antigo Current passa a Previous na mesma transação;
-- [x] Previous parado é reiniciado antes da troca;
-- [x] Previous sem saúde mantém os papéis originais;
-- [x] rollback por revisão não executa build nem cria container;
-- [x] saída retorna deployment, runtime e container já existentes;
+- [x] fragmento válido aponta para o endpoint loopback informado;
+- [x] nome do arquivo é derivado apenas de application ID hexadecimal;
+- [x] entrada inválida falha antes de escrita ou processo externo;
+- [x] validação recebe exatamente o arquivo temporário gerado;
+- [x] validação com falha não altera o fragmento anterior;
+- [x] sucesso substitui o fragmento e remove o temporário;
+- [x] diagnóstico do Caddy é preservado no erro;
 - [x] testes cobrem comportamento observável sem exagero;
 - [x] formatação, Clippy, testes e build release passam sem warnings.
 
 ## Fora do escopo desta iteração
 
-- histórico específico de operações de rollback;
-- retenção ou parada automática de runtimes Previous;
-- lock entre processos concorrentes;
-- Caddy e deployment público.
+- reload do Caddy;
+- persistência da materialização em SQLite;
+- health check externo;
+- integração com o fluxo de deployment público;
+- remoção de rota para tornar a aplicação interna.
