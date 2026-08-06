@@ -6,7 +6,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use pneuma::database::{self, DatabaseError};
-use pneuma::deploy_internal_revision::{DeployInternalRevisionError, deploy_internal_revision};
+use pneuma::deploy_internal_revision::{
+    DeployInternalRevisionError, deploy_internal_revision, deploy_internal_revision_with_progress,
+};
 use pneuma::import_application::{ImportError, import_application};
 use pneuma::list_applications::{ListError, list_applications};
 
@@ -14,7 +16,12 @@ const DATABASE_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_DATABASE_PATH";
 const DEFAULT_DATABASE_PATH: &str = "/var/lib/pneuma/database/pneuma.sqlite3";
 const WORKSPACE_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_WORKSPACE_PATH";
 const DEFAULT_WORKSPACE_PATH: &str = "/var/lib/pneuma/checkouts";
-const USAGE: &str = "Usage:\n  pneuma app import <repository-path>\n  pneuma app list\n  pneuma app deploy <application-name> <repository-path> --revision <revision>";
+const USAGE: &str = "Usage:\n  pneuma [--verbose] app import <repository-path>\n  pneuma [--verbose] app list\n  pneuma [--verbose] app deploy <application-name> <repository-path> --revision <revision>";
+
+struct Invocation {
+    verbose: bool,
+    command: Command,
+}
 
 enum Command {
     Import {
@@ -89,8 +96,12 @@ fn main() -> ExitCode {
     }
 }
 
-fn parse_command(arguments: &[OsString]) -> Result<Command, CliError> {
-    match arguments {
+fn parse_command(arguments: &[OsString]) -> Result<Invocation, CliError> {
+    let (verbose, arguments) = match arguments {
+        [verbose, remaining @ ..] if verbose == OsStr::new("--verbose") => (true, remaining),
+        arguments => (false, arguments),
+    };
+    let command = match arguments {
         [app, import, repository_path]
             if app == OsStr::new("app") && import == OsStr::new("import") =>
         {
@@ -119,19 +130,27 @@ fn parse_command(arguments: &[OsString]) -> Result<Command, CliError> {
             })
         }
         _ => Err(CliError::Usage),
-    }
+    }?;
+    Ok(Invocation { verbose, command })
 }
 
-fn run(command: Command) -> Result<(), CliError> {
+fn run(invocation: Invocation) -> Result<(), CliError> {
+    let Invocation { verbose, command } = invocation;
     let database_path = env::var_os(DATABASE_PATH_ENVIRONMENT_VARIABLE)
         .filter(|path| !path.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(DEFAULT_DATABASE_PATH));
+    if verbose {
+        eprintln!("[verbose] database: {}", database_path.display());
+    }
     let mut connection =
         database::open(&database_path).map_err(|source| CliError::Database { source })?;
 
     match command {
         Command::Import { repository_path } => {
+            if verbose {
+                eprintln!("[verbose] import repository: {}", repository_path.display());
+            }
             let application = import_application(&mut connection, &repository_path)
                 .map_err(|source| CliError::Import { source })?;
             println!("Imported {}", application.name);
@@ -139,6 +158,9 @@ fn run(command: Command) -> Result<(), CliError> {
             println!("Deployment: Not deployed");
         }
         Command::List => {
+            if verbose {
+                eprintln!("[verbose] list registered applications");
+            }
             let applications =
                 list_applications(&connection).map_err(|source| CliError::List { source })?;
             for application in applications {
@@ -150,6 +172,9 @@ fn run(command: Command) -> Result<(), CliError> {
             repository_path,
             revision,
         } => {
+            if verbose {
+                eprintln!("[verbose] resolve application by name: {application_name}");
+            }
             let application = list_applications(&connection)
                 .map_err(|source| CliError::List { source })?
                 .into_iter()
@@ -161,20 +186,42 @@ fn run(command: Command) -> Result<(), CliError> {
                 .filter(|path| !path.is_empty())
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from(DEFAULT_WORKSPACE_PATH));
-            let deployed = deploy_internal_revision(
-                &mut connection,
-                &application.id,
-                &repository_path,
-                &revision,
-                &workspace_path,
-            )
-            .map_err(|source| CliError::Deploy {
+            if verbose {
+                eprintln!(
+                    "[verbose] deployment input: application {}, repository {}, revision {}, workspace {}",
+                    application.name,
+                    repository_path.display(),
+                    revision,
+                    workspace_path.display()
+                );
+            }
+            let deployment = if verbose {
+                let mut report_progress = |event| eprintln!("[verbose] {event}");
+                deploy_internal_revision_with_progress(
+                    &mut connection,
+                    &application.id,
+                    &repository_path,
+                    &revision,
+                    &workspace_path,
+                    &mut report_progress,
+                )
+            } else {
+                deploy_internal_revision(
+                    &mut connection,
+                    &application.id,
+                    &repository_path,
+                    &revision,
+                    &workspace_path,
+                )
+            };
+            let deployed = deployment.map_err(|source| CliError::Deploy {
                 source: Box::new(source),
             })?;
             println!("Deployed {}", application.name);
             println!("Commit: {}", deployed.commit_sha);
             println!("Deployment: {}", deployed.deployment_id);
             println!("Runtime: {}", deployed.runtime_id);
+            println!("Container: {}", deployed.container_name);
             println!("Status: Succeeded");
         }
     }

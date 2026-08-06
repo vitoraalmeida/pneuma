@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OptionalExtension};
 
-use crate::create_deployment::{CreateDeploymentError, create_deployment};
+use crate::create_deployment::{CreateDeploymentError, DeploymentStatus, create_deployment};
 use crate::git_source::{ResolveCommitError, create_checkout, resolve_commit};
 use crate::local_build::build_image;
 use crate::local_runtime::{
@@ -24,8 +24,134 @@ use crate::transition_deployment::{
 pub struct DeployedInternalRevision {
     pub deployment_id: String,
     pub runtime_id: String,
+    pub container_name: String,
     pub commit_sha: String,
     pub finished_at: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeploymentStep {
+    LoadSpecification,
+    ResolveRevision,
+    CreateDeployment,
+    PrepareCheckout,
+    BuildImage,
+    CreateContainer,
+    StartContainer,
+    ObserveContainer,
+    RegisterCandidate,
+    HealthCheckAndPromotion,
+    CleanupCandidate,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum DeploymentProgress {
+    StepStarted {
+        step: DeploymentStep,
+        detail: String,
+    },
+    StepCompleted {
+        step: DeploymentStep,
+        detail: String,
+    },
+    StateChanged {
+        deployment_id: String,
+        status: DeploymentStatus,
+    },
+    FailurePersisted {
+        deployment_id: String,
+        code: &'static str,
+    },
+}
+
+impl fmt::Display for DeploymentStep {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = match self {
+            Self::LoadSpecification => "load application specification",
+            Self::ResolveRevision => "resolve Git revision",
+            Self::CreateDeployment => "create deployment",
+            Self::PrepareCheckout => "prepare checkout",
+            Self::BuildImage => "build image",
+            Self::CreateContainer => "create candidate container",
+            Self::StartContainer => "start candidate container",
+            Self::ObserveContainer => "observe candidate container",
+            Self::RegisterCandidate => "register candidate runtime",
+            Self::HealthCheckAndPromotion => "health check and promotion",
+            Self::CleanupCandidate => "clean up candidate",
+        };
+        formatter.write_str(name)
+    }
+}
+
+impl fmt::Display for DeploymentProgress {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::StepStarted { step, detail } => {
+                write!(formatter, "{step}: started ({detail})")
+            }
+            Self::StepCompleted { step, detail } => {
+                write!(formatter, "{step}: completed ({detail})")
+            }
+            Self::StateChanged {
+                deployment_id,
+                status,
+            } => write!(
+                formatter,
+                "deployment {deployment_id}: state changed to {status:?}"
+            ),
+            Self::FailurePersisted {
+                deployment_id,
+                code,
+            } => write!(
+                formatter,
+                "deployment {deployment_id}: state changed to Failed; failure persisted ({code})"
+            ),
+        }
+    }
+}
+
+struct ProgressReporter<'a> {
+    callback: Option<&'a mut dyn FnMut(DeploymentProgress)>,
+}
+
+impl<'a> ProgressReporter<'a> {
+    fn disabled() -> Self {
+        Self { callback: None }
+    }
+
+    fn enabled(callback: &'a mut dyn FnMut(DeploymentProgress)) -> Self {
+        Self {
+            callback: Some(callback),
+        }
+    }
+
+    fn started(&mut self, step: DeploymentStep, detail: String) {
+        self.emit(DeploymentProgress::StepStarted { step, detail });
+    }
+
+    fn completed(&mut self, step: DeploymentStep, detail: String) {
+        self.emit(DeploymentProgress::StepCompleted { step, detail });
+    }
+
+    fn state_changed(&mut self, deployment_id: &str, status: DeploymentStatus) {
+        self.emit(DeploymentProgress::StateChanged {
+            deployment_id: deployment_id.to_owned(),
+            status,
+        });
+    }
+
+    fn failure_persisted(&mut self, deployment_id: &str, code: &'static str) {
+        self.emit(DeploymentProgress::FailurePersisted {
+            deployment_id: deployment_id.to_owned(),
+            code,
+        });
+    }
+
+    fn emit(&mut self, event: DeploymentProgress) {
+        if let Some(callback) = &mut self.callback {
+            callback(event);
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -155,18 +281,84 @@ pub fn deploy_internal_revision(
     revision: &str,
     workspace_root: &Path,
 ) -> Result<DeployedInternalRevision, DeployInternalRevisionError> {
+    let mut progress = ProgressReporter::disabled();
+    deploy_internal_revision_reporting(
+        connection,
+        application_id,
+        repository_path,
+        revision,
+        workspace_root,
+        &mut progress,
+    )
+}
+
+pub fn deploy_internal_revision_with_progress(
+    connection: &mut Connection,
+    application_id: &str,
+    repository_path: &Path,
+    revision: &str,
+    workspace_root: &Path,
+    progress: &mut dyn FnMut(DeploymentProgress),
+) -> Result<DeployedInternalRevision, DeployInternalRevisionError> {
+    let mut progress = ProgressReporter::enabled(progress);
+    deploy_internal_revision_reporting(
+        connection,
+        application_id,
+        repository_path,
+        revision,
+        workspace_root,
+        &mut progress,
+    )
+}
+
+fn deploy_internal_revision_reporting(
+    connection: &mut Connection,
+    application_id: &str,
+    repository_path: &Path,
+    revision: &str,
+    workspace_root: &Path,
+    progress: &mut ProgressReporter<'_>,
+) -> Result<DeployedInternalRevision, DeployInternalRevisionError> {
+    progress.started(
+        DeploymentStep::LoadSpecification,
+        format!("application {application_id}"),
+    );
     let specification = load_specification(connection, application_id)?;
+    progress.completed(
+        DeploymentStep::LoadSpecification,
+        format!(
+            "application {}, visibility {}",
+            specification.application_name, specification.visibility
+        ),
+    );
     if specification.visibility != "internal" {
         return Err(DeployInternalRevisionError::PublicApplication {
             application_id: application_id.to_owned(),
         });
     }
 
+    progress.started(
+        DeploymentStep::ResolveRevision,
+        format!("{revision} in {}", repository_path.display()),
+    );
     let commit_sha = resolve_commit(repository_path, revision)
         .map_err(|source| DeployInternalRevisionError::ResolveRevision { source })?;
+    progress.completed(
+        DeploymentStep::ResolveRevision,
+        format!("commit {commit_sha}"),
+    );
+    progress.started(
+        DeploymentStep::CreateDeployment,
+        format!("commit {commit_sha}"),
+    );
     let (_, deployment) =
         create_deployment(connection, application_id, &commit_sha, Some(revision))
             .map_err(|source| DeployInternalRevisionError::CreateDeployment { source })?;
+    progress.completed(
+        DeploymentStep::CreateDeployment,
+        format!("deployment {}", deployment.id),
+    );
+    progress.state_changed(&deployment.id, DeploymentStatus::Pending);
 
     let execution = execute_deployment(
         connection,
@@ -175,15 +367,17 @@ pub fn deploy_internal_revision(
         repository_path,
         &commit_sha,
         workspace_root,
+        progress,
     );
     match execution {
-        Ok((runtime_id, finished_at)) => Ok(DeployedInternalRevision {
+        Ok((runtime_id, container_name, finished_at)) => Ok(DeployedInternalRevision {
             deployment_id: deployment.id,
             runtime_id,
+            container_name,
             commit_sha,
             finished_at,
         }),
-        Err(failed) => finish_failed_deployment(connection, &deployment.id, failed),
+        Err(failed) => finish_failed_deployment(connection, &deployment.id, failed, progress),
     }
 }
 
@@ -255,17 +449,27 @@ fn execute_deployment(
     repository_path: &Path,
     commit_sha: &str,
     workspace_root: &Path,
-) -> Result<(String, String), FailedExecution> {
+    progress: &mut ProgressReporter<'_>,
+) -> Result<(String, String, String), FailedExecution> {
     advance_deployment(connection, deployment_id, DeploymentTransition::Start).map_err(
         |source| failure_needing_persistence("deployment_transition_failed", source, None, None),
     )?;
+    progress.state_changed(deployment_id, DeploymentStatus::PreparingSource);
+    let checkout_path = workspace_root.join(deployment_id);
+    progress.started(
+        DeploymentStep::PrepareCheckout,
+        checkout_path.display().to_string(),
+    );
     fs::create_dir_all(workspace_root).map_err(|source| {
         failure_needing_persistence("source_preparation_failed", source, None, None)
     })?;
-    let checkout_path = workspace_root.join(deployment_id);
     create_checkout(repository_path, commit_sha, &checkout_path).map_err(|source| {
         failure_needing_persistence("source_preparation_failed", source, None, None)
     })?;
+    progress.completed(
+        DeploymentStep::PrepareCheckout,
+        checkout_path.display().to_string(),
+    );
     advance_deployment(
         connection,
         deployment_id,
@@ -274,6 +478,14 @@ fn execute_deployment(
     .map_err(|source| {
         failure_needing_persistence("deployment_transition_failed", source, None, None)
     })?;
+    progress.state_changed(deployment_id, DeploymentStatus::Building);
+    progress.started(
+        DeploymentStep::BuildImage,
+        format!(
+            "application {}, commit {commit_sha}",
+            specification.application_name
+        ),
+    );
     let image = build_image(
         &checkout_path,
         &specification.application_name,
@@ -282,9 +494,18 @@ fn execute_deployment(
         &specification.context,
     )
     .map_err(|source| failure_needing_persistence("image_build_failed", source, None, None))?;
+    progress.completed(
+        DeploymentStep::BuildImage,
+        format!("image {}", image.reference),
+    );
     advance_deployment(connection, deployment_id, DeploymentTransition::ImageBuilt).map_err(
         |source| failure_needing_persistence("deployment_transition_failed", source, None, None),
     )?;
+    progress.state_changed(deployment_id, DeploymentStatus::Starting);
+    progress.started(
+        DeploymentStep::CreateContainer,
+        format!("image {}", image.reference),
+    );
     let container = create_container(
         &image.reference,
         &specification.application_name,
@@ -292,8 +513,20 @@ fn execute_deployment(
         specification.container_port,
     )
     .map_err(|source| failure_needing_persistence("runtime_creation_failed", source, None, None))?;
+    progress.completed(
+        DeploymentStep::CreateContainer,
+        format!("container {}", container.id),
+    );
 
-    execute_candidate(connection, deployment_id, specification, &container.id)
+    let (runtime_id, finished_at) = execute_candidate(
+        connection,
+        deployment_id,
+        specification,
+        &container.id,
+        progress,
+    )?;
+
+    Ok((runtime_id, container.name, finished_at))
 }
 
 fn execute_candidate(
@@ -301,10 +534,23 @@ fn execute_candidate(
     deployment_id: &str,
     specification: &DeploymentSpecification,
     container_id: &str,
+    progress: &mut ProgressReporter<'_>,
 ) -> Result<(String, String), FailedExecution> {
+    progress.started(
+        DeploymentStep::StartContainer,
+        format!("container {container_id}"),
+    );
     start_container(container_id).map_err(|source| {
         failure_needing_persistence("runtime_start_failed", source, Some(container_id), None)
     })?;
+    progress.completed(
+        DeploymentStep::StartContainer,
+        format!("container {container_id}"),
+    );
+    progress.started(
+        DeploymentStep::ObserveContainer,
+        format!("container {container_id}"),
+    );
     let observation =
         observe_container(container_id, specification.container_port).map_err(|source| {
             failure_needing_persistence(
@@ -332,6 +578,14 @@ fn execute_candidate(
             None,
         )
     })?;
+    progress.completed(
+        DeploymentStep::ObserveContainer,
+        format!("state Running, endpoint {endpoint}"),
+    );
+    progress.started(
+        DeploymentStep::RegisterCandidate,
+        format!("container {container_id}, endpoint {endpoint}"),
+    );
     let runtime = register_candidate_runtime(
         connection,
         deployment_id,
@@ -347,6 +601,10 @@ fn execute_candidate(
             None,
         )
     })?;
+    progress.completed(
+        DeploymentStep::RegisterCandidate,
+        format!("runtime {}", runtime.id),
+    );
     advance_deployment(
         connection,
         deployment_id,
@@ -360,6 +618,14 @@ fn execute_candidate(
             Some(&runtime.id),
         )
     })?;
+    progress.state_changed(deployment_id, DeploymentStatus::VerifyingInternal);
+    progress.started(
+        DeploymentStep::HealthCheckAndPromotion,
+        format!(
+            "runtime {}, path {}, expected status {}",
+            runtime.id, specification.health_path, specification.expected_status
+        ),
+    );
     let promoted = promote_internal_candidate(
         connection,
         &runtime.id,
@@ -381,6 +647,11 @@ fn execute_candidate(
             )
         }
     })?;
+    progress.completed(
+        DeploymentStep::HealthCheckAndPromotion,
+        format!("runtime {} promoted to Current", runtime.id),
+    );
+    progress.state_changed(deployment_id, DeploymentStatus::Succeeded);
 
     Ok((runtime.id, promoted.finished_at))
 }
@@ -389,16 +660,39 @@ fn finish_failed_deployment(
     connection: &mut Connection,
     deployment_id: &str,
     failed: FailedExecution,
+    progress: &mut ProgressReporter<'_>,
 ) -> Result<DeployedInternalRevision, DeployInternalRevisionError> {
     let failure = failed.source.to_string();
     let record_error = if failed.failure_persisted {
+        progress.failure_persisted(deployment_id, failed.code);
         None
     } else {
-        fail_deployment(connection, deployment_id, failed.code, &failure).err()
+        match fail_deployment(connection, deployment_id, failed.code, &failure) {
+            Ok(_) => {
+                progress.failure_persisted(deployment_id, failed.code);
+                None
+            }
+            Err(source) => Some(source),
+        }
     };
-    let cleanup_error = failed.container_id.as_deref().and_then(|container_id| {
-        cleanup_candidate(connection, container_id, failed.runtime_id.as_deref()).err()
-    });
+    let cleanup_error = if let Some(container_id) = failed.container_id.as_deref() {
+        progress.started(
+            DeploymentStep::CleanupCandidate,
+            format!("container {container_id}"),
+        );
+        match cleanup_candidate(connection, container_id, failed.runtime_id.as_deref()) {
+            Ok(()) => {
+                progress.completed(
+                    DeploymentStep::CleanupCandidate,
+                    format!("container {container_id}"),
+                );
+                None
+            }
+            Err(source) => Some(source),
+        }
+    } else {
+        None
+    };
 
     if let Some(source) = cleanup_error {
         return Err(DeployInternalRevisionError::Cleanup {

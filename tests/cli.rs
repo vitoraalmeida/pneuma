@@ -91,52 +91,106 @@ fn reports_usage_for_an_unknown_command() {
         .unwrap();
 
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("pneuma app import"));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("pneuma app list"));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("pneuma app deploy"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("[--verbose]"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("[--verbose] app import"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("[--verbose] app list"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("[--verbose] app deploy"));
 }
 
 #[test]
 fn deploys_an_internal_application_and_prints_its_identity() {
     let environment = DeploymentEnvironment::new();
-    let import = run_pneuma(
-        &environment.database_path,
-        &[
-            OsStr::new("app"),
-            OsStr::new("import"),
-            environment.repository_path.as_os_str(),
-        ],
-    );
+    let import = environment.import();
     assert_command_succeeded(&import);
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let port = listener.local_addr().unwrap().port();
-    let server = thread::spawn(move || respond_once(listener, 200));
+    let server = thread::spawn(move || respond_once(&listener, 200));
 
-    let output = Command::new(env!("CARGO_BIN_EXE_pneuma"))
-        .env("PNEUMA_DATABASE_PATH", &environment.database_path)
-        .env("PNEUMA_WORKSPACE_PATH", &environment.workspace_path)
-        .env("PATH", executable_path(&environment.fake_bin))
-        .env("PNEUMA_FAKE_PORT", port.to_string())
-        .args(["app", "deploy", "another-site"])
-        .arg(&environment.repository_path)
-        .args(["--revision", "HEAD"])
-        .output()
-        .unwrap();
+    let output = environment.deploy(port, false);
     server.join().unwrap();
 
     assert_command_succeeded(&output);
+    assert!(output.stderr.is_empty());
     let stdout = String::from_utf8(output.stdout).unwrap();
     let lines: Vec<&str> = stdout.lines().collect();
-    assert_eq!(lines.len(), 5);
+    assert_eq!(lines.len(), 6);
     assert_eq!(lines[0], "Deployed another-site");
     assert_eq!(lines[1], format!("Commit: {}", environment.commit_sha));
     assert_identifier_line(lines[2], "Deployment: ");
     assert_identifier_line(lines[3], "Runtime: ");
-    assert_eq!(lines[4], "Status: Succeeded");
+    assert_eq!(
+        lines[4],
+        format!("Container: pneuma-another-site-{}", environment.commit_sha)
+    );
+    assert_eq!(lines[5], "Status: Succeeded");
     assert_eq!(
         fs::read_dir(&environment.workspace_path).unwrap().count(),
         1
     );
+}
+
+#[test]
+fn verbose_deployment_reports_steps_and_persisted_states() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || respond_once(&listener, 200));
+
+    let output = environment.deploy(port, true);
+    server.join().unwrap();
+
+    assert_command_succeeded(&output);
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Status: Succeeded"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for expected in [
+        "[verbose] database:",
+        "[verbose] deployment input:",
+        "resolve Git revision: started",
+        "resolve Git revision: completed",
+        "prepare checkout: completed",
+        "build image: completed",
+        "create candidate container: completed",
+        "start candidate container: completed",
+        "observe candidate container: completed",
+        "register candidate runtime: completed",
+        "health check and promotion: completed",
+        "state changed to Pending",
+        "state changed to PreparingSource",
+        "state changed to Building",
+        "state changed to Starting",
+        "state changed to VerifyingInternal",
+        "state changed to Succeeded",
+    ] {
+        assert!(
+            stderr.contains(expected),
+            "missing `{expected}` in:\n{stderr}"
+        );
+    }
+}
+
+#[test]
+fn verbose_failure_reports_persistence_and_candidate_cleanup() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || {
+        for _ in 0..5 {
+            respond_once(&listener, 503);
+        }
+    });
+
+    let output = environment.deploy(port, true);
+    server.join().unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("failure persisted (health_check_failed)"));
+    assert!(stderr.contains("clean up candidate: started"));
+    assert!(stderr.contains("clean up candidate: completed"));
+    assert!(stderr.contains("error: deployment"));
 }
 
 #[test]
@@ -308,6 +362,35 @@ impl DeploymentEnvironment {
             commit_sha,
         }
     }
+
+    fn import(&self) -> Output {
+        run_pneuma(
+            &self.database_path,
+            &[
+                OsStr::new("app"),
+                OsStr::new("import"),
+                self.repository_path.as_os_str(),
+            ],
+        )
+    }
+
+    fn deploy(&self, port: u16, verbose: bool) -> Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_pneuma"));
+        command
+            .env("PNEUMA_DATABASE_PATH", &self.database_path)
+            .env("PNEUMA_WORKSPACE_PATH", &self.workspace_path)
+            .env("PATH", executable_path(&self.fake_bin))
+            .env("PNEUMA_FAKE_PORT", port.to_string());
+        if verbose {
+            command.arg("--verbose");
+        }
+        command
+            .args(["app", "deploy", "another-site"])
+            .arg(&self.repository_path)
+            .args(["--revision", "HEAD"])
+            .output()
+            .unwrap()
+    }
 }
 
 impl Drop for DeploymentEnvironment {
@@ -388,7 +471,7 @@ fn executable_path(fake_bin: &Path) -> OsString {
         .unwrap()
 }
 
-fn respond_once(listener: TcpListener, status: u16) {
+fn respond_once(listener: &TcpListener, status: u16) {
     let (mut stream, _) = listener.accept().unwrap();
     read_request(&mut stream);
     let response = format!("HTTP/1.1 {status} Test\r\nContent-Length: 0\r\n\r\n");
