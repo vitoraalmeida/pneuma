@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use pneuma::database;
 use pneuma::import_application::{ImportError, import_application};
+use pneuma::list_applications::list_applications;
 
 #[test]
 fn imports_and_persists_the_application_specification() {
@@ -111,13 +112,31 @@ fn importing_the_same_application_is_idempotent() {
 }
 
 #[test]
-fn reports_manifest_failures_at_the_import_boundary() {
+fn reports_manifest_failures_without_changing_the_catalog() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
 
     let error = import_application(&mut connection, &fixture_path("missing")).unwrap_err();
+    let applications = list_applications(&connection).unwrap();
 
     assert!(matches!(error, ImportError::Manifest { .. }));
     assert!(error.to_string().contains("missing/pneuma.toml"));
+    assert!(applications.is_empty());
+}
+
+#[test]
+fn persists_a_local_repository_kind() {
+    let mut connection = database::open(Path::new(":memory:")).unwrap();
+
+    import_application(&mut connection, &fixture_path("another")).unwrap();
+
+    let repository_kind: String = connection
+        .query_row(
+            "SELECT repository_kind FROM application_sources",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(repository_kind, "local");
 }
 
 fn fixture_path(name: &str) -> PathBuf {
