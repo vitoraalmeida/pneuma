@@ -1,52 +1,49 @@
-# Iteração atual — Reload seguro do Caddy
+# Iteração atual — Persistência da exposição materializada
 
 **Status:** concluída
 
 **Atualizado em:** 6 de agosto de 2026
 
-**Implementação:** `5ed0660` (`feat: reload Caddy with recovery`)
+**Implementação:** `38f6ab6` (`feat: persist exposure materialization state`)
 
-**Objetivo:** aplicar o fragmento gerenciado ao Caddy sem perder a rota anterior quando validação completa ou reload falharem.
+**Objetivo:** distinguir no SQLite a exposição desejada da última rota pública conhecida sem ainda coordenar o deployment com o Caddy.
 
-## Trabalho atual — item 33 da sequência de implementação
+## Trabalho atual — item 34 da sequência de implementação
 
-Estender a materialização para validar o Caddyfile principal, executar reload e restaurar atomicamente o fragmento anterior quando necessário.
+Evoluir a tabela `exposures` para registrar runtime ativo, estado de materialização, versão da configuração, horário e último erro.
 
 ### Resultado esperado
 
-- o Caddyfile principal é conhecido e validado após instalar o fragmento candidato;
-- apenas uma configuração completa válida chega ao reload;
-- reload bem-sucedido conclui a materialização;
-- falha de validação completa restaura o fragmento anterior sem reload;
-- falha de reload restaura o fragmento anterior e recarrega a configuração restaurada;
-- erros de recuperação permanecem visíveis junto da falha original.
+- bancos existentes são migrados sem perder intenção de exposição;
+- exposições existentes começam como `not_materialized`;
+- o banco aceita somente estados de materialização conhecidos;
+- runtime materializado, quando presente, referencia uma instância persistida;
+- importações novas recebem o mesmo estado inicial por default.
 
 ### Progresso
 
-- [x] configuração do Caddyfile principal;
-- [x] captura do fragmento anterior;
-- [x] validação da configuração completa;
-- [x] reload do Caddy;
-- [x] restauração atômica do fragmento;
-- [x] reload de recuperação;
-- [x] testes com Caddy falso.
+- [x] migration incremental de `exposures`;
+- [x] estado inicial para registros existentes e novos;
+- [x] referência opcional ao runtime ativo;
+- [x] campos de versão, horário e diagnóstico;
+- [x] testes de banco vazio, upgrade e constraints.
 
 ### Critérios de aceite
 
-- [x] sucesso valida fragmento e configuração completa antes do reload;
-- [x] reload usa o Caddyfile principal informado;
-- [x] validação completa com falha restaura o fragmento anterior;
-- [x] reload com falha restaura o fragmento e recarrega a versão anterior;
-- [x] fragmento inexistente antes da tentativa volta a ficar inexistente na recuperação;
-- [x] diagnósticos da falha original e da recuperação são preservados;
-- [x] temporários não permanecem após sucesso ou recuperação;
-- [x] testes cobrem comportamento observável sem exagero;
+- [x] migration publicada anteriormente não é alterada;
+- [x] banco vazio chega à versão 4;
+- [x] upgrade da versão 3 preserva aplicação, exposição e runtime existentes;
+- [x] exposição migrada inicia como `not_materialized` sem runtime ou versão ativos;
+- [x] estado desconhecido é rejeitado pelo SQLite;
+- [x] `active_runtime_id` inexistente é rejeitado pela foreign key;
+- [x] migration é idempotente;
+- [x] testes adicionais permanecem proporcionais ao comportamento;
 - [x] formatação, Clippy, testes e build release passam sem warnings.
 
 ## Fora do escopo desta iteração
 
-- persistência da materialização em SQLite;
+- funções de transição da materialização;
+- coordenação entre transação SQLite e efeitos no Caddy;
+- promoção de deployment público;
 - health check externo;
-- integração com o fluxo de deployment público;
-- remoção de rota para tornar a aplicação interna;
-- lock global de exposição.
+- remoção de rota pública.
