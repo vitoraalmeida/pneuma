@@ -1,57 +1,65 @@
-# Iteração atual — Início persistido de deployment
+# Iteração atual — Transições do deployment
 
 **Status:** concluída
 
 **Atualizado em:** 6 de agosto de 2026
 
-**Objetivo:** registrar de forma atômica uma revisão imutável e uma nova tentativa de deployment em estado `Pending`.
+**Objetivo:** avançar um deployment com comparação de estado e registrar falhas terminais estruturadas.
 
-## Trabalho atual — item 23 do roadmap
+## Trabalho atual — item 24 do roadmap
 
-Adicionar o ponto inicial durável do processo de deployment:
+Implementar a parte da máquina de estados sustentada pelos adapters atuais:
 
 ```text
-Aplicação importada + commit resolvido
-    ↓ transação curta
-Revision única por aplicação e commit
-    ↓
-Deployment Pending
+Pending
+    ↓ start
+PreparingSource
+    ↓ source prepared
+Building
+    ↓ image built
+Starting
+    ↓ runtime running
+VerifyingInternal
+    ↘ falha em qualquer etapa
+      Failed + causa estruturada
 ```
 
 ### Resultado esperado
 
-- migrations criam somente as tabelas `revisions` e `deployments` deste incremento;
-- a revisão pertence à aplicação e pode ser reutilizada por tentativas futuras;
-- todo deployment nasce em estado explícito `Pending` com horário de solicitação;
-- somente um deployment não terminal pode existir por aplicação.
+- cada avanço compara o estado esperado antes de persistir o próximo;
+- retry ou comando fora de ordem retorna conflito sem alterar o deployment;
+- o primeiro avanço registra `started_at`;
+- falha registra código, etapa, mensagem e `finished_at`;
+- nenhum caminho marca o deployment como `Succeeded` antes da futura promoção.
 
 ### Progresso
 
-- [x] migration incremental de revisões e deployments;
-- [x] tipos concretos de revisão e deployment pendente;
-- [x] criação transacional da tentativa;
-- [x] exclusão de tentativas simultâneas por aplicação;
-- [x] testes de migration e persistência;
-- [x] commit `8b3a62c feat: persist pending deployments`.
+- [x] estados de deployment explícitos;
+- [x] eventos de avanço limitados ao fluxo implementado;
+- [x] atualização compare-and-set;
+- [x] falha terminal estruturada;
+- [x] testes da máquina e da persistência;
+- [x] commit `b676304 feat: transition pending deployments`.
 
 ### Critérios de aceite
 
-- [x] banco vazio aplica as migrations 1 e 2 em ordem;
-- [x] banco na versão 1 recebe a versão 2 sem perder o catálogo;
-- [x] commit completo cria ou reutiliza uma revisão da aplicação;
-- [x] nova tentativa é persistida como `Pending` com timestamps;
-- [x] aplicação inexistente e commit inválido produzem erros estruturados;
-- [x] segunda tentativa não terminal para a mesma aplicação é rejeitada;
-- [x] constraints impedem associar deployment à revisão de outra aplicação;
+- [x] fluxo válido alcança `VerifyingInternal` na ordem definida;
+- [x] primeiro avanço preenche `started_at` e avanços seguintes o preservam;
+- [x] etapa pulada e retry do mesmo evento produzem conflito observável;
+- [x] deployment inexistente produz erro distinto;
+- [x] falha persiste estado `Failed`, etapa, código, mensagem e `finished_at`;
+- [x] falha libera a exclusão de deployment ativo para uma tentativa posterior;
+- [x] estado terminal não volta ao fluxo em andamento;
+- [x] não existe transição para `Succeeded` neste incremento;
 - [x] testes cobrem comportamento observável sem duplicação desnecessária;
 - [x] formatação, Clippy, testes e build release passam sem warnings.
 
 ## Fora do escopo desta iteração
 
-- transições posteriores a `Pending`;
-- execução coordenada de Git, build, runtime e health check;
+- orquestração de Git, build, runtime e health check;
 - persistência de instâncias de runtime;
-- persistência de resultados de health check;
+- promoção para `Succeeded`;
+- estados de troca de tráfego e rollback;
 - listagem do histórico;
-- promoção, Caddy e rollback;
+- Caddy;
 - comando de deploy na CLI.
