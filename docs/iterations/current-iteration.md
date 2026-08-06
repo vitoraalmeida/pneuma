@@ -1,111 +1,51 @@
-# Iteração atual — Walking skeleton de importação
+# Iteração atual — Resolução de commit Git
 
 **Status:** concluída
 
 **Atualizado em:** 6 de agosto de 2026
 
-**Objetivo:** importar um repositório local compatível, persistir a aplicação sem duplicidade e permitir sua listagem pela CLI.
+**Objetivo:** resolver uma referência de um repositório Git local para o identificador completo e imutável de um commit.
 
-## Concluído
+## Trabalho atual — item 18 do roadmap
 
-### Baseline da aplicação real
-
-- [x] `Containerfile` reproduzível para `vitoralmeida.tech`;
-- [x] processo do container executado como usuário sem privilégios;
-- [x] porta interna fixa em `8080`;
-- [x] `GET /` e `GET /healthz` respondendo HTTP 200;
-- [x] `pneuma.toml` criado no repositório do site;
-- [x] Podman rootless validado na VPS com o usuário `pneuma`;
-- [x] domínio `staging.vitoralmeida.tech` apontando para a VPS;
-- [x] Nginx, Caddy e container validados em sequência por HTTP;
-- [x] procedimento registrado em [`staging-validation.md`](../operations/staging-validation.md).
-
-HTTPS de staging foi adiado até o ensaio de migração. A exposição HTTP já
-comprova o encaminhamento entre as fronteiras atuais.
-
-### Fundação do Pneuma
-
-- [x] pacote Rust mínimo criado;
-- [x] Rust 2024 com versão mínima 1.85;
-- [x] CI com formatação, Clippy, testes e build release;
-- [x] `AGENTS.md` e artefatos de build excluídos do versionamento;
-- [x] commit `4115578 chore: initialize Rust workspace`.
-
-### Parser do manifesto — item 16 do roadmap
-
-- [x] carregamento de `pneuma.toml` a partir de um repositório local;
-- [x] desserialização tipada do manifesto;
-- [x] rejeição de campos desconhecidos;
-- [x] validação da versão do schema e dos campos declarados;
-- [x] erros de leitura, parsing, incompatibilidade e validação diferenciados;
-- [x] oito testes cobrindo sucesso e falhas observáveis;
-- [x] checks obrigatórios executados com sucesso;
-- [x] commit `0a6dfa6 feat: parse application manifests`.
-
-## Trabalho atual — item 17 do roadmap
-
-Implementar a importação de um repositório local como primeiro fluxo vertical:
+Implementar o primeiro incremento do adapter Git previsto para a iteração 2 do plano de entrega:
 
 ```text
-CLI
+Repositório local + branch, tag ou SHA
     ↓
-ImportApplication
+Git source control
     ↓
-Parser do manifesto
-    ↓
-SQLite
-    ↓
-ListApplications
+SHA completo do commit
 ```
 
 ### Resultado esperado
 
-```bash
-pneuma app import /caminho/do/vitoralmeida.tech
-pneuma app list
-```
-
-A aplicação deve aparecer como registrada e ainda não implantada.
+- branch, tag anotada ou SHA abreviado resolve para o mesmo commit completo;
+- referência inexistente produz erro compreensível;
+- objeto Git que não é commit é rejeitado;
+- Git é executado com argumentos estruturados, sem shell.
 
 ### Progresso
 
-- [x] tipo mínimo de aplicação definido;
-- [x] suporte síncrono a SQLite adicionado;
-- [x] migration inicial limitada ao catálogo e à especificação do manifesto;
-- [x] abertura do banco configura foreign keys e aplica migrations;
-- [x] caso de uso de importação;
-- [x] caso de uso de listagem;
-- [x] comandos de CLI.
-
-A CLI usa `/var/lib/pneuma/database/pneuma.sqlite3` por padrão. O ambiente de
-desenvolvimento e os testes podem substituir esse caminho com
-`PNEUMA_DATABASE_PATH`.
+- [x] adapter Git mínimo;
+- [x] resolução de branch, tag e SHA;
+- [x] erros de execução e resolução diferenciados;
+- [x] testes de integração com repositório Git temporário;
+- [x] commit `8755870 feat: resolve Git commit references`.
 
 ### Critérios de aceite
 
-- [x] um caminho local compatível pode ser importado;
-- [x] manifesto ausente ou inválido produz erro compreensível;
-- [x] a migration inicial cria somente as tabelas necessárias para esse fluxo;
-- [x] a aplicação e sua especificação atual são persistidas no SQLite;
-- [x] importar novamente a mesma aplicação não cria duplicidade;
-- [x] `pneuma app list` apresenta a aplicação importada;
-- [x] testes cobrem importação, falha, idempotência e listagem;
+- [x] uma referência válida resolve para o SHA completo do commit;
+- [x] referências inexistentes ou que não apontam para commits são rejeitadas;
+- [x] a resolução não altera o repositório;
+- [x] testes cobrem sucesso e falhas observáveis sem casos redundantes;
 - [x] formatação, Clippy, testes e build release passam sem warnings.
 
 ## Fora do escopo desta iteração
 
-- clone remoto;
-- resolução de commit;
+- clone ou fetch remoto;
+- checkout ou worktree isolado;
+- persistência de revisões;
+- comando de deploy na CLI;
 - build de imagem;
-- criação ou supervisão de container;
-- health check executado pelo Pneuma;
-- alteração de Caddy ou Nginx;
-- deployment e rollback;
-- TUI.
-
-## Limitações e trabalho adiado
-
-- o milestone v0.0 ainda possui itens operacionais e documentais fora deste fluxo vertical;
-- o runtime de staging ainda não é supervisionado por Quadlet/systemd;
-- HTTPS de staging ainda não foi configurado;
-- a imagem de staging foi transferida manualmente;
+- criação de container.
