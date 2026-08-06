@@ -158,7 +158,16 @@ pub fn create_checkout(
     }
 
     let clone = Command::new("git")
-        .args(["clone", "--quiet", "--no-checkout", "--local", "--"])
+        // Temporary checkouts can live on another filesystem, where Git cannot use
+        // the hard links normally attempted by a local clone. Copy objects instead.
+        .args([
+            "clone",
+            "--quiet",
+            "--no-checkout",
+            "--local",
+            "--no-hardlinks",
+            "--",
+        ])
         .arg(repository_path)
         .arg(checkout_path)
         .output()
