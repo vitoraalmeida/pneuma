@@ -1,60 +1,61 @@
-# Iteração atual — Persistência da candidata
+# Iteração atual — Promoção interna da candidata
 
 **Status:** concluída
 
 **Atualizado em:** 6 de agosto de 2026
 
-**Objetivo:** registrar a instância candidata observada em execução e vinculá-la ao deployment, revisão e aplicação corretos.
+**Objetivo:** promover uma candidata interna somente depois de confirmar sua saúde no endpoint loopback.
 
-## Trabalho atual — item 25 do roadmap
+## Trabalho atual — item 26 do roadmap
 
-Adicionar o registro durável do runtime criado pelo Podman:
+Adicionar a primeira conclusão segura de deployment para aplicações internas:
 
 ```text
-Deployment Starting + container Running
+Candidate Running + Deployment VerifyingInternal
+    ↓ health check interno
+Healthy
     ↓ transação curta
-RuntimeInstance Candidate
-    ↓
-ID externo + endpoint loopback + observação Running
+Current anterior → Previous
+Candidate → Current
+Deployment → Succeeded
 ```
 
 ### Resultado esperado
 
-- migration 3 cria somente a persistência de instâncias de runtime;
-- a instância deriva aplicação e revisão do deployment;
-- o registro inicial representa papel `Candidate` e estado observado `Running`;
-- o endpoint ativo é IPv4 loopback e exclusivo;
-- retry com os mesmos dados é idempotente.
+- o health check ocorre fora da transação de promoção;
+- estado, papel e visibilidade são revalidados antes da escrita;
+- somente aplicações internas podem usar este caminho;
+- uma candidata não saudável leva o deployment a `Failed` sem substituir a atual;
+- retry de uma promoção concluída é idempotente.
 
 ### Progresso
 
-- [x] migration incremental de runtime instances;
-- [x] tipo concreto de candidata persistida;
-- [x] registro transacional no estado `Starting`;
-- [x] idempotência e conflitos explícitos;
-- [x] testes de migration, validação e constraints;
-- [x] commit `e9ee33a feat: persist candidate runtimes`.
+- [x] estado `Succeeded` representado no fluxo atual;
+- [x] verificação interna vinculada ao endpoint persistido;
+- [x] promoção transacional de papéis;
+- [x] falha de saúde registrada no deployment;
+- [x] testes de primeira promoção, substituição e falha;
+- [x] commit `7fcb601 feat: promote healthy internal candidates`.
 
 ### Critérios de aceite
 
-- [x] banco vazio aplica três migrations em ordem;
-- [x] banco na versão 2 recebe runtime instances sem perder deployments;
-- [x] candidata persiste aplicação, revisão, deployment e ID externo;
-- [x] candidata persiste endpoint loopback, porta interna e observação `Running`;
-- [x] deployment fora de `Starting` é rejeitado;
-- [x] ID externo, endpoint ou porta inválidos são rejeitados antes da escrita;
-- [x] retry idêntico retorna a mesma instância;
-- [x] reutilização conflitante de ID externo ou endpoint ativo é rejeitada;
-- [x] constraints preservam a associação deployment/aplicação/revisão;
+- [x] candidata interna saudável torna-se `Current`;
+- [x] deployment promovido torna-se `Succeeded` com `finished_at`;
+- [x] `Current` anterior torna-se `Previous` na mesma transação;
+- [x] nunca existem duas runtimes `Current` para a aplicação;
+- [x] health check usa o endpoint persistido da candidata;
+- [x] candidata não saudável deixa o deployment `Failed` com causa estruturada;
+- [x] falha da candidata preserva a runtime `Current` anterior;
+- [x] aplicação pública é recusada antes do health check;
+- [x] retry da mesma promoção retorna o resultado persistido;
 - [x] testes cobrem comportamento observável sem duplicação desnecessária;
 - [x] formatação, Clippy, testes e build release passam sem warnings.
 
 ## Fora do escopo desta iteração
 
+- orquestração de Git, build e criação da candidata;
+- persistência detalhada do resultado do health check;
 - atualização de observações posteriores;
-- promoção para `Current`;
-- persistência de resultados de health check;
-- orquestração do deployment;
-- listagem do histórico;
-- Caddy e rollback;
+- promoção de aplicações públicas;
+- Caddy, verificação externa e rollback;
 - comando de deploy na CLI.
