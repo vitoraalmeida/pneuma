@@ -12,20 +12,124 @@ use crate::manifest::is_valid_domain;
 pub struct MaterializedCaddyFragment {
     pub path: PathBuf,
     pub contents: String,
-    pub validation_stdout: String,
-    pub validation_stderr: String,
+    pub fragment_validation_stdout: String,
+    pub fragment_validation_stderr: String,
+    pub configuration_validation_stdout: String,
+    pub configuration_validation_stderr: String,
+    pub reload_stdout: String,
+    pub reload_stderr: String,
+}
+
+#[derive(Debug)]
+pub enum CaddyCommandError {
+    Execute { source: io::Error },
+    Rejected { stdout: String, stderr: String },
+}
+
+#[derive(Debug)]
+pub enum CaddyRecoveryError {
+    RestoreFragment { path: PathBuf, source: io::Error },
+    Reload { failure: CaddyCommandError },
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum CaddyFilesystemAction {
+    InspectCaddyfile,
+    CreateManagedDirectory,
+    ReadPreviousFragment,
+    WriteTemporaryFragment,
+    ActivateFragment,
 }
 
 #[derive(Debug)]
 pub enum MaterializeCaddyFragmentError {
     InvalidApplicationId,
     InvalidDomain,
-    InvalidEndpoint { endpoint: SocketAddr },
-    CreateManagedDirectory { path: PathBuf, source: io::Error },
-    WriteTemporaryFragment { path: PathBuf, source: io::Error },
-    ExecuteValidation { source: io::Error },
-    ValidationFailed { stdout: String, stderr: String },
-    ActivateFragment { path: PathBuf, source: io::Error },
+    InvalidEndpoint {
+        endpoint: SocketAddr,
+    },
+    InvalidCaddyfile {
+        path: PathBuf,
+    },
+    Filesystem {
+        action: CaddyFilesystemAction,
+        path: PathBuf,
+        source: io::Error,
+    },
+    ValidateFragment {
+        failure: CaddyCommandError,
+    },
+    ValidateConfiguration {
+        failure: CaddyCommandError,
+        recovery: Option<Box<CaddyRecoveryError>>,
+    },
+    Reload {
+        failure: CaddyCommandError,
+        recovery: Option<Box<CaddyRecoveryError>>,
+    },
+}
+
+impl fmt::Display for CaddyCommandError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Execute { source } => write!(formatter, "could not execute Caddy: {source}"),
+            Self::Rejected { stdout, stderr } => {
+                write!(
+                    formatter,
+                    "Caddy rejected the command: {}",
+                    diagnostic(stdout, stderr)
+                )
+            }
+        }
+    }
+}
+
+impl Error for CaddyCommandError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Execute { source } => Some(source),
+            Self::Rejected { .. } => None,
+        }
+    }
+}
+
+impl fmt::Display for CaddyFilesystemAction {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::InspectCaddyfile => "inspect the main Caddyfile at",
+            Self::CreateManagedDirectory => "create the managed Caddy directory at",
+            Self::ReadPreviousFragment => "read the previous Caddy fragment at",
+            Self::WriteTemporaryFragment => "write the temporary Caddy fragment at",
+            Self::ActivateFragment => "activate the Caddy fragment at",
+        })
+    }
+}
+
+impl fmt::Display for CaddyRecoveryError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RestoreFragment { path, source } => write!(
+                formatter,
+                "failed to restore Caddy fragment at {}: {source}",
+                path.display()
+            ),
+            Self::Reload { failure } => {
+                write!(
+                    formatter,
+                    "failed to reload the restored configuration: {failure}"
+                )
+            }
+        }
+    }
+}
+
+impl Error for CaddyRecoveryError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::RestoreFragment { source, .. } => Some(source),
+            Self::Reload { failure } => Some(failure),
+        }
+    }
 }
 
 impl fmt::Display for MaterializeCaddyFragmentError {
@@ -39,35 +143,33 @@ impl fmt::Display for MaterializeCaddyFragmentError {
                 formatter,
                 "Caddy upstream must be a nonzero IPv4 loopback endpoint: {endpoint}"
             ),
-            Self::CreateManagedDirectory { path, source } => write!(
+            Self::InvalidCaddyfile { path } => write!(
                 formatter,
-                "failed to create managed Caddy directory at {}: {source}",
+                "main Caddyfile at {} must be a file",
                 path.display()
             ),
-            Self::WriteTemporaryFragment { path, source } => write!(
-                formatter,
-                "failed to write temporary Caddy fragment at {}: {source}",
-                path.display()
-            ),
-            Self::ExecuteValidation { source } => {
-                write!(formatter, "failed to execute Caddy validation: {source}")
-            }
-            Self::ValidationFailed { stdout, stderr } => {
-                let diagnostic = if stderr.trim().is_empty() {
-                    stdout.trim()
-                } else {
-                    stderr.trim()
-                };
+            Self::Filesystem {
+                action,
+                path,
+                source,
+            } => write!(formatter, "failed to {action} {}: {source}", path.display()),
+            Self::ValidateFragment { failure } => {
                 write!(
                     formatter,
-                    "Caddy rejected the generated fragment: {diagnostic}"
+                    "failed to validate the generated fragment: {failure}"
                 )
             }
-            Self::ActivateFragment { path, source } => write!(
-                formatter,
-                "failed to activate Caddy fragment at {}: {source}",
-                path.display()
-            ),
+            Self::ValidateConfiguration { failure, recovery } => {
+                write!(
+                    formatter,
+                    "failed to validate the complete configuration: {failure}"
+                )?;
+                write_recovery(formatter, recovery)
+            }
+            Self::Reload { failure, recovery } => {
+                write!(formatter, "failed to reload Caddy: {failure}")?;
+                write_recovery(formatter, recovery)
+            }
         }
     }
 }
@@ -75,77 +177,115 @@ impl fmt::Display for MaterializeCaddyFragmentError {
 impl Error for MaterializeCaddyFragmentError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::CreateManagedDirectory { source, .. }
-            | Self::WriteTemporaryFragment { source, .. }
-            | Self::ExecuteValidation { source }
-            | Self::ActivateFragment { source, .. } => Some(source),
+            Self::Filesystem { source, .. } => Some(source),
+            Self::ValidateFragment { failure }
+            | Self::ValidateConfiguration { failure, .. }
+            | Self::Reload { failure, .. } => Some(failure),
             Self::InvalidApplicationId
             | Self::InvalidDomain
             | Self::InvalidEndpoint { .. }
-            | Self::ValidationFailed { .. } => None,
+            | Self::InvalidCaddyfile { .. } => None,
         }
     }
 }
 
 pub fn materialize_caddy_fragment(
     managed_directory: &Path,
+    caddyfile_path: &Path,
     application_id: &str,
     domain: &str,
     endpoint: SocketAddr,
 ) -> Result<MaterializedCaddyFragment, MaterializeCaddyFragmentError> {
     validate_input(application_id, domain, endpoint)?;
+    let caddyfile_metadata = fs::metadata(caddyfile_path).map_err(|source| {
+        MaterializeCaddyFragmentError::Filesystem {
+            action: CaddyFilesystemAction::InspectCaddyfile,
+            path: caddyfile_path.to_path_buf(),
+            source,
+        }
+    })?;
+    if !caddyfile_metadata.is_file() {
+        return Err(MaterializeCaddyFragmentError::InvalidCaddyfile {
+            path: caddyfile_path.to_path_buf(),
+        });
+    }
 
     fs::create_dir_all(managed_directory).map_err(|source| {
-        MaterializeCaddyFragmentError::CreateManagedDirectory {
+        MaterializeCaddyFragmentError::Filesystem {
+            action: CaddyFilesystemAction::CreateManagedDirectory,
             path: managed_directory.to_path_buf(),
             source,
         }
     })?;
     let fragment_path = managed_directory.join(format!("{application_id}.caddy"));
     let temporary_path = managed_directory.join(format!(".{application_id}.caddy.tmp"));
+    let previous_fragment = read_previous_fragment(&fragment_path)?;
     let contents = format!("{domain} {{\n    reverse_proxy {endpoint}\n}}\n");
     fs::write(&temporary_path, &contents).map_err(|source| {
-        MaterializeCaddyFragmentError::WriteTemporaryFragment {
+        MaterializeCaddyFragmentError::Filesystem {
+            action: CaddyFilesystemAction::WriteTemporaryFragment,
             path: temporary_path.clone(),
             source,
         }
     })?;
 
-    let validation = Command::new("caddy")
-        .args(["validate", "--config"])
-        .arg(&temporary_path)
-        .args(["--adapter", "caddyfile"])
-        .output();
-    let validation = match validation {
+    let fragment_validation = match caddy_command("validate", &temporary_path) {
         Ok(validation) => validation,
-        Err(source) => {
+        Err(failure) => {
             let _ = fs::remove_file(&temporary_path);
-            return Err(MaterializeCaddyFragmentError::ExecuteValidation { source });
+            return Err(MaterializeCaddyFragmentError::ValidateFragment { failure });
         }
     };
-    let validation_stdout = String::from_utf8_lossy(&validation.stdout).into_owned();
-    let validation_stderr = String::from_utf8_lossy(&validation.stderr).into_owned();
-    if !validation.status.success() {
-        let _ = fs::remove_file(&temporary_path);
-        return Err(MaterializeCaddyFragmentError::ValidationFailed {
-            stdout: validation_stdout,
-            stderr: validation_stderr,
-        });
-    }
+    let fragment_validation_stdout = fragment_validation.stdout;
+    let fragment_validation_stderr = fragment_validation.stderr;
 
     fs::rename(&temporary_path, &fragment_path).map_err(|source| {
         let _ = fs::remove_file(&temporary_path);
-        MaterializeCaddyFragmentError::ActivateFragment {
+        MaterializeCaddyFragmentError::Filesystem {
+            action: CaddyFilesystemAction::ActivateFragment,
             path: fragment_path.clone(),
             source,
         }
     })?;
 
+    let configuration_validation = match caddy_command("validate", caddyfile_path) {
+        Ok(validation) => validation,
+        Err(failure) => {
+            let recovery = restore_fragment(&fragment_path, &temporary_path, &previous_fragment)
+                .err()
+                .map(Box::new);
+            return Err(MaterializeCaddyFragmentError::ValidateConfiguration { failure, recovery });
+        }
+    };
+    let configuration_validation_stdout = configuration_validation.stdout;
+    let configuration_validation_stderr = configuration_validation.stderr;
+
+    let reload = match caddy_command("reload", caddyfile_path) {
+        Ok(reload) => reload,
+        Err(failure) => {
+            let recovery = recover_previous_configuration(
+                &fragment_path,
+                &temporary_path,
+                &previous_fragment,
+                caddyfile_path,
+            )
+            .err()
+            .map(Box::new);
+            return Err(MaterializeCaddyFragmentError::Reload { failure, recovery });
+        }
+    };
+    let reload_stdout = reload.stdout;
+    let reload_stderr = reload.stderr;
+
     Ok(MaterializedCaddyFragment {
         path: fragment_path,
         contents,
-        validation_stdout,
-        validation_stderr,
+        fragment_validation_stdout,
+        fragment_validation_stderr,
+        configuration_validation_stdout,
+        configuration_validation_stderr,
+        reload_stdout,
+        reload_stderr,
     })
 }
 
@@ -164,5 +304,109 @@ fn validate_input(
         return Err(MaterializeCaddyFragmentError::InvalidEndpoint { endpoint });
     }
 
+    Ok(())
+}
+
+fn read_previous_fragment(
+    fragment_path: &Path,
+) -> Result<Option<Vec<u8>>, MaterializeCaddyFragmentError> {
+    match fs::read(fragment_path) {
+        Ok(contents) => Ok(Some(contents)),
+        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(MaterializeCaddyFragmentError::Filesystem {
+            action: CaddyFilesystemAction::ReadPreviousFragment,
+            path: fragment_path.to_path_buf(),
+            source,
+        }),
+    }
+}
+
+fn restore_fragment(
+    fragment_path: &Path,
+    temporary_path: &Path,
+    previous_fragment: &Option<Vec<u8>>,
+) -> Result<(), CaddyRecoveryError> {
+    if let Some(previous_fragment) = previous_fragment {
+        fs::write(temporary_path, previous_fragment).map_err(|source| {
+            CaddyRecoveryError::RestoreFragment {
+                path: fragment_path.to_path_buf(),
+                source,
+            }
+        })?;
+        fs::rename(temporary_path, fragment_path).map_err(|source| {
+            let _ = fs::remove_file(temporary_path);
+            CaddyRecoveryError::RestoreFragment {
+                path: fragment_path.to_path_buf(),
+                source,
+            }
+        })?;
+    } else {
+        match fs::remove_file(fragment_path) {
+            Ok(()) => {}
+            Err(source) if source.kind() == io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(CaddyRecoveryError::RestoreFragment {
+                    path: fragment_path.to_path_buf(),
+                    source,
+                });
+            }
+        }
+        let _ = fs::remove_file(temporary_path);
+    }
+    Ok(())
+}
+
+fn recover_previous_configuration(
+    fragment_path: &Path,
+    temporary_path: &Path,
+    previous_fragment: &Option<Vec<u8>>,
+    caddyfile_path: &Path,
+) -> Result<(), CaddyRecoveryError> {
+    restore_fragment(fragment_path, temporary_path, previous_fragment)?;
+    caddy_command("reload", caddyfile_path)
+        .map_err(|failure| CaddyRecoveryError::Reload { failure })?;
+    Ok(())
+}
+
+struct CaddyCommandOutput {
+    stdout: String,
+    stderr: String,
+}
+
+fn caddy_command(
+    operation: &str,
+    configuration_path: &Path,
+) -> Result<CaddyCommandOutput, CaddyCommandError> {
+    let output = Command::new("caddy")
+        .arg(operation)
+        .arg("--config")
+        .arg(configuration_path)
+        .args(["--adapter", "caddyfile"])
+        .output()
+        .map_err(|source| CaddyCommandError::Execute { source })?;
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    if !output.status.success() {
+        return Err(CaddyCommandError::Rejected { stdout, stderr });
+    }
+
+    Ok(CaddyCommandOutput { stdout, stderr })
+}
+
+fn diagnostic<'a>(stdout: &'a str, stderr: &'a str) -> &'a str {
+    if stderr.trim().is_empty() {
+        stdout.trim()
+    } else {
+        stderr.trim()
+    }
+}
+
+fn write_recovery(
+    formatter: &mut fmt::Formatter<'_>,
+    recovery: &Option<Box<CaddyRecoveryError>>,
+) -> fmt::Result {
+    if let Some(recovery) = recovery {
+        write!(formatter, "; recovery also failed: {recovery}")?;
+    }
     Ok(())
 }
