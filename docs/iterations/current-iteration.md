@@ -1,48 +1,47 @@
-# Iteração atual — Reconciliação da mesma revisão
+# Iteração atual — Reativação de runtime Previous
 
 **Status:** concluída
 
 **Atualizado em:** 6 de agosto de 2026
 
-**Commit de implementação:** `842397e`
+**Commit de implementação:** `1daf8d8`
 
-**Objetivo:** tornar repetível o deployment da mesma revisão sem criar deployments ou containers duplicados.
+**Objetivo:** permitir que uma revisão anterior já materializada volte a ser Current sem novo build ou container.
 
-## Trabalho atual — item 30 da sequência de implementação
+## Trabalho atual — item 31 da sequência de implementação
 
-Antes de criar um deployment, reconciliar a revisão resolvida com o runtime Current já persistido.
+Estender a reconciliação pré-deployment para runtimes ativos com papel `Previous`.
 
 ### Resultado esperado
 
-- runtime existente e saudável é reutilizado;
-- runtime parado ou criado é iniciado novamente e validado;
-- runtime ausente é marcado como removido antes de um deployment novo;
-- runtime em estado ambíguo ou sem saúde falha sem substituição destrutiva;
-- a reconciliação aparece no progresso detalhado.
+- runtime Previous existente é observado e reiniciado quando necessário;
+- health check ocorre antes de qualquer troca de papel;
+- Previous saudável e Current trocam de papel atomicamente;
+- falha de observação, start ou saúde preserva os papéis atuais;
+- nenhum deployment, build ou container duplicado é criado.
 
 ### Progresso
 
-- [x] consulta do runtime Current para a mesma revisão;
-- [x] observação e persistência do estado real;
-- [x] reutilização do runtime saudável;
-- [x] reinício do runtime parado;
-- [x] novo deployment quando o runtime não existe mais;
+- [x] consulta da revisão entre runtimes Current e Previous;
+- [x] reconciliação comum do estado do container;
+- [x] troca atômica de papéis após health check;
+- [x] progresso detalhado da reativação;
 - [x] testes de integração dos caminhos principais.
 
 ### Critérios de aceite
 
-- [x] repetir uma revisão saudável retorna o deployment e runtime existentes;
-- [x] a repetição saudável não executa build nem cria outro container;
-- [x] runtime parado é reiniciado e passa por health check;
-- [x] runtime ausente é marcado como removido e substituído;
-- [x] health check sem sucesso não remove nem substitui o Current;
-- [x] progresso detalhado informa a reconciliação;
-- [x] testes cobrem comportamento observável sem duplicação desnecessária;
+- [x] revisão Previous saudável volta a ser Current;
+- [x] o antigo Current passa a Previous na mesma transação;
+- [x] Previous parado é reiniciado antes da troca;
+- [x] Previous sem saúde mantém os papéis originais;
+- [x] rollback por revisão não executa build nem cria container;
+- [x] saída retorna deployment, runtime e container já existentes;
+- [x] testes cobrem comportamento observável sem exagero;
 - [x] formatação, Clippy, testes e build release passam sem warnings.
 
 ## Fora do escopo desta iteração
 
+- histórico específico de operações de rollback;
+- retenção ou parada automática de runtimes Previous;
 - lock entre processos concorrentes;
-- substituição automática de runtime existente sem saúde;
-- recuperação de deployment interrompido em estado não terminal;
 - Caddy e deployment público.
