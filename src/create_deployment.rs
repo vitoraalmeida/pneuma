@@ -28,6 +28,7 @@ pub enum DeploymentStatus {
     Building,
     Starting,
     VerifyingInternal,
+    Succeeded,
     Failed,
 }
 
@@ -39,6 +40,7 @@ impl DeploymentStatus {
             Self::Building => "building",
             Self::Starting => "starting",
             Self::VerifyingInternal => "verifying_internal",
+            Self::Succeeded => "succeeded",
             Self::Failed => "failed",
         }
     }
@@ -50,6 +52,7 @@ impl DeploymentStatus {
             "building" => Some(Self::Building),
             "starting" => Some(Self::Starting),
             "verifying_internal" => Some(Self::VerifyingInternal),
+            "succeeded" => Some(Self::Succeeded),
             "failed" => Some(Self::Failed),
             _ => None,
         }
