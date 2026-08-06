@@ -1,6 +1,7 @@
 pub mod application;
 pub mod database;
 pub mod git_source;
+pub mod health_check;
 pub mod import_application;
 pub mod list_applications;
 pub mod local_build;

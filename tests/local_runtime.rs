@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use pneuma::health_check::{HealthCheckResult, check_internal_health};
 use pneuma::local_build::build_image;
 use pneuma::local_runtime::{
     ControlContainerError, CreateContainerError, ObservedRuntimeState, create_container,
@@ -23,7 +24,25 @@ fn creates_controls_and_observes_a_rootless_candidate() {
     let runtime_process = temporary_directory.path.join("runtime-process");
     fs::write(
         &runtime_source,
-        "fn main() { loop { std::thread::park(); } }\n",
+        r#"use std::io::{Read, Write};
+use std::net::TcpListener;
+
+fn main() {
+    let listener = TcpListener::bind("0.0.0.0:8080").unwrap();
+    for stream in listener.incoming() {
+        let mut stream = stream.unwrap();
+        let mut request = [0; 1024];
+        let bytes_read = stream.read(&mut request).unwrap();
+        let status = if request[..bytes_read].starts_with(b"GET /healthz ") {
+            "200 OK"
+        } else {
+            "404 Not Found"
+        };
+        let response = format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\n\r\n");
+        stream.write_all(response.as_bytes()).unwrap();
+    }
+}
+"#,
     )
     .unwrap();
     let compile = Command::new("rustc")
@@ -124,6 +143,13 @@ fn creates_controls_and_observes_a_rootless_candidate() {
         .expect("running container needs an endpoint");
     assert!(endpoint.ip().is_loopback());
     assert_ne!(endpoint.port(), 0);
+    assert_eq!(
+        check_internal_health(endpoint, "/healthz", 200).unwrap(),
+        HealthCheckResult::Healthy {
+            attempts: 1,
+            response_status: 200,
+        }
+    );
 
     stop_container(&container.id).unwrap();
     stop_container(&container.id).unwrap();
