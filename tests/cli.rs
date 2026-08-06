@@ -173,6 +173,27 @@ fn verbose_deployment_reports_steps_and_persisted_states() {
 }
 
 #[test]
+fn verbose_redeployment_reports_current_runtime_reconciliation() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || {
+        respond_once(&listener, 200);
+        respond_once(&listener, 200);
+    });
+    assert_command_succeeded(&environment.deploy(port, false));
+    let output = environment.deploy(port, true);
+    server.join().unwrap();
+
+    assert_command_succeeded(&output);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("reconcile current runtime: started"));
+    assert!(stderr.contains("reconcile current runtime: completed"));
+    assert!(!stderr.contains("build image: started"));
+}
+
+#[test]
 fn verbose_failure_reports_persistence_and_candidate_cleanup() {
     let environment = DeploymentEnvironment::new();
     assert_command_succeeded(&environment.import());

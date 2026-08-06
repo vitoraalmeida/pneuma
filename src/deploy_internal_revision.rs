@@ -3,14 +3,15 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::create_deployment::{CreateDeploymentError, DeploymentStatus, create_deployment};
 use crate::git_source::{ResolveCommitError, create_checkout, resolve_commit};
+use crate::health_check::{HealthCheckError, HealthCheckResult, check_internal_health};
 use crate::local_build::build_image;
 use crate::local_runtime::{
-    ControlContainerError, ObservedRuntimeState, create_container, observe_container,
-    remove_container, start_container,
+    ContainerObservation, ControlContainerError, ObserveContainerError, ObservedRuntimeState,
+    container_name, create_container, observe_container, remove_container, start_container,
 };
 use crate::promote_internal_candidate::{
     PromoteInternalCandidateError, promote_internal_candidate,
@@ -33,6 +34,7 @@ pub struct DeployedInternalRevision {
 pub enum DeploymentStep {
     LoadSpecification,
     ResolveRevision,
+    ReconcileRuntime,
     CreateDeployment,
     PrepareCheckout,
     BuildImage,
@@ -69,6 +71,7 @@ impl fmt::Display for DeploymentStep {
         let name = match self {
             Self::LoadSpecification => "load application specification",
             Self::ResolveRevision => "resolve Git revision",
+            Self::ReconcileRuntime => "reconcile current runtime",
             Self::CreateDeployment => "create deployment",
             Self::PrepareCheckout => "prepare checkout",
             Self::BuildImage => "build image",
@@ -168,6 +171,36 @@ pub enum DeployInternalRevisionError {
     ResolveRevision {
         source: ResolveCommitError,
     },
+    LoadCurrentRuntime {
+        source: rusqlite::Error,
+    },
+    ObserveCurrentRuntime {
+        runtime_id: String,
+        source: ObserveContainerError,
+    },
+    StartCurrentRuntime {
+        runtime_id: String,
+        source: ControlContainerError,
+    },
+    PersistCurrentRuntime {
+        runtime_id: String,
+        source: rusqlite::Error,
+    },
+    CurrentRuntimeChanged {
+        runtime_id: String,
+    },
+    CurrentRuntimeUnavailable {
+        runtime_id: String,
+        state: ObservedRuntimeState,
+    },
+    CheckCurrentRuntime {
+        runtime_id: String,
+        source: HealthCheckError,
+    },
+    CurrentRuntimeUnhealthy {
+        runtime_id: String,
+        result: HealthCheckResult,
+    },
     CreateDeployment {
         source: CreateDeploymentError,
     },
@@ -211,6 +244,37 @@ impl fmt::Display for DeployInternalRevisionError {
                 )
             }
             Self::ResolveRevision { source } => write!(formatter, "{source}"),
+            Self::LoadCurrentRuntime { source } => {
+                write!(formatter, "failed to load the current runtime: {source}")
+            }
+            Self::ObserveCurrentRuntime { runtime_id, source } => write!(
+                formatter,
+                "failed to observe current runtime `{runtime_id}`: {source}"
+            ),
+            Self::StartCurrentRuntime { runtime_id, source } => write!(
+                formatter,
+                "failed to restart current runtime `{runtime_id}`: {source}"
+            ),
+            Self::PersistCurrentRuntime { runtime_id, source } => write!(
+                formatter,
+                "failed to persist observation of current runtime `{runtime_id}`: {source}"
+            ),
+            Self::CurrentRuntimeChanged { runtime_id } => write!(
+                formatter,
+                "current runtime `{runtime_id}` changed while it was being reconciled"
+            ),
+            Self::CurrentRuntimeUnavailable { runtime_id, state } => write!(
+                formatter,
+                "current runtime `{runtime_id}` cannot be reconciled from state {state:?}"
+            ),
+            Self::CheckCurrentRuntime { runtime_id, source } => write!(
+                formatter,
+                "failed to check current runtime `{runtime_id}` health: {source}"
+            ),
+            Self::CurrentRuntimeUnhealthy { runtime_id, result } => write!(
+                formatter,
+                "current runtime `{runtime_id}` is unhealthy: {result:?}"
+            ),
             Self::CreateDeployment { source } => write!(formatter, "{source}"),
             Self::DeploymentFailed {
                 deployment_id,
@@ -245,11 +309,20 @@ impl Error for DeployInternalRevisionError {
         match self {
             Self::LoadApplication { source } => Some(source),
             Self::ResolveRevision { source } => Some(source),
+            Self::LoadCurrentRuntime { source } => Some(source),
+            Self::ObserveCurrentRuntime { source, .. } => Some(source),
+            Self::StartCurrentRuntime { source, .. } => Some(source),
+            Self::PersistCurrentRuntime { source, .. } => Some(source),
+            Self::CheckCurrentRuntime { source, .. } => Some(source),
             Self::CreateDeployment { source } => Some(source),
             Self::DeploymentFailed { source, .. } => Some(source.as_ref()),
             Self::RecordFailure { source, .. } => Some(source),
             Self::Cleanup { source, .. } => Some(source.as_ref()),
-            Self::ApplicationNotFound { .. } | Self::PublicApplication { .. } => None,
+            Self::ApplicationNotFound { .. }
+            | Self::PublicApplication { .. }
+            | Self::CurrentRuntimeChanged { .. }
+            | Self::CurrentRuntimeUnavailable { .. }
+            | Self::CurrentRuntimeUnhealthy { .. } => None,
         }
     }
 }
@@ -347,6 +420,15 @@ fn deploy_internal_revision_reporting(
         DeploymentStep::ResolveRevision,
         format!("commit {commit_sha}"),
     );
+    if let Some(deployed) = reconcile_current_runtime(
+        connection,
+        application_id,
+        &specification,
+        &commit_sha,
+        progress,
+    )? {
+        return Ok(deployed);
+    }
     progress.started(
         DeploymentStep::CreateDeployment,
         format!("commit {commit_sha}"),
@@ -389,6 +471,223 @@ struct DeploymentSpecification {
     health_path: String,
     expected_status: u16,
     visibility: String,
+}
+
+struct CurrentRuntime {
+    runtime_id: String,
+    deployment_id: String,
+    external_runtime_id: String,
+    container_port: u16,
+    finished_at: String,
+}
+
+fn reconcile_current_runtime(
+    connection: &Connection,
+    application_id: &str,
+    specification: &DeploymentSpecification,
+    commit_sha: &str,
+    progress: &mut ProgressReporter<'_>,
+) -> Result<Option<DeployedInternalRevision>, DeployInternalRevisionError> {
+    let Some(runtime) = load_current_runtime(connection, application_id, commit_sha)? else {
+        return Ok(None);
+    };
+    progress.started(
+        DeploymentStep::ReconcileRuntime,
+        format!("runtime {}, commit {commit_sha}", runtime.runtime_id),
+    );
+
+    let observation = observe_container(&runtime.external_runtime_id, runtime.container_port)
+        .map_err(
+            |source| DeployInternalRevisionError::ObserveCurrentRuntime {
+                runtime_id: runtime.runtime_id.clone(),
+                source,
+            },
+        )?;
+    persist_current_observation(connection, &runtime.runtime_id, &observation)?;
+
+    let endpoint = match observation.state {
+        ObservedRuntimeState::Missing => {
+            progress.completed(
+                DeploymentStep::ReconcileRuntime,
+                format!(
+                    "runtime {} is missing; a new deployment is required",
+                    runtime.runtime_id
+                ),
+            );
+            return Ok(None);
+        }
+        ObservedRuntimeState::Running => observation.endpoint.ok_or_else(|| {
+            DeployInternalRevisionError::CurrentRuntimeUnavailable {
+                runtime_id: runtime.runtime_id.clone(),
+                state: ObservedRuntimeState::Running,
+            }
+        })?,
+        ObservedRuntimeState::Created | ObservedRuntimeState::Stopped => {
+            start_container(&runtime.external_runtime_id).map_err(|source| {
+                DeployInternalRevisionError::StartCurrentRuntime {
+                    runtime_id: runtime.runtime_id.clone(),
+                    source,
+                }
+            })?;
+            let observation =
+                observe_container(&runtime.external_runtime_id, runtime.container_port).map_err(
+                    |source| DeployInternalRevisionError::ObserveCurrentRuntime {
+                        runtime_id: runtime.runtime_id.clone(),
+                        source,
+                    },
+                )?;
+            persist_current_observation(connection, &runtime.runtime_id, &observation)?;
+            match observation {
+                ContainerObservation {
+                    state: ObservedRuntimeState::Running,
+                    endpoint: Some(endpoint),
+                } => endpoint,
+                observation => {
+                    return Err(DeployInternalRevisionError::CurrentRuntimeUnavailable {
+                        runtime_id: runtime.runtime_id,
+                        state: observation.state,
+                    });
+                }
+            }
+        }
+        state => {
+            return Err(DeployInternalRevisionError::CurrentRuntimeUnavailable {
+                runtime_id: runtime.runtime_id,
+                state,
+            });
+        }
+    };
+
+    let health = check_internal_health(
+        endpoint,
+        &specification.health_path,
+        specification.expected_status,
+    )
+    .map_err(|source| DeployInternalRevisionError::CheckCurrentRuntime {
+        runtime_id: runtime.runtime_id.clone(),
+        source,
+    })?;
+    match health {
+        HealthCheckResult::Healthy { .. } => {}
+        result @ HealthCheckResult::Unhealthy { .. } => {
+            return Err(DeployInternalRevisionError::CurrentRuntimeUnhealthy {
+                runtime_id: runtime.runtime_id,
+                result,
+            });
+        }
+    }
+
+    progress.completed(
+        DeploymentStep::ReconcileRuntime,
+        format!("runtime {} is running and healthy", runtime.runtime_id),
+    );
+    Ok(Some(DeployedInternalRevision {
+        deployment_id: runtime.deployment_id,
+        runtime_id: runtime.runtime_id,
+        container_name: container_name(&specification.application_name, commit_sha),
+        commit_sha: commit_sha.to_owned(),
+        finished_at: runtime.finished_at,
+    }))
+}
+
+fn load_current_runtime(
+    connection: &Connection,
+    application_id: &str,
+    commit_sha: &str,
+) -> Result<Option<CurrentRuntime>, DeployInternalRevisionError> {
+    connection
+        .query_row(
+            "SELECT
+                runtime_instances.id,
+                runtime_instances.deployment_id,
+                runtime_instances.external_runtime_id,
+                runtime_instances.container_port,
+                deployments.finished_at
+             FROM runtime_instances
+             JOIN revisions ON revisions.id = runtime_instances.revision_id
+             JOIN deployments ON deployments.id = runtime_instances.deployment_id
+             WHERE runtime_instances.application_id = ?1
+               AND revisions.commit_sha = ?2
+               AND runtime_instances.role = 'current'
+               AND runtime_instances.removed_at IS NULL
+               AND deployments.status = 'succeeded'
+               AND deployments.finished_at IS NOT NULL",
+            params![application_id, commit_sha],
+            |row| {
+                Ok(CurrentRuntime {
+                    runtime_id: row.get(0)?,
+                    deployment_id: row.get(1)?,
+                    external_runtime_id: row.get(2)?,
+                    container_port: row.get(3)?,
+                    finished_at: row.get(4)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|source| DeployInternalRevisionError::LoadCurrentRuntime { source })
+}
+
+fn persist_current_observation(
+    connection: &Connection,
+    runtime_id: &str,
+    observation: &ContainerObservation,
+) -> Result<(), DeployInternalRevisionError> {
+    let state = observed_state_database_value(&observation.state);
+    let updated = if observation.state == ObservedRuntimeState::Missing {
+        connection.execute(
+            "UPDATE runtime_instances
+             SET last_observed_state = 'missing',
+                 last_observed_at = CURRENT_TIMESTAMP,
+                 removed_at = CURRENT_TIMESTAMP,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?1 AND role = 'current' AND removed_at IS NULL",
+            [runtime_id],
+        )
+    } else if let Some(endpoint) = observation.endpoint {
+        connection.execute(
+            "UPDATE runtime_instances
+             SET last_observed_state = ?2,
+                 host_port = ?3,
+                 last_observed_at = CURRENT_TIMESTAMP,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?1 AND role = 'current' AND removed_at IS NULL",
+            params![runtime_id, state, endpoint.port()],
+        )
+    } else {
+        connection.execute(
+            "UPDATE runtime_instances
+             SET last_observed_state = ?2,
+                 last_observed_at = CURRENT_TIMESTAMP,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?1 AND role = 'current' AND removed_at IS NULL",
+            params![runtime_id, state],
+        )
+    }
+    .map_err(
+        |source| DeployInternalRevisionError::PersistCurrentRuntime {
+            runtime_id: runtime_id.to_owned(),
+            source,
+        },
+    )?;
+    if updated != 1 {
+        return Err(DeployInternalRevisionError::CurrentRuntimeChanged {
+            runtime_id: runtime_id.to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn observed_state_database_value(state: &ObservedRuntimeState) -> &'static str {
+    match state {
+        ObservedRuntimeState::Missing => "missing",
+        ObservedRuntimeState::Created => "created",
+        ObservedRuntimeState::Starting => "starting",
+        ObservedRuntimeState::Running => "running",
+        ObservedRuntimeState::Stopping => "stopping",
+        ObservedRuntimeState::Stopped => "stopped",
+        ObservedRuntimeState::Failed => "failed",
+        ObservedRuntimeState::Unknown { .. } => "unknown",
+    }
 }
 
 fn load_specification(

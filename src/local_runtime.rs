@@ -436,7 +436,7 @@ fn diagnostic<'a>(stdout: &'a str, stderr: &'a str) -> &'a str {
     }
 }
 
-fn container_name(application_name: &str, commit_sha: &str) -> String {
+pub(crate) fn container_name(application_name: &str, commit_sha: &str) -> String {
     format!("pneuma-{application_name}-{commit_sha}")
 }
 

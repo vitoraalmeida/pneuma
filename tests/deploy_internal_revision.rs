@@ -134,6 +134,153 @@ fn removes_an_unhealthy_candidate_and_preserves_current() {
 }
 
 #[test]
+fn reuses_a_healthy_current_runtime_for_the_same_revision() {
+    let project = TestProject::new("internal");
+    let (endpoint, server) = server_with_statuses(&[200, 200]);
+
+    project.run_child(
+        "reuse-current",
+        &[("PNEUMA_FAKE_FIRST_PORT", endpoint.port().to_string())],
+    );
+    server.join().unwrap();
+
+    let connection = database::open(&project.database_path).unwrap();
+    let counts: (i64, i64) = connection
+        .query_row(
+            "SELECT
+                (SELECT COUNT(*) FROM deployments),
+                (SELECT COUNT(*) FROM runtime_instances)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(counts, (1, 1));
+    let podman_log = fs::read_to_string(&project.podman_log).unwrap();
+    assert_eq!(
+        podman_log
+            .lines()
+            .filter(|line| line.starts_with("create "))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn restarts_a_stopped_current_runtime_for_the_same_revision() {
+    let project = TestProject::new("internal");
+    let (endpoint, server) = server_with_statuses(&[200, 200]);
+
+    project.run_child(
+        "restart-current",
+        &[
+            ("PNEUMA_FAKE_FIRST_PORT", endpoint.port().to_string()),
+            ("PNEUMA_FAKE_RECONCILE_STATE", "stopped".to_owned()),
+        ],
+    );
+    server.join().unwrap();
+
+    let connection = database::open(&project.database_path).unwrap();
+    let persisted: (i64, String) = connection
+        .query_row(
+            "SELECT
+                (SELECT COUNT(*) FROM deployments),
+                last_observed_state
+             FROM runtime_instances WHERE role = 'current'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(persisted, (1, "running".to_owned()));
+    let podman_log = fs::read_to_string(&project.podman_log).unwrap();
+    assert_eq!(
+        podman_log
+            .lines()
+            .filter(|line| line.starts_with("start "))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn replaces_a_current_runtime_that_is_missing_from_podman() {
+    let project = TestProject::new("internal");
+    let (first_endpoint, first_server) = server_with_statuses(&[200]);
+    let (second_endpoint, second_server) = server_with_statuses(&[200]);
+
+    project.run_child(
+        "replace-missing",
+        &[
+            ("PNEUMA_FAKE_FIRST_PORT", first_endpoint.port().to_string()),
+            (
+                "PNEUMA_FAKE_SECOND_PORT",
+                second_endpoint.port().to_string(),
+            ),
+            ("PNEUMA_FAKE_MISSING_ON_RECONCILE", "1".to_owned()),
+        ],
+    );
+    first_server.join().unwrap();
+    second_server.join().unwrap();
+
+    let connection = database::open(&project.database_path).unwrap();
+    let counts: (i64, i64, i64, i64) = connection
+        .query_row(
+            "SELECT
+                (SELECT COUNT(*) FROM deployments),
+                (SELECT COUNT(*) FROM runtime_instances),
+                (SELECT COUNT(*) FROM runtime_instances WHERE removed_at IS NOT NULL),
+                (SELECT COUNT(*) FROM runtime_instances
+                 WHERE role = 'current' AND removed_at IS NULL)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(counts, (2, 2, 1, 1));
+    let podman_log = fs::read_to_string(&project.podman_log).unwrap();
+    assert_eq!(
+        podman_log
+            .lines()
+            .filter(|line| line.starts_with("create "))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn preserves_an_unhealthy_current_runtime_for_manual_recovery() {
+    let project = TestProject::new("internal");
+    let statuses = [200, 503, 503, 503, 503, 503];
+    let (endpoint, server) = server_with_statuses(&statuses);
+
+    project.run_child(
+        "unhealthy-current",
+        &[("PNEUMA_FAKE_FIRST_PORT", endpoint.port().to_string())],
+    );
+    server.join().unwrap();
+
+    let connection = database::open(&project.database_path).unwrap();
+    let persisted: (i64, String, bool) = connection
+        .query_row(
+            "SELECT
+                (SELECT COUNT(*) FROM deployments),
+                role,
+                removed_at IS NOT NULL
+             FROM runtime_instances",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(persisted, (1, "current".to_owned(), false));
+    let podman_log = fs::read_to_string(&project.podman_log).unwrap();
+    assert_eq!(
+        podman_log
+            .lines()
+            .filter(|line| line.starts_with("create "))
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn refuses_a_public_application_before_external_work() {
     let project = TestProject::new("public");
     let mut connection = database::open(&project.database_path).unwrap();
@@ -252,6 +399,87 @@ fn deployment_child_process() {
                 }
             ));
         }
+        "reuse-current" => {
+            let first = deploy_internal_revision(
+                &mut connection,
+                &application_id,
+                &repository_path,
+                &first_revision,
+                &workspace_path,
+            )
+            .unwrap();
+            let second = deploy_internal_revision(
+                &mut connection,
+                &application_id,
+                &repository_path,
+                &first_revision,
+                &workspace_path,
+            )
+            .unwrap();
+            assert_eq!(second, first);
+        }
+        "restart-current" => {
+            let first = deploy_internal_revision(
+                &mut connection,
+                &application_id,
+                &repository_path,
+                &first_revision,
+                &workspace_path,
+            )
+            .unwrap();
+            let second = deploy_internal_revision(
+                &mut connection,
+                &application_id,
+                &repository_path,
+                &first_revision,
+                &workspace_path,
+            )
+            .unwrap();
+            assert_eq!(second, first);
+        }
+        "replace-missing" => {
+            let first = deploy_internal_revision(
+                &mut connection,
+                &application_id,
+                &repository_path,
+                &first_revision,
+                &workspace_path,
+            )
+            .unwrap();
+            let second = deploy_internal_revision(
+                &mut connection,
+                &application_id,
+                &repository_path,
+                &first_revision,
+                &workspace_path,
+            )
+            .unwrap();
+            assert_ne!(second.deployment_id, first.deployment_id);
+            assert_ne!(second.runtime_id, first.runtime_id);
+            assert_eq!(second.commit_sha, first.commit_sha);
+        }
+        "unhealthy-current" => {
+            deploy_internal_revision(
+                &mut connection,
+                &application_id,
+                &repository_path,
+                &first_revision,
+                &workspace_path,
+            )
+            .unwrap();
+            let error = deploy_internal_revision(
+                &mut connection,
+                &application_id,
+                &repository_path,
+                &first_revision,
+                &workspace_path,
+            )
+            .unwrap_err();
+            assert!(matches!(
+                error,
+                DeployInternalRevisionError::CurrentRuntimeUnhealthy { .. }
+            ));
+        }
         unknown => panic!("unknown child case: {unknown}"),
     }
 }
@@ -367,7 +595,11 @@ impl TestProject {
             .env(FIRST_REVISION, &self.first_revision)
             .env("PATH", path)
             .env("PNEUMA_FAKE_PODMAN_LOG", &self.podman_log)
-            .env("PNEUMA_FAKE_PODMAN_COUNT", count_path);
+            .env("PNEUMA_FAKE_PODMAN_COUNT", count_path)
+            .env(
+                "PNEUMA_FAKE_PODMAN_OBSERVE_COUNT",
+                self.root.join("podman-observe-count"),
+            );
         if let Some(second_revision) = &self.second_revision {
             command.env(SECOND_REVISION, second_revision);
         }
@@ -477,9 +709,25 @@ case "$1" in
     start)
         ;;
     container)
+        if [ "${2:-}" = "exists" ]; then
+            count=0
+            if [ -f "$PNEUMA_FAKE_PODMAN_OBSERVE_COUNT" ]; then
+                count=$(sed -n '1p' "$PNEUMA_FAKE_PODMAN_OBSERVE_COUNT")
+            fi
+            count=$((count + 1))
+            printf '%s\n' "$count" > "$PNEUMA_FAKE_PODMAN_OBSERVE_COUNT"
+            if [ "${PNEUMA_FAKE_MISSING_ON_RECONCILE:-0}" = "1" ] && [ "$count" -eq 2 ]; then
+                exit 1
+            fi
+        fi
         ;;
     inspect)
-        printf 'running\n'
+        count=$(sed -n '1p' "$PNEUMA_FAKE_PODMAN_OBSERVE_COUNT")
+        if [ "${PNEUMA_FAKE_RECONCILE_STATE:-}" = "stopped" ] && [ "$count" -eq 2 ]; then
+            printf 'stopped\n'
+        else
+            printf 'running\n'
+        fi
         ;;
     port)
         case "$2" in
