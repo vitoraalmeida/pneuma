@@ -6,7 +6,12 @@ use rusqlite::Connection;
 
 const INITIAL_MIGRATION: &str = include_str!("../migrations/0001_application_catalog.sql");
 const DEPLOYMENT_MIGRATION: &str = include_str!("../migrations/0002_revisions_and_deployments.sql");
-const MIGRATIONS: &[(i64, &str)] = &[(1, INITIAL_MIGRATION), (2, DEPLOYMENT_MIGRATION)];
+const RUNTIME_MIGRATION: &str = include_str!("../migrations/0003_runtime_instances.sql");
+const MIGRATIONS: &[(i64, &str)] = &[
+    (1, INITIAL_MIGRATION),
+    (2, DEPLOYMENT_MIGRATION),
+    (3, RUNTIME_MIGRATION),
+];
 
 #[derive(Debug)]
 pub enum DatabaseError {
@@ -143,7 +148,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(migration_count, 2);
+        assert_eq!(migration_count, 3);
         assert_eq!(application_table_count, 1);
         assert_eq!(deployment_table_count, 1);
     }
@@ -159,7 +164,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(migration_count, 2);
+        assert_eq!(migration_count, 3);
     }
 
     #[test]
@@ -204,6 +209,61 @@ mod tests {
             .unwrap();
         assert_eq!(application_name, "existing");
         assert!(deployment_table_exists);
+    }
+
+    #[test]
+    fn upgrades_deployment_persistence_to_runtime_instances() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "PRAGMA foreign_keys = ON;
+                 CREATE TABLE schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                 );",
+            )
+            .unwrap();
+        connection.execute_batch(INITIAL_MIGRATION).unwrap();
+        connection.execute_batch(DEPLOYMENT_MIGRATION).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO schema_migrations (version) VALUES (1), (2);
+                 INSERT INTO applications (
+                    id, name, desired_runtime_state, spec_version, created_at, updated_at
+                 ) VALUES ('app-id', 'existing', 'stopped', 1, 'now', 'now');
+                 INSERT INTO revisions (
+                    id, application_id, commit_sha, discovered_at
+                 ) VALUES (
+                    'revision-id', 'app-id',
+                    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'now'
+                 );
+                 INSERT INTO deployments (
+                    id, application_id, revision_id, status,
+                    requested_at, created_at, updated_at
+                 ) VALUES (
+                    'deployment-id', 'app-id', 'revision-id', 'starting',
+                    'now', 'now', 'now'
+                 );",
+            )
+            .unwrap();
+
+        migrate(&mut connection).unwrap();
+
+        let deployment_status: String = connection
+            .query_row("SELECT status FROM deployments", [], |row| row.get(0))
+            .unwrap();
+        let runtime_table_exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM sqlite_schema
+                    WHERE type = 'table' AND name = 'runtime_instances'
+                 )",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(deployment_status, "starting");
+        assert!(runtime_table_exists);
     }
 
     #[test]
