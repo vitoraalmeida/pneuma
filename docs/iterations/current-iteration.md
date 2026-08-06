@@ -1,60 +1,59 @@
-# Iteração atual — Build local por revisão
+# Iteração atual — Criação do runtime
 
 **Status:** concluída
 
 **Atualizado em:** 6 de agosto de 2026
 
-**Objetivo:** criar um checkout isolado de um commit resolvido e construir uma imagem local determinística com Podman.
+**Objetivo:** criar com Podman rootless um container candidato, parado e identificável, a partir da imagem de uma revisão.
 
-## Trabalho atual — item 19 do roadmap
+## Trabalho atual — item 20 do roadmap
 
-Implementar o incremento de preparação de fonte e build da iteração 2:
+Implementar o primeiro incremento do adapter de runtime da iteração 2:
 
 ```text
-Repositório local + SHA completo
+Imagem local + aplicação + SHA + porta interna
     ↓
-Checkout isolado
+Podman create
     ↓
-Containerfile + contexto registrados
+Container Candidate parado
     ↓
-Podman build
-    ↓
-Imagem identificada por aplicação + revisão
+ID externo + publicação loopback configurada
 ```
 
 ### Resultado esperado
 
-- duas revisões podem ser preparadas sem alterar uma à outra ou o repositório original;
-- `containerfile` e contexto de build permanecem confinados ao checkout;
-- a referência da imagem deriva deterministicamente da aplicação e do commit;
-- saída e falhas do Podman permanecem disponíveis para diagnóstico.
+- o container recebe nome determinístico e labels de aplicação, revisão e papel;
+- a porta interna é configurada somente em `127.0.0.1`; a porta do host será atribuída pelo Podman ao iniciar;
+- o container é criado sem modo privilegiado ou mounts do host;
+- ID e diagnósticos do Podman ficam acessíveis ao chamador.
 
 ### Progresso
 
-- [x] criação de checkout Git isolado;
-- [x] adapter de build local com Podman;
-- [x] confinamento dos paths de build ao checkout;
-- [x] identificação determinística da imagem;
-- [x] testes de integração de checkout e build;
-- [x] commit `742b14d feat: build local images by revision`.
+- [x] adapter mínimo de criação de container;
+- [x] identidade e labels determinísticos;
+- [x] publicação de porta limitada ao loopback;
+- [x] erros de execução e criação diferenciados;
+- [x] teste de integração com Podman rootless;
+- [x] commit `cea38ec feat: create candidate containers`.
 
 ### Critérios de aceite
 
-- [x] checkouts de dois commits preservam conteúdos independentes;
-- [x] paths ausentes ou que escapam do checkout são rejeitados antes do build;
-- [x] uma imagem local pode ser construída pelo `Containerfile` e contexto registrados;
-- [x] a imagem é identificada pela aplicação e pelo SHA completo;
-- [x] logs de sucesso e falha do build ficam acessíveis;
+- [x] uma imagem local gera um container existente e parado;
+- [x] nome, aplicação, revisão e papel podem ser observados no Podman;
+- [x] a publicação configurada usa `127.0.0.1` e a porta interna registrada;
+- [x] o container não é privilegiado e não possui mounts do host;
+- [x] falha de criação preserva stdout e stderr para diagnóstico;
 - [x] testes cobrem comportamento observável sem duplicação desnecessária;
 - [x] formatação, Clippy, testes e build release passam sem warnings.
 
-O teste end-to-end com Podman exige um ambiente rootless configurado e é executado explicitamente fora da suíte portátil padrão.
+O teste end-to-end exige Podman rootless configurado e é executado explicitamente fora da suíte portátil padrão.
 
 ## Fora do escopo desta iteração
 
-- clone ou fetch remoto;
-- persistência de revisão ou imagem;
-- criação e execução de container;
+- iniciar, parar, reiniciar ou remover containers pela API do Pneuma;
+- supervisão por systemd/Quadlet;
+- persistência de runtime ou deployment;
+- alocação persistente de portas;
 - comando de deploy na CLI;
 - health check;
 - integração com Caddy;
