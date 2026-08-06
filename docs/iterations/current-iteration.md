@@ -75,7 +75,11 @@ A aplicação deve aparecer como registrada e ainda não implantada.
 - [x] abertura do banco configura foreign keys e aplica migrations;
 - [x] caso de uso de importação;
 - [x] caso de uso de listagem;
-- [ ] comandos de CLI.
+- [x] comandos de CLI.
+
+A CLI usa `/var/lib/pneuma/database/pneuma.sqlite3` por padrão. O ambiente de
+desenvolvimento e os testes podem substituir esse caminho com
+`PNEUMA_DATABASE_PATH`.
 
 ### Critérios de aceite
 
@@ -84,7 +88,7 @@ A aplicação deve aparecer como registrada e ainda não implantada.
 - [x] a migration inicial cria somente as tabelas necessárias para esse fluxo;
 - [x] a aplicação e sua especificação atual são persistidas no SQLite;
 - [x] importar novamente a mesma aplicação não cria duplicidade;
-- [ ] `pneuma app list` apresenta a aplicação importada;
+- [x] `pneuma app list` apresenta a aplicação importada;
 - [x] testes cobrem importação, falha, idempotência e listagem;
 - [ ] formatação, Clippy, testes e build release passam sem warnings.
 
@@ -105,4 +109,3 @@ A aplicação deve aparecer como registrada e ainda não implantada.
 - o runtime de staging ainda não é supervisionado por Quadlet/systemd;
 - HTTPS de staging ainda não foi configurado;
 - a imagem de staging foi transferida manualmente;
-- não existe ainda aplicação persistida ou comando CLI funcional.
