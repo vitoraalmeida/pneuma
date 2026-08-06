@@ -1,51 +1,61 @@
-# Iteração atual — Resolução de commit Git
+# Iteração atual — Build local por revisão
 
 **Status:** concluída
 
 **Atualizado em:** 6 de agosto de 2026
 
-**Objetivo:** resolver uma referência de um repositório Git local para o identificador completo e imutável de um commit.
+**Objetivo:** criar um checkout isolado de um commit resolvido e construir uma imagem local determinística com Podman.
 
-## Trabalho atual — item 18 do roadmap
+## Trabalho atual — item 19 do roadmap
 
-Implementar o primeiro incremento do adapter Git previsto para a iteração 2 do plano de entrega:
+Implementar o incremento de preparação de fonte e build da iteração 2:
 
 ```text
-Repositório local + branch, tag ou SHA
+Repositório local + SHA completo
     ↓
-Git source control
+Checkout isolado
     ↓
-SHA completo do commit
+Containerfile + contexto registrados
+    ↓
+Podman build
+    ↓
+Imagem identificada por aplicação + revisão
 ```
 
 ### Resultado esperado
 
-- branch, tag anotada ou SHA abreviado resolve para o mesmo commit completo;
-- referência inexistente produz erro compreensível;
-- objeto Git que não é commit é rejeitado;
-- Git é executado com argumentos estruturados, sem shell.
+- duas revisões podem ser preparadas sem alterar uma à outra ou o repositório original;
+- `containerfile` e contexto de build permanecem confinados ao checkout;
+- a referência da imagem deriva deterministicamente da aplicação e do commit;
+- saída e falhas do Podman permanecem disponíveis para diagnóstico.
 
 ### Progresso
 
-- [x] adapter Git mínimo;
-- [x] resolução de branch, tag e SHA;
-- [x] erros de execução e resolução diferenciados;
-- [x] testes de integração com repositório Git temporário;
-- [x] commit `8755870 feat: resolve Git commit references`.
+- [x] criação de checkout Git isolado;
+- [x] adapter de build local com Podman;
+- [x] confinamento dos paths de build ao checkout;
+- [x] identificação determinística da imagem;
+- [x] testes de integração de checkout e build;
+- [x] commit `742b14d feat: build local images by revision`.
 
 ### Critérios de aceite
 
-- [x] uma referência válida resolve para o SHA completo do commit;
-- [x] referências inexistentes ou que não apontam para commits são rejeitadas;
-- [x] a resolução não altera o repositório;
-- [x] testes cobrem sucesso e falhas observáveis sem casos redundantes;
+- [x] checkouts de dois commits preservam conteúdos independentes;
+- [x] paths ausentes ou que escapam do checkout são rejeitados antes do build;
+- [x] uma imagem local pode ser construída pelo `Containerfile` e contexto registrados;
+- [x] a imagem é identificada pela aplicação e pelo SHA completo;
+- [x] logs de sucesso e falha do build ficam acessíveis;
+- [x] testes cobrem comportamento observável sem duplicação desnecessária;
 - [x] formatação, Clippy, testes e build release passam sem warnings.
+
+O teste end-to-end com Podman exige um ambiente rootless configurado e é executado explicitamente fora da suíte portátil padrão.
 
 ## Fora do escopo desta iteração
 
 - clone ou fetch remoto;
-- checkout ou worktree isolado;
-- persistência de revisões;
+- persistência de revisão ou imagem;
+- criação e execução de container;
 - comando de deploy na CLI;
-- build de imagem;
-- criação de container.
+- health check;
+- integração com Caddy;
+- rollback.
