@@ -21,9 +21,39 @@ pub struct Deployment {
     pub requested_at: String,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeploymentStatus {
     Pending,
+    PreparingSource,
+    Building,
+    Starting,
+    VerifyingInternal,
+    Failed,
+}
+
+impl DeploymentStatus {
+    pub(crate) fn database_value(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::PreparingSource => "preparing_source",
+            Self::Building => "building",
+            Self::Starting => "starting",
+            Self::VerifyingInternal => "verifying_internal",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub(crate) fn from_database(value: &str) -> Option<Self> {
+        match value {
+            "pending" => Some(Self::Pending),
+            "preparing_source" => Some(Self::PreparingSource),
+            "building" => Some(Self::Building),
+            "starting" => Some(Self::Starting),
+            "verifying_internal" => Some(Self::VerifyingInternal),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug)]

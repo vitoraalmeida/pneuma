@@ -8,3 +8,4 @@ pub mod list_applications;
 pub mod local_build;
 pub mod local_runtime;
 pub mod manifest;
+pub mod transition_deployment;
