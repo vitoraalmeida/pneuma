@@ -194,6 +194,8 @@ fn run(invocation: Invocation) -> Result<(), CliError> {
                     revision,
                     workspace_path.display()
                 );
+            } else {
+                eprintln!("Deploying {}...", application.name);
             }
             let deployment = if verbose {
                 let mut report_progress = |event| eprintln!("[verbose] {event}");

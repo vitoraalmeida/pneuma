@@ -110,7 +110,10 @@ fn deploys_an_internal_application_and_prints_its_identity() {
     server.join().unwrap();
 
     assert_command_succeeded(&output);
-    assert!(output.stderr.is_empty());
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "Deploying another-site...\n"
+    );
     let stdout = String::from_utf8(output.stdout).unwrap();
     let lines: Vec<&str> = stdout.lines().collect();
     assert_eq!(lines.len(), 6);
