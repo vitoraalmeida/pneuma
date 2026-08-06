@@ -4,8 +4,9 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 
-const INITIAL_MIGRATION_VERSION: i64 = 1;
 const INITIAL_MIGRATION: &str = include_str!("../migrations/0001_application_catalog.sql");
+const DEPLOYMENT_MIGRATION: &str = include_str!("../migrations/0002_revisions_and_deployments.sql");
+const MIGRATIONS: &[(i64, &str)] = &[(1, INITIAL_MIGRATION), (2, DEPLOYMENT_MIGRATION)];
 
 #[derive(Debug)]
 pub enum DatabaseError {
@@ -73,35 +74,36 @@ fn migrate(connection: &mut Connection) -> Result<(), DatabaseError> {
         )
         .map_err(|source| DatabaseError::Migrate { source })?;
 
-    let migration_applied = connection
-        .query_row(
-            "SELECT EXISTS(
-                SELECT 1 FROM schema_migrations WHERE version = ?1
-            )",
-            [INITIAL_MIGRATION_VERSION],
-            |row| row.get::<_, bool>(0),
-        )
-        .map_err(|source| DatabaseError::Migrate { source })?;
+    for &(version, sql) in MIGRATIONS {
+        let migration_applied = connection
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM schema_migrations WHERE version = ?1
+                )",
+                [version],
+                |row| row.get::<_, bool>(0),
+            )
+            .map_err(|source| DatabaseError::Migrate { source })?;
+        if migration_applied {
+            continue;
+        }
 
-    if migration_applied {
-        return Ok(());
+        let transaction = connection
+            .transaction()
+            .map_err(|source| DatabaseError::Migrate { source })?;
+        transaction
+            .execute_batch(sql)
+            .map_err(|source| DatabaseError::Migrate { source })?;
+        transaction
+            .execute(
+                "INSERT INTO schema_migrations (version) VALUES (?1)",
+                [version],
+            )
+            .map_err(|source| DatabaseError::Migrate { source })?;
+        transaction
+            .commit()
+            .map_err(|source| DatabaseError::Migrate { source })?;
     }
-
-    let transaction = connection
-        .transaction()
-        .map_err(|source| DatabaseError::Migrate { source })?;
-    transaction
-        .execute_batch(INITIAL_MIGRATION)
-        .map_err(|source| DatabaseError::Migrate { source })?;
-    transaction
-        .execute(
-            "INSERT INTO schema_migrations (version) VALUES (?1)",
-            [INITIAL_MIGRATION_VERSION],
-        )
-        .map_err(|source| DatabaseError::Migrate { source })?;
-    transaction
-        .commit()
-        .map_err(|source| DatabaseError::Migrate { source })?;
 
     Ok(())
 }
@@ -132,8 +134,18 @@ mod tests {
             .unwrap();
 
         assert!(foreign_keys);
-        assert_eq!(migration_count, 1);
+        let deployment_table_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_schema
+                 WHERE type = 'table' AND name = 'deployments'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert_eq!(migration_count, 2);
         assert_eq!(application_table_count, 1);
+        assert_eq!(deployment_table_count, 1);
     }
 
     #[test]
@@ -147,7 +159,51 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(migration_count, 1);
+        assert_eq!(migration_count, 2);
+    }
+
+    #[test]
+    fn upgrades_an_existing_catalog_to_deployment_persistence() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "PRAGMA foreign_keys = ON;
+                 CREATE TABLE schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                 );",
+            )
+            .unwrap();
+        connection.execute_batch(INITIAL_MIGRATION).unwrap();
+        connection
+            .execute("INSERT INTO schema_migrations (version) VALUES (1)", [])
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO applications (
+                    id, name, desired_runtime_state, spec_version, created_at, updated_at
+                 ) VALUES ('app-id', 'existing', 'stopped', 1, 'now', 'now')",
+                [],
+            )
+            .unwrap();
+
+        migrate(&mut connection).unwrap();
+
+        let application_name: String = connection
+            .query_row("SELECT name FROM applications", [], |row| row.get(0))
+            .unwrap();
+        let deployment_table_exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM sqlite_schema
+                    WHERE type = 'table' AND name = 'deployments'
+                 )",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(application_name, "existing");
+        assert!(deployment_table_exists);
     }
 
     #[test]
