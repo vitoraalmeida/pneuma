@@ -1,8 +1,9 @@
 use std::error::Error;
 use std::fmt;
+use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
 
 #[derive(Debug)]
 pub enum ResolveCommitError {
@@ -12,6 +13,23 @@ pub enum ResolveCommitError {
     Resolve {
         repository_path: PathBuf,
         revision: String,
+        message: String,
+    },
+}
+
+#[derive(Debug)]
+pub enum CreateCheckoutError {
+    InvalidCommit,
+    DestinationExists {
+        path: PathBuf,
+    },
+    Execute {
+        operation: &'static str,
+        source: io::Error,
+    },
+    Git {
+        operation: &'static str,
+        path: PathBuf,
         message: String,
     },
 }
@@ -42,6 +60,45 @@ impl Error for ResolveCommitError {
     }
 }
 
+impl fmt::Display for CreateCheckoutError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidCommit => formatter.write_str("commit identifier must be hexadecimal"),
+            Self::DestinationExists { path } => {
+                write!(
+                    formatter,
+                    "checkout destination already exists: {}",
+                    path.display()
+                )
+            }
+            Self::Execute { operation, source } => {
+                write!(
+                    formatter,
+                    "failed to execute Git while {operation}: {source}"
+                )
+            }
+            Self::Git {
+                operation,
+                path,
+                message,
+            } => write!(
+                formatter,
+                "Git failed while {operation} at {}: {message}",
+                path.display()
+            ),
+        }
+    }
+}
+
+impl Error for CreateCheckoutError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Execute { source, .. } => Some(source),
+            Self::InvalidCommit | Self::DestinationExists { .. } | Self::Git { .. } => None,
+        }
+    }
+}
+
 pub fn resolve_commit(
     repository_path: &Path,
     revision: &str,
@@ -58,7 +115,7 @@ pub fn resolve_commit(
         .map_err(|source| ResolveCommitError::Execute { source })?;
 
     if !output.status.success() {
-        let message = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        let message = git_failure_message(&output);
         return Err(ResolveCommitError::Resolve {
             repository_path: repository_path.to_path_buf(),
             revision: revision.to_owned(),
@@ -77,4 +134,73 @@ pub fn resolve_commit(
         })?;
 
     Ok(commit_sha.to_owned())
+}
+
+pub fn create_checkout(
+    repository_path: &Path,
+    commit_sha: &str,
+    checkout_path: &Path,
+) -> Result<(), CreateCheckoutError> {
+    if commit_sha.is_empty() || !commit_sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(CreateCheckoutError::InvalidCommit);
+    }
+
+    if checkout_path
+        .try_exists()
+        .map_err(|source| CreateCheckoutError::Execute {
+            operation: "inspecting the checkout destination",
+            source,
+        })?
+    {
+        return Err(CreateCheckoutError::DestinationExists {
+            path: checkout_path.to_path_buf(),
+        });
+    }
+
+    let clone = Command::new("git")
+        .args(["clone", "--quiet", "--no-checkout", "--local", "--"])
+        .arg(repository_path)
+        .arg(checkout_path)
+        .output()
+        .map_err(|source| CreateCheckoutError::Execute {
+            operation: "creating an isolated checkout",
+            source,
+        })?;
+    if !clone.status.success() {
+        return Err(CreateCheckoutError::Git {
+            operation: "creating an isolated checkout",
+            path: checkout_path.to_path_buf(),
+            message: git_failure_message(&clone),
+        });
+    }
+
+    let checkout = Command::new("git")
+        .arg("-C")
+        .arg(checkout_path)
+        .args(["checkout", "--quiet", "--detach"])
+        .arg(commit_sha)
+        .output()
+        .map_err(|source| CreateCheckoutError::Execute {
+            operation: "checking out the resolved commit",
+            source,
+        })?;
+    if !checkout.status.success() {
+        let _ = fs::remove_dir_all(checkout_path);
+        return Err(CreateCheckoutError::Git {
+            operation: "checking out the resolved commit",
+            path: checkout_path.to_path_buf(),
+            message: git_failure_message(&checkout),
+        });
+    }
+
+    Ok(())
+}
+
+fn git_failure_message(output: &Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+    if stderr.is_empty() {
+        format!("Git exited with {}", output.status)
+    } else {
+        stderr
+    }
 }
