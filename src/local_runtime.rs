@@ -269,11 +269,17 @@ pub fn create_container(
 pub fn start_container(
     container_id: &str,
 ) -> Result<ContainerCommandOutput, ControlContainerError> {
-    control_container("starting", "start", container_id)
+    control_container("starting", &["start"], container_id)
 }
 
 pub fn stop_container(container_id: &str) -> Result<ContainerCommandOutput, ControlContainerError> {
-    control_container("stopping", "stop", container_id)
+    control_container("stopping", &["stop"], container_id)
+}
+
+pub fn remove_container(
+    container_id: &str,
+) -> Result<ContainerCommandOutput, ControlContainerError> {
+    control_container("removing", &["container", "rm", "--force"], container_id)
 }
 
 pub fn observe_container(
@@ -332,7 +338,7 @@ pub fn observe_container(
 
 fn control_container(
     operation: &'static str,
-    command: &str,
+    arguments: &[&str],
     container_id: &str,
 ) -> Result<ContainerCommandOutput, ControlContainerError> {
     if !is_container_id(container_id) {
@@ -340,7 +346,8 @@ fn control_container(
     }
 
     let output = Command::new("podman")
-        .args([command, container_id])
+        .args(arguments)
+        .arg(container_id)
         .output()
         .map_err(|source| ControlContainerError::Execute { operation, source })?;
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();

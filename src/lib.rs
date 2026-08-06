@@ -1,6 +1,7 @@
 pub mod application;
 pub mod create_deployment;
 pub mod database;
+pub mod deploy_internal_revision;
 pub mod git_source;
 pub mod health_check;
 pub mod import_application;
