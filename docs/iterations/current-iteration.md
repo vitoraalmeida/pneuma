@@ -1,52 +1,51 @@
-# Iteração atual — Orquestração do deployment interno
+# Iteração atual — Comando de deployment interno
 
 **Status:** concluída
 
 **Atualizado em:** 6 de agosto de 2026
 
-**Objetivo:** executar uma revisão de aplicação interna do Git até a promoção saudável usando os casos de uso já implementados.
+**Objetivo:** disponibilizar pela CLI o deployment interno completo já implementado no Core.
 
-## Trabalho atual — item 27 do roadmap
+## Trabalho atual — item 28 do roadmap
 
-Compor o primeiro fluxo completo de deployment:
+Adicionar o comando estável:
 
 ```text
-Revisão Git → checkout → build → candidata
-    → start/observação → health check → Current
+pneuma app deploy <application-name> <repository-path> --revision <revision>
 ```
 
 ### Resultado esperado
 
-- cada efeito externo concluído avança o estado persistido correspondente;
-- falhas ficam registradas no estágio em que ocorreram;
-- uma candidata criada que falha é removida;
-- a runtime `Current` anterior permanece ativa quando a candidata falha;
-- aplicações públicas aguardam a integração com Caddy.
+- a aplicação importada é localizada pelo nome;
+- paths continuam aceitando valores nativos do sistema operacional;
+- revisão e nome são validados como texto UTF-8;
+- checkouts usam uma raiz gerenciada configurável;
+- sucesso imprime commit, deployment, runtime e estado final;
+- falhas do caso de uso chegam à fronteira da CLI com status diferente de zero.
 
 ### Progresso
 
-- [x] especificação de deployment carregada do catálogo;
-- [x] orquestração concreta dos adapters existentes;
-- [x] falha estruturada e limpeza da candidata;
-- [x] testes de sucesso e falhas representativas;
-- [x] commit `907a0cb feat: orchestrate internal deployments`.
+- [x] parsing do comando e configuração do workspace;
+- [x] resolução da aplicação pelo nome;
+- [x] integração com `deploy_internal_revision`;
+- [x] testes do comportamento observável da CLI;
+- [x] commit `11fe9c6 feat: deploy internal applications from CLI`.
 
 ### Critérios de aceite
 
-- [x] revisão solicitada é resolvida para um commit completo antes do deployment;
-- [x] sucesso percorre os estados até `Succeeded`;
-- [x] runtime saudável termina como única `Current` da aplicação;
-- [x] falha de build termina em `Failed` no estágio `Building`;
-- [x] falha de saúde preserva a `Current` anterior;
-- [x] container candidato que falha depois de criado é removido;
-- [x] aplicação pública é recusada antes de Git, Podman ou escrita de deployment;
+- [x] sintaxe inválida imprime o uso atualizado e falha;
+- [x] aplicação inexistente falha antes de Git ou Podman;
+- [x] aplicação interna saudável conclui pela CLI;
+- [x] saída de sucesso identifica commit, deployment e runtime;
+- [x] `PNEUMA_WORKSPACE_PATH` controla a raiz dos checkouts;
+- [x] erro do deployment é preservado e retorna código de falha;
 - [x] testes cobrem comportamento observável sem duplicação desnecessária;
 - [x] formatação, Clippy, testes e build release passam sem warnings.
 
 ## Fora do escopo desta iteração
 
-- comando de deploy na CLI;
-- Caddy, verificação externa e promoção pública;
-- retomada automática após interrupção do processo;
-- rollback solicitado pelo usuário;
-- política definitiva de retenção de checkouts e imagens.
+- repositórios remotos sem checkout local fornecido;
+- Caddy, verificação externa e deployment público;
+- comando de status ou histórico;
+- retomada automática após interrupção;
+- limpeza definitiva de checkouts e imagens.
