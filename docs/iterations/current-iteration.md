@@ -1,50 +1,52 @@
-# Iteração atual — Fragmento público gerenciado pelo Caddy
+# Iteração atual — Reload seguro do Caddy
 
 **Status:** concluída
 
 **Atualizado em:** 6 de agosto de 2026
 
-**Commit de implementação:** `16cd34e`
+**Implementação:** `5ed0660` (`feat: reload Caddy with recovery`)
 
-**Objetivo:** materializar com segurança um fragmento Caddy determinístico sem substituir uma rota válida por configuração inválida.
+**Objetivo:** aplicar o fragmento gerenciado ao Caddy sem perder a rota anterior quando validação completa ou reload falharem.
 
-## Trabalho atual — item 32 da sequência de implementação
+## Trabalho atual — item 33 da sequência de implementação
 
-Criar o primeiro adapter concreto de exposição pública, limitado à geração, validação e substituição atômica do fragmento gerenciado.
+Estender a materialização para validar o Caddyfile principal, executar reload e restaurar atomicamente o fragmento anterior quando necessário.
 
 ### Resultado esperado
 
-- o fragmento usa domínio validado e endpoint exclusivamente loopback;
-- cada aplicação escreve somente em `<managed-dir>/<application-id>.caddy`;
-- a configuração temporária é validada pelo Caddy antes da ativação;
-- a substituição ocorre por rename na mesma filesystem;
-- falha de validação preserva o fragmento ativo anterior.
+- o Caddyfile principal é conhecido e validado após instalar o fragmento candidato;
+- apenas uma configuração completa válida chega ao reload;
+- reload bem-sucedido conclui a materialização;
+- falha de validação completa restaura o fragmento anterior sem reload;
+- falha de reload restaura o fragmento anterior e recarrega a configuração restaurada;
+- erros de recuperação permanecem visíveis junto da falha original.
 
 ### Progresso
 
-- [x] geração determinística do fragmento;
-- [x] validação de identidade, domínio e endpoint;
-- [x] arquivo temporário na raiz gerenciada;
-- [x] execução de `caddy validate`;
-- [x] substituição atômica após sucesso;
-- [x] testes de integração com Caddy falso.
+- [x] configuração do Caddyfile principal;
+- [x] captura do fragmento anterior;
+- [x] validação da configuração completa;
+- [x] reload do Caddy;
+- [x] restauração atômica do fragmento;
+- [x] reload de recuperação;
+- [x] testes com Caddy falso.
 
 ### Critérios de aceite
 
-- [x] fragmento válido aponta para o endpoint loopback informado;
-- [x] nome do arquivo é derivado apenas de application ID hexadecimal;
-- [x] entrada inválida falha antes de escrita ou processo externo;
-- [x] validação recebe exatamente o arquivo temporário gerado;
-- [x] validação com falha não altera o fragmento anterior;
-- [x] sucesso substitui o fragmento e remove o temporário;
-- [x] diagnóstico do Caddy é preservado no erro;
+- [x] sucesso valida fragmento e configuração completa antes do reload;
+- [x] reload usa o Caddyfile principal informado;
+- [x] validação completa com falha restaura o fragmento anterior;
+- [x] reload com falha restaura o fragmento e recarrega a versão anterior;
+- [x] fragmento inexistente antes da tentativa volta a ficar inexistente na recuperação;
+- [x] diagnósticos da falha original e da recuperação são preservados;
+- [x] temporários não permanecem após sucesso ou recuperação;
 - [x] testes cobrem comportamento observável sem exagero;
 - [x] formatação, Clippy, testes e build release passam sem warnings.
 
 ## Fora do escopo desta iteração
 
-- reload do Caddy;
 - persistência da materialização em SQLite;
 - health check externo;
 - integração com o fluxo de deployment público;
-- remoção de rota para tornar a aplicação interna.
+- remoção de rota para tornar a aplicação interna;
+- lock global de exposição.
