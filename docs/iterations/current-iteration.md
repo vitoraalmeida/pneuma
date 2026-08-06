@@ -1,8 +1,8 @@
 # Iteração atual — Walking skeleton de importação
 
-**Status:** em andamento
+**Status:** concluída
 
-**Atualizado em:** 5 de agosto de 2026
+**Atualizado em:** 6 de agosto de 2026
 
 **Objetivo:** importar um repositório local compatível, persistir a aplicação sem duplicidade e permitir sua listagem pela CLI.
 
@@ -90,7 +90,7 @@ desenvolvimento e os testes podem substituir esse caminho com
 - [x] importar novamente a mesma aplicação não cria duplicidade;
 - [x] `pneuma app list` apresenta a aplicação importada;
 - [x] testes cobrem importação, falha, idempotência e listagem;
-- [ ] formatação, Clippy, testes e build release passam sem warnings.
+- [x] formatação, Clippy, testes e build release passam sem warnings.
 
 ## Fora do escopo desta iteração
 
