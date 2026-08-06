@@ -1,56 +1,48 @@
-# Iteração atual — Progresso detalhado do deployment
+# Iteração atual — Reconciliação da mesma revisão
 
 **Status:** concluída
 
 **Atualizado em:** 6 de agosto de 2026
 
-**Commits de implementação:** `c11c6f6`, `81aeec4`
+**Commit de implementação:** `842397e`
 
-**Objetivo:** tornar observável pela CLI o fluxo completo do deployment sem acoplar o Core à apresentação.
+**Objetivo:** tornar repetível o deployment da mesma revisão sem criar deployments ou containers duplicados.
 
-## Trabalho atual — item 29 do roadmap
+## Trabalho atual — item 30 da sequência de implementação
 
-Adicionar o modo global:
-
-```text
-pneuma --verbose app deploy <application-name> <repository-path> --revision <revision>
-```
+Antes de criar um deployment, reconciliar a revisão resolvida com o runtime Current já persistido.
 
 ### Resultado esperado
 
-- o Core emite eventos estruturados de progresso;
-- cada estado persistido é informado depois da transição;
-- operações externas longas informam início e conclusão;
-- falha e limpeza da candidata também aparecem no fluxo;
-- logs detalhados usam `stderr` e o resultado final continua em `stdout`;
-- sem `--verbose`, apenas uma mensagem estática informa que o deployment começou.
+- runtime existente e saudável é reutilizado;
+- runtime parado ou criado é iniciado novamente e validado;
+- runtime ausente é marcado como removido antes de um deployment novo;
+- runtime em estado ambíguo ou sem saúde falha sem substituição destrutiva;
+- a reconciliação aparece no progresso detalhado.
 
 ### Progresso
 
-- [x] tipos concretos de passo e evento de progresso;
-- [x] instrumentação da orquestração interna;
-- [x] parsing global de `--verbose`;
-- [x] apresentação dos eventos pela CLI;
-- [x] mensagem estática de início no modo normal;
-- [x] testes de saída detalhada e modo padrão.
+- [x] consulta do runtime Current para a mesma revisão;
+- [x] observação e persistência do estado real;
+- [x] reutilização do runtime saudável;
+- [x] reinício do runtime parado;
+- [x] novo deployment quando o runtime não existe mais;
+- [x] testes de integração dos caminhos principais.
 
 ### Critérios de aceite
 
-- [x] `--verbose` antes do comando ativa o modo detalhado;
-- [x] resolução Git, checkout, build e lifecycle da candidata aparecem nos logs;
-- [x] estados `Pending` até `Succeeded` aparecem após persistidos;
-- [x] health check e promoção aparecem nos logs;
-- [x] falha persistida e limpeza aparecem quando aplicáveis;
-- [x] logs detalhados vão para `stderr`;
-- [x] resultado final permanece em `stdout`;
-- [x] execução sem `--verbose` imprime apenas a mensagem estática de início;
+- [x] repetir uma revisão saudável retorna o deployment e runtime existentes;
+- [x] a repetição saudável não executa build nem cria outro container;
+- [x] runtime parado é reiniciado e passa por health check;
+- [x] runtime ausente é marcado como removido e substituído;
+- [x] health check sem sucesso não remove nem substitui o Current;
+- [x] progresso detalhado informa a reconciliação;
 - [x] testes cobrem comportamento observável sem duplicação desnecessária;
 - [x] formatação, Clippy, testes e build release passam sem warnings.
 
 ## Fora do escopo desta iteração
 
-- framework ou dependência de logging;
-- níveis adicionais como trace, debug ou warn;
-- timestamps e medição de duração;
-- persistência dos eventos de progresso;
+- lock entre processos concorrentes;
+- substituição automática de runtime existente sem saúde;
+- recuperação de deployment interrompido em estado não terminal;
 - Caddy e deployment público.
