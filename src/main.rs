@@ -7,7 +7,8 @@ use std::process::ExitCode;
 
 use pneuma::database::{self, DatabaseError};
 use pneuma::deploy_internal_revision::{
-    DeployInternalRevisionError, deploy_internal_revision, deploy_internal_revision_with_progress,
+    DeployInternalRevisionError, PublicDeploymentConfiguration, deploy_revision,
+    deploy_revision_with_progress,
 };
 use pneuma::import_application::{ImportError, import_application};
 use pneuma::list_applications::{ListError, list_applications};
@@ -16,6 +17,10 @@ const DATABASE_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_DATABASE_PATH";
 const DEFAULT_DATABASE_PATH: &str = "/var/lib/pneuma/database/pneuma.sqlite3";
 const WORKSPACE_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_WORKSPACE_PATH";
 const DEFAULT_WORKSPACE_PATH: &str = "/var/lib/pneuma/checkouts";
+const CADDY_MANAGED_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_CADDY_MANAGED_PATH";
+const DEFAULT_CADDY_MANAGED_PATH: &str = "/etc/caddy/applications";
+const CADDYFILE_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_CADDYFILE_PATH";
+const DEFAULT_CADDYFILE_PATH: &str = "/etc/caddy/Caddyfile";
 const USAGE: &str = "Usage:\n  pneuma [--verbose] app import <repository-path>\n  pneuma [--verbose] app list\n  pneuma [--verbose] app deploy <application-name> <repository-path> --revision <revision>";
 
 struct Invocation {
@@ -186,6 +191,16 @@ fn run(invocation: Invocation) -> Result<(), CliError> {
                 .filter(|path| !path.is_empty())
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from(DEFAULT_WORKSPACE_PATH));
+            let public_configuration = PublicDeploymentConfiguration {
+                managed_caddy_directory: configured_path(
+                    CADDY_MANAGED_PATH_ENVIRONMENT_VARIABLE,
+                    DEFAULT_CADDY_MANAGED_PATH,
+                ),
+                caddyfile_path: configured_path(
+                    CADDYFILE_PATH_ENVIRONMENT_VARIABLE,
+                    DEFAULT_CADDYFILE_PATH,
+                ),
+            };
             if verbose {
                 eprintln!(
                     "[verbose] deployment input: application {}, repository {}, revision {}, workspace {}",
@@ -199,21 +214,23 @@ fn run(invocation: Invocation) -> Result<(), CliError> {
             }
             let deployment = if verbose {
                 let mut report_progress = |event| eprintln!("[verbose] {event}");
-                deploy_internal_revision_with_progress(
+                deploy_revision_with_progress(
                     &mut connection,
                     &application.id,
                     &repository_path,
                     &revision,
                     &workspace_path,
+                    &public_configuration,
                     &mut report_progress,
                 )
             } else {
-                deploy_internal_revision(
+                deploy_revision(
                     &mut connection,
                     &application.id,
                     &repository_path,
                     &revision,
                     &workspace_path,
+                    &public_configuration,
                 )
             };
             let deployed = deployment.map_err(|source| CliError::Deploy {
@@ -229,4 +246,11 @@ fn run(invocation: Invocation) -> Result<(), CliError> {
     }
 
     Ok(())
+}
+
+fn configured_path(variable: &str, default: &str) -> PathBuf {
+    env::var_os(variable)
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(default))
 }

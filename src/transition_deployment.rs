@@ -11,6 +11,8 @@ pub enum DeploymentTransition {
     SourcePrepared,
     ImageBuilt,
     RuntimeRunning,
+    InternalVerified,
+    TrafficSwitched,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -207,6 +209,14 @@ fn transition_states(transition: DeploymentTransition) -> (DeploymentStatus, Dep
             DeploymentStatus::Starting,
             DeploymentStatus::VerifyingInternal,
         ),
+        DeploymentTransition::InternalVerified => (
+            DeploymentStatus::VerifyingInternal,
+            DeploymentStatus::SwitchingTraffic,
+        ),
+        DeploymentTransition::TrafficSwitched => (
+            DeploymentStatus::SwitchingTraffic,
+            DeploymentStatus::VerifyingExternal,
+        ),
     }
 }
 
@@ -245,6 +255,8 @@ fn can_fail(status: DeploymentStatus) -> bool {
             | DeploymentStatus::Building
             | DeploymentStatus::Starting
             | DeploymentStatus::VerifyingInternal
+            | DeploymentStatus::SwitchingTraffic
+            | DeploymentStatus::VerifyingExternal
     )
 }
 

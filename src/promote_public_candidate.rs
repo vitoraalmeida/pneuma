@@ -1,0 +1,361 @@
+use std::error::Error;
+use std::fmt;
+
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct PublicExposureTarget {
+    pub application_id: String,
+    pub domain: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct PromotedPublicCandidate {
+    pub runtime_id: String,
+    pub deployment_id: String,
+    pub finished_at: String,
+}
+
+#[derive(Debug)]
+pub enum PromotePublicCandidateError {
+    RuntimeNotFound {
+        runtime_id: String,
+    },
+    InvalidRuntime {
+        runtime_id: String,
+        reason: String,
+    },
+    InvalidDeploymentState {
+        deployment_id: String,
+        actual: String,
+    },
+    InvalidExposure {
+        application_id: String,
+        reason: String,
+    },
+    InvalidDiagnostic,
+    Persistence {
+        source: rusqlite::Error,
+    },
+}
+
+impl fmt::Display for PromotePublicCandidateError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RuntimeNotFound { runtime_id } => {
+                write!(formatter, "runtime `{runtime_id}` was not found")
+            }
+            Self::InvalidRuntime { runtime_id, reason } => {
+                write!(
+                    formatter,
+                    "runtime `{runtime_id}` cannot be publicly promoted: {reason}"
+                )
+            }
+            Self::InvalidDeploymentState {
+                deployment_id,
+                actual,
+            } => write!(
+                formatter,
+                "deployment `{deployment_id}` is `{actual}` during public promotion"
+            ),
+            Self::InvalidExposure {
+                application_id,
+                reason,
+            } => write!(
+                formatter,
+                "application `{application_id}` has invalid public exposure: {reason}"
+            ),
+            Self::InvalidDiagnostic => formatter
+                .write_str("exposure failure code and message must be trimmed and non-empty"),
+            Self::Persistence { source } => {
+                write!(formatter, "failed to persist public promotion: {source}")
+            }
+        }
+    }
+}
+
+impl Error for PromotePublicCandidateError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Persistence { source } => Some(source),
+            Self::RuntimeNotFound { .. }
+            | Self::InvalidRuntime { .. }
+            | Self::InvalidDeploymentState { .. }
+            | Self::InvalidExposure { .. }
+            | Self::InvalidDiagnostic => None,
+        }
+    }
+}
+
+/// Marks the exposure operation before Caddy is changed while preserving the last
+/// known active route. A crash can therefore be diagnosed as interrupted Applying.
+pub fn begin_public_exposure(
+    connection: &Connection,
+    runtime_id: &str,
+) -> Result<PublicExposureTarget, PromotePublicCandidateError> {
+    let target = load_target(connection, runtime_id)?;
+    validate_runtime(&target)?;
+    if target.deployment_status != "switching_traffic" {
+        return Err(PromotePublicCandidateError::InvalidDeploymentState {
+            deployment_id: target.deployment_id,
+            actual: target.deployment_status,
+        });
+    }
+    let domain =
+        target
+            .domain
+            .clone()
+            .ok_or_else(|| PromotePublicCandidateError::InvalidExposure {
+                application_id: target.application_id.clone(),
+                reason: "public visibility requires a domain".to_owned(),
+            })?;
+    if target.visibility != "public" {
+        return Err(PromotePublicCandidateError::InvalidExposure {
+            application_id: target.application_id,
+            reason: format!("visibility is `{}`", target.visibility),
+        });
+    }
+
+    let updated = connection
+        .execute(
+            "UPDATE exposures
+             SET materialization_state = 'applying',
+                 last_error_code = NULL,
+                 last_error_message = NULL,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE application_id = ?1 AND desired_visibility = 'public'",
+            [&target.application_id],
+        )
+        .map_err(|source| PromotePublicCandidateError::Persistence { source })?;
+    if updated != 1 {
+        return Err(PromotePublicCandidateError::InvalidExposure {
+            application_id: target.application_id,
+            reason: "exposure changed while application was being prepared".to_owned(),
+        });
+    }
+
+    Ok(PublicExposureTarget {
+        application_id: target.application_id,
+        domain,
+    })
+}
+
+/// Records materialization failure without clearing the previous active runtime or
+/// configuration version; those fields continue to describe the last known good route.
+pub fn record_public_exposure_failure(
+    connection: &Connection,
+    application_id: &str,
+    code: &str,
+    message: &str,
+    diverged: bool,
+) -> Result<(), PromotePublicCandidateError> {
+    if !is_trimmed_nonempty(code) || !is_trimmed_nonempty(message) {
+        return Err(PromotePublicCandidateError::InvalidDiagnostic);
+    }
+    let state = if diverged { "diverged" } else { "failed" };
+    let updated = connection
+        .execute(
+            "UPDATE exposures
+             SET materialization_state = ?1,
+                 last_error_code = ?2,
+                 last_error_message = ?3,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE application_id = ?4 AND desired_visibility = 'public'",
+            params![state, code, message, application_id],
+        )
+        .map_err(|source| PromotePublicCandidateError::Persistence { source })?;
+    if updated != 1 {
+        return Err(PromotePublicCandidateError::InvalidExposure {
+            application_id: application_id.to_owned(),
+            reason: "public exposure was not found".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+/// Commits database ownership only after Caddy and the external health check have
+/// succeeded. Runtime role, deployment success, and active exposure change together.
+pub fn promote_public_candidate(
+    connection: &mut Connection,
+    runtime_id: &str,
+    configuration_version: &str,
+) -> Result<PromotedPublicCandidate, PromotePublicCandidateError> {
+    if !is_trimmed_nonempty(configuration_version) {
+        return Err(PromotePublicCandidateError::InvalidExposure {
+            application_id: "unknown".to_owned(),
+            reason: "configuration version must be trimmed and non-empty".to_owned(),
+        });
+    }
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|source| PromotePublicCandidateError::Persistence { source })?;
+    let target = load_target(&transaction, runtime_id)?;
+    validate_runtime(&target)?;
+    if target.deployment_status != "verifying_external" {
+        return Err(PromotePublicCandidateError::InvalidDeploymentState {
+            deployment_id: target.deployment_id,
+            actual: target.deployment_status,
+        });
+    }
+    if target.visibility != "public" || target.domain.is_none() {
+        return Err(PromotePublicCandidateError::InvalidExposure {
+            application_id: target.application_id,
+            reason: "visibility or domain changed during deployment".to_owned(),
+        });
+    }
+
+    transaction
+        .execute(
+            "UPDATE runtime_instances
+             SET role = 'previous', updated_at = CURRENT_TIMESTAMP
+             WHERE application_id = ?1
+               AND role = 'current'
+               AND removed_at IS NULL",
+            [&target.application_id],
+        )
+        .map_err(|source| PromotePublicCandidateError::Persistence { source })?;
+    let runtime_updated = transaction
+        .execute(
+            "UPDATE runtime_instances
+             SET role = 'current', updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?1 AND role = 'candidate' AND removed_at IS NULL",
+            [runtime_id],
+        )
+        .map_err(|source| PromotePublicCandidateError::Persistence { source })?;
+    if runtime_updated != 1 {
+        return Err(PromotePublicCandidateError::InvalidRuntime {
+            runtime_id: runtime_id.to_owned(),
+            reason: "role changed during promotion".to_owned(),
+        });
+    }
+    let exposure_updated = transaction
+        .execute(
+            "UPDATE exposures
+             SET active_runtime_id = ?1,
+                 materialization_state = 'active',
+                 configuration_version = ?2,
+                 last_materialized_at = CURRENT_TIMESTAMP,
+                 last_error_code = NULL,
+                 last_error_message = NULL,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE application_id = ?3
+               AND desired_visibility = 'public'
+               AND materialization_state = 'applying'",
+            params![runtime_id, configuration_version, target.application_id],
+        )
+        .map_err(|source| PromotePublicCandidateError::Persistence { source })?;
+    if exposure_updated != 1 {
+        return Err(PromotePublicCandidateError::InvalidExposure {
+            application_id: target.application_id,
+            reason: "materialization state changed during promotion".to_owned(),
+        });
+    }
+    let deployment_updated = transaction
+        .execute(
+            "UPDATE deployments
+             SET status = 'succeeded',
+                 finished_at = CURRENT_TIMESTAMP,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?1 AND status = 'verifying_external'",
+            [&target.deployment_id],
+        )
+        .map_err(|source| PromotePublicCandidateError::Persistence { source })?;
+    if deployment_updated != 1 {
+        return Err(PromotePublicCandidateError::InvalidDeploymentState {
+            deployment_id: target.deployment_id,
+            actual: "changed during promotion".to_owned(),
+        });
+    }
+    let finished_at = transaction
+        .query_row(
+            "SELECT finished_at FROM deployments WHERE id = ?1",
+            [&target.deployment_id],
+            |row| row.get(0),
+        )
+        .map_err(|source| PromotePublicCandidateError::Persistence { source })?;
+    transaction
+        .commit()
+        .map_err(|source| PromotePublicCandidateError::Persistence { source })?;
+
+    Ok(PromotedPublicCandidate {
+        runtime_id: runtime_id.to_owned(),
+        deployment_id: target.deployment_id,
+        finished_at,
+    })
+}
+
+struct PromotionTarget {
+    runtime_id: String,
+    application_id: String,
+    deployment_id: String,
+    role: String,
+    observed_state: String,
+    removed_at: Option<String>,
+    deployment_status: String,
+    visibility: String,
+    domain: Option<String>,
+}
+
+fn load_target(
+    connection: &Connection,
+    runtime_id: &str,
+) -> Result<PromotionTarget, PromotePublicCandidateError> {
+    connection
+        .query_row(
+            "SELECT
+                runtime_instances.application_id,
+                runtime_instances.deployment_id,
+                runtime_instances.role,
+                runtime_instances.last_observed_state,
+                runtime_instances.removed_at,
+                deployments.status,
+                exposures.desired_visibility,
+                exposures.domain
+             FROM runtime_instances
+             JOIN deployments ON deployments.id = runtime_instances.deployment_id
+             JOIN exposures ON exposures.application_id = runtime_instances.application_id
+             WHERE runtime_instances.id = ?1",
+            [runtime_id],
+            |row| {
+                Ok(PromotionTarget {
+                    runtime_id: runtime_id.to_owned(),
+                    application_id: row.get(0)?,
+                    deployment_id: row.get(1)?,
+                    role: row.get(2)?,
+                    observed_state: row.get(3)?,
+                    removed_at: row.get(4)?,
+                    deployment_status: row.get(5)?,
+                    visibility: row.get(6)?,
+                    domain: row.get(7)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|source| PromotePublicCandidateError::Persistence { source })?
+        .ok_or_else(|| PromotePublicCandidateError::RuntimeNotFound {
+            runtime_id: runtime_id.to_owned(),
+        })
+}
+
+fn validate_runtime(target: &PromotionTarget) -> Result<(), PromotePublicCandidateError> {
+    let reason = if target.role != "candidate" {
+        Some(format!("role is `{}`", target.role))
+    } else if target.observed_state != "running" {
+        Some(format!("observed state is `{}`", target.observed_state))
+    } else if target.removed_at.is_some() {
+        Some("runtime has been removed".to_owned())
+    } else {
+        None
+    };
+    if let Some(reason) = reason {
+        return Err(PromotePublicCandidateError::InvalidRuntime {
+            runtime_id: target.runtime_id.clone(),
+            reason,
+        });
+    }
+    Ok(())
+}
+
+fn is_trimmed_nonempty(value: &str) -> bool {
+    !value.is_empty() && value.trim() == value
+}

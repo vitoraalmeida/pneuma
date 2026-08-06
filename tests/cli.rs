@@ -10,6 +10,8 @@ use std::process::{Command, Output};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use pneuma::database;
+
 #[test]
 fn imports_and_lists_an_application_idempotently() {
     let database_path = temporary_database_path();
@@ -246,34 +248,117 @@ fn reports_a_missing_application_before_external_work() {
 }
 
 #[test]
-fn preserves_a_public_deployment_error() {
-    let database_path = temporary_database_path();
-    let repository_path = fixture_path("valid");
-    let import = run_pneuma(
-        &database_path,
-        &[
-            OsStr::new("app"),
-            OsStr::new("import"),
-            repository_path.as_os_str(),
-        ],
-    );
-    assert_command_succeeded(&import);
+fn deploys_a_public_application_and_persists_the_active_route() {
+    let environment = DeploymentEnvironment::public();
+    assert_command_succeeded(&environment.import());
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || respond_once(&listener, 200));
 
-    let output = run_pneuma(
-        &database_path,
-        &[
-            OsStr::new("app"),
-            OsStr::new("deploy"),
-            OsStr::new("personal-site"),
-            repository_path.as_os_str(),
-            OsStr::new("--revision"),
-            OsStr::new("main"),
-        ],
+    let output = environment.deploy(port, true);
+    server.join().unwrap();
+
+    assert_command_succeeded(&output);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("internal health check: completed"));
+    assert!(stderr.contains("apply public route: completed"));
+    assert!(stderr.contains("external health check: completed"));
+    let curl_command = fs::read_to_string(environment.root.join("curl.log")).unwrap();
+    assert!(curl_command.contains("--resolve vitoralmeida.tech:443:127.0.0.1"));
+    assert!(curl_command.contains("https://vitoralmeida.tech/healthz"));
+    let connection = database::open(&environment.database_path).unwrap();
+    let state: (String, String, String, String) = connection
+        .query_row(
+            "SELECT exposures.materialization_state,
+                    exposures.configuration_version,
+                    runtime_instances.role,
+                    deployments.status
+             FROM exposures
+             JOIN runtime_instances ON runtime_instances.id = exposures.active_runtime_id
+             JOIN deployments ON deployments.id = runtime_instances.deployment_id",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        state,
+        (
+            "active".to_owned(),
+            environment.commit_sha.clone(),
+            "current".to_owned(),
+            "succeeded".to_owned(),
+        )
     );
-    let _ = fs::remove_file(&database_path);
+    assert!(
+        environment
+            .managed_caddy_directory
+            .read_dir()
+            .unwrap()
+            .next()
+            .is_some()
+    );
+}
+
+#[test]
+fn restores_the_previous_public_route_when_external_health_fails() {
+    let environment = DeploymentEnvironment::public();
+    assert_command_succeeded(&environment.import());
+    let first_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let first_port = first_listener.local_addr().unwrap().port();
+    let first_server = thread::spawn(move || respond_once(&first_listener, 200));
+    assert_command_succeeded(&environment.deploy(first_port, false));
+    first_server.join().unwrap();
+    let connection = database::open(&environment.database_path).unwrap();
+    let first_active_runtime: String = connection
+        .query_row("SELECT active_runtime_id FROM exposures", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let application_id: String = connection
+        .query_row("SELECT application_id FROM exposures", [], |row| row.get(0))
+        .unwrap();
+    let fragment_path = environment
+        .managed_caddy_directory
+        .join(format!("{application_id}.caddy"));
+    let first_fragment = fs::read_to_string(&fragment_path).unwrap();
+    drop(connection);
+    environment.commit("second revision");
+    let second_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let second_port = second_listener.local_addr().unwrap().port();
+    let second_server = thread::spawn(move || respond_once(&second_listener, 200));
+
+    let output = environment.deploy_with_external_status(second_port, false, 503);
+    second_server.join().unwrap();
 
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("requires public deployment support"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("external_health_check_failed"));
+    assert_eq!(fs::read_to_string(fragment_path).unwrap(), first_fragment);
+    let connection = database::open(&environment.database_path).unwrap();
+    let exposure: (String, String, String) = connection
+        .query_row(
+            "SELECT materialization_state, active_runtime_id, last_error_code
+             FROM exposures",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        exposure,
+        (
+            "failed".to_owned(),
+            first_active_runtime.clone(),
+            "external_health_check_failed".to_owned(),
+        )
+    );
+    let active_runtime: (String, String) = connection
+        .query_row(
+            "SELECT id, role FROM runtime_instances
+             WHERE id = ?1 AND removed_at IS NULL",
+            [&first_active_runtime],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(active_runtime.1, "current");
 }
 
 #[test]
@@ -349,11 +434,22 @@ struct DeploymentEnvironment {
     database_path: PathBuf,
     workspace_path: PathBuf,
     fake_bin: PathBuf,
+    application_name: String,
+    managed_caddy_directory: PathBuf,
+    caddyfile_path: PathBuf,
     commit_sha: String,
 }
 
 impl DeploymentEnvironment {
     fn new() -> Self {
+        Self::from_fixture("another", "another-site")
+    }
+
+    fn public() -> Self {
+        Self::from_fixture("valid", "personal-site")
+    }
+
+    fn from_fixture(fixture: &str, application_name: &str) -> Self {
         let root = env::temp_dir().join(format!(
             "pneuma-cli-deploy-{}-{}",
             std::process::id(),
@@ -363,16 +459,24 @@ impl DeploymentEnvironment {
         let database_path = root.join("pneuma.sqlite3");
         let workspace_path = root.join("workspaces");
         let fake_bin = root.join("bin");
+        let managed_caddy_directory = root.join("caddy-applications");
+        let caddyfile_path = root.join("Caddyfile");
         fs::create_dir_all(&repository_path).unwrap();
         fs::create_dir(&fake_bin).unwrap();
         fs::copy(
-            fixture_path("another").join("pneuma.toml"),
+            fixture_path(fixture).join("pneuma.toml"),
             repository_path.join("pneuma.toml"),
         )
         .unwrap();
         fs::write(repository_path.join("Containerfile"), "FROM scratch\n").unwrap();
         initialize_repository(&repository_path);
         install_fake_podman(&fake_bin);
+        install_fake_caddy_and_curl(&fake_bin);
+        fs::write(
+            &caddyfile_path,
+            format!("import {}/*.caddy\n", managed_caddy_directory.display()),
+        )
+        .unwrap();
         let commit_sha = git(&repository_path, &["rev-parse", "HEAD"])
             .trim()
             .to_owned();
@@ -383,6 +487,9 @@ impl DeploymentEnvironment {
             database_path,
             workspace_path,
             fake_bin,
+            application_name: application_name.to_owned(),
+            managed_caddy_directory,
+            caddyfile_path,
             commit_sha,
         }
     }
@@ -398,18 +505,50 @@ impl DeploymentEnvironment {
         )
     }
 
+    fn commit(&self, contents: &str) {
+        fs::write(self.repository_path.join("site.txt"), contents).unwrap();
+        git(&self.repository_path, &["add", "site.txt"]);
+        git(
+            &self.repository_path,
+            &[
+                "-c",
+                "user.name=Pneuma Tests",
+                "-c",
+                "user.email=pneuma@example.invalid",
+                "commit",
+                "--quiet",
+                "-m",
+                contents,
+            ],
+        );
+    }
+
     fn deploy(&self, port: u16, verbose: bool) -> Output {
+        self.deploy_with_external_status(port, verbose, 200)
+    }
+
+    fn deploy_with_external_status(
+        &self,
+        port: u16,
+        verbose: bool,
+        external_status: u16,
+    ) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_pneuma"));
         command
             .env("PNEUMA_DATABASE_PATH", &self.database_path)
             .env("PNEUMA_WORKSPACE_PATH", &self.workspace_path)
+            .env("PNEUMA_CADDY_MANAGED_PATH", &self.managed_caddy_directory)
+            .env("PNEUMA_CADDYFILE_PATH", &self.caddyfile_path)
             .env("PATH", executable_path(&self.fake_bin))
-            .env("PNEUMA_FAKE_PORT", port.to_string());
+            .env("PNEUMA_FAKE_PORT", port.to_string())
+            .env("PNEUMA_FAKE_PODMAN_COUNT", self.root.join("podman-count"))
+            .env("PNEUMA_FAKE_CURL_LOG", self.root.join("curl.log"))
+            .env("PNEUMA_FAKE_CURL_STATUS", external_status.to_string());
         if verbose {
             command.arg("--verbose");
         }
         command
-            .args(["app", "deploy", "another-site"])
+            .args(["app", "deploy", &self.application_name])
             .arg(&self.repository_path)
             .args(["--revision", "HEAD"])
             .output()
@@ -468,7 +607,17 @@ case "$1" in
     build|start|container)
         ;;
     create)
-        printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'
+        count=0
+        if [ -f "$PNEUMA_FAKE_PODMAN_COUNT" ]; then
+            count=$(sed -n '1p' "$PNEUMA_FAKE_PODMAN_COUNT")
+        fi
+        count=$((count + 1))
+        printf '%s\n' "$count" > "$PNEUMA_FAKE_PODMAN_COUNT"
+        if [ "$count" -eq 1 ]; then
+            printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'
+        else
+            printf 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n'
+        fi
         ;;
     inspect)
         printf 'running\n'
@@ -487,6 +636,25 @@ esac
     let mut permissions = fs::metadata(&podman).unwrap().permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(podman, permissions).unwrap();
+}
+
+fn install_fake_caddy_and_curl(fake_bin: &Path) {
+    for (name, script) in [
+        (
+            "caddy",
+            "#!/bin/sh\nset -eu\ncase \"$1\" in validate) printf 'valid configuration\\n' ;; reload) printf 'reload complete\\n' ;; *) exit 1 ;; esac\n",
+        ),
+        (
+            "curl",
+            "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"$PNEUMA_FAKE_CURL_LOG\"\nprintf '%s' \"${PNEUMA_FAKE_CURL_STATUS:-200}\"\n",
+        ),
+    ] {
+        let executable = fake_bin.join(name);
+        fs::write(&executable, script).unwrap();
+        let mut permissions = fs::metadata(&executable).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(executable, permissions).unwrap();
+    }
 }
 
 fn executable_path(fake_bin: &Path) -> OsString {

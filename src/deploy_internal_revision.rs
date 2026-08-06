@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
+use crate::caddy_exposure::{materialize_caddy_fragment, restore_materialized_caddy_fragment};
 use crate::create_deployment::{CreateDeploymentError, DeploymentStatus, create_deployment};
+use crate::external_health::check_external_health;
 use crate::git_source::{ResolveCommitError, create_checkout, resolve_commit};
 use crate::health_check::{HealthCheckError, HealthCheckResult, check_internal_health};
 use crate::local_build::build_image;
@@ -16,7 +18,11 @@ use crate::local_runtime::{
 use crate::promote_internal_candidate::{
     PromoteInternalCandidateError, promote_internal_candidate,
 };
-use crate::register_candidate_runtime::register_candidate_runtime;
+use crate::promote_public_candidate::{
+    PromotePublicCandidateError, begin_public_exposure, promote_public_candidate,
+    record_public_exposure_failure,
+};
+use crate::register_candidate_runtime::{CandidateRuntime, register_candidate_runtime};
 use crate::transition_deployment::{
     DeploymentTransition, TransitionDeploymentError, advance_deployment, fail_deployment,
 };
@@ -28,6 +34,12 @@ pub struct DeployedInternalRevision {
     pub container_name: String,
     pub commit_sha: String,
     pub finished_at: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct PublicDeploymentConfiguration {
+    pub managed_caddy_directory: PathBuf,
+    pub caddyfile_path: PathBuf,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,6 +55,10 @@ pub enum DeploymentStep {
     ObserveContainer,
     RegisterCandidate,
     HealthCheckAndPromotion,
+    InternalHealthCheck,
+    ApplyPublicRoute,
+    ExternalHealthCheck,
+    PromoteCandidate,
     CleanupCandidate,
 }
 
@@ -80,6 +96,10 @@ impl fmt::Display for DeploymentStep {
             Self::ObserveContainer => "observe candidate container",
             Self::RegisterCandidate => "register candidate runtime",
             Self::HealthCheckAndPromotion => "health check and promotion",
+            Self::InternalHealthCheck => "internal health check",
+            Self::ApplyPublicRoute => "apply public route",
+            Self::ExternalHealthCheck => "external health check",
+            Self::PromoteCandidate => "promote public candidate",
             Self::CleanupCandidate => "clean up candidate",
         };
         formatter.write_str(name)
@@ -201,6 +221,9 @@ pub enum DeployInternalRevisionError {
         runtime_id: String,
         result: HealthCheckResult,
     },
+    ExistingPublicRouteMismatch {
+        runtime_id: String,
+    },
     ReactivatePreviousRuntime {
         runtime_id: String,
         source: rusqlite::Error,
@@ -279,6 +302,10 @@ impl fmt::Display for DeployInternalRevisionError {
                 formatter,
                 "existing runtime `{runtime_id}` is unhealthy: {result:?}"
             ),
+            Self::ExistingPublicRouteMismatch { runtime_id } => write!(
+                formatter,
+                "public runtime `{runtime_id}` is healthy but is not the active materialized route"
+            ),
             Self::ReactivatePreviousRuntime { runtime_id, source } => write!(
                 formatter,
                 "failed to reactivate previous runtime `{runtime_id}`: {source}"
@@ -331,7 +358,8 @@ impl Error for DeployInternalRevisionError {
             | Self::PublicApplication { .. }
             | Self::ExistingRuntimeChanged { .. }
             | Self::ExistingRuntimeUnavailable { .. }
-            | Self::ExistingRuntimeUnhealthy { .. } => None,
+            | Self::ExistingRuntimeUnhealthy { .. }
+            | Self::ExistingPublicRouteMismatch { .. } => None,
         }
     }
 }
@@ -370,6 +398,7 @@ pub fn deploy_internal_revision(
         repository_path,
         revision,
         workspace_root,
+        None,
         &mut progress,
     )
 }
@@ -389,6 +418,48 @@ pub fn deploy_internal_revision_with_progress(
         repository_path,
         revision,
         workspace_root,
+        None,
+        &mut progress,
+    )
+}
+
+pub fn deploy_revision(
+    connection: &mut Connection,
+    application_id: &str,
+    repository_path: &Path,
+    revision: &str,
+    workspace_root: &Path,
+    public_configuration: &PublicDeploymentConfiguration,
+) -> Result<DeployedInternalRevision, DeployInternalRevisionError> {
+    let mut progress = ProgressReporter::disabled();
+    deploy_internal_revision_reporting(
+        connection,
+        application_id,
+        repository_path,
+        revision,
+        workspace_root,
+        Some(public_configuration),
+        &mut progress,
+    )
+}
+
+pub fn deploy_revision_with_progress(
+    connection: &mut Connection,
+    application_id: &str,
+    repository_path: &Path,
+    revision: &str,
+    workspace_root: &Path,
+    public_configuration: &PublicDeploymentConfiguration,
+    progress: &mut dyn FnMut(DeploymentProgress),
+) -> Result<DeployedInternalRevision, DeployInternalRevisionError> {
+    let mut progress = ProgressReporter::enabled(progress);
+    deploy_internal_revision_reporting(
+        connection,
+        application_id,
+        repository_path,
+        revision,
+        workspace_root,
+        Some(public_configuration),
         &mut progress,
     )
 }
@@ -399,6 +470,7 @@ fn deploy_internal_revision_reporting(
     repository_path: &Path,
     revision: &str,
     workspace_root: &Path,
+    public_configuration: Option<&PublicDeploymentConfiguration>,
     progress: &mut ProgressReporter<'_>,
 ) -> Result<DeployedInternalRevision, DeployInternalRevisionError> {
     progress.started(
@@ -413,7 +485,7 @@ fn deploy_internal_revision_reporting(
             specification.application_name, specification.visibility
         ),
     );
-    if specification.visibility != "internal" {
+    if specification.visibility == "public" && public_configuration.is_none() {
         return Err(DeployInternalRevisionError::PublicApplication {
             application_id: application_id.to_owned(),
         });
@@ -451,13 +523,17 @@ fn deploy_internal_revision_reporting(
     );
     progress.state_changed(&deployment.id, DeploymentStatus::Pending);
 
+    let source = ResolvedDeploymentSource {
+        repository_path,
+        commit_sha: &commit_sha,
+        workspace_root,
+    };
     let execution = execute_deployment(
         connection,
         &deployment.id,
         &specification,
-        repository_path,
-        &commit_sha,
-        workspace_root,
+        &source,
+        public_configuration,
         progress,
     );
     match execution {
@@ -473,6 +549,7 @@ fn deploy_internal_revision_reporting(
 }
 
 struct DeploymentSpecification {
+    application_id: String,
     application_name: String,
     containerfile: PathBuf,
     context: PathBuf,
@@ -480,6 +557,12 @@ struct DeploymentSpecification {
     health_path: String,
     expected_status: u16,
     visibility: String,
+}
+
+struct ResolvedDeploymentSource<'a> {
+    repository_path: &'a Path,
+    commit_sha: &'a str,
+    workspace_root: &'a Path,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -601,6 +684,23 @@ fn reconcile_existing_runtime(
             return Err(DeployInternalRevisionError::ExistingRuntimeUnhealthy {
                 runtime_id: runtime.runtime_id,
                 result,
+            });
+        }
+    }
+
+    if specification.visibility == "public" {
+        let route_is_active = connection
+            .query_row(
+                "SELECT COALESCE(active_runtime_id = ?1, 0)
+                        AND materialization_state IN ('active', 'failed')
+                 FROM exposures WHERE application_id = ?2",
+                params![runtime.runtime_id, application_id],
+                |row| row.get::<_, bool>(0),
+            )
+            .map_err(|source| DeployInternalRevisionError::LoadExistingRuntime { source })?;
+        if runtime.role != ExistingRuntimeRole::Current || !route_is_active {
+            return Err(DeployInternalRevisionError::ExistingPublicRouteMismatch {
+                runtime_id: runtime.runtime_id,
             });
         }
     }
@@ -822,6 +922,7 @@ fn load_specification(
     connection
         .query_row(
             "SELECT
+                applications.id,
                 applications.name,
                 application_build_specs.containerfile_path,
                 application_build_specs.context_path,
@@ -841,13 +942,14 @@ fn load_specification(
             [application_id],
             |row| {
                 Ok(DeploymentSpecification {
-                    application_name: row.get(0)?,
-                    containerfile: PathBuf::from(row.get::<_, String>(1)?),
-                    context: PathBuf::from(row.get::<_, String>(2)?),
-                    container_port: row.get(3)?,
-                    health_path: row.get(4)?,
-                    expected_status: row.get(5)?,
-                    visibility: row.get(6)?,
+                    application_id: row.get(0)?,
+                    application_name: row.get(1)?,
+                    containerfile: PathBuf::from(row.get::<_, String>(2)?),
+                    context: PathBuf::from(row.get::<_, String>(3)?),
+                    container_port: row.get(4)?,
+                    health_path: row.get(5)?,
+                    expected_status: row.get(6)?,
+                    visibility: row.get(7)?,
                 })
             },
         )
@@ -870,26 +972,25 @@ fn execute_deployment(
     connection: &mut Connection,
     deployment_id: &str,
     specification: &DeploymentSpecification,
-    repository_path: &Path,
-    commit_sha: &str,
-    workspace_root: &Path,
+    source: &ResolvedDeploymentSource<'_>,
+    public_configuration: Option<&PublicDeploymentConfiguration>,
     progress: &mut ProgressReporter<'_>,
 ) -> Result<(String, String, String), FailedExecution> {
     advance_deployment(connection, deployment_id, DeploymentTransition::Start).map_err(
         |source| failure_needing_persistence("deployment_transition_failed", source, None, None),
     )?;
     progress.state_changed(deployment_id, DeploymentStatus::PreparingSource);
-    let checkout_path = workspace_root.join(deployment_id);
+    let checkout_path = source.workspace_root.join(deployment_id);
     progress.started(
         DeploymentStep::PrepareCheckout,
         checkout_path.display().to_string(),
     );
-    fs::create_dir_all(workspace_root).map_err(|source| {
+    fs::create_dir_all(source.workspace_root).map_err(|source| {
         failure_needing_persistence("source_preparation_failed", source, None, None)
     })?;
-    create_checkout(repository_path, commit_sha, &checkout_path).map_err(|source| {
-        failure_needing_persistence("source_preparation_failed", source, None, None)
-    })?;
+    create_checkout(source.repository_path, source.commit_sha, &checkout_path).map_err(
+        |source| failure_needing_persistence("source_preparation_failed", source, None, None),
+    )?;
     progress.completed(
         DeploymentStep::PrepareCheckout,
         checkout_path.display().to_string(),
@@ -906,14 +1007,14 @@ fn execute_deployment(
     progress.started(
         DeploymentStep::BuildImage,
         format!(
-            "application {}, commit {commit_sha}",
-            specification.application_name
+            "application {}, commit {}",
+            specification.application_name, source.commit_sha
         ),
     );
     let image = build_image(
         &checkout_path,
         &specification.application_name,
-        commit_sha,
+        source.commit_sha,
         &specification.containerfile,
         &specification.context,
     )
@@ -933,7 +1034,7 @@ fn execute_deployment(
     let container = create_container(
         &image.reference,
         &specification.application_name,
-        commit_sha,
+        source.commit_sha,
         specification.container_port,
     )
     .map_err(|source| failure_needing_persistence("runtime_creation_failed", source, None, None))?;
@@ -947,6 +1048,8 @@ fn execute_deployment(
         deployment_id,
         specification,
         &container.id,
+        source.commit_sha,
+        public_configuration,
         progress,
     )?;
 
@@ -958,6 +1061,8 @@ fn execute_candidate(
     deployment_id: &str,
     specification: &DeploymentSpecification,
     container_id: &str,
+    commit_sha: &str,
+    public_configuration: Option<&PublicDeploymentConfiguration>,
     progress: &mut ProgressReporter<'_>,
 ) -> Result<(String, String), FailedExecution> {
     progress.started(
@@ -1043,6 +1148,19 @@ fn execute_candidate(
         )
     })?;
     progress.state_changed(deployment_id, DeploymentStatus::VerifyingInternal);
+    if specification.visibility == "public" {
+        let public_configuration = public_configuration
+            .expect("public deployment configuration was checked before external work");
+        return execute_public_candidate(
+            connection,
+            specification,
+            &runtime,
+            commit_sha,
+            public_configuration,
+            progress,
+        );
+    }
+
     progress.started(
         DeploymentStep::HealthCheckAndPromotion,
         format!(
@@ -1078,6 +1196,286 @@ fn execute_candidate(
     progress.state_changed(deployment_id, DeploymentStatus::Succeeded);
 
     Ok((runtime.id, promoted.finished_at))
+}
+
+fn execute_public_candidate(
+    connection: &mut Connection,
+    specification: &DeploymentSpecification,
+    runtime: &CandidateRuntime,
+    commit_sha: &str,
+    public_configuration: &PublicDeploymentConfiguration,
+    progress: &mut ProgressReporter<'_>,
+) -> Result<(String, String), FailedExecution> {
+    let runtime_id = runtime.id.as_str();
+    let container_id = runtime.external_runtime_id.as_str();
+    let deployment_id = runtime.deployment_id.as_str();
+    let endpoint = runtime.endpoint;
+    progress.started(
+        DeploymentStep::InternalHealthCheck,
+        format!(
+            "runtime {runtime_id}, path {}, expected status {}",
+            specification.health_path, specification.expected_status
+        ),
+    );
+    let internal_health = check_internal_health(
+        endpoint,
+        &specification.health_path,
+        specification.expected_status,
+    )
+    .map_err(|source| {
+        failure_needing_persistence(
+            "health_check_failed",
+            source,
+            Some(container_id),
+            Some(runtime_id),
+        )
+    })?;
+    if !matches!(internal_health, HealthCheckResult::Healthy { .. }) {
+        return Err(failure_needing_persistence(
+            "health_check_failed",
+            PublicHealthFailure {
+                result: internal_health,
+            },
+            Some(container_id),
+            Some(runtime_id),
+        ));
+    }
+    progress.completed(
+        DeploymentStep::InternalHealthCheck,
+        format!("runtime {runtime_id} is healthy"),
+    );
+    advance_deployment(
+        connection,
+        deployment_id,
+        DeploymentTransition::InternalVerified,
+    )
+    .map_err(|source| {
+        failure_needing_persistence(
+            "deployment_transition_failed",
+            source,
+            Some(container_id),
+            Some(runtime_id),
+        )
+    })?;
+    progress.state_changed(deployment_id, DeploymentStatus::SwitchingTraffic);
+
+    let exposure = begin_public_exposure(connection, runtime_id).map_err(|source| {
+        failure_needing_persistence(
+            "exposure_preparation_failed",
+            source,
+            Some(container_id),
+            Some(runtime_id),
+        )
+    })?;
+    progress.started(
+        DeploymentStep::ApplyPublicRoute,
+        format!("{} -> {endpoint}", exposure.domain),
+    );
+    let materialized = materialize_caddy_fragment(
+        &public_configuration.managed_caddy_directory,
+        &public_configuration.caddyfile_path,
+        &specification.application_id,
+        &exposure.domain,
+        endpoint,
+    )
+    .map_err(|source| {
+        let diverged = source.recovery_failed();
+        public_failure(
+            connection,
+            &exposure.application_id,
+            "caddy_materialization_failed",
+            Box::new(source),
+            container_id,
+            runtime_id,
+            diverged,
+        )
+    })?;
+    progress.completed(
+        DeploymentStep::ApplyPublicRoute,
+        format!("fragment {}", materialized.path.display()),
+    );
+
+    if let Err(source) = advance_deployment(
+        connection,
+        deployment_id,
+        DeploymentTransition::TrafficSwitched,
+    ) {
+        let (source, diverged) =
+            rollback_public_route(source, &materialized, &public_configuration.caddyfile_path);
+        return Err(public_failure(
+            connection,
+            &exposure.application_id,
+            "deployment_transition_failed",
+            source,
+            container_id,
+            runtime_id,
+            diverged,
+        ));
+    }
+    progress.state_changed(deployment_id, DeploymentStatus::VerifyingExternal);
+    progress.started(
+        DeploymentStep::ExternalHealthCheck,
+        format!("https://{}{}", exposure.domain, specification.health_path),
+    );
+    if let Err(source) = check_external_health(
+        &exposure.domain,
+        &specification.health_path,
+        specification.expected_status,
+    ) {
+        let (source, diverged) =
+            rollback_public_route(source, &materialized, &public_configuration.caddyfile_path);
+        return Err(public_failure(
+            connection,
+            &exposure.application_id,
+            "external_health_check_failed",
+            source,
+            container_id,
+            runtime_id,
+            diverged,
+        ));
+    }
+    progress.completed(
+        DeploymentStep::ExternalHealthCheck,
+        format!("{} returned expected status", exposure.domain),
+    );
+
+    progress.started(
+        DeploymentStep::PromoteCandidate,
+        format!("runtime {runtime_id}"),
+    );
+    let promoted = match promote_public_candidate(connection, runtime_id, commit_sha) {
+        Ok(promoted) => promoted,
+        Err(source) => {
+            let (source, diverged) =
+                rollback_public_route(source, &materialized, &public_configuration.caddyfile_path);
+            return Err(public_failure(
+                connection,
+                &exposure.application_id,
+                "candidate_promotion_failed",
+                source,
+                container_id,
+                runtime_id,
+                diverged,
+            ));
+        }
+    };
+    progress.completed(
+        DeploymentStep::PromoteCandidate,
+        format!("runtime {runtime_id} promoted to Current"),
+    );
+    progress.state_changed(deployment_id, DeploymentStatus::Succeeded);
+
+    Ok((runtime_id.to_owned(), promoted.finished_at))
+}
+
+#[derive(Debug)]
+struct PublicHealthFailure {
+    result: HealthCheckResult,
+}
+
+impl fmt::Display for PublicHealthFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "candidate failed its internal health check: {:?}",
+            self.result
+        )
+    }
+}
+
+impl Error for PublicHealthFailure {}
+
+#[derive(Debug)]
+struct PublicRouteRollbackError {
+    original: Box<dyn Error>,
+    recovery: crate::caddy_exposure::CaddyRecoveryError,
+}
+
+impl fmt::Display for PublicRouteRollbackError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{}; public route recovery also failed: {}",
+            self.original, self.recovery
+        )
+    }
+}
+
+impl Error for PublicRouteRollbackError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(self.original.as_ref())
+    }
+}
+
+#[derive(Debug)]
+struct ExposureFailureRecordingError {
+    original: Box<dyn Error>,
+    persistence: PromotePublicCandidateError,
+}
+
+impl fmt::Display for ExposureFailureRecordingError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{}; exposure failure could not be recorded: {}",
+            self.original, self.persistence
+        )
+    }
+}
+
+impl Error for ExposureFailureRecordingError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(self.original.as_ref())
+    }
+}
+
+fn rollback_public_route(
+    original: impl Error + 'static,
+    materialized: &crate::caddy_exposure::MaterializedCaddyFragment,
+    caddyfile_path: &Path,
+) -> (Box<dyn Error>, bool) {
+    match restore_materialized_caddy_fragment(materialized, caddyfile_path) {
+        Ok(()) => (Box::new(original), false),
+        Err(recovery) => (
+            Box::new(PublicRouteRollbackError {
+                original: Box::new(original),
+                recovery,
+            }),
+            true,
+        ),
+    }
+}
+
+fn public_failure(
+    connection: &Connection,
+    application_id: &str,
+    code: &'static str,
+    source: Box<dyn Error>,
+    container_id: &str,
+    runtime_id: &str,
+    diverged: bool,
+) -> FailedExecution {
+    let message = source.to_string();
+    let source = match record_public_exposure_failure(
+        connection,
+        application_id,
+        code,
+        &message,
+        diverged,
+    ) {
+        Ok(()) => source,
+        Err(persistence) => Box::new(ExposureFailureRecordingError {
+            original: source,
+            persistence,
+        }),
+    };
+    FailedExecution {
+        code,
+        source,
+        container_id: Some(container_id.to_owned()),
+        runtime_id: Some(runtime_id.to_owned()),
+        failure_persisted: false,
+    }
 }
 
 fn finish_failed_deployment(

@@ -65,6 +65,31 @@ fn advances_in_order_through_internal_verification() {
 }
 
 #[test]
+fn advances_through_public_verification_and_can_fail_there() {
+    let (mut connection, deployment_id, _) = pending_deployment();
+    for transition in [
+        DeploymentTransition::Start,
+        DeploymentTransition::SourcePrepared,
+        DeploymentTransition::ImageBuilt,
+        DeploymentTransition::RuntimeRunning,
+        DeploymentTransition::InternalVerified,
+        DeploymentTransition::TrafficSwitched,
+    ] {
+        advance_deployment(&connection, &deployment_id, transition).unwrap();
+    }
+
+    let failure = fail_deployment(
+        &mut connection,
+        &deployment_id,
+        "external_health_check_failed",
+        "public endpoint returned 503",
+    )
+    .unwrap();
+
+    assert_eq!(failure.stage, DeploymentStatus::VerifyingExternal);
+}
+
+#[test]
 fn rejects_skipped_and_repeated_transitions_without_changing_state() {
     let (connection, deployment_id, _) = pending_deployment();
 

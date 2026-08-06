@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use pneuma::caddy_exposure::{
     CaddyCommandError, CaddyFilesystemAction, MaterializeCaddyFragmentError,
-    materialize_caddy_fragment,
+    materialize_caddy_fragment, restore_materialized_caddy_fragment,
 };
 
 const CHILD_CASE: &str = "PNEUMA_CADDY_TEST_CASE";
@@ -48,6 +48,18 @@ fn validates_the_complete_configuration_and_reloads_caddy() {
             ),
         ]
     );
+}
+
+#[test]
+fn restores_a_successfully_applied_fragment_when_later_work_fails() {
+    let environment = CaddyTestEnvironment::new();
+    environment.write_previous("known good route\n");
+
+    environment.run_child("success-and-restore");
+
+    assert_eq!(environment.active_fragment(), "known good route\n");
+    assert!(!environment.temporary_path().exists());
+    assert_eq!(environment.caddy_commands().len(), 4);
 }
 
 #[test]
@@ -207,7 +219,7 @@ fn caddy_child_process() {
     );
 
     match case {
-        "success" => {
+        "success" | "success-and-restore" => {
             let materialized = result.unwrap();
             assert_eq!(
                 materialized.path,
@@ -222,6 +234,9 @@ fn caddy_child_process() {
                 "valid configuration\n"
             );
             assert_eq!(materialized.reload_stdout, "reload complete\n");
+            if case == "success-and-restore" {
+                restore_materialized_caddy_fragment(&materialized, &caddyfile_path).unwrap();
+            }
         }
         "fragment-validation-failure" => {
             let error = result.unwrap_err();

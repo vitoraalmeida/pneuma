@@ -18,6 +18,8 @@ pub struct MaterializedCaddyFragment {
     pub configuration_validation_stderr: String,
     pub reload_stdout: String,
     pub reload_stderr: String,
+    previous_fragment: Option<Vec<u8>>,
+    temporary_path: PathBuf,
 }
 
 #[derive(Debug)]
@@ -189,6 +191,21 @@ impl Error for MaterializeCaddyFragmentError {
     }
 }
 
+impl MaterializeCaddyFragmentError {
+    pub fn recovery_failed(&self) -> bool {
+        matches!(
+            self,
+            Self::ValidateConfiguration {
+                recovery: Some(_),
+                ..
+            } | Self::Reload {
+                recovery: Some(_),
+                ..
+            }
+        )
+    }
+}
+
 pub fn materialize_caddy_fragment(
     managed_directory: &Path,
     caddyfile_path: &Path,
@@ -286,7 +303,23 @@ pub fn materialize_caddy_fragment(
         configuration_validation_stderr,
         reload_stdout,
         reload_stderr,
+        previous_fragment,
+        temporary_path,
     })
+}
+
+/// Restores the fragment that was active before a successful materialization and
+/// reloads Caddy. This is used when a later external health check rejects the route.
+pub fn restore_materialized_caddy_fragment(
+    materialized: &MaterializedCaddyFragment,
+    caddyfile_path: &Path,
+) -> Result<(), CaddyRecoveryError> {
+    recover_previous_configuration(
+        &materialized.path,
+        &materialized.temporary_path,
+        &materialized.previous_fragment,
+        caddyfile_path,
+    )
 }
 
 fn validate_input(
