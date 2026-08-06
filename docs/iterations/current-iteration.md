@@ -1,59 +1,57 @@
-# Iteração atual — Health check interno
+# Iteração atual — Início persistido de deployment
 
 **Status:** concluída
 
 **Atualizado em:** 6 de agosto de 2026
 
-**Objetivo:** verificar por HTTP se um container candidato em execução está saudável antes de uma futura ativação.
+**Objetivo:** registrar de forma atômica uma revisão imutável e uma nova tentativa de deployment em estado `Pending`.
 
-## Trabalho atual — item 22 do roadmap
+## Trabalho atual — item 23 do roadmap
 
-Adicionar o health check interno mínimo sobre o endpoint loopback observado no Podman:
+Adicionar o ponto inicial durável do processo de deployment:
 
 ```text
-Container em execução + endpoint loopback
-    ↓ GET no caminho configurado
-Resposta HTTP esperada
+Aplicação importada + commit resolvido
+    ↓ transação curta
+Revision única por aplicação e commit
     ↓
-Healthy ou causa estruturada de falha
+Deployment Pending
 ```
 
 ### Resultado esperado
 
-- a verificação usa timeout, intervalo e quantidade de tentativas limitados;
-- sucesso registra quantidade de tentativas e status HTTP observado;
-- falha diferencia timeout, endpoint inalcançável, resposta inválida e status inesperado;
-- o checker apenas observa saúde e não promove, para ou remove containers.
+- migrations criam somente as tabelas `revisions` e `deployments` deste incremento;
+- a revisão pertence à aplicação e pode ser reutilizada por tentativas futuras;
+- todo deployment nasce em estado explícito `Pending` com horário de solicitação;
+- somente um deployment não terminal pode existir por aplicação.
 
 ### Progresso
 
-- [x] checker HTTP interno síncrono;
-- [x] política operacional limitada;
-- [x] resultado e causas de falha explícitos;
-- [x] testes locais do protocolo e das tentativas;
-- [x] teste com container Podman rootless;
-- [x] commit `a12c322 feat: check candidate health`.
+- [x] migration incremental de revisões e deployments;
+- [x] tipos concretos de revisão e deployment pendente;
+- [x] criação transacional da tentativa;
+- [x] exclusão de tentativas simultâneas por aplicação;
+- [x] testes de migration e persistência;
+- [x] commit `8b3a62c feat: persist pending deployments`.
 
 ### Critérios de aceite
 
-- [x] endpoint loopback que responde com o status esperado resulta em `Healthy`;
-- [x] status inesperado é retornado como causa estruturada após as tentativas;
-- [x] falhas de conexão e timeout não causam panic;
-- [x] endpoint que não é loopback é rejeitado antes da conexão;
-- [x] uma tentativa posterior pode confirmar saúde durante a inicialização;
-- [x] o teste de runtime verifica saúde pelo endpoint real do container;
+- [x] banco vazio aplica as migrations 1 e 2 em ordem;
+- [x] banco na versão 1 recebe a versão 2 sem perder o catálogo;
+- [x] commit completo cria ou reutiliza uma revisão da aplicação;
+- [x] nova tentativa é persistida como `Pending` com timestamps;
+- [x] aplicação inexistente e commit inválido produzem erros estruturados;
+- [x] segunda tentativa não terminal para a mesma aplicação é rejeitada;
+- [x] constraints impedem associar deployment à revisão de outra aplicação;
 - [x] testes cobrem comportamento observável sem duplicação desnecessária;
 - [x] formatação, Clippy, testes e build release passam sem warnings.
 
-O teste end-to-end exige Podman rootless configurado e é executado explicitamente fora da suíte portátil padrão.
-
 ## Fora do escopo desta iteração
 
-- persistência do resultado de saúde;
-- estados e histórico de deployment;
-- promoção ou rejeição automática da candidata;
-- health check externo;
-- integração com Caddy;
-- rollback;
-- configuração de timeout e tentativas no manifesto;
+- transições posteriores a `Pending`;
+- execução coordenada de Git, build, runtime e health check;
+- persistência de instâncias de runtime;
+- persistência de resultados de health check;
+- listagem do histórico;
+- promoção, Caddy e rollback;
 - comando de deploy na CLI.
