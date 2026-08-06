@@ -149,7 +149,7 @@ impl TestImage {
 impl Drop for TestImage {
     fn drop(&mut self) {
         let _ = Command::new("podman")
-            .args(["image", "remove", "--force"])
+            .args(["image", "rm", "--force"])
             .arg(&self.reference)
             .output();
     }

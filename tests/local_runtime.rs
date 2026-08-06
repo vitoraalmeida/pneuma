@@ -5,20 +5,38 @@ use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use pneuma::local_build::build_image;
-use pneuma::local_runtime::{CreateContainerError, create_container};
+use pneuma::local_runtime::{
+    ControlContainerError, CreateContainerError, ObservedRuntimeState, create_container,
+    observe_container, start_container, stop_container,
+};
 
 #[test]
 #[ignore = "requires configured rootless Podman"]
-fn creates_a_stopped_loopback_only_candidate_and_preserves_failure_diagnostics() {
+fn creates_controls_and_observes_a_rootless_candidate() {
     assert_eq!(
         podman(&["info", "--format", "{{.Host.Security.Rootless}}"]).trim(),
         "true"
     );
 
     let temporary_directory = TemporaryDirectory::new();
+    let runtime_source = temporary_directory.path.join("runtime.rs");
+    let runtime_process = temporary_directory.path.join("runtime-process");
+    fs::write(
+        &runtime_source,
+        "fn main() { loop { std::thread::park(); } }\n",
+    )
+    .unwrap();
+    let compile = Command::new("rustc")
+        .args(["-C", "target-feature=+crt-static", "-C", "opt-level=s"])
+        .arg(&runtime_source)
+        .arg("-o")
+        .arg(&runtime_process)
+        .output()
+        .unwrap();
+    assert_command_succeeded(&compile);
     fs::write(
         temporary_directory.path.join("Containerfile"),
-        "FROM scratch\nCMD [\"/bin/true\"]\n",
+        "FROM scratch\nCOPY runtime-process /runtime-process\nENTRYPOINT [\"/runtime-process\"]\n",
     )
     .unwrap();
     let commit_sha = format!("{:040x}", unique_suffix());
@@ -89,7 +107,53 @@ fn creates_a_stopped_loopback_only_candidate_and_preserves_failure_diagnostics()
         } if !stdout.is_empty() || !stderr.is_empty()
     ));
 
-    drop(container);
+    assert_eq!(
+        observe_container(&container.id, 8080).unwrap(),
+        pneuma::local_runtime::ContainerObservation {
+            state: ObservedRuntimeState::Created,
+            endpoint: None,
+        }
+    );
+
+    start_container(&container.id).unwrap();
+    start_container(&container.id).unwrap();
+    let running = observe_container(&container.id, 8080).unwrap();
+    assert_eq!(running.state, ObservedRuntimeState::Running);
+    let endpoint = running
+        .endpoint
+        .expect("running container needs an endpoint");
+    assert!(endpoint.ip().is_loopback());
+    assert_ne!(endpoint.port(), 0);
+
+    stop_container(&container.id).unwrap();
+    stop_container(&container.id).unwrap();
+    assert_eq!(
+        observe_container(&container.id, 8080).unwrap(),
+        pneuma::local_runtime::ContainerObservation {
+            state: ObservedRuntimeState::Stopped,
+            endpoint: None,
+        }
+    );
+
+    let container_id = container.id.clone();
+    container.remove();
+    assert_eq!(
+        observe_container(&container_id, 8080).unwrap(),
+        pneuma::local_runtime::ContainerObservation {
+            state: ObservedRuntimeState::Missing,
+            endpoint: None,
+        }
+    );
+    let error = start_container(&container_id).unwrap_err();
+    assert!(matches!(
+        error,
+        ControlContainerError::Podman {
+            ref stdout,
+            ref stderr,
+            ..
+        } if !stdout.is_empty() || !stderr.is_empty()
+    ));
+
     drop(image);
 }
 
@@ -128,7 +192,7 @@ impl TestImage {
 impl Drop for TestImage {
     fn drop(&mut self) {
         let _ = Command::new("podman")
-            .args(["image", "remove", "--force"])
+            .args(["image", "rm", "--force"])
             .arg(&self.reference)
             .output();
     }
@@ -142,12 +206,25 @@ impl TestContainer {
     fn new(id: String) -> Self {
         Self { id }
     }
+
+    fn remove(mut self) {
+        let output = Command::new("podman")
+            .args(["container", "rm", "--force"])
+            .arg(&self.id)
+            .output()
+            .unwrap();
+        assert_command_succeeded(&output);
+        self.id.clear();
+    }
 }
 
 impl Drop for TestContainer {
     fn drop(&mut self) {
+        if self.id.is_empty() {
+            return;
+        }
         let _ = Command::new("podman")
-            .args(["container", "remove", "--force"])
+            .args(["container", "rm", "--force"])
             .arg(&self.id)
             .output();
     }
