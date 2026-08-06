@@ -228,7 +228,7 @@ fn is_trimmed_nonempty(value: &str) -> bool {
     !value.is_empty() && value.trim() == value
 }
 
-fn is_valid_domain(domain: &str) -> bool {
+pub(crate) fn is_valid_domain(domain: &str) -> bool {
     if domain.is_empty() || domain.len() > 253 || !domain.is_ascii() {
         return false;
     }

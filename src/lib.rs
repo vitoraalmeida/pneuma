@@ -1,4 +1,5 @@
 pub mod application;
+pub mod caddy_exposure;
 pub mod create_deployment;
 pub mod database;
 pub mod deploy_internal_revision;
