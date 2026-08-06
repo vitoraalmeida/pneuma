@@ -1,49 +1,55 @@
-# Iteração atual — Persistência da exposição materializada
+# Iteração atual — Deployment público utilizável
 
 **Status:** concluída
 
 **Atualizado em:** 6 de agosto de 2026
 
-**Implementação:** `38f6ab6` (`feat: persist exposure materialization state`)
+**Implementação:** `280e442` (`feat: deploy public applications through Caddy`)
 
-**Objetivo:** distinguir no SQLite a exposição desejada da última rota pública conhecida sem ainda coordenar o deployment com o Caddy.
+**Objetivo:** permitir que `pneuma app deploy` publique uma aplicação no Caddy e só conclua após verificar a rota HTTPS.
 
-## Trabalho atual — item 34 da sequência de implementação
+## Trabalho atual — item 35 da sequência de implementação
 
-Evoluir a tabela `exposures` para registrar runtime ativo, estado de materialização, versão da configuração, horário e último erro.
+Conectar health interno, aplicação reversível do fragmento Caddy, health externo, promoção da candidata e persistência da exposição.
 
 ### Resultado esperado
 
-- bancos existentes são migrados sem perder intenção de exposição;
-- exposições existentes começam como `not_materialized`;
-- o banco aceita somente estados de materialização conhecidos;
-- runtime materializado, quando presente, referencia uma instância persistida;
-- importações novas recebem o mesmo estado inicial por default.
+- deployment interno preserva o comportamento atual;
+- deployment público verifica a candidata no endpoint loopback antes de expô-la;
+- Caddy recebe a rota candidata por validação e reload seguros;
+- a URL HTTPS é verificada pelo domínio via listener local do Caddy;
+- somente depois da verificação externa runtime, deployment e exposição são promovidos atomicamente;
+- falha externa restaura a rota anterior e remove apenas a candidata.
 
 ### Progresso
 
-- [x] migration incremental de `exposures`;
-- [x] estado inicial para registros existentes e novos;
-- [x] referência opcional ao runtime ativo;
-- [x] campos de versão, horário e diagnóstico;
-- [x] testes de banco vazio, upgrade e constraints.
+- [x] rollback explícito de fragmento Caddy aplicado;
+- [x] health check HTTPS externo;
+- [x] transições públicas do deployment;
+- [x] promoção pública transacional;
+- [x] persistência de aplicação/falha da exposição;
+- [x] configuração CLI dos paths do Caddy;
+- [x] testes de sucesso e restauração.
 
 ### Critérios de aceite
 
-- [x] migration publicada anteriormente não é alterada;
-- [x] banco vazio chega à versão 4;
-- [x] upgrade da versão 3 preserva aplicação, exposição e runtime existentes;
-- [x] exposição migrada inicia como `not_materialized` sem runtime ou versão ativos;
-- [x] estado desconhecido é rejeitado pelo SQLite;
-- [x] `active_runtime_id` inexistente é rejeitado pela foreign key;
-- [x] migration é idempotente;
+- [x] aplicação pública deixa de ser recusada pelo comando geral de deployment;
+- [x] health interno ocorre antes da troca de tráfego;
+- [x] Caddy usa diretório gerenciado e Caddyfile configuráveis;
+- [x] health externo usa HTTPS, domínio configurado e path registrado;
+- [x] sucesso persiste runtime atual, deployment sucedido e exposição ativa;
+- [x] falha do Caddy preserva a rota e runtime anteriores;
+- [x] falha do health externo restaura a rota anterior;
+- [x] falha pública preserva diagnóstico e remove a candidata;
+- [x] deployment interno continua passando sem exigir Caddy ou curl;
 - [x] testes adicionais permanecem proporcionais ao comportamento;
 - [x] formatação, Clippy, testes e build release passam sem warnings.
 
 ## Fora do escopo desta iteração
 
-- funções de transição da materialização;
-- coordenação entre transação SQLite e efeitos no Caddy;
-- promoção de deployment público;
-- health check externo;
-- remoção de rota pública.
+- comando separado `app expose`;
+- tornar aplicação ativa interna;
+- consulta de status e histórico;
+- rollback por comando para deployment antigo;
+- automação remota após push;
+- registry de imagens.
