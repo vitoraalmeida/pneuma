@@ -1,6 +1,6 @@
 # Arquitetura do Pneuma
 
-**Status:** documento vivo — descreve o sistema como implementado. atual.
+**Status:** documento vivo — descreve o sistema como implementado.
 
 ## 1. Estrutura
 

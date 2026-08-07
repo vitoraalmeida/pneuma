@@ -22,8 +22,8 @@ export PNEUMA_CADDYFILE_PATH=/etc/caddy/Caddyfile
 Depois que o commit exato passar no CI, atualize o checkout da VPS e execute:
 
 ```bash
-pneuma app import /srv/personal-site
-pneuma --verbose app deploy personal-site /srv/personal-site --revision <commit-sha>
+pneuma app import /srv/vitoralmeida.tech
+pneuma --verbose app deploy vitoralmeida-tech-prod /srv/vitoralmeida.tech --revision <commit-sha>
 ```
 
 O deployment somente termina como `Succeeded` depois de:
@@ -35,3 +35,17 @@ O deployment somente termina como `Succeeded` depois de:
 5. promover runtime, deployment e exposição em uma transação SQLite.
 
 Falha depois da troca do Caddy restaura e recarrega o fragmento anterior antes de remover a candidata. Se a própria recuperação falhar, o erro é preservado e a exposição fica marcada como `diverged`, exigindo inspeção manual antes de nova promoção.
+
+## Validação em produção
+
+Em 7 de agosto de 2026, o fluxo acima foi exercitado em produção: aplicação
+`vitoralmeida-tech-prod`, domínio `vitoralmeida.tech`, repositório
+`https://github.com/vitoraalmeida/vitoralmeida.tech`. O runtime roda como Podman
+rootless sob o usuário `pneuma`, o Caddy controla as portas 80 e 443 com o
+certificado HTTPS e o site responde `https://vitoralmeida.tech/healthz` com HTTP
+200.
+
+A remoção de uma aplicação não possui comando na CLI; para desregistrar, pare e
+remova o container, remova o fragmento do Caddy e recarregue, e depois apague a
+linha da aplicação no SQLite com `PRAGMA foreign_keys = ON` (o `DELETE` em
+`applications` remove as linhas dependentes por cascata).

@@ -132,12 +132,30 @@ if [[ "$SSH_REPOSITORY" == true && ! -f "$SSH_KEY" ]]; then
     exit 0
 fi
 
-if [[ "$SSH_REPOSITORY" == true ]]; then
-    if [[ "$PNEUMA_SOURCE_URL" == *github.com* ||
-          "$APPLICATION_SOURCE_URL" == *github.com* ]]; then
-        runuser -u "$PNEUMA_USER" -- \
-            ssh-keyscan -H github.com >>"$SSH_DIR/known_hosts"
+extract_ssh_host() {
+    local url="$1" remainder host
+    if [[ "$url" == ssh://* ]]; then
+        remainder="${url#ssh://}"
+        remainder="${remainder#*@}"
+        remainder="${remainder%%/*}"
+        host="${remainder%%:*}"
+    elif [[ "$url" == git@* ]]; then
+        host="${url#git@}"
+        host="${host%%:*}"
+    else
+        host=""
     fi
+    printf '%s' "$host"
+}
+
+if [[ "$SSH_REPOSITORY" == true ]]; then
+    for host in "$(extract_ssh_host "$PNEUMA_SOURCE_URL")" "$(extract_ssh_host "$APPLICATION_SOURCE_URL")"; do
+        [[ -n "$host" ]] || continue
+        if ! grep -qF "$host" "$SSH_DIR/known_hosts" 2>/dev/null; then
+            runuser -u "$PNEUMA_USER" -- \
+                ssh-keyscan -H "$host" >>"$SSH_DIR/known_hosts"
+        fi
+    done
 
     chown "$PNEUMA_USER:$PNEUMA_USER" "$SSH_DIR/known_hosts" 2>/dev/null || true
     chmod 0600 "$SSH_DIR/known_hosts" 2>/dev/null || true
@@ -217,14 +235,28 @@ caddy validate \
 systemctl restart caddy
 systemctl start "user@$PNEUMA_UID.service" || true
 
+ROOTLESS_OUTPUT="$(runuser -u "$PNEUMA_USER" -- \
+    env HOME="$PNEUMA_HOME" XDG_RUNTIME_DIR="/run/user/$PNEUMA_UID" \
+    podman info --format '{{.Host.Security.Rootless}}' 2>&1 || true)"
+
+if [[ "$ROOTLESS_OUTPUT" != "true" ]]; then
+    echo
+    echo "Rootless Podman is not usable by the $PNEUMA_USER user."
+    echo "Expected {{.Host.Security.Rootless}} to be true; got: $ROOTLESS_OUTPUT"
+    echo "Check subuid/subgid, fuse-overlayfs and linger, then rerun the script."
+    exit 1
+fi
+
 echo
 echo "VPS setup completed."
 echo
 echo "Open a Pneuma shell:"
 echo "  sudo -iu pneuma"
 echo
-echo "Verify Podman:"
-echo "  podman info --format '{{.Host.Security.Rootless}}'"
+echo "Rootless Podman is working for the pneuma user."
 echo
-echo "Import the application:"
+echo "Import and deploy the application. The application name is the"
+echo "[application] name declared in the pneuma.toml of the checkout:"
 echo "  pneuma app import $APPLICATION_PATH"
+echo "  pneuma app list"
+echo "  pneuma app deploy <application-name> $APPLICATION_PATH --revision <commit-sha>"
