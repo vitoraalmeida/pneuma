@@ -5,6 +5,10 @@ use std::fmt;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use pneuma::application::Application;
+use pneuma::application_runtime::{
+    RuntimeLifecycleError, report_application_status, start_application, stop_application,
+};
 use pneuma::database::{self, DatabaseError};
 use pneuma::deploy_internal_revision::{
     DeployInternalRevisionError, PublicDeploymentConfiguration, deploy_revision,
@@ -21,7 +25,7 @@ const CADDY_MANAGED_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_CADDY_MANAGED_PATH
 const DEFAULT_CADDY_MANAGED_PATH: &str = "/etc/caddy/applications";
 const CADDYFILE_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_CADDYFILE_PATH";
 const DEFAULT_CADDYFILE_PATH: &str = "/etc/caddy/Caddyfile";
-const USAGE: &str = "Usage:\n  pneuma [--verbose] app import <repository-path>\n  pneuma [--verbose] app list\n  pneuma [--verbose] app deploy <application-name> <repository-path> --revision <revision>";
+const USAGE: &str = "Usage:\n  pneuma [--verbose] app import <repository-path>\n  pneuma [--verbose] app list\n  pneuma [--verbose] app status <application-name>\n  pneuma [--verbose] app stop <application-name>\n  pneuma [--verbose] app start <application-name>\n  pneuma [--verbose] app deploy <application-name> <repository-path> --revision <revision>";
 
 struct Invocation {
     verbose: bool,
@@ -33,6 +37,15 @@ enum Command {
         repository_path: PathBuf,
     },
     List,
+    Status {
+        application_name: String,
+    },
+    Stop {
+        application_name: String,
+    },
+    Start {
+        application_name: String,
+    },
     Deploy {
         application_name: String,
         repository_path: PathBuf,
@@ -55,6 +68,9 @@ enum CliError {
     ApplicationNotFound {
         application_name: String,
     },
+    ApplicationRuntime {
+        source: Box<RuntimeLifecycleError>,
+    },
     Deploy {
         source: Box<DeployInternalRevisionError>,
     },
@@ -70,6 +86,7 @@ impl fmt::Display for CliError {
             Self::ApplicationNotFound { application_name } => {
                 write!(formatter, "application `{application_name}` was not found")
             }
+            Self::ApplicationRuntime { source } => write!(formatter, "{source}"),
             Self::Deploy { source } => write!(formatter, "{source}"),
         }
     }
@@ -83,6 +100,7 @@ impl Error for CliError {
             Self::Import { source } => Some(source),
             Self::List { source } => Some(source),
             Self::Deploy { source } => Some(source.as_ref()),
+            Self::ApplicationRuntime { source } => Some(source.as_ref()),
             Self::ApplicationNotFound { .. } => None,
         }
     }
@@ -115,6 +133,22 @@ fn parse_command(arguments: &[OsString]) -> Result<Invocation, CliError> {
             })
         }
         [app, list] if app == OsStr::new("app") && list == OsStr::new("list") => Ok(Command::List),
+        [app, status, application_name]
+            if app == OsStr::new("app") && status == OsStr::new("status") =>
+        {
+            let application_name = application_name.to_str().ok_or(CliError::Usage)?.to_owned();
+            Ok(Command::Status { application_name })
+        }
+        [app, stop, application_name] if app == OsStr::new("app") && stop == OsStr::new("stop") => {
+            let application_name = application_name.to_str().ok_or(CliError::Usage)?.to_owned();
+            Ok(Command::Stop { application_name })
+        }
+        [app, start, application_name]
+            if app == OsStr::new("app") && start == OsStr::new("start") =>
+        {
+            let application_name = application_name.to_str().ok_or(CliError::Usage)?.to_owned();
+            Ok(Command::Start { application_name })
+        }
         [
             app,
             deploy,
@@ -180,6 +214,62 @@ fn run(invocation: Invocation) -> Result<(), CliError> {
                 println!("{}\tRegistered\t{deployment_status}", application.name);
             }
         }
+        Command::Status { application_name } => {
+            if verbose {
+                eprintln!("[verbose] resolve application by name: {application_name}");
+            }
+            let application = resolve_application(&connection, &application_name)?;
+            if verbose {
+                eprintln!(
+                    "[verbose] report status of application {}",
+                    application.name
+                );
+            }
+            let observation =
+                report_application_status(&mut connection, &application.id, &application.name)
+                    .map_err(|source| CliError::ApplicationRuntime {
+                        source: Box::new(source),
+                    })?;
+            println!("Application: {}", application.name);
+            println!("Desired state: {:?}", observation.desired_runtime_state);
+            println!("Observed state: {:?}", observation.observed_runtime_state);
+            println!("Runtime: {}", observation.runtime_id);
+            println!("Container: {}", observation.container_id);
+        }
+        Command::Stop { application_name } => {
+            if verbose {
+                eprintln!("[verbose] resolve application by name: {application_name}");
+            }
+            let application = resolve_application(&connection, &application_name)?;
+            if verbose {
+                eprintln!("[verbose] stop application {}", application.name);
+            }
+            let observation = stop_application(&mut connection, &application.id, &application.name)
+                .map_err(|source| CliError::ApplicationRuntime {
+                    source: Box::new(source),
+                })?;
+            println!("Stopped {}", application.name);
+            println!("Desired state: {:?}", observation.desired_runtime_state);
+            println!("Observed state: {:?}", observation.observed_runtime_state);
+        }
+        Command::Start { application_name } => {
+            if verbose {
+                eprintln!("[verbose] resolve application by name: {application_name}");
+            }
+            let application = resolve_application(&connection, &application_name)?;
+            if verbose {
+                eprintln!("[verbose] start application {}", application.name);
+            }
+            let observation =
+                start_application(&mut connection, &application.id, &application.name).map_err(
+                    |source| CliError::ApplicationRuntime {
+                        source: Box::new(source),
+                    },
+                )?;
+            println!("Started {}", application.name);
+            println!("Desired state: {:?}", observation.desired_runtime_state);
+            println!("Observed state: {:?}", observation.observed_runtime_state);
+        }
         Command::Deploy {
             application_name,
             repository_path,
@@ -188,13 +278,7 @@ fn run(invocation: Invocation) -> Result<(), CliError> {
             if verbose {
                 eprintln!("[verbose] resolve application by name: {application_name}");
             }
-            let application = list_applications(&connection)
-                .map_err(|source| CliError::List { source })?
-                .into_iter()
-                .find(|application| application.name == application_name)
-                .ok_or_else(|| CliError::ApplicationNotFound {
-                    application_name: application_name.clone(),
-                })?;
+            let application = resolve_application(&connection, &application_name)?;
             let workspace_path = env::var_os(WORKSPACE_PATH_ENVIRONMENT_VARIABLE)
                 .filter(|path| !path.is_empty())
                 .map(PathBuf::from)
@@ -261,4 +345,17 @@ fn configured_path(variable: &str, default: &str) -> PathBuf {
         .filter(|path| !path.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(default))
+}
+
+fn resolve_application(
+    connection: &rusqlite::Connection,
+    application_name: &str,
+) -> Result<Application, CliError> {
+    list_applications(connection)
+        .map_err(|source| CliError::List { source })?
+        .into_iter()
+        .find(|application| application.name == application_name)
+        .ok_or_else(|| CliError::ApplicationNotFound {
+            application_name: application_name.to_owned(),
+        })
 }

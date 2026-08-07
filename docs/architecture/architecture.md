@@ -12,9 +12,9 @@ Crate único e plano, sem camadas formais:
 - `src/main.rs` — CLI fina com parsing manual de argumentos (sem clap); compõe
   configuração e chama os casos de uso; não contém lógica de domínio.
 - `src/*.rs` — um módulo por caso de uso (`import_application`,
-  `create_deployment`, `promote_public_candidate`, ...) ou por adapter
-  (`git_source`, `local_build`, `local_runtime`, `caddy_exposure`,
-  `external_health`, `database`).
+  `application_runtime`, `create_deployment`, `promote_public_candidate`, ...)
+  ou por adapter (`git_source`, `local_build`, `local_runtime`,
+  `caddy_exposure`, `external_health`, `database`).
 - `src/deploy_internal_revision.rs` — orquestra o deployment inteiro, interno e
   público, emitindo progresso passo a passo.
 - `src/transition_deployment.rs` — aplica a máquina de estados persistida.
@@ -60,6 +60,21 @@ com defaults em `/var/lib/pneuma` e `/etc/caddy`.
 
 A supervisão por systemd/Quadlet prevista na D0 não foi implementada; o runtime
 é um container Podman direto.
+
+### 4.1 Ciclo de vida do runtime
+
+- a promoção do deployment marca `applications.desired_runtime_state` como
+  `running`, persistindo a intenção junto da ativação;
+- `app status` observa o container atual (`role = 'current'`) no Podman e
+  registra a observação: `last_observed_state`, `last_observed_at` e, quando em
+  execução, `host_port`; se o container estiver ausente, persiste
+  `missing`/`removed_at` e orienta um novo deployment;
+- `app stop` e `app start` persistem o estado desejado antes do efeito externo,
+  controlam o container e persistem a observação resultante (saga local);
+- parar uma aplicação já parada e iniciar uma já em execução são sucessos
+  idempotentes;
+- aplicação registrada mas nunca implantada, e nome desconhecido, falham antes
+  de qualquer efeito externo.
 
 ## 5. Exposição pelo Caddy
 

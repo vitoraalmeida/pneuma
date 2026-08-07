@@ -206,6 +206,14 @@ pub fn promote_internal_candidate(
             actual: "changed during promotion".to_owned(),
         });
     }
+    transaction
+        .execute(
+            "UPDATE applications
+             SET desired_runtime_state = 'running', updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?1",
+            [&target.application_id],
+        )
+        .map_err(|source| PromoteInternalCandidateError::Persistence { source })?;
     let finished_at = transaction
         .query_row(
             "SELECT finished_at FROM deployments WHERE id = ?1",

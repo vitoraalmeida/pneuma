@@ -29,6 +29,15 @@ fn promotes_a_healthy_internal_candidate_idempotently() {
     assert_eq!(persisted.0, "current");
     assert_eq!(persisted.1, "succeeded");
     assert_eq!(persisted.2.as_deref(), Some(promoted.finished_at.as_str()));
+    let desired_state: String = connection
+        .query_row(
+            "SELECT desired_runtime_state FROM applications
+             WHERE id = (SELECT application_id FROM runtime_instances WHERE id = ?1)",
+            [&runtime_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(desired_state, "running");
 }
 
 #[test]

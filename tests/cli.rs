@@ -132,6 +132,15 @@ fn deploys_an_internal_application_and_prints_its_identity() {
         fs::read_dir(&environment.workspace_path).unwrap().count(),
         1
     );
+    let connection = database::open(&environment.database_path).unwrap();
+    let desired_state: String = connection
+        .query_row(
+            "SELECT desired_runtime_state FROM applications",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(desired_state, "running");
 }
 
 #[test]
@@ -290,6 +299,14 @@ fn deploys_a_public_application_and_persists_the_active_route() {
             "succeeded".to_owned(),
         )
     );
+    let desired_state: String = connection
+        .query_row(
+            "SELECT desired_runtime_state FROM applications",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(desired_state, "running");
     assert!(
         environment
             .managed_caddy_directory
@@ -402,6 +419,131 @@ fn accepts_native_repository_paths_but_requires_textual_name_and_revision() {
         assert!(!output.status.success());
         assert!(String::from_utf8_lossy(&output.stderr).contains("Usage:"));
     }
+}
+
+#[test]
+fn reports_desired_and_observed_state_after_deployment() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    environment.deploy_current_revision();
+
+    let output = environment.run_lifecycle("status");
+
+    assert_command_succeeded(&output);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 5);
+    assert_eq!(
+        lines[0],
+        format!("Application: {}", environment.application_name)
+    );
+    assert_eq!(lines[1], "Desired state: Running");
+    assert_eq!(lines[2], "Observed state: Running");
+    assert!(lines[3].starts_with("Runtime: "));
+    assert!(lines[4].starts_with("Container: "));
+}
+
+#[test]
+fn stop_and_start_are_idempotent_and_persist_desired_and_observed_states() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    environment.deploy_current_revision();
+
+    assert_command_succeeded(&environment.run_lifecycle("stop"));
+    assert_command_succeeded(&environment.run_lifecycle("stop"));
+    let connection = database::open(&environment.database_path).unwrap();
+    let (desired, observed): (String, String) = current_runtime_states(&connection);
+    drop(connection);
+    assert_eq!(
+        (desired, observed),
+        ("stopped".to_owned(), "stopped".to_owned())
+    );
+
+    assert_command_succeeded(&environment.run_lifecycle("start"));
+    assert_command_succeeded(&environment.run_lifecycle("start"));
+    let connection = database::open(&environment.database_path).unwrap();
+    let (desired, observed): (String, String) = current_runtime_states(&connection);
+    assert_eq!(
+        (desired, observed),
+        ("running".to_owned(), "running".to_owned())
+    );
+}
+
+#[test]
+fn lifecycle_commands_fail_for_a_non_deployed_application_without_external_effects() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+
+    for subcommand in ["status", "stop", "start"] {
+        let output = environment.run_lifecycle(subcommand);
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("is not deployed"),
+            "unexpected stderr for `{subcommand}`: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    assert!(
+        !environment.root.join("podman.log").exists(),
+        "podman must not be invoked for a non-deployed application"
+    );
+}
+
+#[test]
+fn lifecycle_commands_report_an_unknown_application() {
+    let database_path = temporary_database_path();
+
+    for subcommand in ["status", "stop", "start"] {
+        let output = run_pneuma(
+            &database_path,
+            &[
+                OsStr::new("app"),
+                OsStr::new(subcommand),
+                OsStr::new("missing-application"),
+            ],
+        );
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("application `missing-application` was not found")
+        );
+    }
+    let _ = fs::remove_file(&database_path);
+}
+
+#[test]
+fn a_removed_container_guides_a_new_deployment() {
+    let status_environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&status_environment.import());
+    status_environment.deploy_current_revision();
+    fs::write(status_environment.root.join("podman-removed"), "removed").unwrap();
+
+    let status = status_environment.run_lifecycle("status");
+    assert!(!status.status.success());
+    let status_stderr = String::from_utf8_lossy(&status.stderr);
+    assert!(status_stderr.contains("is missing"));
+    assert!(status_stderr.contains("pneuma app deploy"));
+
+    let stop_environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&stop_environment.import());
+    stop_environment.deploy_current_revision();
+    fs::write(stop_environment.root.join("podman-removed"), "removed").unwrap();
+
+    let stop = stop_environment.run_lifecycle("stop");
+    assert!(!stop.status.success());
+    let stop_stderr = String::from_utf8_lossy(&stop.stderr);
+    assert!(stop_stderr.contains("is missing"));
+    assert!(stop_stderr.contains("pneuma app deploy"));
+
+    let connection = database::open(&stop_environment.database_path).unwrap();
+    let observed: String = connection
+        .query_row(
+            "SELECT last_observed_state FROM runtime_instances WHERE role = 'current'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(observed, "missing");
 }
 
 fn run_pneuma(database_path: &Path, arguments: &[&OsStr]) -> Output {
@@ -528,6 +670,34 @@ impl DeploymentEnvironment {
         self.deploy_with_external_status(port, verbose, 200)
     }
 
+    fn deploy_current_revision(&self) {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || respond_once(&listener, 200));
+        assert_command_succeeded(&self.deploy(port, false));
+        server.join().unwrap();
+    }
+
+    fn run_lifecycle(&self, subcommand: &str) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_pneuma"))
+            .env("PNEUMA_DATABASE_PATH", &self.database_path)
+            .env("PNEUMA_WORKSPACE_PATH", &self.workspace_path)
+            .env("PATH", executable_path(&self.fake_bin))
+            .env("PNEUMA_FAKE_PORT", "30000")
+            .env(
+                "PNEUMA_FAKE_CONTAINER_STATE",
+                self.root.join("container-state"),
+            )
+            .env("PNEUMA_FAKE_PODMAN_LOG", self.root.join("podman.log"))
+            .env(
+                "PNEUMA_FAKE_PODMAN_REMOVED",
+                self.root.join("podman-removed"),
+            )
+            .args(["app", subcommand, &self.application_name])
+            .output()
+            .unwrap()
+    }
+
     fn deploy_with_external_status(
         &self,
         port: u16,
@@ -604,8 +774,17 @@ fn install_fake_podman(fake_bin: &Path) {
         r#"#!/bin/sh
 set -eu
 
+if [ -n "${PNEUMA_FAKE_PODMAN_LOG:-}" ]; then
+    printf '%s\n' "$*" >> "$PNEUMA_FAKE_PODMAN_LOG"
+fi
+
 case "$1" in
-    build|start|container)
+    build)
+        ;;
+    container)
+        if [ "$2" = "exists" ] && [ -f "${PNEUMA_FAKE_PODMAN_REMOVED:-}" ]; then
+            exit 1
+        fi
         ;;
     create)
         count=0
@@ -621,10 +800,24 @@ case "$1" in
         fi
         ;;
     inspect)
-        printf 'running\n'
+        if [ -n "${PNEUMA_FAKE_CONTAINER_STATE:-}" ] && [ -f "$PNEUMA_FAKE_CONTAINER_STATE" ]; then
+            sed -n '1p' "$PNEUMA_FAKE_CONTAINER_STATE"
+        else
+            printf 'running\n'
+        fi
         ;;
     port)
         printf '127.0.0.1:%s\n' "$PNEUMA_FAKE_PORT"
+        ;;
+    start)
+        if [ -n "${PNEUMA_FAKE_CONTAINER_STATE:-}" ]; then
+            printf 'running\n' > "$PNEUMA_FAKE_CONTAINER_STATE"
+        fi
+        ;;
+    stop)
+        if [ -n "${PNEUMA_FAKE_CONTAINER_STATE:-}" ]; then
+            printf 'stopped\n' > "$PNEUMA_FAKE_CONTAINER_STATE"
+        fi
         ;;
     *)
         printf 'unsupported fake Podman command: %s\n' "$*" >&2
@@ -685,6 +878,19 @@ fn assert_identifier_line(line: &str, prefix: &str) {
     let identifier = line.strip_prefix(prefix).unwrap();
     assert_eq!(identifier.len(), 32);
     assert!(identifier.bytes().all(|byte| byte.is_ascii_hexdigit()));
+}
+
+fn current_runtime_states(connection: &rusqlite::Connection) -> (String, String) {
+    connection
+        .query_row(
+            "SELECT applications.desired_runtime_state, runtime_instances.last_observed_state
+             FROM applications
+             JOIN runtime_instances ON runtime_instances.application_id = applications.id
+             WHERE runtime_instances.role = 'current'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap()
 }
 
 fn unique_suffix() -> u128 {
