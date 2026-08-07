@@ -100,8 +100,11 @@ pub fn check_external_health(
             "2",
             "--max-time",
             "2",
+            // Caddy may provision a first certificate asynchronously after the
+            // route reload. Keep the candidate route in place long enough for
+            // ACME validation and certificate download to finish.
             "--retry",
-            "4",
+            "30",
             "--retry-delay",
             "1",
             "--retry-all-errors",
