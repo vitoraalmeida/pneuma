@@ -189,11 +189,12 @@ pneuma/
 │   │   ├── application.rs           # Application model
 │   │   └── manifest.rs              # Manifest parsing
 │   ├── use_cases/                   # Business logic
-│   │   ├── deploy_internal_revision.rs  # Deployment orchestrator
-│   │   ├── import_application.rs    # Application import
+│   │   ├── application_import.rs    # Application import
+│   │   ├── application_list.rs      # Application list
 │   │   ├── application_runtime.rs   # Lifecycle management
-│   │   ├── create_deployment.rs     # Deployment creation
-│   │   ├── transition_deployment.rs # State machine
+│   │   ├── deployment_create.rs     # Deployment creation
+│   │   ├── deployment_deploy_internal.rs # Deployment orchestrator
+│   │   ├── deployment_transition.rs # State machine
 │   │   └── ...                      # Other use cases
 │   └── adapters/                    # External integrations
 │       ├── git_source.rs            # Git adapter

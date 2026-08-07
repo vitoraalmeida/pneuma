@@ -19,7 +19,7 @@ Adicionar o comando `app deployments <application-name>`, consultando deployment
 
 ### Progresso
 
-- [x] módulo `list_deployments` com `DeploymentSummary` e consulta ao banco;
+- [x] módulo `deployment_list` com `DeploymentSummary` e consulta ao banco;
 - [x] comando `app deployments` na CLI;
 - [x] testes unitários de lista vazia, múltiplos deployments e isolamento por aplicação;
 - [x] testes de CLI para deployment existente, sem histórico e aplicação ausente.

@@ -16,18 +16,18 @@ use crate::adapters::local_runtime::{
     ContainerObservation, ControlContainerError, ObserveContainerError, ObservedRuntimeState,
     container_name, create_container, observe_container, remove_container, start_container,
 };
-use crate::use_cases::create_deployment::{
+use crate::use_cases::deployment_create::{
     CreateDeploymentError, DeploymentStatus, create_deployment,
 };
-use crate::use_cases::promote_internal_candidate::{
+use crate::use_cases::deployment_promote_internal::{
     PromoteInternalCandidateError, promote_internal_candidate,
 };
-use crate::use_cases::promote_public_candidate::{
+use crate::use_cases::deployment_promote_public::{
     PromotePublicCandidateError, begin_public_exposure, promote_public_candidate,
     record_public_exposure_failure,
 };
-use crate::use_cases::register_candidate_runtime::{CandidateRuntime, register_candidate_runtime};
-use crate::use_cases::transition_deployment::{
+use crate::use_cases::deployment_register_runtime::{CandidateRuntime, register_candidate_runtime};
+use crate::use_cases::deployment_transition::{
     DeploymentTransition, TransitionDeploymentError, advance_deployment, fail_deployment,
 };
 

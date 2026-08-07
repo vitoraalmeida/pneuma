@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use pneuma::adapters::database;
-use pneuma::use_cases::import_application::import_application;
-use pneuma::use_cases::list_applications::list_applications;
+use pneuma::use_cases::application_import::import_application;
+use pneuma::use_cases::application_list::list_applications;
 
 #[test]
 fn returns_an_empty_list_for_an_empty_catalog() {

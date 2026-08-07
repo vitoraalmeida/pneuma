@@ -1,10 +1,10 @@
 use std::path::{Path, PathBuf};
 
 use pneuma::adapters::database;
-use pneuma::use_cases::create_deployment::{
+use pneuma::use_cases::application_import::import_application;
+use pneuma::use_cases::deployment_create::{
     CreateDeploymentError, DeploymentStatus, create_deployment,
 };
-use pneuma::use_cases::import_application::import_application;
 
 #[test]
 fn persists_a_revision_and_pending_deployment_atomically() {

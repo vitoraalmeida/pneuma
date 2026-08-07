@@ -7,7 +7,7 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
 use crate::adapters::health_check::{
     HealthCheckError, HealthCheckFailure, HealthCheckResult, check_internal_health,
 };
-use crate::use_cases::transition_deployment::{TransitionDeploymentError, fail_deployment};
+use crate::use_cases::deployment_transition::{TransitionDeploymentError, fail_deployment};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct PromotedCandidate {

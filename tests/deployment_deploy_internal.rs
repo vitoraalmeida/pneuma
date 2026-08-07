@@ -10,10 +10,10 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use pneuma::adapters::database;
-use pneuma::use_cases::deploy_internal_revision::{
+use pneuma::use_cases::application_import::import_application;
+use pneuma::use_cases::deployment_deploy_internal::{
     DeployInternalRevisionError, deploy_internal_revision, deploy_internal_revision_with_progress,
 };
-use pneuma::use_cases::import_application::import_application;
 
 const CHILD_CASE: &str = "PNEUMA_DEPLOY_TEST_CASE";
 const DATABASE_PATH: &str = "PNEUMA_DEPLOY_TEST_DATABASE";
@@ -604,7 +604,7 @@ fn deployment_child_process() {
             .unwrap();
             let mut progress = Vec::new();
             let mut report =
-                |event: pneuma::use_cases::deploy_internal_revision::DeploymentProgress| {
+                |event: pneuma::use_cases::deployment_deploy_internal::DeploymentProgress| {
                     progress.push(event.to_string());
                 };
             let reactivated = deploy_internal_revision_with_progress(

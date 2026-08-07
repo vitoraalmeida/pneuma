@@ -3,12 +3,12 @@ use std::path::{Path, PathBuf};
 
 use pneuma::adapters::database;
 use pneuma::adapters::local_runtime::ObservedRuntimeState;
-use pneuma::use_cases::create_deployment::create_deployment;
-use pneuma::use_cases::import_application::import_application;
-use pneuma::use_cases::register_candidate_runtime::{
+use pneuma::use_cases::application_import::import_application;
+use pneuma::use_cases::deployment_create::create_deployment;
+use pneuma::use_cases::deployment_register_runtime::{
     RegisterCandidateRuntimeError, register_candidate_runtime,
 };
-use pneuma::use_cases::transition_deployment::{DeploymentTransition, advance_deployment};
+use pneuma::use_cases::deployment_transition::{DeploymentTransition, advance_deployment};
 
 #[test]
 fn persists_a_running_candidate_linked_to_its_deployment() {

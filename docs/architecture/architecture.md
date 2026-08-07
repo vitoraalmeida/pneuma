@@ -11,12 +11,13 @@ Crate único organizado em três camadas:
 - `src/domain/` — tipos de domínio puros (`application`, `manifest`), sem
   dependências externas.
 - `src/use_cases/` — casos de uso que orquestram adapters e domínio
-  (`import_application`, `application_runtime`, `create_deployment`,
-  `deploy_internal_revision`, `promote_internal_candidate`,
-  `promote_public_candidate`, `transition_deployment`, ...).
-  `deploy_internal_revision` orquestra o deployment inteiro, interno e público,
-  emitindo progresso passo a passo. `transition_deployment` aplica a máquina de
-  estados persistida.
+  (`application_import`, `application_list`, `application_runtime`,
+  `deployment_create`, `deployment_deploy_internal`, `deployment_list`,
+  `deployment_promote_internal`, `deployment_promote_public`,
+  `deployment_register_runtime`, `deployment_transition`).
+  `deployment_deploy_internal` orquestra o deployment inteiro, interno e
+  público, emitindo progresso passo a passo. `deployment_transition` aplica a
+  máquina de estados persistida.
 - `src/adapters/` — integrações com sistemas externos (`git_source`,
   `local_build`, `local_runtime`, `caddy_exposure`, `external_health`,
   `health_check`, `database`).

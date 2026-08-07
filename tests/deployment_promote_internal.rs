@@ -4,13 +4,13 @@ use std::path::{Path, PathBuf};
 use std::thread;
 
 use pneuma::adapters::database;
-use pneuma::use_cases::create_deployment::create_deployment;
-use pneuma::use_cases::import_application::import_application;
-use pneuma::use_cases::promote_internal_candidate::{
+use pneuma::use_cases::application_import::import_application;
+use pneuma::use_cases::deployment_create::create_deployment;
+use pneuma::use_cases::deployment_promote_internal::{
     PromoteInternalCandidateError, promote_internal_candidate,
 };
-use pneuma::use_cases::register_candidate_runtime::register_candidate_runtime;
-use pneuma::use_cases::transition_deployment::{DeploymentTransition, advance_deployment};
+use pneuma::use_cases::deployment_register_runtime::register_candidate_runtime;
+use pneuma::use_cases::deployment_transition::{DeploymentTransition, advance_deployment};
 
 #[test]
 fn promotes_a_healthy_internal_candidate_idempotently() {
