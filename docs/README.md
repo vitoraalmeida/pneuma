@@ -12,7 +12,7 @@ altera; um **registro** descreve algo executado e não muda.
 | [`architecture/architecture.md`](architecture/architecture.md) | Arquitetura implementada: estrutura, runtime, exposição, máquina de estados |
 | [`product/v0.1-scope.md`](product/v0.1-scope.md) | Contrato da v0.1: capacidades, aceite final, não objetivos |
 | [`iterations/current-iteration.md`](iterations/current-iteration.md) | Iteração em andamento (o único acompanhamento de trabalho) |
-| [`../roadmap.md`](../roadmap.md) | Direção de produto v0.1 → v0.3; leia apenas para planejar marcos |
+| [`roadmap.md`](roadmap.md) | Direção de produto v0.1 → v0.3; leia apenas para planejar marcos |
 
 ## Registros operacionais
 

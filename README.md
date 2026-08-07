@@ -60,10 +60,10 @@ sudo install -m 0755 target/release/pneuma /usr/local/bin/
 For a complete VPS setup (Podman, Caddy, user creation, directories), use the bootstrap script:
 
 ```bash
-bash bootstrap-vps.sh <pneuma-source-url> [application-repository-url]
+bash scripts/bootstrap-vps.sh <pneuma-source-url> [application-repository-url]
 ```
 
-See `bootstrap-vps.sh` for prerequisites and details.
+See `scripts/bootstrap-vps.sh` for prerequisites and details.
 
 ## Quick start
 
@@ -185,22 +185,29 @@ pneuma/
 ├── src/
 │   ├── main.rs                      # CLI entry point
 │   ├── lib.rs                       # Module declarations
-│   ├── deploy_internal_revision.rs  # Deployment orchestrator
-│   ├── import_application.rs        # Application import
-│   ├── application_runtime.rs       # Lifecycle management
-│   ├── create_deployment.rs         # Deployment creation
-│   ├── transition_deployment.rs     # State machine
-│   ├── git_source.rs                # Git adapter
-│   ├── local_build.rs               # Podman build
-│   ├── local_runtime.rs             # Container lifecycle
-│   ├── caddy_exposure.rs            # Caddy integration
-│   ├── health_check.rs              # Internal health checks
-│   ├── external_health.rs           # External health checks
-│   └── database.rs                  # SQLite and migrations
+│   ├── domain/                      # Pure domain types
+│   │   ├── application.rs           # Application model
+│   │   └── manifest.rs              # Manifest parsing
+│   ├── use_cases/                   # Business logic
+│   │   ├── deploy_internal_revision.rs  # Deployment orchestrator
+│   │   ├── import_application.rs    # Application import
+│   │   ├── application_runtime.rs   # Lifecycle management
+│   │   ├── create_deployment.rs     # Deployment creation
+│   │   ├── transition_deployment.rs # State machine
+│   │   └── ...                      # Other use cases
+│   └── adapters/                    # External integrations
+│       ├── git_source.rs            # Git adapter
+│       ├── local_build.rs           # Podman build
+│       ├── local_runtime.rs         # Container lifecycle
+│       ├── caddy_exposure.rs        # Caddy integration
+│       ├── health_check.rs          # Internal health checks
+│       ├── external_health.rs       # External health checks
+│       └── database.rs              # SQLite and migrations
 ├── migrations/                      # Versioned SQL migrations
+├── scripts/                         # Operational scripts
+│   └── bootstrap-vps.sh             # VPS setup script
 ├── tests/                           # Integration tests
-├── docs/                            # Architecture and guidelines
-└── bootstrap-vps.sh                 # VPS setup script
+└── docs/                            # Architecture and guidelines
 ```
 
 ## Development
@@ -222,7 +229,7 @@ See `docs/rust-guidelines.md` for code conventions and `AGENTS.md` for contribut
 - **v0.2**: Build images in CI, deploy by OCI digest
 - **v0.3**: Automatic deployment triggered by GitHub Actions via SSH
 
-See `roadmap.md` for the full product vision.
+See `docs/roadmap.md` for the full product vision.
 
 ## License
 
