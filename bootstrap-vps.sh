@@ -18,7 +18,7 @@
 # - Add that key to the Git provider, then run the script again.
 #
 # Usage:
-#   bash bootstrap-vps.sh <pneuma-source-url> [application-repository-url]
+#   bash bootstrap-vps.sh <pneuma-source-url> [deploy-application-repository-url]
 #
 # Example:
 #   bash bootstrap-vps.sh \
