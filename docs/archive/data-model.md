@@ -1,5 +1,7 @@
 # Modelo de Dados da v0.1 do Pneuma
 
+> **Arquivado:** hipótese original da Iteração D0, preservada como registro. O schema real está em `migrations/`, registrado em `src/database.rs`.
+
 **Status:** Proposta inicial para migrations  
 **Banco:** SQLite  
 **Objetivo:** persistir catálogo, intenção, histórico e coordenação sem tratar o banco como fonte exclusiva do estado externo.

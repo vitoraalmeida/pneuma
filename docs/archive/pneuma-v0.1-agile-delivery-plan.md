@@ -1,5 +1,7 @@
 # Plano Ágil para Entrega da v0.1 do Pneuma
 
+> **Arquivado:** plano de processo da v0.1, preservado como registro. O acompanhamento vivo das iterações está em [`docs/iterations/current-iteration.md`](../iterations/current-iteration.md).
+
 O roadmap deve funcionar como **direção de produto**, não como uma lista de componentes que serão implementados sequencialmente. Para chegar à v0.1 com práticas ágeis, transforme-o em incrementos verticais que produzam um comportamento utilizável a cada etapa.
 
 A regra principal será:

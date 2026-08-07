@@ -1,5 +1,7 @@
 # Modelo de Domínio da v0.1 do Pneuma
 
+> **Arquivado:** hipótese original da Iteração D0, preservada como registro. A arquitetura implementada está em [`docs/architecture/architecture.md`](../architecture/architecture.md).
+
 **Status:** Hipótese de domínio da Iteração D0  
 **Objetivo:** definir linguagem, responsabilidades, estados e invariantes sem acoplamento a Git, Podman, SQLite ou Caddy.
 

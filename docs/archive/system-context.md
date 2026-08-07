@@ -1,8 +1,10 @@
 # Contexto do Sistema — Pneuma v0.1
 
+> **Arquivado:** hipótese original da Iteração D0, preservada como registro. A arquitetura implementada está em [`docs/architecture/architecture.md`](../architecture/architecture.md).
+
 **Status:** Hipótese de design da Iteração D0  
 **Nível:** contexto e fronteiras externas  
-**Documentos relacionados:** [`architecture.md`](./architecture.md), [`domain-model.md`](./domain-model.md)
+**Documentos relacionados:** [`architecture-d0.md`](./architecture-d0.md), [`domain-model.md`](./domain-model.md)
 
 ## 1. Visão
 
