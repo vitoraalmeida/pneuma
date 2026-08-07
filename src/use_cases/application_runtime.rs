@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::local_runtime::{
+use crate::adapters::local_runtime::{
     ContainerCommandOutput, ControlContainerError, ObserveContainerError, ObservedRuntimeState,
     observe_container, start_container, stop_container,
 };
@@ -305,7 +305,7 @@ fn set_desired_state(
 fn persist_observation(
     connection: &Connection,
     runtime: &CurrentRuntime,
-    observation: &crate::local_runtime::ContainerObservation,
+    observation: &crate::adapters::local_runtime::ContainerObservation,
 ) -> Result<(), RuntimeLifecycleError> {
     let state = observed_state_database_value(&observation.state);
     let updated = if observation.state == ObservedRuntimeState::Missing {

@@ -10,7 +10,7 @@ use std::process::{Command, Output};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use pneuma::database;
+use pneuma::adapters::database;
 
 #[test]
 fn imports_and_lists_an_application_idempotently() {

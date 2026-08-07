@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use pneuma::caddy_exposure::{
+use pneuma::adapters::caddy_exposure::{
     CaddyCommandError, CaddyFilesystemAction, MaterializeCaddyFragmentError,
     materialize_caddy_fragment, restore_materialized_caddy_fragment,
 };

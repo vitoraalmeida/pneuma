@@ -4,8 +4,8 @@ use std::path::Path;
 
 use rusqlite::{Connection, params};
 
-use crate::application::Application;
-use crate::manifest::{Manifest, ManifestError, Visibility, load_manifest};
+use crate::domain::application::Application;
+use crate::domain::manifest::{Manifest, ManifestError, Visibility, load_manifest};
 
 const MANIFEST_PATH: &str = "pneuma.toml";
 

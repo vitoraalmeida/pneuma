@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use pneuma::local_build::{BuildImageError, build_image};
+use pneuma::adapters::local_build::{BuildImageError, build_image};
 
 #[test]
 fn rejects_a_missing_build_path_before_running_podman() {

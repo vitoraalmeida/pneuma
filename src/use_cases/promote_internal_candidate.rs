@@ -4,10 +4,10 @@ use std::net::{Ipv4Addr, SocketAddr};
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
 
-use crate::health_check::{
+use crate::adapters::health_check::{
     HealthCheckError, HealthCheckFailure, HealthCheckResult, check_internal_health,
 };
-use crate::transition_deployment::{TransitionDeploymentError, fail_deployment};
+use crate::use_cases::transition_deployment::{TransitionDeploymentError, fail_deployment};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct PromotedCandidate {

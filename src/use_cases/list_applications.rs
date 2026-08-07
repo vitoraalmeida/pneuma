@@ -3,7 +3,7 @@ use std::fmt;
 
 use rusqlite::Connection;
 
-use crate::application::Application;
+use crate::domain::application::Application;
 
 #[derive(Debug)]
 pub struct ListError {

@@ -3,7 +3,7 @@ use std::fmt;
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
-use crate::create_deployment::DeploymentStatus;
+use crate::use_cases::create_deployment::DeploymentStatus;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeploymentTransition {

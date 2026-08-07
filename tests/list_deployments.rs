@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
 
-use pneuma::create_deployment::{DeploymentStatus, create_deployment};
-use pneuma::database;
-use pneuma::import_application::import_application;
-use pneuma::list_deployments::list_deployments;
+use pneuma::adapters::database;
+use pneuma::use_cases::create_deployment::{DeploymentStatus, create_deployment};
+use pneuma::use_cases::import_application::import_application;
+use pneuma::use_cases::list_deployments::list_deployments;
 
 #[test]
 fn returns_an_empty_list_for_an_application_without_deployments() {

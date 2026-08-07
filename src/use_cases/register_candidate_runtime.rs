@@ -4,7 +4,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
-use crate::local_runtime::ObservedRuntimeState;
+use crate::adapters::local_runtime::ObservedRuntimeState;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct CandidateRuntime {

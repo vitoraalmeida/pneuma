@@ -4,10 +4,11 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 
-const INITIAL_MIGRATION: &str = include_str!("../migrations/0001_application_catalog.sql");
-const DEPLOYMENT_MIGRATION: &str = include_str!("../migrations/0002_revisions_and_deployments.sql");
-const RUNTIME_MIGRATION: &str = include_str!("../migrations/0003_runtime_instances.sql");
-const EXPOSURE_MIGRATION: &str = include_str!("../migrations/0004_exposure_materialization.sql");
+const INITIAL_MIGRATION: &str = include_str!("../../migrations/0001_application_catalog.sql");
+const DEPLOYMENT_MIGRATION: &str =
+    include_str!("../../migrations/0002_revisions_and_deployments.sql");
+const RUNTIME_MIGRATION: &str = include_str!("../../migrations/0003_runtime_instances.sql");
+const EXPOSURE_MIGRATION: &str = include_str!("../../migrations/0004_exposure_materialization.sql");
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, INITIAL_MIGRATION),
     (2, DEPLOYMENT_MIGRATION),

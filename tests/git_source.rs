@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use pneuma::git_source::{
+use pneuma::adapters::git_source::{
     CreateCheckoutError, ResolveCommitError, create_checkout, resolve_commit,
 };
 

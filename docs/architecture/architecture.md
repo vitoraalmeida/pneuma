@@ -4,17 +4,22 @@
 
 ## 1. Estrutura
 
-Crate único e plano, sem camadas formais:
+Crate único organizado em três camadas:
 
 - `src/main.rs` — CLI fina com parsing manual de argumentos (sem clap); compõe
   configuração e chama os casos de uso; não contém lógica de domínio.
-- `src/*.rs` — um módulo por caso de uso (`import_application`,
-  `application_runtime`, `create_deployment`, `promote_public_candidate`, ...)
-  ou por adapter (`git_source`, `local_build`, `local_runtime`,
-  `caddy_exposure`, `external_health`, `database`).
-- `src/deploy_internal_revision.rs` — orquestra o deployment inteiro, interno e
-  público, emitindo progresso passo a passo.
-- `src/transition_deployment.rs` — aplica a máquina de estados persistida.
+- `src/domain/` — tipos de domínio puros (`application`, `manifest`), sem
+  dependências externas.
+- `src/use_cases/` — casos de uso que orquestram adapters e domínio
+  (`import_application`, `application_runtime`, `create_deployment`,
+  `deploy_internal_revision`, `promote_internal_candidate`,
+  `promote_public_candidate`, `transition_deployment`, ...).
+  `deploy_internal_revision` orquestra o deployment inteiro, interno e público,
+  emitindo progresso passo a passo. `transition_deployment` aplica a máquina de
+  estados persistida.
+- `src/adapters/` — integrações com sistemas externos (`git_source`,
+  `local_build`, `local_runtime`, `caddy_exposure`, `external_health`,
+  `health_check`, `database`).
 
 Sem traits, generics, macros ou async: as restrições de
 [`docs/rust-guidelines.md`](../rust-guidelines.md) valem para toda mudança.
@@ -29,7 +34,7 @@ da CLI compõe tudo no processo local e termina.
 
 SQLite (rusqlite bundled) é a única persistência. Migrations versionadas e
 imutáveis vivem em `migrations/` e são registradas via `include_str!` em
-`src/database.rs`, que aplica as pendentes em cada abertura de conexão
+`src/adapters/database.rs`, que aplica as pendentes em cada abertura de conexão
 (`PRAGMA foreign_keys = ON`).
 
 Regras observadas:

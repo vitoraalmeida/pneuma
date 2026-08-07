@@ -5,18 +5,18 @@ use std::fmt;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use pneuma::application::Application;
-use pneuma::application_runtime::{
+use pneuma::adapters::database::{self, DatabaseError};
+use pneuma::domain::application::Application;
+use pneuma::use_cases::application_runtime::{
     RuntimeLifecycleError, report_application_status, start_application, stop_application,
 };
-use pneuma::database::{self, DatabaseError};
-use pneuma::deploy_internal_revision::{
+use pneuma::use_cases::deploy_internal_revision::{
     DeployInternalRevisionError, PublicDeploymentConfiguration, deploy_revision,
     deploy_revision_with_progress,
 };
-use pneuma::import_application::{ImportError, import_application};
-use pneuma::list_applications::{ListError, application_is_deployed, list_applications};
-use pneuma::list_deployments::{ListDeploymentsError, list_deployments};
+use pneuma::use_cases::import_application::{ImportError, import_application};
+use pneuma::use_cases::list_applications::{ListError, application_is_deployed, list_applications};
+use pneuma::use_cases::list_deployments::{ListDeploymentsError, list_deployments};
 
 const DATABASE_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_DATABASE_PATH";
 const DEFAULT_DATABASE_PATH: &str = "/var/lib/pneuma/database/pneuma.sqlite3";

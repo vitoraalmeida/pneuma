@@ -5,25 +5,29 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
-use crate::caddy_exposure::{materialize_caddy_fragment, restore_materialized_caddy_fragment};
-use crate::create_deployment::{CreateDeploymentError, DeploymentStatus, create_deployment};
-use crate::external_health::check_external_health;
-use crate::git_source::{ResolveCommitError, create_checkout, resolve_commit};
-use crate::health_check::{HealthCheckError, HealthCheckResult, check_internal_health};
-use crate::local_build::build_image;
-use crate::local_runtime::{
+use crate::adapters::caddy_exposure::{
+    materialize_caddy_fragment, restore_materialized_caddy_fragment,
+};
+use crate::adapters::external_health::check_external_health;
+use crate::adapters::git_source::{ResolveCommitError, create_checkout, resolve_commit};
+use crate::adapters::health_check::{HealthCheckError, HealthCheckResult, check_internal_health};
+use crate::adapters::local_build::build_image;
+use crate::adapters::local_runtime::{
     ContainerObservation, ControlContainerError, ObserveContainerError, ObservedRuntimeState,
     container_name, create_container, observe_container, remove_container, start_container,
 };
-use crate::promote_internal_candidate::{
+use crate::use_cases::create_deployment::{
+    CreateDeploymentError, DeploymentStatus, create_deployment,
+};
+use crate::use_cases::promote_internal_candidate::{
     PromoteInternalCandidateError, promote_internal_candidate,
 };
-use crate::promote_public_candidate::{
+use crate::use_cases::promote_public_candidate::{
     PromotePublicCandidateError, begin_public_exposure, promote_public_candidate,
     record_public_exposure_failure,
 };
-use crate::register_candidate_runtime::{CandidateRuntime, register_candidate_runtime};
-use crate::transition_deployment::{
+use crate::use_cases::register_candidate_runtime::{CandidateRuntime, register_candidate_runtime};
+use crate::use_cases::transition_deployment::{
     DeploymentTransition, TransitionDeploymentError, advance_deployment, fail_deployment,
 };
 
@@ -1388,7 +1392,7 @@ impl Error for PublicHealthFailure {}
 #[derive(Debug)]
 struct PublicRouteRollbackError {
     original: Box<dyn Error>,
-    recovery: crate::caddy_exposure::CaddyRecoveryError,
+    recovery: crate::adapters::caddy_exposure::CaddyRecoveryError,
 }
 
 impl fmt::Display for PublicRouteRollbackError {
@@ -1431,7 +1435,7 @@ impl Error for ExposureFailureRecordingError {
 
 fn rollback_public_route(
     original: impl Error + 'static,
-    materialized: &crate::caddy_exposure::MaterializedCaddyFragment,
+    materialized: &crate::adapters::caddy_exposure::MaterializedCaddyFragment,
     caddyfile_path: &Path,
 ) -> (Box<dyn Error>, bool) {
     match restore_materialized_caddy_fragment(materialized, caddyfile_path) {

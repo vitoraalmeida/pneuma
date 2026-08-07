@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use pneuma::health_check::{HealthCheckResult, check_internal_health};
-use pneuma::local_build::build_image;
-use pneuma::local_runtime::{
+use pneuma::adapters::health_check::{HealthCheckResult, check_internal_health};
+use pneuma::adapters::local_build::build_image;
+use pneuma::adapters::local_runtime::{
     ControlContainerError, CreateContainerError, ObservedRuntimeState, create_container,
     observe_container, start_container, stop_container,
 };
@@ -128,7 +128,7 @@ fn main() {
 
     assert_eq!(
         observe_container(&container.id, 8080).unwrap(),
-        pneuma::local_runtime::ContainerObservation {
+        pneuma::adapters::local_runtime::ContainerObservation {
             state: ObservedRuntimeState::Created,
             endpoint: None,
         }
@@ -155,7 +155,7 @@ fn main() {
     stop_container(&container.id).unwrap();
     assert_eq!(
         observe_container(&container.id, 8080).unwrap(),
-        pneuma::local_runtime::ContainerObservation {
+        pneuma::adapters::local_runtime::ContainerObservation {
             state: ObservedRuntimeState::Stopped,
             endpoint: None,
         }
@@ -165,7 +165,7 @@ fn main() {
     container.remove();
     assert_eq!(
         observe_container(&container_id, 8080).unwrap(),
-        pneuma::local_runtime::ContainerObservation {
+        pneuma::adapters::local_runtime::ContainerObservation {
             state: ObservedRuntimeState::Missing,
             endpoint: None,
         }

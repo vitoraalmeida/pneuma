@@ -3,7 +3,7 @@ use std::fmt;
 use std::io;
 use std::process::Command;
 
-use crate::manifest::is_valid_domain;
+use crate::domain::manifest::is_valid_domain;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct ExternalHealthCheck {
