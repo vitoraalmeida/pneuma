@@ -54,3 +54,21 @@ pub fn list_applications(connection: &Connection) -> Result<Vec<Application>, Li
 
     Ok(applications)
 }
+
+pub fn application_is_deployed(
+    connection: &Connection,
+    application_id: &str,
+) -> Result<bool, ListError> {
+    connection
+        .query_row(
+            "SELECT EXISTS(
+                SELECT 1
+                FROM deployments
+                WHERE application_id = ?1
+                AND status = 'succeeded'
+            )",
+            [application_id],
+            |row| row.get(0),
+        )
+        .map_err(|source| ListError { source })
+}

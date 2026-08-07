@@ -11,7 +11,7 @@ use pneuma::deploy_internal_revision::{
     deploy_revision_with_progress,
 };
 use pneuma::import_application::{ImportError, import_application};
-use pneuma::list_applications::{ListError, list_applications};
+use pneuma::list_applications::{ListError, application_is_deployed, list_applications};
 
 const DATABASE_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_DATABASE_PATH";
 const DEFAULT_DATABASE_PATH: &str = "/var/lib/pneuma/database/pneuma.sqlite3";
@@ -169,7 +169,15 @@ fn run(invocation: Invocation) -> Result<(), CliError> {
             let applications =
                 list_applications(&connection).map_err(|source| CliError::List { source })?;
             for application in applications {
-                println!("{}\tRegistered\tNot deployed", application.name);
+                let deployment_status = if application_is_deployed(&connection, &application.id)
+                    .map_err(|source| CliError::List { source })?
+                {
+                    "Deployed"
+                } else {
+                    "Not deployed"
+                };
+
+                println!("{}\tRegistered\t{deployment_status}", application.name);
             }
         }
         Command::Deploy {

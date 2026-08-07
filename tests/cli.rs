@@ -264,6 +264,7 @@ fn deploys_a_public_application_and_persists_the_active_route() {
     assert!(stderr.contains("apply public route: completed"));
     assert!(stderr.contains("external health check: completed"));
     let curl_command = fs::read_to_string(environment.root.join("curl.log")).unwrap();
+    assert!(curl_command.contains("--retry 30"));
     assert!(curl_command.contains("--resolve vitoralmeida.tech:443:127.0.0.1"));
     assert!(curl_command.contains("https://vitoralmeida.tech/healthz"));
     let connection = database::open(&environment.database_path).unwrap();
