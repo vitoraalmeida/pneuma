@@ -1,48 +1,41 @@
-# Iteração atual — Ciclo de vida da aplicação implantada
+# Iteração atual — Histórico de deployments
 
 **Status:** concluída
 
 **Atualizado em:** 7 de agosto de 2026
 
-**Objetivo:** permitir consultar o estado observado e controlar o ciclo de execução (parar e iniciar) de uma aplicação implantada, fechando a jornada do operador da v0.1.
+**Objetivo:** permitir consultar o histórico de deployments de uma aplicação, exibindo commit, status e timestamp de cada tentativa.
 
-## Trabalho atual — item 36 da sequência de implementação
+## Trabalho atual — item 37 da sequência de implementação
 
-Adicionar os comandos `app status`, `app stop` e `app start`, persistindo o estado desejado e a última observação do runtime atual.
+Adicionar o comando `app deployments <application-name>`, consultando deployments e revisões persistidos no SQLite.
 
 ### Resultado esperado
 
-- deployment promovido marca a aplicação como `running` desejada;
-- `app status` observa o container atual no Podman e registra a última observação;
-- `app stop` e `app start` atualizam o estado desejado, controlam o container e persistem a observação resultante;
-- parar aplicação parada e iniciar aplicação em execução são sucessos idempotentes;
-- container removido externamente produz erro claro orientando novo deployment.
+- `app deployments` lista cada deployment com id, commit curto, status e timestamp;
+- aplicação sem deployments exibe mensagem informativa;
+- aplicação inexistente falha com o erro padrão de aplicação não encontrada;
+- resultados ordenados do mais recente para o mais antigo.
 
 ### Progresso
 
-- [x] estado desejado atualizado na promoção do deployment;
-- [x] comando `app status`;
-- [x] comando `app stop`;
-- [x] comando `app start`;
-- [x] testes de sucesso, idempotência e divergência.
+- [x] módulo `list_deployments` com `DeploymentSummary` e consulta ao banco;
+- [x] comando `app deployments` na CLI;
+- [x] testes unitários de lista vazia, múltiplos deployments e isolamento por aplicação;
+- [x] testes de CLI para deployment existente, sem histórico e aplicação ausente.
 
 ### Critérios de aceite
 
-- [x] aplicação recém-implantada reporta estado desejado `running`;
-- [x] status sem deployment informa que a aplicação não está implantada;
-- [x] stop persiste `stopped` desejado e observado, e repetir stop é idempotente;
-- [x] start persiste `running` desejado e observado, e repetir start é idempotente;
-- [x] start/stop/status em aplicação não implantada falham antes de qualquer efeito externo;
-- [x] container ausente gera diagnóstico que orienta novo deployment;
-- [x] deployment interno e público continuam passando sem alteração de comportamento;
-- [x] testes adicionais permanecem proporcionais ao comportamento;
+- [x] aplicação com deployment lista cada tentativa com id, commit curto, status e timestamp;
+- [x] aplicação sem deployments exibe mensagem informativa;
+- [x] aplicação inexistente falha com o erro padrão;
+- [x] resultados ordenados do mais recente para o mais antigo;
 - [x] formatação, Clippy, testes e build release passam sem warnings.
 
 ## Fora do escopo desta iteração
 
-- política de restart e sobrevivência a reboot do host;
-- health check no `app start`;
-- recuperação automática de container removido externamente;
-- TUI;
+- filtros por status ou paginação;
+- formato de saída alternativo (JSON, tabular);
+- comando `deployment rollback`;
 - comando `app expose`;
-- rollback por comando para deployment antigo.
+- TUI.

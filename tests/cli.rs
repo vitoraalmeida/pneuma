@@ -546,6 +546,81 @@ fn a_removed_container_guides_a_new_deployment() {
     assert_eq!(observed, "missing");
 }
 
+#[test]
+fn lists_deployments_for_a_deployed_application() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    environment.deploy_current_revision();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_pneuma"))
+        .env("PNEUMA_DATABASE_PATH", &environment.database_path)
+        .args(["app", "deployments", &environment.application_name])
+        .output()
+        .unwrap();
+
+    assert_command_succeeded(&output);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(
+        lines[0],
+        format!("Deployments for {}:", environment.application_name)
+    );
+    assert!(lines[1].contains("Succeeded"));
+    assert!(lines[1].contains(&environment.commit_sha[..7]));
+}
+
+#[test]
+fn lists_no_deployments_for_an_application_without_deployment_history() {
+    let database_path = temporary_database_path();
+    let repository_path = fixture_path("valid");
+    assert_command_succeeded(&run_pneuma(
+        &database_path,
+        &[
+            OsStr::new("app"),
+            OsStr::new("import"),
+            repository_path.as_os_str(),
+        ],
+    ));
+
+    let output = run_pneuma(
+        &database_path,
+        &[
+            OsStr::new("app"),
+            OsStr::new("deployments"),
+            OsStr::new("personal-site"),
+        ],
+    );
+    let _ = fs::remove_file(&database_path);
+
+    assert_command_succeeded(&output);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "No deployments for personal-site\n"
+    );
+}
+
+#[test]
+fn deployments_command_fails_for_a_missing_application() {
+    let database_path = temporary_database_path();
+
+    let output = run_pneuma(
+        &database_path,
+        &[
+            OsStr::new("app"),
+            OsStr::new("deployments"),
+            OsStr::new("missing-application"),
+        ],
+    );
+    let _ = fs::remove_file(&database_path);
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("application `missing-application` was not found")
+    );
+}
+
 fn run_pneuma(database_path: &Path, arguments: &[&OsStr]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_pneuma"))
         .env("PNEUMA_DATABASE_PATH", database_path)

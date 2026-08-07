@@ -16,6 +16,7 @@ use pneuma::deploy_internal_revision::{
 };
 use pneuma::import_application::{ImportError, import_application};
 use pneuma::list_applications::{ListError, application_is_deployed, list_applications};
+use pneuma::list_deployments::{ListDeploymentsError, list_deployments};
 
 const DATABASE_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_DATABASE_PATH";
 const DEFAULT_DATABASE_PATH: &str = "/var/lib/pneuma/database/pneuma.sqlite3";
@@ -25,7 +26,7 @@ const CADDY_MANAGED_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_CADDY_MANAGED_PATH
 const DEFAULT_CADDY_MANAGED_PATH: &str = "/etc/caddy/applications";
 const CADDYFILE_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_CADDYFILE_PATH";
 const DEFAULT_CADDYFILE_PATH: &str = "/etc/caddy/Caddyfile";
-const USAGE: &str = "Usage:\n  pneuma [--verbose] app import <repository-path>\n  pneuma [--verbose] app list\n  pneuma [--verbose] app status <application-name>\n  pneuma [--verbose] app stop <application-name>\n  pneuma [--verbose] app start <application-name>\n  pneuma [--verbose] app deploy <application-name> <repository-path> --revision <revision>";
+const USAGE: &str = "Usage:\n  pneuma [--verbose] app import <repository-path>\n  pneuma [--verbose] app list\n  pneuma [--verbose] app deployments <application-name>\n  pneuma [--verbose] app status <application-name>\n  pneuma [--verbose] app stop <application-name>\n  pneuma [--verbose] app start <application-name>\n  pneuma [--verbose] app deploy <application-name> <repository-path> --revision <revision>";
 
 struct Invocation {
     verbose: bool,
@@ -37,6 +38,9 @@ enum Command {
         repository_path: PathBuf,
     },
     List,
+    Deployments {
+        application_name: String,
+    },
     Status {
         application_name: String,
     },
@@ -65,6 +69,9 @@ enum CliError {
     List {
         source: ListError,
     },
+    ListDeployments {
+        source: ListDeploymentsError,
+    },
     ApplicationNotFound {
         application_name: String,
     },
@@ -83,6 +90,7 @@ impl fmt::Display for CliError {
             Self::Database { source } => write!(formatter, "{source}"),
             Self::Import { source } => write!(formatter, "{source}"),
             Self::List { source } => write!(formatter, "{source}"),
+            Self::ListDeployments { source } => write!(formatter, "{source}"),
             Self::ApplicationNotFound { application_name } => {
                 write!(formatter, "application `{application_name}` was not found")
             }
@@ -99,6 +107,7 @@ impl Error for CliError {
             Self::Database { source } => Some(source),
             Self::Import { source } => Some(source),
             Self::List { source } => Some(source),
+            Self::ListDeployments { source } => Some(source),
             Self::Deploy { source } => Some(source.as_ref()),
             Self::ApplicationRuntime { source } => Some(source.as_ref()),
             Self::ApplicationNotFound { .. } => None,
@@ -133,6 +142,12 @@ fn parse_command(arguments: &[OsString]) -> Result<Invocation, CliError> {
             })
         }
         [app, list] if app == OsStr::new("app") && list == OsStr::new("list") => Ok(Command::List),
+        [app, deployments, application_name]
+            if app == OsStr::new("app") && deployments == OsStr::new("deployments") =>
+        {
+            let application_name = application_name.to_str().ok_or(CliError::Usage)?.to_owned();
+            Ok(Command::Deployments { application_name })
+        }
         [app, status, application_name]
             if app == OsStr::new("app") && status == OsStr::new("status") =>
         {
@@ -212,6 +227,43 @@ fn run(invocation: Invocation) -> Result<(), CliError> {
                 };
 
                 println!("{}\tRegistered\t{deployment_status}", application.name);
+            }
+        }
+        Command::Deployments { application_name } => {
+            if verbose {
+                eprintln!("[verbose] resolve application by name: {application_name}");
+            }
+            let application = resolve_application(&connection, &application_name)?;
+            if verbose {
+                eprintln!(
+                    "[verbose] list deployments of application {}",
+                    application.name
+                );
+            }
+            let deployments = list_deployments(&connection, &application.id)
+                .map_err(|source| CliError::ListDeployments { source })?;
+            if deployments.is_empty() {
+                println!("No deployments for {}", application.name);
+            } else {
+                println!("Deployments for {}:", application.name);
+                for deployment in deployments {
+                    let short_commit = &deployment.commit_sha[..7];
+                    let status = format!("{:?}", deployment.status);
+                    match deployment.finished_at {
+                        Some(finished_at) => {
+                            println!(
+                                "{}\t{}\t{}\t{}",
+                                deployment.id, short_commit, status, finished_at
+                            );
+                        }
+                        None => {
+                            println!(
+                                "{}\t{}\t{}\t{}",
+                                deployment.id, short_commit, status, deployment.requested_at
+                            );
+                        }
+                    }
+                }
             }
         }
         Command::Status { application_name } => {
