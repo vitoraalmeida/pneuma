@@ -2,8 +2,7 @@
 
 Índice dos documentos e seus status. Regra: um documento **vivo** descreve o
 sistema ou o trabalho atual e deve ser atualizado na mesma mudança que o
-altera; um **registro** descreve algo executado e não muda; o **arquivo morto**
-é histórico e não deve ser lido para entender o comportamento atual.
+altera; um **registro** descreve algo executado e não muda.
 
 ## Vivos
 
@@ -21,10 +20,3 @@ altera; um **registro** descreve algo executado e não muda; o **arquivo morto**
 |---|---|
 | [`operations/staging-validation.md`](operations/staging-validation.md) | Validação manual do contrato do site em staging (ago/2026) |
 | [`operations/public-deployment.md`](operations/public-deployment.md) | Procedimento e pré-requisitos do deployment público no host |
-
-## Arquivo morto
-
-[`archive/`](archive/) preserva as hipóteses da Iteração D0 (arquitetura
-ports-and-adapters multi-crate, modelo de domínio, modelo de dados, plano ágil
-e requisitos formais) que orientaram o início do projeto mas **não** descrevem
-o sistema implementado. Consulte apenas para entender decisões históricas.

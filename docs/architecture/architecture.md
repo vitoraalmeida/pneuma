@@ -2,8 +2,7 @@
 
 **Status:** documento vivo — descreve o sistema como implementado. As hipóteses
 originais da Iteração D0 (ports and adapters multi-crate, TUI, Quadlet) foram
-arquivadas em [`docs/archive/`](../archive/) e não devem ser usadas como
-referência do comportamento atual.
+descartadas e não devem ser usadas como referência do comportamento atual.
 
 ## 1. Estrutura
 
