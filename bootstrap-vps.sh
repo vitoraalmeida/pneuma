@@ -1,0 +1,230 @@
+#!/usr/bin/env bash
+#
+# Pneuma VPS bootstrap script
+#
+# Prerequisites:
+# - Debian or Ubuntu VPS
+# - Run this script as root
+# - Internet access
+# - Caddy available from the configured APT repositories
+# - DNS A/AAAA records point to this VPS
+# - TCP ports 80 and 443 are open
+# - Nginx or another service does not own ports 80/443
+#
+# Git prerequisites:
+# - Public HTTPS repositories do not need an SSH key.
+# - Private SSH repositories require a deploy key for the pneuma user.
+# - On the first run, this script creates the key and prints the public key.
+# - Add that key to the Git provider, then run the script again.
+#
+# Usage:
+#   bash bootstrap-vps.sh <pneuma-source-url> [application-repository-url]
+#
+# Example:
+#   bash bootstrap-vps.sh \
+#     git@github.com:USER/pneuma.git \
+#     git@github.com:USER/vitoralmeida.tech.git
+#
+
+set -euo pipefail
+
+PNEUMA_SOURCE_URL="${1:-}"
+APPLICATION_SOURCE_URL="${2:-}"
+
+PNEUMA_USER="pneuma"
+PNEUMA_HOME="/home/$PNEUMA_USER"
+PNEUMA_SOURCE_PATH="$PNEUMA_HOME/pneuma"
+APPLICATION_PATH="/srv/vitoralmeida.tech"
+SSH_DIR="$PNEUMA_HOME/.ssh"
+SSH_KEY="$SSH_DIR/id_ed25519"
+
+if [[ "$(id -u)" -ne 0 ]]; then
+    echo "Run this script as root."
+    exit 1
+fi
+
+if [[ -z "$PNEUMA_SOURCE_URL" ]]; then
+    echo "Missing Pneuma source repository URL."
+    exit 1
+fi
+
+apt-get update
+apt-get install -y \
+    build-essential \
+    curl \
+    git \
+    pkg-config \
+    libssl-dev \
+    podman \
+    uidmap \
+    fuse-overlayfs \
+    caddy
+
+if ! id "$PNEUMA_USER" >/dev/null 2>&1; then
+    useradd \
+        --create-home \
+        --shell /bin/bash \
+        "$PNEUMA_USER"
+fi
+
+PNEUMA_UID="$(id -u "$PNEUMA_USER")"
+
+if ! grep -q "^${PNEUMA_USER}:" /etc/subuid; then
+    usermod --add-subuids 100000-165535 "$PNEUMA_USER"
+fi
+
+if ! grep -q "^${PNEUMA_USER}:" /etc/subgid; then
+    usermod --add-subgids 100000-165535 "$PNEUMA_USER"
+fi
+
+passwd -l "$PNEUMA_USER" || true
+loginctl enable-linger "$PNEUMA_USER"
+
+install -d \
+    -o "$PNEUMA_USER" \
+    -g "$PNEUMA_USER" \
+    -m 0700 \
+    "$SSH_DIR"
+
+install -d \
+    -o "$PNEUMA_USER" \
+    -g "$PNEUMA_USER" \
+    -m 0750 \
+    /var/lib/pneuma/database \
+    /var/lib/pneuma/checkouts \
+    "$APPLICATION_PATH"
+
+install -d \
+    -o "$PNEUMA_USER" \
+    -g caddy \
+    -m 0750 \
+    /etc/caddy/applications
+
+SSH_REPOSITORY=false
+
+if [[ "$PNEUMA_SOURCE_URL" == git@* ||
+      "$PNEUMA_SOURCE_URL" == ssh://* ||
+      "$APPLICATION_SOURCE_URL" == git@* ||
+      "$APPLICATION_SOURCE_URL" == ssh://* ]]; then
+    SSH_REPOSITORY=true
+fi
+
+if [[ "$SSH_REPOSITORY" == true && ! -f "$SSH_KEY" ]]; then
+    runuser -u "$PNEUMA_USER" -- \
+        ssh-keygen \
+        -t ed25519 \
+        -f "$SSH_KEY" \
+        -N "" \
+        -C "pneuma@$(hostname)"
+
+    chown "$PNEUMA_USER:$PNEUMA_USER" "$SSH_KEY" "$SSH_KEY.pub"
+    chmod 0600 "$SSH_KEY"
+    chmod 0644 "$SSH_KEY.pub"
+
+    echo
+    echo "An SSH key was created for the pneuma user."
+    echo
+    echo "Add this public key as a read-only deploy key:"
+    echo
+    cat "$SSH_KEY.pub"
+    echo
+    echo "After adding the key, run this script again."
+    exit 0
+fi
+
+if [[ "$SSH_REPOSITORY" == true ]]; then
+    if [[ "$PNEUMA_SOURCE_URL" == *github.com* ||
+          "$APPLICATION_SOURCE_URL" == *github.com* ]]; then
+        runuser -u "$PNEUMA_USER" -- \
+            ssh-keyscan -H github.com >>"$SSH_DIR/known_hosts"
+    fi
+
+    chown "$PNEUMA_USER:$PNEUMA_USER" "$SSH_DIR/known_hosts" 2>/dev/null || true
+    chmod 0600 "$SSH_DIR/known_hosts" 2>/dev/null || true
+fi
+
+if [[ ! -d "$PNEUMA_SOURCE_PATH/.git" ]]; then
+    runuser -u "$PNEUMA_USER" -- \
+        env \
+            HOME="$PNEUMA_HOME" \
+            XDG_RUNTIME_DIR="/run/user/$PNEUMA_UID" \
+        git clone "$PNEUMA_SOURCE_URL" "$PNEUMA_SOURCE_PATH"
+fi
+
+if ! command -v rustup >/dev/null 2>&1; then
+    runuser -u "$PNEUMA_USER" -- \
+        env HOME="$PNEUMA_HOME" \
+        sh -c \
+        'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y'
+fi
+
+runuser -u "$PNEUMA_USER" -- bash -lc "
+    source '$PNEUMA_HOME/.cargo/env'
+    cd '$PNEUMA_SOURCE_PATH'
+    cargo build --release
+"
+
+install \
+    -o root \
+    -g root \
+    -m 0755 \
+    "$PNEUMA_SOURCE_PATH/target/release/pneuma" \
+    /usr/local/bin/pneuma
+
+if [[ -f /etc/caddy/Caddyfile ]]; then
+    cp -a /etc/caddy/Caddyfile \
+        "/etc/caddy/Caddyfile.backup.$(date +%Y%m%d%H%M%S)"
+fi
+
+cat >/etc/caddy/Caddyfile <<'EOF'
+import /etc/caddy/applications/*.caddy
+EOF
+
+chown root:caddy /etc/caddy/Caddyfile
+chmod 0644 /etc/caddy/Caddyfile
+
+PROFILE="$PNEUMA_HOME/.profile"
+
+touch "$PROFILE"
+chown "$PNEUMA_USER:$PNEUMA_USER" "$PROFILE"
+chmod 0644 "$PROFILE"
+
+for line in \
+    'export XDG_RUNTIME_DIR="/run/user/$(id -u)"' \
+    'export PNEUMA_DATABASE_PATH=/var/lib/pneuma/database/pneuma.sqlite3' \
+    'export PNEUMA_WORKSPACE_PATH=/var/lib/pneuma/checkouts' \
+    'export PNEUMA_CADDY_MANAGED_PATH=/etc/caddy/applications' \
+    'export PNEUMA_CADDYFILE_PATH=/etc/caddy/Caddyfile'
+do
+    grep -qxF "$line" "$PROFILE" || echo "$line" >>"$PROFILE"
+done
+
+if [[ -n "$APPLICATION_SOURCE_URL" &&
+      ! -e "$APPLICATION_PATH/.git" ]]; then
+    runuser -u "$PNEUMA_USER" -- \
+        env \
+            HOME="$PNEUMA_HOME" \
+            XDG_RUNTIME_DIR="/run/user/$PNEUMA_UID" \
+        git clone "$APPLICATION_SOURCE_URL" "$APPLICATION_PATH"
+fi
+
+systemctl enable --now caddy
+
+caddy validate \
+    --config /etc/caddy/Caddyfile \
+    --adapter caddyfile
+
+systemctl restart caddy
+systemctl start "user@$PNEUMA_UID.service" || true
+
+echo
+echo "VPS setup completed."
+echo
+echo "Open a Pneuma shell:"
+echo "  sudo -iu pneuma"
+echo
+echo "Verify Podman:"
+echo "  podman info --format '{{.Host.Security.Rootless}}'"
+echo
+echo "Import the application:"
+echo "  pneuma app import $APPLICATION_PATH"

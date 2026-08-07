@@ -1,8 +1,6 @@
 # Arquitetura do Pneuma
 
-**Status:** documento vivo — descreve o sistema como implementado. As hipóteses
-originais da Iteração D0 (ports and adapters multi-crate, TUI, Quadlet) foram
-descartadas e não devem ser usadas como referência do comportamento atual.
+**Status:** documento vivo — descreve o sistema como implementado. atual.
 
 ## 1. Estrutura
 
