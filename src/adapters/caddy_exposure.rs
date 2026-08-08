@@ -322,6 +322,20 @@ pub fn restore_materialized_caddy_fragment(
     )
 }
 
+/// Removes the Caddy fragment for an application and reloads Caddy.
+pub fn remove_caddy_fragment(
+    managed_directory: &Path,
+    application_id: &str,
+    caddyfile_path: &Path,
+) -> Result<(), CaddyRecoveryError> {
+    let fragment_path = managed_directory.join(format!("{application_id}.caddy"));
+    let temporary_path = managed_directory.join(format!(".{application_id}.caddy.tmp"));
+    restore_fragment(&fragment_path, &temporary_path, &None)?;
+    caddy_command("reload", caddyfile_path)
+        .map_err(|failure| CaddyRecoveryError::Reload { failure })?;
+    Ok(())
+}
+
 fn validate_input(
     application_id: &str,
     domain: &str,

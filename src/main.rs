@@ -7,6 +7,7 @@ use std::process::ExitCode;
 
 use pneuma::adapters::database::{self, DatabaseError};
 use pneuma::domain::application::Application;
+use pneuma::domain::manifest::Visibility;
 use pneuma::use_cases::application_import::{ImportError, import_application};
 use pneuma::use_cases::application_list::{ListError, application_is_deployed, list_applications};
 use pneuma::use_cases::application_runtime::{
@@ -17,6 +18,8 @@ use pneuma::use_cases::deployment_deploy_internal::{
     deploy_revision_with_progress,
 };
 use pneuma::use_cases::deployment_list::{ListDeploymentsError, list_deployments};
+use pneuma::use_cases::deployment_rollback::{RollbackError, rollback_deployment};
+use pneuma::use_cases::exposure_change::{ExposureChangeError, change_exposure};
 
 const DATABASE_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_DATABASE_PATH";
 const DEFAULT_DATABASE_PATH: &str = "/var/lib/pneuma/database/pneuma.sqlite3";
@@ -26,7 +29,7 @@ const CADDY_MANAGED_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_CADDY_MANAGED_PATH
 const DEFAULT_CADDY_MANAGED_PATH: &str = "/etc/caddy/applications";
 const CADDYFILE_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_CADDYFILE_PATH";
 const DEFAULT_CADDYFILE_PATH: &str = "/etc/caddy/Caddyfile";
-const USAGE: &str = "Usage:\n  pneuma [--verbose] app import <repository-path>\n  pneuma [--verbose] app list\n  pneuma [--verbose] app deployments <application-name>\n  pneuma [--verbose] app status <application-name>\n  pneuma [--verbose] app stop <application-name>\n  pneuma [--verbose] app start <application-name>\n  pneuma [--verbose] app deploy <application-name> <repository-path> --revision <revision>";
+const USAGE: &str = "Usage:\n  pneuma [--verbose] app import <repository-path>\n  pneuma [--verbose] app list\n  pneuma [--verbose] app deployments <application-name>\n  pneuma [--verbose] app status <application-name>\n  pneuma [--verbose] app stop <application-name>\n  pneuma [--verbose] app start <application-name>\n  pneuma [--verbose] app deploy <application-name> <repository-path> --revision <revision>\n  pneuma [--verbose] deployment rollback <application-name>\n  pneuma [--verbose] app expose <application-name> <public|internal>\n  pneuma version\n  pneuma doctor";
 
 struct Invocation {
     verbose: bool,
@@ -55,6 +58,15 @@ enum Command {
         repository_path: PathBuf,
         revision: String,
     },
+    Rollback {
+        application_name: String,
+    },
+    Expose {
+        application_name: String,
+        visibility: Visibility,
+    },
+    Version,
+    Doctor,
 }
 
 #[derive(Debug)]
@@ -81,6 +93,12 @@ enum CliError {
     Deploy {
         source: Box<DeployInternalRevisionError>,
     },
+    Rollback {
+        source: RollbackError,
+    },
+    Expose {
+        source: ExposureChangeError,
+    },
 }
 
 impl fmt::Display for CliError {
@@ -96,6 +114,8 @@ impl fmt::Display for CliError {
             }
             Self::ApplicationRuntime { source } => write!(formatter, "{source}"),
             Self::Deploy { source } => write!(formatter, "{source}"),
+            Self::Rollback { source } => write!(formatter, "{source}"),
+            Self::Expose { source } => write!(formatter, "{source}"),
         }
     }
 }
@@ -111,6 +131,8 @@ impl Error for CliError {
             Self::Deploy { source } => Some(source.as_ref()),
             Self::ApplicationRuntime { source } => Some(source.as_ref()),
             Self::ApplicationNotFound { .. } => None,
+            Self::Rollback { source } => Some(source),
+            Self::Expose { source } => Some(source),
         }
     }
 }
@@ -183,6 +205,29 @@ fn parse_command(arguments: &[OsString]) -> Result<Invocation, CliError> {
                 revision,
             })
         }
+        [deployment, rollback, application_name]
+            if deployment == OsStr::new("deployment") && rollback == OsStr::new("rollback") =>
+        {
+            let application_name = application_name.to_str().ok_or(CliError::Usage)?.to_owned();
+            Ok(Command::Rollback { application_name })
+        }
+        [app, expose, application_name, visibility]
+            if app == OsStr::new("app") && expose == OsStr::new("expose") =>
+        {
+            let application_name = application_name.to_str().ok_or(CliError::Usage)?.to_owned();
+            let visibility_str = visibility.to_str().ok_or(CliError::Usage)?;
+            let visibility = match visibility_str {
+                "public" => Visibility::Public,
+                "internal" => Visibility::Internal,
+                _ => return Err(CliError::Usage),
+            };
+            Ok(Command::Expose {
+                application_name,
+                visibility,
+            })
+        }
+        [version] if version == OsStr::new("version") => Ok(Command::Version),
+        [doctor] if doctor == OsStr::new("doctor") => Ok(Command::Doctor),
         _ => Err(CliError::Usage),
     }?;
     Ok(Invocation { verbose, command })
@@ -190,6 +235,31 @@ fn parse_command(arguments: &[OsString]) -> Result<Invocation, CliError> {
 
 fn run(invocation: Invocation) -> Result<(), CliError> {
     let Invocation { verbose, command } = invocation;
+
+    if matches!(command, Command::Version | Command::Doctor) {
+        let database_path = env::var_os(DATABASE_PATH_ENVIRONMENT_VARIABLE)
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_DATABASE_PATH));
+
+        if matches!(command, Command::Version) {
+            return run_version();
+        }
+
+        let connection = match database::open(&database_path) {
+            Ok(conn) => conn,
+            Err(source) => {
+                println!(
+                    "✗ Database connection: FAILED (unable to open database at {})",
+                    database_path.display()
+                );
+                println!("\nSome checks failed. Please review the output above.");
+                return Err(CliError::Database { source });
+            }
+        };
+        return run_doctor(&connection, verbose);
+    }
+
     let database_path = env::var_os(DATABASE_PATH_ENVIRONMENT_VARIABLE)
         .filter(|path| !path.is_empty())
         .map(PathBuf::from)
@@ -224,6 +294,14 @@ fn run(invocation: Invocation) -> Result<(), CliError> {
             &repository_path,
             &revision,
         ),
+        Command::Rollback { application_name } => {
+            run_rollback(&mut connection, verbose, &application_name)
+        }
+        Command::Expose {
+            application_name,
+            visibility,
+        } => run_expose(&mut connection, verbose, &application_name, visibility),
+        Command::Doctor | Command::Version => unreachable!(),
     }
 }
 
@@ -454,6 +532,76 @@ fn run_deploy(
     Ok(())
 }
 
+fn run_rollback(
+    connection: &mut rusqlite::Connection,
+    verbose: bool,
+    application_name: &str,
+) -> Result<(), CliError> {
+    log_verbose(
+        verbose,
+        format!("resolve application by name: {application_name}"),
+    );
+    let application = resolve_application(connection, application_name)?;
+    log_verbose(
+        verbose,
+        format!("rolling back application {}", application.name),
+    );
+    let rolled_back = rollback_deployment(connection, &application.id)
+        .map_err(|source| CliError::Rollback { source })?;
+    println!("Rolled back {}", application.name);
+    println!("Commit: {}", rolled_back.commit_sha);
+    println!("Deployment: {}", rolled_back.deployment_id);
+    println!("Runtime: {}", rolled_back.runtime_id);
+    println!("Status: Succeeded");
+    Ok(())
+}
+
+fn run_expose(
+    connection: &mut rusqlite::Connection,
+    verbose: bool,
+    application_name: &str,
+    visibility: Visibility,
+) -> Result<(), CliError> {
+    log_verbose(
+        verbose,
+        format!("resolve application by name: {application_name}"),
+    );
+    let application = resolve_application(connection, application_name)?;
+    let managed_directory = configured_path(
+        CADDY_MANAGED_PATH_ENVIRONMENT_VARIABLE,
+        DEFAULT_CADDY_MANAGED_PATH,
+    );
+    let caddyfile_path =
+        configured_path(CADDYFILE_PATH_ENVIRONMENT_VARIABLE, DEFAULT_CADDYFILE_PATH);
+    log_verbose(
+        verbose,
+        format!(
+            "changing exposure of application {} to {:?}",
+            application.name, visibility
+        ),
+    );
+    let exposure_change = change_exposure(
+        connection,
+        &application.id,
+        visibility,
+        &managed_directory,
+        &caddyfile_path,
+    )
+    .map_err(|source| CliError::Expose { source })?;
+    match exposure_change.visibility {
+        Visibility::Public => {
+            println!("Exposed {} publicly", application.name);
+            if let Some(domain) = exposure_change.domain {
+                println!("Domain: {}", domain);
+            }
+        }
+        Visibility::Internal => {
+            println!("Exposed {} internally", application.name);
+        }
+    }
+    Ok(())
+}
+
 fn configured_path(variable: &str, default: &str) -> PathBuf {
     env::var_os(variable)
         .filter(|path| !path.is_empty())
@@ -472,4 +620,139 @@ fn resolve_application(
         .ok_or_else(|| CliError::ApplicationNotFound {
             application_name: application_name.to_owned(),
         })
+}
+
+fn run_version() -> Result<(), CliError> {
+    println!("pneuma {}", env!("CARGO_PKG_VERSION"));
+    Ok(())
+}
+
+fn run_doctor(connection: &rusqlite::Connection, verbose: bool) -> Result<(), CliError> {
+    let mut all_ok = true;
+
+    log_verbose(verbose, "checking database connection");
+    match connection.query_row("SELECT 1", [], |_| Ok(())) {
+        Ok(()) => println!("✓ Database connection: OK"),
+        Err(source) => {
+            println!("✗ Database connection: FAILED ({source})");
+            all_ok = false;
+        }
+    }
+
+    log_verbose(verbose, "checking database migrations");
+    match connection.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+        row.get::<_, i64>(0)
+    }) {
+        Ok(count) => println!("✓ Database migrations: {count} applied"),
+        Err(source) => {
+            println!("✗ Database migrations: FAILED ({source})");
+            all_ok = false;
+        }
+    }
+
+    log_verbose(verbose, "checking workspace directory");
+    let workspace_path = env::var_os(WORKSPACE_PATH_ENVIRONMENT_VARIABLE)
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_WORKSPACE_PATH));
+    if workspace_path.exists() {
+        println!(
+            "✓ Workspace directory: {} (exists)",
+            workspace_path.display()
+        );
+    } else {
+        println!(
+            "✗ Workspace directory: {} (does not exist)",
+            workspace_path.display()
+        );
+        all_ok = false;
+    }
+
+    log_verbose(verbose, "checking Caddy managed directory");
+    let caddy_managed_path = env::var_os(CADDY_MANAGED_PATH_ENVIRONMENT_VARIABLE)
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_CADDY_MANAGED_PATH));
+    if caddy_managed_path.exists() {
+        println!(
+            "✓ Caddy managed directory: {} (exists)",
+            caddy_managed_path.display()
+        );
+    } else {
+        println!(
+            "✗ Caddy managed directory: {} (does not exist)",
+            caddy_managed_path.display()
+        );
+        all_ok = false;
+    }
+
+    log_verbose(verbose, "checking Caddyfile");
+    let caddyfile_path = env::var_os(CADDYFILE_PATH_ENVIRONMENT_VARIABLE)
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_CADDYFILE_PATH));
+    if caddyfile_path.exists() {
+        println!("✓ Caddyfile: {} (exists)", caddyfile_path.display());
+    } else {
+        println!("✗ Caddyfile: {} (does not exist)", caddyfile_path.display());
+        all_ok = false;
+    }
+
+    log_verbose(verbose, "checking Git availability");
+    match std::process::Command::new("git").arg("--version").output() {
+        Ok(output) if output.status.success() => {
+            let version = String::from_utf8_lossy(&output.stdout);
+            println!("✓ Git: {version}");
+        }
+        Ok(_) => {
+            println!("✗ Git: command failed");
+            all_ok = false;
+        }
+        Err(source) => {
+            println!("✗ Git: not found ({source})");
+            all_ok = false;
+        }
+    }
+
+    log_verbose(verbose, "checking Podman availability");
+    match std::process::Command::new("podman")
+        .arg("--version")
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            let version = String::from_utf8_lossy(&output.stdout);
+            println!("✓ Podman: {version}");
+        }
+        Ok(_) => {
+            println!("✗ Podman: command failed");
+            all_ok = false;
+        }
+        Err(source) => {
+            println!("✗ Podman: not found ({source})");
+            all_ok = false;
+        }
+    }
+
+    log_verbose(verbose, "checking Caddy availability");
+    match std::process::Command::new("caddy").arg("version").output() {
+        Ok(output) if output.status.success() => {
+            let version = String::from_utf8_lossy(&output.stdout);
+            println!("✓ Caddy: {version}");
+        }
+        Ok(_) => {
+            println!("✗ Caddy: command failed");
+            all_ok = false;
+        }
+        Err(source) => {
+            println!("✗ Caddy: not found ({source})");
+            all_ok = false;
+        }
+    }
+
+    if all_ok {
+        println!("\nAll checks passed!");
+    } else {
+        println!("\nSome checks failed. Please review the output above.");
+    }
+    Ok(())
 }

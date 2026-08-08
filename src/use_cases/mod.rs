@@ -7,4 +7,6 @@ pub mod deployment_list;
 pub mod deployment_promote_internal;
 pub mod deployment_promote_public;
 pub mod deployment_register_runtime;
+pub mod deployment_rollback;
 pub mod deployment_transition;
+pub mod exposure_change;
