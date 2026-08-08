@@ -185,6 +185,7 @@ fn deploy_writes_and_enables_a_per_deployment_quadlet_unit() {
     let content = fs::read_to_string(unit).unwrap();
     assert!(content.contains(&format!("PublishPort=127.0.0.1:{port}:8080")));
     assert!(content.contains("Restart=on-failure"));
+    assert!(content.contains("WantedBy=default.target"));
 }
 
 #[test]

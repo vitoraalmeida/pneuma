@@ -102,7 +102,7 @@ pub fn write_unit(
     fs::create_dir_all(&directory).map_err(|source| QuadletError::CreateDirectory { source })?;
     let path = directory.join(format!("{unit}.container"));
     let content = format!(
-        "[Unit]\nDescription=Pneuma application {application_name}\n\n[Container]\nContainerName={}\nImage={image_reference}\nPublishPort=127.0.0.1:{host_port}:{container_port}\nLabel=io.pneuma.application={application_name}\nLabel=io.pneuma.revision={revision}\n\n[Service]\nRestart=on-failure\n",
+        "[Unit]\nDescription=Pneuma application {application_name}\n\n[Container]\nContainerName={}\nImage={image_reference}\nPublishPort=127.0.0.1:{host_port}:{container_port}\nLabel=io.pneuma.application={application_name}\nLabel=io.pneuma.revision={revision}\n\n[Service]\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n",
         container_name(application_name, deployment_id),
     );
     fs::write(&path, content).map_err(|source| QuadletError::WriteUnit { path, source })?;
