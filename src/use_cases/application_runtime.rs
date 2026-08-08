@@ -8,6 +8,9 @@ use crate::adapters::local_runtime::{
     ContainerCommandOutput, ControlContainerError, ObserveContainerError, ObservedRuntimeState,
     observe_container, start_container, stop_container,
 };
+use crate::adapters::systemd_quadlet::{
+    QuadletError, disable, enable, start as start_unit, stop as stop_unit, unit_exists, unit_name,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DesiredRuntimeState {
@@ -64,6 +67,11 @@ pub enum RuntimeLifecycleError {
         runtime_id: String,
         source: Box<ControlContainerError>,
     },
+    Supervision {
+        operation: &'static str,
+        runtime_id: String,
+        source: QuadletError,
+    },
     Persistence {
         source: rusqlite::Error,
     },
@@ -100,6 +108,14 @@ impl fmt::Display for RuntimeLifecycleError {
                 formatter,
                 "failed while {operation} runtime `{runtime_id}`: {source}"
             ),
+            Self::Supervision {
+                operation,
+                runtime_id,
+                source,
+            } => write!(
+                formatter,
+                "failed while {operation} supervised runtime `{runtime_id}`: {source}"
+            ),
             Self::Persistence { source } => {
                 write!(formatter, "failed to control application runtime: {source}")
             }
@@ -112,6 +128,7 @@ impl Error for RuntimeLifecycleError {
         match self {
             Self::Observe { source, .. } => Some(source),
             Self::Control { source, .. } => Some(source.as_ref()),
+            Self::Supervision { source, .. } => Some(source),
             Self::Persistence { source } => Some(source),
             Self::NotDeployed { .. }
             | Self::ContainerMissing { .. }
@@ -209,11 +226,44 @@ fn transition_application(
     let observation = if observation.state == target {
         observation
     } else {
-        control(&runtime.external_runtime_id).map_err(|source| RuntimeLifecycleError::Control {
-            operation,
+        let unit = unit_name(application_name, &runtime.deployment_id);
+        if unit_exists(&unit).map_err(|source| RuntimeLifecycleError::Supervision {
+            operation: "checking Quadlet unit for",
             runtime_id: runtime.runtime_id.clone(),
-            source: Box::new(source),
-        })?;
+            source,
+        })? {
+            if desired_runtime_state == DesiredRuntimeState::Running {
+                enable(&unit).map_err(|source| RuntimeLifecycleError::Supervision {
+                    operation: "enabling",
+                    runtime_id: runtime.runtime_id.clone(),
+                    source,
+                })?;
+                start_unit(&unit).map_err(|source| RuntimeLifecycleError::Supervision {
+                    operation,
+                    runtime_id: runtime.runtime_id.clone(),
+                    source,
+                })?;
+            } else {
+                stop_unit(&unit).map_err(|source| RuntimeLifecycleError::Supervision {
+                    operation,
+                    runtime_id: runtime.runtime_id.clone(),
+                    source,
+                })?;
+                disable(&unit).map_err(|source| RuntimeLifecycleError::Supervision {
+                    operation: "disabling",
+                    runtime_id: runtime.runtime_id.clone(),
+                    source,
+                })?;
+            }
+        } else {
+            control(&runtime.external_runtime_id).map_err(|source| {
+                RuntimeLifecycleError::Control {
+                    operation,
+                    runtime_id: runtime.runtime_id.clone(),
+                    source: Box::new(source),
+                }
+            })?;
+        }
         observe_container(&runtime.external_runtime_id, runtime.container_port).map_err(
             |source| RuntimeLifecycleError::Observe {
                 runtime_id: runtime.runtime_id.clone(),
@@ -236,6 +286,7 @@ struct CurrentRuntime {
     runtime_id: String,
     external_runtime_id: String,
     container_port: u16,
+    deployment_id: String,
 }
 
 fn load_current_runtime(
@@ -248,7 +299,8 @@ fn load_current_runtime(
             "SELECT
                 runtime_instances.id,
                 runtime_instances.external_runtime_id,
-                runtime_instances.container_port
+                runtime_instances.container_port,
+                runtime_instances.deployment_id
              FROM runtime_instances
               JOIN applications
                 ON applications.active_deployment_id = runtime_instances.deployment_id
@@ -263,6 +315,7 @@ fn load_current_runtime(
                     runtime_id: row.get(0)?,
                     external_runtime_id: row.get(1)?,
                     container_port: row.get(2)?,
+                    deployment_id: row.get(3)?,
                 })
             },
         )

@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use pneuma::adapters::database::{self, DatabaseError};
+use pneuma::adapters::oci_image::{OciImageReference, pull_image};
 use pneuma::domain::application::Application;
 use pneuma::domain::manifest::Visibility;
 use pneuma::use_cases::application_import::{ImportError, import_application};
@@ -31,7 +32,7 @@ const CADDY_MANAGED_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_CADDY_MANAGED_PATH
 const DEFAULT_CADDY_MANAGED_PATH: &str = "/etc/caddy/applications";
 const CADDYFILE_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_CADDYFILE_PATH";
 const DEFAULT_CADDYFILE_PATH: &str = "/etc/caddy/Caddyfile";
-const USAGE: &str = "Usage:\n  pneuma [--verbose] system create <name> [--description <text>]\n  pneuma [--verbose] system list\n  pneuma [--verbose] system show <name>\n  pneuma [--verbose] app import <repository-path> [--system <system-name>]\n  pneuma [--verbose] app list\n  pneuma [--verbose] app deployments <application-name>\n  pneuma [--verbose] app status <application-name>\n  pneuma [--verbose] app stop <application-name>\n  pneuma [--verbose] app start <application-name>\n  pneuma [--verbose] app deploy <application-name> --image <repository@sha256:...>\n  pneuma [--verbose] app deploy-source <application-name> <repository-path> --revision <revision>\n  pneuma [--verbose] deployment rollback <application-name>\n  pneuma [--verbose] app visibility set <application-name> <public|internal>\n  pneuma version\n  pneuma doctor";
+const USAGE: &str = "Usage:\n  pneuma [--verbose] system create <name> [--description <text>]\n  pneuma [--verbose] system list\n  pneuma [--verbose] system show <name>\n  pneuma [--verbose] app import <repository-path> [--system <system-name>]\n  pneuma [--verbose] app list\n  pneuma [--verbose] app deployments <application-name>\n  pneuma [--verbose] app status <application-name>\n  pneuma [--verbose] app stop <application-name>\n  pneuma [--verbose] app start <application-name>\n  pneuma [--verbose] app deploy <application-name> --image <repository@sha256:...>\n  pneuma [--verbose] app deploy-source <application-name> <repository-path> --revision <revision>\n  pneuma [--verbose] deployment rollback <application-name>\n  pneuma [--verbose] app visibility set <application-name> <public|internal>\n  pneuma database backup <path>\n  pneuma database restore <path>\n  pneuma version\n  pneuma doctor";
 
 struct Invocation {
     verbose: bool,
@@ -82,6 +83,12 @@ enum Command {
     },
     Version,
     Doctor,
+    DatabaseBackup {
+        path: PathBuf,
+    },
+    DatabaseRestore {
+        path: PathBuf,
+    },
 }
 
 #[derive(Debug)]
@@ -117,6 +124,12 @@ enum CliError {
     VisibilitySet {
         source: ExposureChangeError,
     },
+    DatabaseBackup {
+        source: DatabaseError,
+    },
+    DatabaseRestore {
+        source: DatabaseError,
+    },
     SystemCreate {
         source: pneuma::use_cases::system_create::CreateError,
     },
@@ -144,6 +157,9 @@ impl fmt::Display for CliError {
             Self::DeploySource { source } => write!(formatter, "{source}"),
             Self::Rollback { source } => write!(formatter, "{source}"),
             Self::VisibilitySet { source } => write!(formatter, "{source}"),
+            Self::DatabaseBackup { source } | Self::DatabaseRestore { source } => {
+                write!(formatter, "{source}")
+            }
             Self::SystemCreate { source } => write!(formatter, "{source}"),
             Self::SystemList { source } => write!(formatter, "{source}"),
             Self::SystemShow { source } => write!(formatter, "{source}"),
@@ -165,6 +181,7 @@ impl Error for CliError {
             Self::ApplicationNotFound { .. } => None,
             Self::Rollback { source } => Some(source),
             Self::VisibilitySet { source } => Some(source),
+            Self::DatabaseBackup { source } | Self::DatabaseRestore { source } => Some(source),
             Self::SystemCreate { source } => Some(source),
             Self::SystemList { source } => Some(source),
             Self::SystemShow { source } => Some(source),
@@ -322,6 +339,20 @@ fn parse_command(arguments: &[OsString]) -> Result<Invocation, CliError> {
         }
         [version] if version == OsStr::new("version") => Ok(Command::Version),
         [doctor] if doctor == OsStr::new("doctor") => Ok(Command::Doctor),
+        [database, backup, path]
+            if database == OsStr::new("database") && backup == OsStr::new("backup") =>
+        {
+            Ok(Command::DatabaseBackup {
+                path: PathBuf::from(path),
+            })
+        }
+        [database, restore, path]
+            if database == OsStr::new("database") && restore == OsStr::new("restore") =>
+        {
+            Ok(Command::DatabaseRestore {
+                path: PathBuf::from(path),
+            })
+        }
         _ => Err(CliError::Usage),
     }?;
     Ok(Invocation { verbose, command })
@@ -330,7 +361,13 @@ fn parse_command(arguments: &[OsString]) -> Result<Invocation, CliError> {
 fn run(invocation: Invocation) -> Result<(), CliError> {
     let Invocation { verbose, command } = invocation;
 
-    if matches!(command, Command::Version | Command::Doctor) {
+    if matches!(
+        command,
+        Command::Version
+            | Command::Doctor
+            | Command::DatabaseBackup { .. }
+            | Command::DatabaseRestore { .. }
+    ) {
         let database_path = env::var_os(DATABASE_PATH_ENVIRONMENT_VARIABLE)
             .filter(|path| !path.is_empty())
             .map(PathBuf::from)
@@ -338,6 +375,21 @@ fn run(invocation: Invocation) -> Result<(), CliError> {
 
         if matches!(command, Command::Version) {
             return run_version();
+        }
+        if let Command::DatabaseBackup { path } = command {
+            database::backup(&database_path, &path)
+                .map_err(|source| CliError::DatabaseBackup { source })?;
+            println!("Database backup: {}", path.display());
+            return Ok(());
+        }
+        if let Command::DatabaseRestore { path } = command {
+            let pre_restore = database::restore(&database_path, &path)
+                .map_err(|source| CliError::DatabaseRestore { source })?;
+            let _ = database::open(&database_path)
+                .map_err(|source| CliError::DatabaseRestore { source })?;
+            println!("Database restored from {}", path.display());
+            println!("Pre-restore backup: {}", pre_restore.display());
+            return Ok(());
         }
 
         let connection = match database::open(&database_path) {
@@ -415,7 +467,10 @@ fn run(invocation: Invocation) -> Result<(), CliError> {
             application_name,
             visibility,
         } => run_visibility_set(&mut connection, verbose, &application_name, visibility),
-        Command::Doctor | Command::Version => unreachable!(),
+        Command::Doctor
+        | Command::Version
+        | Command::DatabaseBackup { .. }
+        | Command::DatabaseRestore { .. } => unreachable!(),
     }
 }
 
@@ -893,6 +948,25 @@ fn run_doctor(connection: &rusqlite::Connection, verbose: bool) -> Result<(), Cl
         .unwrap_or_else(|| PathBuf::from(DEFAULT_CADDYFILE_PATH));
     if caddyfile_path.exists() {
         println!("✓ Caddyfile: {} (exists)", caddyfile_path.display());
+        match std::process::Command::new("caddy")
+            .args(["validate", "--config"])
+            .arg(&caddyfile_path)
+            .args(["--adapter", "caddyfile"])
+            .output()
+        {
+            Ok(output) if output.status.success() => println!("✓ Caddy configuration: valid"),
+            Ok(output) => {
+                println!(
+                    "✗ Caddy configuration: FAILED ({})",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                );
+                all_ok = false;
+            }
+            Err(source) => {
+                println!("✗ Caddy configuration: FAILED ({source})");
+                all_ok = false;
+            }
+        }
     } else {
         println!("✗ Caddyfile: {} (does not exist)", caddyfile_path.display());
         all_ok = false;
@@ -929,6 +1003,94 @@ fn run_doctor(connection: &rusqlite::Connection, verbose: bool) -> Result<(), Cl
         }
         Err(source) => {
             println!("✗ Podman: not found ({source})");
+            all_ok = false;
+        }
+    }
+
+    match connection.prepare(
+        "SELECT releases.image_reference
+         FROM applications
+         JOIN deployments ON deployments.id = applications.active_deployment_id
+         JOIN releases ON releases.id = deployments.release_id",
+    ) {
+        Ok(mut statement) => match statement.query_map([], |row| row.get::<_, String>(0)) {
+            Ok(images) => {
+                for image in images {
+                    match image {
+                        Ok(image) if OciImageReference::parse(&image).is_ok() => {
+                            match pull_image(&image) {
+                                Ok(_) => println!("✓ Active OCI image: {image} (pullable)"),
+                                Err(source) => {
+                                    println!("✗ Active OCI image: {image} (FAILED: {source})");
+                                    all_ok = false;
+                                }
+                            }
+                        }
+                        Ok(_) => println!("- Active local image: skipped"),
+                        Err(source) => {
+                            println!("✗ Active OCI image: FAILED ({source})");
+                            all_ok = false;
+                        }
+                    }
+                }
+            }
+            Err(source) => {
+                println!("✗ Active OCI images: FAILED ({source})");
+                all_ok = false;
+            }
+        },
+        Err(source) => {
+            println!("✗ Active OCI images: FAILED ({source})");
+            all_ok = false;
+        }
+    }
+
+    let database_path = configured_path(DATABASE_PATH_ENVIRONMENT_VARIABLE, DEFAULT_DATABASE_PATH);
+    for path in [&database_path, &workspace_path] {
+        match std::process::Command::new("df")
+            .args(["-Pk"])
+            .arg(path)
+            .output()
+        {
+            Ok(output) if output.status.success() => {
+                let free_kib = String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .nth(1)
+                    .and_then(|line| line.split_whitespace().nth(3))
+                    .and_then(|value| value.parse::<u64>().ok());
+                if free_kib.is_some_and(|value| value >= 1024 * 1024) {
+                    println!("✓ Disk space: {} (at least 1 GiB free)", path.display());
+                } else {
+                    println!("✗ Disk space: {} (less than 1 GiB free)", path.display());
+                    all_ok = false;
+                }
+            }
+            Ok(_) | Err(_) => {
+                println!("✗ Disk space: {} (unable to inspect)", path.display());
+                all_ok = false;
+            }
+        }
+    }
+
+    match std::process::Command::new("podman")
+        .args(["info", "--format", "{{.Host.Security.Rootless}}"])
+        .output()
+    {
+        Ok(output)
+            if output.status.success()
+                && String::from_utf8_lossy(&output.stdout).trim() == "true" =>
+        {
+            println!("✓ Podman rootless: OK")
+        }
+        Ok(output) => {
+            println!(
+                "✗ Podman rootless: FAILED ({})",
+                String::from_utf8_lossy(&output.stdout).trim()
+            );
+            all_ok = false;
+        }
+        Err(source) => {
+            println!("✗ Podman rootless: FAILED ({source})");
             all_ok = false;
         }
     }

@@ -123,6 +123,22 @@ pub enum ObserveContainerError {
     },
 }
 
+#[derive(Debug)]
+pub enum ResolveContainerError {
+    EmptyName,
+    Execute {
+        source: io::Error,
+    },
+    Podman {
+        name: String,
+        stdout: String,
+        stderr: String,
+    },
+    InvalidOutput {
+        name: String,
+    },
+}
+
 impl fmt::Display for CreateContainerError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -240,6 +256,37 @@ impl Error for ObserveContainerError {
     }
 }
 
+impl fmt::Display for ResolveContainerError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptyName => formatter.write_str("container name must not be empty"),
+            Self::Execute { source } => write!(formatter, "failed to execute Podman: {source}"),
+            Self::Podman {
+                name,
+                stdout,
+                stderr,
+            } => write!(
+                formatter,
+                "failed to resolve container `{name}` with Podman: {}",
+                diagnostic(stdout, stderr)
+            ),
+            Self::InvalidOutput { name } => write!(
+                formatter,
+                "Podman returned an invalid ID for container `{name}`"
+            ),
+        }
+    }
+}
+
+impl Error for ResolveContainerError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Execute { source } => Some(source),
+            Self::EmptyName | Self::Podman { .. } | Self::InvalidOutput { .. } => None,
+        }
+    }
+}
+
 pub fn create_container(
     image_reference: &str,
     application_name: &str,
@@ -296,6 +343,32 @@ pub fn start_container(
     container_id: &str,
 ) -> Result<ContainerCommandOutput, ControlContainerError> {
     control_container("starting", &["start"], container_id)
+}
+
+pub fn resolve_container_id(name: &str) -> Result<String, ResolveContainerError> {
+    if name.is_empty() {
+        return Err(ResolveContainerError::EmptyName);
+    }
+    let output = Command::new("podman")
+        .args(["inspect", "--format", "{{.Id}}", name])
+        .output()
+        .map_err(|source| ResolveContainerError::Execute { source })?;
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    if !output.status.success() {
+        return Err(ResolveContainerError::Podman {
+            name: name.to_owned(),
+            stdout,
+            stderr,
+        });
+    }
+    let id = stdout.trim();
+    if !is_container_id(id) {
+        return Err(ResolveContainerError::InvalidOutput {
+            name: name.to_owned(),
+        });
+    }
+    Ok(id.to_owned())
 }
 
 pub fn stop_container(container_id: &str) -> Result<ContainerCommandOutput, ControlContainerError> {

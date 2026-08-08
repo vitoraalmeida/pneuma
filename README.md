@@ -6,7 +6,7 @@ Single-host deployment CLI for containerized applications.
 
 ## Overview
 
-Pneuma imports containerized app repositories (declared by a `pneuma.toml` manifest), builds and runs them with rootless Podman on loopback, health-checks them, and exposes public apps through Caddy. State lives in SQLite.
+Pneuma imports containerized app repositories (declared by a `pneuma.toml` manifest), deploys immutable OCI releases with rootless Podman on loopback, health-checks them, and exposes public apps through Caddy. State lives in SQLite. Successful deployments are supervised by rootless Podman Quadlet units and survive a host reboot.
 
 Designed for personal sites and small projects that need production-grade deployment without the complexity of Kubernetes or multi-host orchestration.
 
@@ -17,7 +17,7 @@ pneuma.toml manifest
     ↓
 pneuma app import <repository>
     ↓
-pneuma app deploy <app> <repository> --revision <commit>
+pneuma app deploy <app> --image ghcr.io/owner/app@sha256:...
     ↓
 Git checkout → Podman build → Container create → Health check
     ↓
@@ -28,14 +28,14 @@ Caddy reverse proxy (if public)
 
 ## Features
 
-- **Manifest-driven**: declare application name, source, build, runtime, and exposure in `pneuma.toml`
+- **OCI-first**: deploy digest-pinned releases declared by `[delivery]`; `deploy-source` remains available for local builds
 - **Rootless containers**: runs on Podman without root privileges
 - **Health checks**: internal (loopback) and external (public endpoint) verification
 - **Atomic deployments**: candidate containers are validated before promotion; failed deployments preserve the previous version
 - **Caddy integration**: automatic reverse proxy configuration for public apps
 - **Lifecycle management**: start, stop, and status commands with idempotent operations
 - **Deployment history**: track all deployment attempts with commit, status, and timestamps
-- **SQLite persistence**: all state in a single database file with versioned migrations
+- **SQLite persistence**: all state in a single database file with versioned migrations and backup/restore commands
 
 ## Requirements
 
@@ -71,14 +71,14 @@ See `scripts/bootstrap-vps.sh` for prerequisites and details.
 
 ```toml
 # pneuma.toml
-schema_version = 1
+schema_version = 2
 
 [application]
 name = "my-app"
 
-[source]
-repository = "https://github.com/user/my-app"
-branch = "main"
+[delivery]
+type = "oci"
+image = "ghcr.io/user/my-app"
 
 [build]
 containerfile = "Containerfile"
@@ -100,10 +100,10 @@ domain = "my-app.example.com"
 pneuma app import /path/to/my-app
 ```
 
-3. **Deploy a revision**:
+3. **Deploy an immutable image**:
 
 ```bash
-pneuma app deploy my-app /path/to/my-app --revision abc1234
+pneuma app deploy my-app --image ghcr.io/user/my-app@sha256:<digest>
 ```
 
 4. **Check status**:
@@ -117,6 +117,11 @@ pneuma app status my-app
 | Command | Description |
 |---------|-------------|
 | `pneuma app import <repository-path>` | Import an application from a local repository |
+| `pneuma app deploy <app> --image <repository@sha256:...>` | Deploy an immutable OCI release |
+| `pneuma app deploy-source <app> <repository> --revision <revision>` | Build and deploy a local source revision |
+| `pneuma app visibility set <app> <public\|internal>` | Set desired public visibility |
+| `pneuma database backup <path>` | Create a consistent SQLite backup |
+| `pneuma database restore <path>` | Validate and restore a SQLite backup |
 | `pneuma app list` | List all registered applications |
 | `pneuma app deploy <app> <repository> --revision <rev>` | Deploy a specific revision |
 | `pneuma app status <app>` | Show desired and observed runtime state |

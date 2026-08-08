@@ -159,10 +159,10 @@ use_cases/
 
 #### 7. Operabilidade final
 
-- [ ] Sobrevivência a reboot do host (systemd/Quadlet para containers current)
-- [ ] Doctor estendido: rootless funcional, caddy validate, registry/pull, espaço em disco
-- [ ] `pneuma database backup <path>`
-- [ ] `pneuma database restore <path>`
+- [x] Sobrevivência a reboot do host (Quadlet por deployment, habilitado após promoção)
+- [x] Doctor estendido: rootless funcional, `caddy validate`, pull OCI ativo e espaço em disco
+- [x] `pneuma database backup <path>`
+- [x] `pneuma database restore <path>`
 - [ ] Docs atualizadas (roadmap, arquitetura, scope, README) refletindo OCI-first
 - [ ] E2E final: CI → GHCR → pull → deploy → health → active → rollback → reboot
 

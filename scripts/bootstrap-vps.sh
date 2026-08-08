@@ -96,6 +96,12 @@ install -d \
 
 install -d \
     -o "$PNEUMA_USER" \
+    -g "$PNEUMA_USER" \
+    -m 0750 \
+    "$PNEUMA_HOME/.config/containers/systemd"
+
+install -d \
+    -o "$PNEUMA_USER" \
     -g caddy \
     -m 0750 \
     /etc/caddy/applications
@@ -212,7 +218,9 @@ for line in \
     'export PNEUMA_DATABASE_PATH=/var/lib/pneuma/database/pneuma.sqlite3' \
     'export PNEUMA_WORKSPACE_PATH=/var/lib/pneuma/checkouts' \
     'export PNEUMA_CADDY_MANAGED_PATH=/etc/caddy/applications' \
-    'export PNEUMA_CADDYFILE_PATH=/etc/caddy/Caddyfile'
+    'export PNEUMA_CADDYFILE_PATH=/etc/caddy/Caddyfile' \
+    'export PNEUMA_RUNTIME_PORT_RANGE=30000-39999' \
+    'export PNEUMA_QUADLET_DIR=$HOME/.config/containers/systemd'
 do
     grep -qxF "$line" "$PROFILE" || echo "$line" >>"$PROFILE"
 done
@@ -259,4 +267,4 @@ echo "Import and deploy the application. The application name is the"
 echo "[application] name declared in the pneuma.toml of the checkout:"
 echo "  pneuma app import $APPLICATION_PATH"
 echo "  pneuma app list"
-echo "  pneuma app deploy <application-name> $APPLICATION_PATH --revision <commit-sha>"
+echo "  pneuma app deploy <application-name> --image ghcr.io/owner/image@sha256:<digest>"

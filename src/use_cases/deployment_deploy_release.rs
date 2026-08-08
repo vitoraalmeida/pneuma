@@ -11,8 +11,15 @@ use crate::adapters::external_health::check_external_health;
 use crate::adapters::git_source::ResolveCommitError;
 use crate::adapters::health_check::{HealthCheckError, HealthCheckResult, check_internal_health};
 use crate::adapters::local_runtime::{
-    ControlContainerError, ObserveContainerError, ObservedRuntimeState, create_container,
-    observe_container, remove_container, start_container,
+    ControlContainerError, ObserveContainerError, ObservedRuntimeState, observe_container,
+    remove_container, resolve_container_id,
+};
+use crate::adapters::port_allocator::{
+    PortAllocationError, consume_port_reservation, release_port, reserve_port,
+};
+use crate::adapters::systemd_quadlet::{
+    QuadletError, container_name, daemon_reload, disable, enable, remove_unit, start, stop,
+    unit_name, write_unit,
 };
 use crate::domain::manifest::Visibility;
 use crate::domain::release::Release;
@@ -255,7 +262,11 @@ pub enum DeployReleaseError {
 
 #[derive(Debug)]
 pub enum CandidateCleanupError {
+    StopUnit { source: QuadletError },
+    RemoveUnit { source: QuadletError },
+    ReloadUnits { source: QuadletError },
     RemoveContainer { source: ControlContainerError },
+    ReleasePort { source: PortAllocationError },
     Persistence { source: rusqlite::Error },
 }
 
@@ -373,6 +384,10 @@ impl fmt::Display for CandidateCleanupError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::RemoveContainer { source } => write!(formatter, "{source}"),
+            Self::StopUnit { source }
+            | Self::RemoveUnit { source }
+            | Self::ReloadUnits { source } => write!(formatter, "{source}"),
+            Self::ReleasePort { source } => write!(formatter, "{source}"),
             Self::Persistence { source } => {
                 write!(formatter, "failed to persist candidate removal: {source}")
             }
@@ -384,6 +399,10 @@ impl Error for CandidateCleanupError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::RemoveContainer { source } => Some(source),
+            Self::StopUnit { source }
+            | Self::RemoveUnit { source }
+            | Self::ReloadUnits { source } => Some(source),
+            Self::ReleasePort { source } => Some(source),
             Self::Persistence { source } => Some(source),
         }
     }
@@ -557,6 +576,8 @@ struct FailedExecution {
     container_id: Option<String>,
     runtime_id: Option<String>,
     failure_persisted: bool,
+    unit_name: Option<String>,
+    port_reserved: bool,
 }
 
 fn execute_deployment(
@@ -576,29 +597,86 @@ fn execute_deployment(
         DeploymentStep::CreateContainer,
         format!("image {image_reference}"),
     );
-    let container = create_container(
-        image_reference,
+    let host_port = reserve_port(connection, &specification.application_id, deployment_id)
+        .map_err(|source| {
+            failure_needing_persistence("runtime_port_allocation_failed", source, None, None)
+        })?;
+    let unit = write_unit(
         &specification.application_name,
-        source_revision,
+        deployment_id,
+        image_reference,
         specification.container_port,
+        host_port,
+        source_revision,
     )
-    .map_err(|source| failure_needing_persistence("runtime_creation_failed", source, None, None))?;
+    .map_err(|source| {
+        candidate_failure(
+            "runtime_unit_creation_failed",
+            source,
+            None,
+            None,
+            None,
+            true,
+        )
+    })?;
+    daemon_reload().map_err(|source| {
+        candidate_failure(
+            "runtime_unit_reload_failed",
+            source,
+            None,
+            None,
+            Some(&unit),
+            true,
+        )
+    })?;
     progress.completed(
         DeploymentStep::CreateContainer,
-        format!("container {}", container.id),
+        format!("unit {unit}, endpoint 127.0.0.1:{host_port}"),
+    );
+
+    progress.started(DeploymentStep::StartContainer, format!("unit {unit}"));
+    start(&unit).map_err(|source| {
+        candidate_failure(
+            "runtime_start_failed",
+            source,
+            None,
+            None,
+            Some(&unit),
+            true,
+        )
+    })?;
+    let name = container_name(&specification.application_name, deployment_id);
+    let container_id = resolve_container_id(&name).map_err(|source| {
+        candidate_failure(
+            "runtime_resolution_failed",
+            source,
+            None,
+            None,
+            Some(&unit),
+            true,
+        )
+    })?;
+    progress.completed(
+        DeploymentStep::StartContainer,
+        format!("container {container_id}"),
     );
 
     let (runtime_id, finished_at) = execute_candidate(
         connection,
         deployment_id,
         specification,
-        &container.id,
+        &container_id,
         source_revision,
         public_configuration,
         progress,
-    )?;
+    )
+    .map_err(|mut failed| {
+        failed.unit_name = Some(unit);
+        failed.port_reserved = true;
+        failed
+    })?;
 
-    Ok((runtime_id, container.name, finished_at))
+    Ok((runtime_id, name, finished_at))
 }
 
 fn execute_candidate(
@@ -610,17 +688,6 @@ fn execute_candidate(
     public_configuration: Option<&PublicDeploymentConfiguration>,
     progress: &mut ProgressReporter<'_>,
 ) -> Result<(String, String), FailedExecution> {
-    progress.started(
-        DeploymentStep::StartContainer,
-        format!("container {container_id}"),
-    );
-    start_container(container_id).map_err(|source| {
-        failure_needing_persistence("runtime_start_failed", source, Some(container_id), None)
-    })?;
-    progress.completed(
-        DeploymentStep::StartContainer,
-        format!("container {container_id}"),
-    );
     progress.started(
         DeploymentStep::ObserveContainer,
         format!("container {container_id}"),
@@ -679,6 +746,16 @@ fn execute_candidate(
         DeploymentStep::RegisterCandidate,
         format!("runtime {}", runtime.id),
     );
+    consume_port_reservation(connection, deployment_id).map_err(|source| {
+        candidate_failure(
+            "runtime_port_persistence_failed",
+            source,
+            Some(container_id),
+            Some(&runtime.id),
+            Some(&unit_name(&specification.application_name, deployment_id)),
+            false,
+        )
+    })?;
     advance_deployment(
         connection,
         deployment_id,
@@ -693,6 +770,19 @@ fn execute_candidate(
         )
     })?;
     progress.state_changed(deployment_id, DeploymentStatus::Verifying);
+    let previous_runtime =
+        load_previous_runtime(connection, &specification.application_id, &runtime.id).map_err(
+            |source| {
+                candidate_failure(
+                    "runtime_reconciliation_failed",
+                    source,
+                    Some(container_id),
+                    Some(&runtime.id),
+                    Some(&unit_name(&specification.application_name, deployment_id)),
+                    false,
+                )
+            },
+        )?;
     if specification.visibility == Visibility::Public {
         let Some(public_configuration) = public_configuration else {
             return Err(failure_needing_persistence(
@@ -704,7 +794,7 @@ fn execute_candidate(
                 Some(&runtime.id),
             ));
         };
-        return execute_public_candidate(
+        let completed = execute_public_candidate(
             connection,
             specification,
             &runtime,
@@ -712,6 +802,15 @@ fn execute_candidate(
             public_configuration,
             progress,
         );
+        if completed.is_ok() {
+            finalize_runtime_supervision(
+                connection,
+                specification,
+                deployment_id,
+                previous_runtime.as_ref(),
+            );
+        }
+        return completed;
     }
 
     progress.started(
@@ -747,6 +846,12 @@ fn execute_candidate(
         format!("runtime {} promoted to Current", runtime.id),
     );
     progress.state_changed(deployment_id, DeploymentStatus::Succeeded);
+    finalize_runtime_supervision(
+        connection,
+        specification,
+        deployment_id,
+        previous_runtime.as_ref(),
+    );
 
     Ok((runtime.id, promoted.finished_at))
 }
@@ -1005,6 +1110,8 @@ fn public_failure(
         container_id: Some(container_id.to_owned()),
         runtime_id: Some(runtime_id.to_owned()),
         failure_persisted: false,
+        unit_name: None,
+        port_reserved: false,
     }
 }
 
@@ -1027,24 +1134,31 @@ fn finish_failed_deployment(
             Err(source) => Some(source),
         }
     };
-    let cleanup_error = if let Some(container_id) = failed.container_id.as_deref() {
-        progress.started(
-            DeploymentStep::CleanupCandidate,
-            format!("container {container_id}"),
-        );
-        match cleanup_candidate(connection, container_id, failed.runtime_id.as_deref()) {
-            Ok(()) => {
-                progress.completed(
-                    DeploymentStep::CleanupCandidate,
-                    format!("container {container_id}"),
-                );
-                None
+    let cleanup_error =
+        if failed.container_id.is_some() || failed.unit_name.is_some() || failed.port_reserved {
+            progress.started(
+                DeploymentStep::CleanupCandidate,
+                format!("deployment {deployment_id}"),
+            );
+            match cleanup_candidate(
+                connection,
+                deployment_id,
+                failed.unit_name.as_deref(),
+                failed.container_id.as_deref(),
+                failed.runtime_id.as_deref(),
+            ) {
+                Ok(()) => {
+                    progress.completed(
+                        DeploymentStep::CleanupCandidate,
+                        format!("deployment {deployment_id}"),
+                    );
+                    None
+                }
+                Err(source) => Some(source),
             }
-            Err(source) => Some(source),
-        }
-    } else {
-        None
-    };
+        } else {
+            None
+        };
 
     if let Some(source) = cleanup_error {
         return Err(DeployReleaseError::Cleanup {
@@ -1083,6 +1197,27 @@ fn failure_needing_persistence(
         container_id: container_id.map(str::to_owned),
         runtime_id: runtime_id.map(str::to_owned),
         failure_persisted: false,
+        unit_name: None,
+        port_reserved: false,
+    }
+}
+
+fn candidate_failure(
+    code: &'static str,
+    source: impl Error + 'static,
+    container_id: Option<&str>,
+    runtime_id: Option<&str>,
+    unit_name: Option<&str>,
+    port_reserved: bool,
+) -> FailedExecution {
+    FailedExecution {
+        code,
+        source: Box::new(source),
+        container_id: container_id.map(str::to_owned),
+        runtime_id: runtime_id.map(str::to_owned),
+        failure_persisted: false,
+        unit_name: unit_name.map(str::to_owned),
+        port_reserved,
     }
 }
 
@@ -1101,6 +1236,8 @@ fn failure_already_persisted(
         container_id: Some(container_id.to_owned()),
         runtime_id: Some(runtime_id.to_owned()),
         failure_persisted: true,
+        unit_name: None,
+        port_reserved: false,
     }
 }
 
@@ -1125,9 +1262,92 @@ impl fmt::Display for RuntimeObservationFailure {
 
 impl Error for RuntimeObservationFailure {}
 
+struct PreviousRuntime {
+    runtime_id: String,
+    deployment_id: String,
+    external_runtime_id: String,
+}
+
+fn load_previous_runtime(
+    connection: &Connection,
+    application_id: &str,
+    candidate_runtime_id: &str,
+) -> Result<Option<PreviousRuntime>, rusqlite::Error> {
+    connection
+        .query_row(
+            "SELECT id, deployment_id, external_runtime_id
+             FROM runtime_instances
+             WHERE application_id = ?1
+               AND state = 'running'
+               AND removed_at IS NULL
+               AND id != ?2",
+            [application_id, candidate_runtime_id],
+            |row| {
+                Ok(PreviousRuntime {
+                    runtime_id: row.get(0)?,
+                    deployment_id: row.get(1)?,
+                    external_runtime_id: row.get(2)?,
+                })
+            },
+        )
+        .optional()
+}
+
+fn finalize_runtime_supervision(
+    connection: &Connection,
+    specification: &DeploymentSpecification,
+    deployment_id: &str,
+    previous: Option<&PreviousRuntime>,
+) {
+    let current_unit = unit_name(&specification.application_name, deployment_id);
+    if let Err(source) = enable(&current_unit) {
+        eprintln!(
+            "warning: promoted runtime is active but its Quadlet unit could not be enabled: {source}"
+        );
+    }
+    let Some(previous) = previous else {
+        return;
+    };
+    let previous_unit = unit_name(&specification.application_name, &previous.deployment_id);
+    let retirement = (|| -> Result<(), QuadletError> {
+        stop(&previous_unit)?;
+        disable(&previous_unit)?;
+        remove_unit(&previous_unit)?;
+        daemon_reload()?;
+        Ok(())
+    })();
+    if let Err(source) = retirement {
+        eprintln!(
+            "warning: previous runtime {} could not be retired: {source}",
+            previous.runtime_id
+        );
+        return;
+    }
+    if let Err(source) = remove_container(&previous.external_runtime_id) {
+        eprintln!(
+            "warning: previous runtime {} unit was retired but its container could not be removed: {source}",
+            previous.runtime_id
+        );
+        return;
+    }
+    if let Err(source) = connection.execute(
+        "UPDATE runtime_instances
+         SET state = 'removed', removed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?1 AND state = 'stopped' AND removed_at IS NULL",
+        [&previous.runtime_id],
+    ) {
+        eprintln!(
+            "warning: previous runtime {} was retired but could not be marked removed: {source}",
+            previous.runtime_id
+        );
+    }
+}
+
 fn cleanup_candidate(
     connection: &Connection,
-    container_id: &str,
+    deployment_id: &str,
+    unit: Option<&str>,
+    container_id: Option<&str>,
     runtime_id: Option<&str>,
 ) -> Result<(), CandidateCleanupError> {
     if let Some(runtime_id) = runtime_id {
@@ -1146,8 +1366,15 @@ fn cleanup_candidate(
         }
     }
 
-    remove_container(container_id)
-        .map_err(|source| CandidateCleanupError::RemoveContainer { source })?;
+    if let Some(unit) = unit {
+        stop(unit).map_err(|source| CandidateCleanupError::StopUnit { source })?;
+        remove_unit(unit).map_err(|source| CandidateCleanupError::RemoveUnit { source })?;
+        daemon_reload().map_err(|source| CandidateCleanupError::ReloadUnits { source })?;
+    }
+    if let Some(container_id) = container_id {
+        remove_container(container_id)
+            .map_err(|source| CandidateCleanupError::RemoveContainer { source })?;
+    }
     if let Some(runtime_id) = runtime_id {
         connection
             .execute(
@@ -1161,5 +1388,7 @@ fn cleanup_candidate(
             )
             .map_err(|source| CandidateCleanupError::Persistence { source })?;
     }
+    release_port(connection, deployment_id)
+        .map_err(|source| CandidateCleanupError::ReleasePort { source })?;
     Ok(())
 }

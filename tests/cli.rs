@@ -123,10 +123,7 @@ fn deploys_an_internal_application_and_prints_its_identity() {
     assert_eq!(lines[1], format!("Commit: {}", environment.commit_sha));
     assert_identifier_line(lines[2], "Deployment: ");
     assert_identifier_line(lines[3], "Runtime: ");
-    assert_eq!(
-        lines[4],
-        format!("Container: pneuma-another-site-{}", environment.commit_sha)
-    );
+    assert!(lines[4].starts_with("Container: pneuma-another-site-"));
     assert_eq!(lines[5], "Status: Succeeded");
     assert_eq!(
         fs::read_dir(&environment.workspace_path).unwrap().count(),
@@ -141,6 +138,68 @@ fn deploys_an_internal_application_and_prints_its_identity() {
         )
         .unwrap();
     assert_eq!(desired_state, "running");
+}
+
+#[test]
+fn deploy_writes_and_enables_a_per_deployment_quadlet_unit() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || respond_once(&listener, 200));
+
+    let output = environment.deploy(port, false);
+    server.join().unwrap();
+    assert_command_succeeded(&output);
+    let deployment_id = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .find_map(|line| line.strip_prefix("Deployment: "))
+        .unwrap()
+        .to_owned();
+    let unit = environment
+        .root
+        .join("quadlets")
+        .join(format!("pneuma-another-site-{deployment_id}.container"));
+    let content = fs::read_to_string(unit).unwrap();
+    assert!(content.contains(&format!("PublishPort=127.0.0.1:{port}:8080")));
+    assert!(content.contains("Restart=on-failure"));
+}
+
+#[test]
+fn database_backup_and_restore_preserve_catalog_state() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    let backup = environment.root.join("database-backup.sqlite3");
+    let backup_output = Command::new(env!("CARGO_BIN_EXE_pneuma"))
+        .env("PNEUMA_DATABASE_PATH", &environment.database_path)
+        .args(["database", "backup"])
+        .arg(&backup)
+        .output()
+        .unwrap();
+    assert_command_succeeded(&backup_output);
+    let connection = database::open(&environment.database_path).unwrap();
+    connection.execute("DELETE FROM applications", []).unwrap();
+    drop(connection);
+    let restore_output = Command::new(env!("CARGO_BIN_EXE_pneuma"))
+        .env("PNEUMA_DATABASE_PATH", &environment.database_path)
+        .args(["database", "restore"])
+        .arg(&backup)
+        .output()
+        .unwrap();
+    assert_command_succeeded(&restore_output);
+    let connection = database::open(&environment.database_path).unwrap();
+    let count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM applications", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 1);
+    assert!(fs::read_dir(&environment.root).unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains("pre-restore")
+    }));
 }
 
 #[test]
@@ -191,7 +250,7 @@ fn deploys_a_verified_oci_image_and_persists_its_release() {
         commands[1],
         format!("image inspect --format {{{{.Digest}}}} {reference}")
     );
-    assert!(commands[2].starts_with("create "));
+    assert!(commands[2].starts_with("inspect --format {{.Id}} pneuma-another-site-"));
 }
 
 #[test]
@@ -939,6 +998,7 @@ impl DeploymentEnvironment {
         fs::write(repository_path.join("Containerfile"), "FROM scratch\n").unwrap();
         initialize_repository(&repository_path);
         install_fake_podman(&fake_bin);
+        install_fake_systemctl(&fake_bin);
         install_fake_caddy_and_curl(&fake_bin);
         fs::write(
             &caddyfile_path,
@@ -1014,6 +1074,11 @@ impl DeploymentEnvironment {
                 self.root.join("container-state"),
             )
             .env("PNEUMA_FAKE_PODMAN_LOG", self.root.join("podman.log"))
+            .env("PNEUMA_QUADLET_DIR", self.root.join("quadlets"))
+            .env(
+                "PNEUMA_FAKE_CONTAINER_STATE",
+                self.root.join("container-state"),
+            )
             .env(
                 "PNEUMA_FAKE_PODMAN_REMOVED",
                 self.root.join("podman-removed"),
@@ -1035,8 +1100,10 @@ impl DeploymentEnvironment {
             .env("PNEUMA_WORKSPACE_PATH", &self.workspace_path)
             .env("PNEUMA_CADDY_MANAGED_PATH", &self.managed_caddy_directory)
             .env("PNEUMA_CADDYFILE_PATH", &self.caddyfile_path)
+            .env("PNEUMA_QUADLET_DIR", self.root.join("quadlets"))
             .env("PATH", executable_path(&self.fake_bin))
             .env("PNEUMA_FAKE_PORT", port.to_string())
+            .env("PNEUMA_RUNTIME_PORT_RANGE", format!("{port}-{port}"))
             .env("PNEUMA_FAKE_PODMAN_COUNT", self.root.join("podman-count"))
             .env("PNEUMA_FAKE_CURL_LOG", self.root.join("curl.log"))
             .env("PNEUMA_FAKE_CURL_STATUS", external_status.to_string());
@@ -1066,8 +1133,10 @@ impl DeploymentEnvironment {
             .env("PNEUMA_WORKSPACE_PATH", &self.workspace_path)
             .env("PNEUMA_CADDY_MANAGED_PATH", &self.managed_caddy_directory)
             .env("PNEUMA_CADDYFILE_PATH", &self.caddyfile_path)
+            .env("PNEUMA_QUADLET_DIR", self.root.join("quadlets"))
             .env("PATH", executable_path(&self.fake_bin))
             .env("PNEUMA_FAKE_PORT", port.to_string())
+            .env("PNEUMA_RUNTIME_PORT_RANGE", format!("{port}-{port}"))
             .env("PNEUMA_FAKE_PODMAN_COUNT", self.root.join("podman-count"))
             .env("PNEUMA_FAKE_PODMAN_LOG", self.root.join("podman.log"));
         match failure {
@@ -1195,7 +1264,21 @@ case "$1" in
         fi
         ;;
     inspect)
-        if [ -n "${PNEUMA_FAKE_CONTAINER_STATE:-}" ] && [ -f "$PNEUMA_FAKE_CONTAINER_STATE" ]; then
+        if [ "$2" = "--format" ] && [ "$3" = "{{.Id}}" ]; then
+            count=0
+            if [ -n "${PNEUMA_FAKE_PODMAN_COUNT:-}" ] && [ -f "$PNEUMA_FAKE_PODMAN_COUNT" ]; then
+                count=$(sed -n '1p' "$PNEUMA_FAKE_PODMAN_COUNT")
+            fi
+            count=$((count + 1))
+            if [ -n "${PNEUMA_FAKE_PODMAN_COUNT:-}" ]; then
+                printf '%s\n' "$count" > "$PNEUMA_FAKE_PODMAN_COUNT"
+            fi
+            if [ "$count" -eq 1 ]; then
+                printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'
+            else
+                printf 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n'
+            fi
+        elif [ -n "${PNEUMA_FAKE_CONTAINER_STATE:-}" ] && [ -f "$PNEUMA_FAKE_CONTAINER_STATE" ]; then
             sed -n '1p' "$PNEUMA_FAKE_CONTAINER_STATE"
         else
             printf 'running\n'
@@ -1225,6 +1308,37 @@ esac
     let mut permissions = fs::metadata(&podman).unwrap().permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(podman, permissions).unwrap();
+}
+
+fn install_fake_systemctl(fake_bin: &Path) {
+    let systemctl = fake_bin.join("systemctl");
+    fs::write(
+        &systemctl,
+        r#"#!/bin/sh
+set -eu
+if [ "$1" = "--user" ]; then
+    shift
+fi
+case "$1" in
+    daemon-reload|start|stop|enable|disable)
+        if [ "$1" = "start" ] && [ -n "${PNEUMA_FAKE_CONTAINER_STATE:-}" ]; then
+            printf 'running\n' > "$PNEUMA_FAKE_CONTAINER_STATE"
+        fi
+        if [ "$1" = "stop" ] && [ -n "${PNEUMA_FAKE_CONTAINER_STATE:-}" ]; then
+            printf 'stopped\n' > "$PNEUMA_FAKE_CONTAINER_STATE"
+        fi
+        ;;
+    *)
+        printf 'unsupported fake systemctl command: %s\n' "$*" >&2
+        exit 1
+        ;;
+esac
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&systemctl).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(systemctl, permissions).unwrap();
 }
 
 fn install_fake_caddy_and_curl(fake_bin: &Path) {

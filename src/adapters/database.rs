@@ -1,8 +1,11 @@
 use std::error::Error;
 use std::fmt;
+use std::fs::{self, OpenOptions};
+use std::io;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::Connection;
+use rusqlite::{Connection, DatabaseName, OpenFlags};
 
 const INITIAL_MIGRATION: &str = include_str!("../../migrations/0001_application_catalog.sql");
 const DEPLOYMENT_MIGRATION: &str =
@@ -21,6 +24,8 @@ const RUNTIME_DEPLOYMENT_APPLICATION_MIGRATION: &str =
     include_str!("../../migrations/0010_runtime_deployment_application.sql");
 const DELIVERY_MIGRATION: &str =
     include_str!("../../migrations/0011_application_delivery_specs.sql");
+const RUNTIME_PORT_RESERVATION_MIGRATION: &str =
+    include_str!("../../migrations/0012_runtime_port_reservations.sql");
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, INITIAL_MIGRATION),
     (2, DEPLOYMENT_MIGRATION),
@@ -33,6 +38,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (9, DEPLOYMENT_RELEASE_APPLICATION_MIGRATION),
     (10, RUNTIME_DEPLOYMENT_APPLICATION_MIGRATION),
     (11, DELIVERY_MIGRATION),
+    (12, RUNTIME_PORT_RESERVATION_MIGRATION),
 ];
 
 #[derive(Debug)]
@@ -46,6 +52,31 @@ pub enum DatabaseError {
     },
     Migrate {
         source: rusqlite::Error,
+    },
+    BackupDestinationExists {
+        path: PathBuf,
+    },
+    BackupDestinationParent {
+        path: PathBuf,
+        source: io::Error,
+    },
+    Backup {
+        source: rusqlite::Error,
+    },
+    RestoreSource {
+        path: PathBuf,
+        source: rusqlite::Error,
+    },
+    RestoreIntegrity {
+        path: PathBuf,
+        result: String,
+    },
+    RestoreLock {
+        path: PathBuf,
+        source: io::Error,
+    },
+    RestoreReplace {
+        source: io::Error,
     },
 }
 
@@ -63,6 +94,36 @@ impl fmt::Display for DatabaseError {
                 write!(formatter, "failed to configure database: {source}")
             }
             Self::Migrate { source } => write!(formatter, "failed to migrate database: {source}"),
+            Self::BackupDestinationExists { path } => write!(
+                formatter,
+                "backup destination already exists: {}",
+                path.display()
+            ),
+            Self::BackupDestinationParent { path, source } => write!(
+                formatter,
+                "failed to create backup directory {}: {source}",
+                path.display()
+            ),
+            Self::Backup { source } => write!(formatter, "database backup failed: {source}"),
+            Self::RestoreSource { path, source } => write!(
+                formatter,
+                "failed to open restore source {}: {source}",
+                path.display()
+            ),
+            Self::RestoreIntegrity { path, result } => write!(
+                formatter,
+                "restore source {} failed integrity check: {result}",
+                path.display()
+            ),
+            Self::RestoreLock { path, source } => write!(
+                formatter,
+                "database restore is already in progress ({}) : {source}",
+                path.display()
+            ),
+            Self::RestoreReplace { source } => write!(
+                formatter,
+                "failed to replace database during restore: {source}"
+            ),
         }
     }
 }
@@ -70,11 +131,103 @@ impl fmt::Display for DatabaseError {
 impl Error for DatabaseError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::Open { source, .. } | Self::Configure { source } | Self::Migrate { source } => {
-                Some(source)
-            }
+            Self::Open { source, .. }
+            | Self::Configure { source }
+            | Self::Migrate { source }
+            | Self::Backup { source }
+            | Self::RestoreSource { source, .. } => Some(source),
+            Self::BackupDestinationParent { source, .. }
+            | Self::RestoreLock { source, .. }
+            | Self::RestoreReplace { source } => Some(source),
+            Self::BackupDestinationExists { .. } | Self::RestoreIntegrity { .. } => None,
         }
     }
+}
+
+pub fn backup(path: &Path, destination: &Path) -> Result<(), DatabaseError> {
+    if destination.exists() {
+        return Err(DatabaseError::BackupDestinationExists {
+            path: destination.to_path_buf(),
+        });
+    }
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent).map_err(|source| DatabaseError::BackupDestinationParent {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+    }
+    let connection =
+        Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|source| {
+            DatabaseError::Open {
+                path: path.to_path_buf(),
+                source,
+            }
+        })?;
+    connection
+        .backup(DatabaseName::Main, destination, None)
+        .map_err(|source| DatabaseError::Backup { source })
+}
+
+pub fn restore(path: &Path, source_path: &Path) -> Result<PathBuf, DatabaseError> {
+    let source = Connection::open_with_flags(source_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|source| DatabaseError::RestoreSource {
+            path: source_path.to_path_buf(),
+            source,
+        })?;
+    let integrity: String = source
+        .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+        .map_err(|source| DatabaseError::RestoreSource {
+            path: source_path.to_path_buf(),
+            source,
+        })?;
+    if integrity != "ok" {
+        return Err(DatabaseError::RestoreIntegrity {
+            path: source_path.to_path_buf(),
+            result: integrity,
+        });
+    }
+    let lock_path = path.with_extension("restore.lock");
+    let lock = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&lock_path)
+        .map_err(|source| DatabaseError::RestoreLock {
+            path: lock_path.clone(),
+            source,
+        })?;
+    drop(lock);
+    let result = restore_locked(path, source_path);
+    let _ = fs::remove_file(&lock_path);
+    result
+}
+
+fn restore_locked(path: &Path, source_path: &Path) -> Result<PathBuf, DatabaseError> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let pre_restore = path.with_extension(format!("pre-restore-{timestamp}.sqlite3"));
+    backup(path, &pre_restore)?;
+    let temporary = path.with_extension("restore.tmp");
+    if temporary.exists() {
+        fs::remove_file(&temporary).map_err(|source| DatabaseError::RestoreReplace { source })?;
+    }
+    let source = Connection::open_with_flags(source_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|source| DatabaseError::RestoreSource {
+            path: source_path.to_path_buf(),
+            source,
+        })?;
+    source
+        .backup(DatabaseName::Main, &temporary, None)
+        .map_err(|source| DatabaseError::Backup { source })?;
+    fs::rename(&temporary, path).map_err(|source| DatabaseError::RestoreReplace { source })?;
+    for suffix in ["-wal", "-shm", "-journal"] {
+        let sidecar = PathBuf::from(format!("{}{}", path.display(), suffix));
+        if sidecar.exists() {
+            fs::remove_file(sidecar).map_err(|source| DatabaseError::RestoreReplace { source })?;
+        }
+    }
+    Ok(pre_restore)
 }
 
 pub fn open(path: &Path) -> Result<Connection, DatabaseError> {
@@ -186,7 +339,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(migration_count, 11);
+        assert_eq!(migration_count, 12);
         assert_eq!(application_table_count, 1);
         assert_eq!(deployment_table_count, 1);
     }
@@ -202,7 +355,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(migration_count, 11);
+        assert_eq!(migration_count, 12);
     }
 
     #[test]

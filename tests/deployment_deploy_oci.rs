@@ -123,12 +123,17 @@ impl FakePodman {
         let podman = bin.join("podman");
         fs::write(
             &podman,
-            "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"$PNEUMA_FAKE_PODMAN_LOG\"\ncase \"$1\" in\n  pull|start|container) ;;\n  image) printf '%s\\n' \"${PNEUMA_FAKE_DIGEST}\" ;;\n  create) printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\n' ;;\n  inspect) printf 'running\\n' ;;\n  port) printf '127.0.0.1:%s\\n' \"$PNEUMA_FAKE_PORT\" ;;\n  *) exit 1 ;;\nesac\n",
+            "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"$PNEUMA_FAKE_PODMAN_LOG\"\ncase \"$1\" in\n  pull|start|container) ;;\n  image) printf '%s\\n' \"${PNEUMA_FAKE_DIGEST}\" ;;\n  inspect) if [ \"$2\" = \"--format\" ] && [ \"$3\" = \"{{.Id}}\" ]; then printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\n'; else printf 'running\\n'; fi ;;\n  port) printf '127.0.0.1:%s\\n' \"$PNEUMA_FAKE_PORT\" ;;\n  *) exit 1 ;;\nesac\n",
         )
         .unwrap();
         let mut permissions = fs::metadata(&podman).unwrap().permissions();
         permissions.set_mode(0o755);
         fs::set_permissions(&podman, permissions).unwrap();
+        let systemctl = bin.join("systemctl");
+        fs::write(&systemctl, "#!/bin/sh\nexit 0\n").unwrap();
+        let mut permissions = fs::metadata(&systemctl).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&systemctl, permissions).unwrap();
         Self {
             root,
             bin,
@@ -150,6 +155,13 @@ impl FakePodman {
         unsafe { env::set_var("PNEUMA_FAKE_PODMAN_LOG", &self.log_path) };
         unsafe { env::set_var("PNEUMA_FAKE_DIGEST", digest) };
         unsafe { env::set_var("PNEUMA_FAKE_PORT", &self.port) };
+        unsafe {
+            env::set_var(
+                "PNEUMA_RUNTIME_PORT_RANGE",
+                format!("{}-{}", self.port, self.port),
+            )
+        };
+        unsafe { env::set_var("PNEUMA_QUADLET_DIR", self.root.join("quadlets")) };
         let result = operation();
         if let Some(path) = previous_path {
             unsafe { env::set_var("PATH", path) };
