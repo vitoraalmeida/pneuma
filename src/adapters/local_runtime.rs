@@ -263,7 +263,6 @@ pub fn create_container(
         .arg(application_label)
         .arg("--label")
         .arg(revision_label)
-        .arg("--label")
         .arg("--publish")
         .arg(port_mapping)
         .arg(image_reference)

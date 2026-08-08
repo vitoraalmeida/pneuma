@@ -1,7 +1,9 @@
 use std::env;
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use pneuma::adapters::health_check::{HealthCheckResult, check_internal_health};
@@ -10,6 +12,93 @@ use pneuma::adapters::local_runtime::{
     ControlContainerError, CreateContainerError, ObservedRuntimeState, create_container,
     observe_container, start_container, stop_container,
 };
+
+#[test]
+fn creates_a_container_without_a_stray_label_flag() {
+    let environment = FakePodman::new();
+    let commit_sha = "a".repeat(40);
+    let reference = format!("localhost/pneuma/personal-site:{commit_sha}");
+
+    let created =
+        environment.run(|| create_container(&reference, "personal-site", &commit_sha, 8080));
+
+    let commands = fs::read_to_string(environment.log_path()).unwrap();
+    assert_eq!(
+        commands.trim(),
+        format!(
+            "create --pull=never --name pneuma-personal-site-{commit_sha} \
+             --label io.pneuma.application=personal-site \
+             --label io.pneuma.revision={commit_sha} \
+             --publish 127.0.0.1::8080 {reference}"
+        )
+    );
+    assert!(created.unwrap().id.len() == 64);
+}
+
+struct FakePodman {
+    root: PathBuf,
+    bin: PathBuf,
+    log_path: PathBuf,
+}
+
+impl FakePodman {
+    fn new() -> Self {
+        let root = env::temp_dir().join(format!(
+            "pneuma-local-runtime-fake-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
+        let bin = root.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let log_path = root.join("podman.log");
+        let podman = bin.join("podman");
+        fs::write(
+            &podman,
+            "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"$PNEUMA_FAKE_PODMAN_LOG\"\nprintf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\n'\n",
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&podman).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&podman, permissions).unwrap();
+        Self {
+            root,
+            bin,
+            log_path,
+        }
+    }
+
+    fn run<T>(&self, operation: impl FnOnce() -> T) -> T {
+        let _lock = environment_lock().lock().unwrap();
+        let path = env::join_paths(
+            std::iter::once(self.bin.clone())
+                .chain(env::split_paths(&env::var_os("PATH").unwrap())),
+        )
+        .unwrap();
+        let previous_path = env::var_os("PATH");
+        unsafe { env::set_var("PATH", path) };
+        unsafe { env::set_var("PNEUMA_FAKE_PODMAN_LOG", &self.log_path) };
+        let result = operation();
+        if let Some(path) = previous_path {
+            unsafe { env::set_var("PATH", path) };
+        }
+        result
+    }
+
+    fn log_path(&self) -> PathBuf {
+        self.log_path.clone()
+    }
+}
+
+impl Drop for FakePodman {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+fn environment_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
 
 #[test]
 #[ignore = "requires configured rootless Podman"]
