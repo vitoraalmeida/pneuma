@@ -308,6 +308,25 @@ fn source_deploy_is_explicit_and_old_deploy_syntax_is_usage() {
 }
 
 #[test]
+fn a_failed_deploy_retry_reuses_the_checkout() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+
+    let failing_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let failing_port = failing_listener.local_addr().unwrap().port();
+    let failing_server = thread::spawn(move || respond_unhealthy(&failing_listener, 5));
+    let first = environment.deploy(failing_port, false);
+    failing_server.join().unwrap();
+    assert!(!first.status.success());
+
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || respond_once(&listener, 200));
+    assert_command_succeeded(&environment.deploy(port, false));
+    server.join().unwrap();
+}
+
+#[test]
 fn reports_a_missing_application_before_external_work() {
     let database_path = temporary_database_path();
     let workspace_path = database_path.with_extension("workspaces");
@@ -1088,6 +1107,12 @@ fn respond_once(listener: &TcpListener, status: u16) {
     read_request(&mut stream);
     let response = format!("HTTP/1.1 {status} Test\r\nContent-Length: 0\r\n\r\n");
     stream.write_all(response.as_bytes()).unwrap();
+}
+
+fn respond_unhealthy(listener: &TcpListener, attempts: usize) {
+    for _ in 0..attempts {
+        respond_once(listener, 500);
+    }
 }
 
 fn read_request(stream: &mut TcpStream) {

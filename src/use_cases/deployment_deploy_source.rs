@@ -5,7 +5,7 @@ use std::path::Path;
 
 use rusqlite::Connection;
 
-use crate::adapters::git_source::{ResolveCommitError, create_checkout, resolve_commit};
+use crate::adapters::git_source::{ResolveCommitError, ensure_checkout, resolve_commit};
 use crate::adapters::local_build::build_image;
 use crate::use_cases::deployment_create::DeploymentType;
 use crate::use_cases::deployment_deploy_release::{
@@ -90,7 +90,7 @@ pub fn deploy_source(
     fs::create_dir_all(workspace_root).map_err(|source| DeploySourceError::PrepareCheckout {
         source: Box::new(source),
     })?;
-    create_checkout(repository_path, &commit_sha, &checkout_path).map_err(|source| {
+    ensure_checkout(repository_path, &commit_sha, &checkout_path).map_err(|source| {
         DeploySourceError::PrepareCheckout {
             source: Box::new(source),
         }

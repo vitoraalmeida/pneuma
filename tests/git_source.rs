@@ -5,7 +5,7 @@ use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use pneuma::adapters::git_source::{
-    CreateCheckoutError, ResolveCommitError, create_checkout, resolve_commit,
+    CreateCheckoutError, ResolveCommitError, create_checkout, ensure_checkout, resolve_commit,
 };
 
 #[test]
@@ -94,6 +94,53 @@ fn rejects_an_existing_checkout_destination() {
         error,
         CreateCheckoutError::DestinationExists { .. }
     ));
+}
+
+#[test]
+fn reuses_a_clean_checkout_at_the_same_commit() {
+    let repository = TestRepository::new();
+    let commit = repository.head_commit();
+    let destination = repository.temporary_root.join("checkout");
+    create_checkout(&repository.path, &commit, &destination).unwrap();
+
+    ensure_checkout(&repository.path, &commit, &destination).unwrap();
+
+    assert_eq!(
+        fs::read_to_string(destination.join("site.txt")).unwrap(),
+        "initial contents"
+    );
+}
+
+#[test]
+fn replaces_a_dirty_checkout_at_the_same_commit() {
+    let repository = TestRepository::new();
+    let commit = repository.head_commit();
+    let destination = repository.temporary_root.join("checkout");
+    create_checkout(&repository.path, &commit, &destination).unwrap();
+    fs::write(destination.join("site.txt"), "local changes").unwrap();
+
+    ensure_checkout(&repository.path, &commit, &destination).unwrap();
+
+    assert_eq!(
+        fs::read_to_string(destination.join("site.txt")).unwrap(),
+        "initial contents"
+    );
+}
+
+#[test]
+fn replaces_a_checkout_at_a_different_commit() {
+    let repository = TestRepository::new();
+    let first_commit = repository.head_commit();
+    let second_commit = repository.commit_file("second contents", "second commit");
+    let destination = repository.temporary_root.join("checkout");
+    create_checkout(&repository.path, &first_commit, &destination).unwrap();
+
+    ensure_checkout(&repository.path, &second_commit, &destination).unwrap();
+
+    assert_eq!(
+        fs::read_to_string(destination.join("site.txt")).unwrap(),
+        "second contents"
+    );
 }
 
 struct TestRepository {

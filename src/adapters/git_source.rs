@@ -205,6 +205,67 @@ pub fn create_checkout(
     Ok(())
 }
 
+pub fn ensure_checkout(
+    repository_path: &Path,
+    commit_sha: &str,
+    checkout_path: &Path,
+) -> Result<(), CreateCheckoutError> {
+    if commit_sha.is_empty() || !commit_sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(CreateCheckoutError::InvalidCommit);
+    }
+
+    let exists = checkout_path
+        .try_exists()
+        .map_err(|source| CreateCheckoutError::Execute {
+            operation: "inspecting the checkout destination",
+            source,
+        })?;
+    if !exists {
+        return create_checkout(repository_path, commit_sha, checkout_path);
+    }
+
+    if is_clean_checkout_at(checkout_path, commit_sha)? {
+        return Ok(());
+    }
+
+    // A failed deployment can leave a checkout behind; discard an unusable or
+    // stale one so a retry of the same commit starts from a clean tree.
+    fs::remove_dir_all(checkout_path).map_err(|source| CreateCheckoutError::Execute {
+        operation: "removing an unusable checkout",
+        source,
+    })?;
+    create_checkout(repository_path, commit_sha, checkout_path)
+}
+
+fn is_clean_checkout_at(
+    checkout_path: &Path,
+    commit_sha: &str,
+) -> Result<bool, CreateCheckoutError> {
+    let head = Command::new("git")
+        .arg("-C")
+        .arg(checkout_path)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .map_err(|source| CreateCheckoutError::Execute {
+            operation: "inspecting an existing checkout",
+            source,
+        })?;
+    if !head.status.success() || String::from_utf8_lossy(&head.stdout).trim() != commit_sha {
+        return Ok(false);
+    }
+
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(checkout_path)
+        .args(["status", "--porcelain"])
+        .output()
+        .map_err(|source| CreateCheckoutError::Execute {
+            operation: "inspecting an existing checkout",
+            source,
+        })?;
+    Ok(status.status.success() && String::from_utf8_lossy(&status.stdout).trim().is_empty())
+}
+
 fn git_failure_message(output: &Output) -> String {
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
     if stderr.is_empty() {
