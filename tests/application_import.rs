@@ -184,8 +184,8 @@ fn persists_delivery_without_source_or_build_specs() {
 fn requires_system_from_manifest_or_cli() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
 
-    let error = import_application(&mut connection, &fixture_path("valid"), None).unwrap();
-    assert!(!error.system_id.is_empty());
+    let application = import_application(&mut connection, &fixture_path("valid"), None).unwrap();
+    assert!(application.system_id.is_some());
 }
 
 #[test]
