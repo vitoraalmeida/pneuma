@@ -31,7 +31,7 @@ const CADDY_MANAGED_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_CADDY_MANAGED_PATH
 const DEFAULT_CADDY_MANAGED_PATH: &str = "/etc/caddy/applications";
 const CADDYFILE_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_CADDYFILE_PATH";
 const DEFAULT_CADDYFILE_PATH: &str = "/etc/caddy/Caddyfile";
-const USAGE: &str = "Usage:\n  pneuma [--verbose] system create <name> [--description <text>]\n  pneuma [--verbose] system list\n  pneuma [--verbose] system show <name>\n  pneuma [--verbose] app import <repository-path> [--system <system-name>]\n  pneuma [--verbose] app list\n  pneuma [--verbose] app deployments <application-name>\n  pneuma [--verbose] app status <application-name>\n  pneuma [--verbose] app stop <application-name>\n  pneuma [--verbose] app start <application-name>\n  pneuma [--verbose] app deploy <application-name> --image <repository@sha256:...>\n  pneuma [--verbose] app deploy-source <application-name> <repository-path> --revision <revision>\n  pneuma [--verbose] deployment rollback <application-name>\n  pneuma [--verbose] app expose <application-name> <public|internal>\n  pneuma version\n  pneuma doctor";
+const USAGE: &str = "Usage:\n  pneuma [--verbose] system create <name> [--description <text>]\n  pneuma [--verbose] system list\n  pneuma [--verbose] system show <name>\n  pneuma [--verbose] app import <repository-path> [--system <system-name>]\n  pneuma [--verbose] app list\n  pneuma [--verbose] app deployments <application-name>\n  pneuma [--verbose] app status <application-name>\n  pneuma [--verbose] app stop <application-name>\n  pneuma [--verbose] app start <application-name>\n  pneuma [--verbose] app deploy <application-name> --image <repository@sha256:...>\n  pneuma [--verbose] app deploy-source <application-name> <repository-path> --revision <revision>\n  pneuma [--verbose] deployment rollback <application-name>\n  pneuma [--verbose] app visibility set <application-name> <public|internal>\n  pneuma version\n  pneuma doctor";
 
 struct Invocation {
     verbose: bool,
@@ -76,7 +76,7 @@ enum Command {
     Rollback {
         application_name: String,
     },
-    Expose {
+    VisibilitySet {
         application_name: String,
         visibility: Visibility,
     },
@@ -114,7 +114,7 @@ enum CliError {
     Rollback {
         source: RollbackError,
     },
-    Expose {
+    VisibilitySet {
         source: ExposureChangeError,
     },
     SystemCreate {
@@ -143,7 +143,7 @@ impl fmt::Display for CliError {
             Self::DeployOci { source } => write!(formatter, "{source}"),
             Self::DeploySource { source } => write!(formatter, "{source}"),
             Self::Rollback { source } => write!(formatter, "{source}"),
-            Self::Expose { source } => write!(formatter, "{source}"),
+            Self::VisibilitySet { source } => write!(formatter, "{source}"),
             Self::SystemCreate { source } => write!(formatter, "{source}"),
             Self::SystemList { source } => write!(formatter, "{source}"),
             Self::SystemShow { source } => write!(formatter, "{source}"),
@@ -164,7 +164,7 @@ impl Error for CliError {
             Self::ApplicationRuntime { source } => Some(source.as_ref()),
             Self::ApplicationNotFound { .. } => None,
             Self::Rollback { source } => Some(source),
-            Self::Expose { source } => Some(source),
+            Self::VisibilitySet { source } => Some(source),
             Self::SystemCreate { source } => Some(source),
             Self::SystemList { source } => Some(source),
             Self::SystemShow { source } => Some(source),
@@ -298,17 +298,24 @@ fn parse_command(arguments: &[OsString]) -> Result<Invocation, CliError> {
             let application_name = application_name.to_str().ok_or(CliError::Usage)?.to_owned();
             Ok(Command::Rollback { application_name })
         }
-        [app, expose, application_name, visibility]
-            if app == OsStr::new("app") && expose == OsStr::new("expose") =>
+        [
+            app,
+            visibility_command,
+            set,
+            application_name,
+            visibility_value,
+        ] if app == OsStr::new("app")
+            && visibility_command == OsStr::new("visibility")
+            && set == OsStr::new("set") =>
         {
             let application_name = application_name.to_str().ok_or(CliError::Usage)?.to_owned();
-            let visibility_str = visibility.to_str().ok_or(CliError::Usage)?;
+            let visibility_str = visibility_value.to_str().ok_or(CliError::Usage)?;
             let visibility = match visibility_str {
                 "public" => Visibility::Public,
                 "internal" => Visibility::Internal,
                 _ => return Err(CliError::Usage),
             };
-            Ok(Command::Expose {
+            Ok(Command::VisibilitySet {
                 application_name,
                 visibility,
             })
@@ -404,10 +411,10 @@ fn run(invocation: Invocation) -> Result<(), CliError> {
         Command::Rollback { application_name } => {
             run_rollback(&mut connection, verbose, &application_name)
         }
-        Command::Expose {
+        Command::VisibilitySet {
             application_name,
             visibility,
-        } => run_expose(&mut connection, verbose, &application_name, visibility),
+        } => run_visibility_set(&mut connection, verbose, &application_name, visibility),
         Command::Doctor | Command::Version => unreachable!(),
     }
 }
@@ -518,30 +525,13 @@ fn run_deployments(
         println!("No deployments for {}", application.name);
     } else {
         println!("Deployments for {}:", application.name);
+        println!("DEPLOYMENT\tRELEASE\tSOURCE\tSTATUS");
         for deployment in deployments {
-            let status = format!("{:?}", deployment.status);
-            match deployment.finished_at {
-                Some(_finished_at) => {
-                    println!(
-                        "{}\t{:?}\t{}\t{}\t{}",
-                        deployment.id,
-                        deployment.deployment_type,
-                        deployment.release_id,
-                        deployment.image_reference,
-                        status
-                    );
-                }
-                None => {
-                    println!(
-                        "{}\t{:?}\t{}\t{}\t{}",
-                        deployment.id,
-                        deployment.deployment_type,
-                        deployment.release_id,
-                        deployment.image_reference,
-                        status
-                    );
-                }
-            }
+            let source = deployment.source_revision.as_deref().unwrap_or("-");
+            println!(
+                "{}\t{}\t{}\t{:?}",
+                deployment.id, deployment.image_digest, source, deployment.status
+            );
         }
     }
     Ok(())
@@ -766,7 +756,7 @@ fn run_rollback(
     Ok(())
 }
 
-fn run_expose(
+fn run_visibility_set(
     connection: &mut rusqlite::Connection,
     verbose: bool,
     application_name: &str,
@@ -786,7 +776,7 @@ fn run_expose(
     log_verbose(
         verbose,
         format!(
-            "changing exposure of application {} to {:?}",
+            "set visibility of application {} to {:?}",
             application.name, visibility
         ),
     );
@@ -797,16 +787,16 @@ fn run_expose(
         &managed_directory,
         &caddyfile_path,
     )
-    .map_err(|source| CliError::Expose { source })?;
+    .map_err(|source| CliError::VisibilitySet { source })?;
     match exposure_change.visibility {
         Visibility::Public => {
-            println!("Exposed {} publicly", application.name);
+            println!("Visibility for {}: Public", application.name);
             if let Some(domain) = exposure_change.domain {
                 println!("Domain: {}", domain);
             }
         }
         Visibility::Internal => {
-            println!("Exposed {} internally", application.name);
+            println!("Visibility for {}: Internal", application.name);
         }
     }
     Ok(())

@@ -655,13 +655,14 @@ fn lists_deployments_for_a_deployed_application() {
     assert_command_succeeded(&output);
     let stdout = String::from_utf8(output.stdout).unwrap();
     let lines: Vec<&str> = stdout.lines().collect();
-    assert_eq!(lines.len(), 2);
+    assert_eq!(lines.len(), 3);
     assert_eq!(
         lines[0],
         format!("Deployments for {}:", environment.application_name)
     );
-    assert!(lines[1].contains("Succeeded"));
-    assert!(lines[1].contains(&environment.commit_sha[..7]));
+    assert_eq!(lines[1], "DEPLOYMENT\tRELEASE\tSOURCE\tSTATUS");
+    assert!(lines[2].contains("Succeeded"));
+    assert!(lines[2].contains(&environment.commit_sha));
 }
 
 #[test]
@@ -713,6 +714,155 @@ fn deployments_command_fails_for_a_missing_application() {
         String::from_utf8_lossy(&output.stderr)
             .contains("application `missing-application` was not found")
     );
+}
+
+#[test]
+fn visibility_set_toggles_public_and_internal() {
+    let environment = DeploymentEnvironment::public();
+    assert_command_succeeded(&environment.import());
+    environment.deploy_current_revision();
+
+    let internal = run_visibility_command(&environment, "internal");
+    assert_command_succeeded(&internal);
+    let stdout = String::from_utf8_lossy(&internal.stdout);
+    assert!(
+        stdout.contains(&format!(
+            "Visibility for {}: Internal",
+            environment.application_name
+        )),
+        "unexpected stdout: {stdout}"
+    );
+    let connection = database::open(&environment.database_path).unwrap();
+    let visibility: String = connection
+        .query_row("SELECT desired_visibility FROM exposures", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(visibility, "internal");
+    assert!(
+        environment
+            .managed_caddy_directory
+            .read_dir()
+            .unwrap()
+            .next()
+            .is_none(),
+        "internal visibility must remove the Caddy fragment"
+    );
+
+    let public = run_visibility_command(&environment, "public");
+    assert_command_succeeded(&public);
+    let stdout = String::from_utf8_lossy(&public.stdout);
+    assert!(
+        stdout.contains(&format!(
+            "Visibility for {}: Public",
+            environment.application_name
+        )),
+        "unexpected stdout: {stdout}"
+    );
+    assert!(stdout.contains("Domain:"));
+    let visibility: String = connection
+        .query_row("SELECT desired_visibility FROM exposures", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(visibility, "public");
+    assert!(
+        environment
+            .managed_caddy_directory
+            .read_dir()
+            .unwrap()
+            .next()
+            .is_some(),
+        "public visibility must materialize the Caddy fragment"
+    );
+}
+
+#[test]
+fn legacy_expose_command_returns_usage() {
+    let database_path = temporary_database_path();
+    let output = run_pneuma(
+        &database_path,
+        &[
+            OsStr::new("app"),
+            OsStr::new("expose"),
+            OsStr::new("personal-site"),
+            OsStr::new("public"),
+        ],
+    );
+    let _ = fs::remove_file(&database_path);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Usage:"));
+    assert!(stderr.contains("app visibility set"));
+}
+
+#[test]
+fn visibility_set_rejects_an_unknown_visibility() {
+    let database_path = temporary_database_path();
+    let output = run_pneuma(
+        &database_path,
+        &[
+            OsStr::new("app"),
+            OsStr::new("visibility"),
+            OsStr::new("set"),
+            OsStr::new("personal-site"),
+            OsStr::new("exposed"),
+        ],
+    );
+    let _ = fs::remove_file(&database_path);
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Usage:"));
+}
+
+#[test]
+fn deployments_source_is_dash_for_oci_releases() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    let reference = format!("registry.example/team/service@sha256:{}", "a".repeat(64));
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || respond_once(&listener, 200));
+    assert_command_succeeded(&environment.deploy_oci(&reference, port));
+    server.join().unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_pneuma"))
+        .env("PNEUMA_DATABASE_PATH", &environment.database_path)
+        .args(["app", "deployments", &environment.application_name])
+        .output()
+        .unwrap();
+
+    assert_command_succeeded(&output);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 3);
+    assert_eq!(lines[1], "DEPLOYMENT\tRELEASE\tSOURCE\tSTATUS");
+    assert!(lines[2].contains(&format!("sha256:{}", "a".repeat(64))));
+    assert!(lines[2].contains("\t-\tSucceeded"));
+}
+
+fn run_visibility_command(environment: &DeploymentEnvironment, visibility: &str) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_pneuma"))
+        .env("PNEUMA_DATABASE_PATH", &environment.database_path)
+        .env("PNEUMA_WORKSPACE_PATH", &environment.workspace_path)
+        .env(
+            "PNEUMA_CADDY_MANAGED_PATH",
+            &environment.managed_caddy_directory,
+        )
+        .env("PNEUMA_CADDYFILE_PATH", &environment.caddyfile_path)
+        .env("PATH", executable_path(&environment.fake_bin))
+        .env("PNEUMA_FAKE_PORT", "30000")
+        .env("PNEUMA_FAKE_CURL_LOG", environment.root.join("curl.log"))
+        .args([
+            "app",
+            "visibility",
+            "set",
+            &environment.application_name,
+            visibility,
+        ])
+        .output()
+        .unwrap()
 }
 
 fn run_pneuma(database_path: &Path, arguments: &[&OsStr]) -> Output {
