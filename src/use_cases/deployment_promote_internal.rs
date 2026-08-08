@@ -7,6 +7,9 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
 use crate::adapters::health_check::{
     HealthCheckError, HealthCheckFailure, HealthCheckResult, check_internal_health,
 };
+use crate::adapters::local_runtime::ObservedRuntimeState;
+use crate::domain::manifest::Visibility;
+use crate::use_cases::deployment_create::{DeploymentStatus, RuntimeRole};
 use crate::use_cases::deployment_transition::{TransitionDeploymentError, fail_deployment};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -237,12 +240,12 @@ struct PromotionTarget {
     application_id: String,
     deployment_id: String,
     endpoint: SocketAddr,
-    role: String,
-    observed_state: String,
+    role: RuntimeRole,
+    observed_state: ObservedRuntimeState,
     removed_at: Option<String>,
-    deployment_status: String,
+    deployment_status: DeploymentStatus,
     deployment_finished_at: Option<String>,
-    visibility: String,
+    visibility: Visibility,
 }
 
 fn load_target(
@@ -268,17 +271,53 @@ fn load_target(
             [runtime_id],
             |row| {
                 let host_port = row.get::<_, u16>(2)?;
+                let role_text: String = row.get(3)?;
+                let role = RuntimeRole::from_database(&role_text).ok_or_else(|| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        3,
+                        rusqlite::types::Type::Text,
+                        Box::new(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!("invalid runtime role: {role_text}"),
+                        )),
+                    )
+                })?;
+                let observed_state_text: String = row.get(4)?;
+                let observed_state = ObservedRuntimeState::from_database(&observed_state_text);
+                let status_text: String = row.get(6)?;
+                let deployment_status =
+                    DeploymentStatus::from_database(&status_text).ok_or_else(|| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            6,
+                            rusqlite::types::Type::Text,
+                            Box::new(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                format!("invalid deployment status: {status_text}"),
+                            )),
+                        )
+                    })?;
+                let visibility_text: String = row.get(8)?;
+                let visibility = Visibility::from_database(&visibility_text).ok_or_else(|| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        8,
+                        rusqlite::types::Type::Text,
+                        Box::new(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!("invalid visibility: {visibility_text}"),
+                        )),
+                    )
+                })?;
                 Ok(PromotionTarget {
                     runtime_id: runtime_id.to_owned(),
                     application_id: row.get(0)?,
                     deployment_id: row.get(1)?,
                     endpoint: SocketAddr::from((Ipv4Addr::LOCALHOST, host_port)),
-                    role: row.get(3)?,
-                    observed_state: row.get(4)?,
+                    role,
+                    observed_state,
                     removed_at: row.get(5)?,
-                    deployment_status: row.get(6)?,
+                    deployment_status,
                     deployment_finished_at: row.get(7)?,
-                    visibility: row.get(8)?,
+                    visibility,
                 })
             },
         )
@@ -290,7 +329,9 @@ fn load_target(
 }
 
 fn completed_promotion(target: &PromotionTarget) -> Option<PromotedCandidate> {
-    if target.role != "current" || target.deployment_status != "succeeded" {
+    if target.role != RuntimeRole::Current
+        || target.deployment_status != DeploymentStatus::Succeeded
+    {
         return None;
     }
     target
@@ -304,16 +345,16 @@ fn completed_promotion(target: &PromotionTarget) -> Option<PromotedCandidate> {
 }
 
 fn validate_target(target: &PromotionTarget) -> Result<(), PromoteInternalCandidateError> {
-    if target.role != "candidate" {
+    if target.role != RuntimeRole::Candidate {
         return Err(PromoteInternalCandidateError::InvalidRuntimeRole {
             runtime_id: target.runtime_id.clone(),
-            actual: target.role.clone(),
+            actual: target.role.database_value().to_owned(),
         });
     }
-    if target.observed_state != "running" {
+    if target.observed_state != ObservedRuntimeState::Running {
         return Err(PromoteInternalCandidateError::RuntimeNotRunning {
             runtime_id: target.runtime_id.clone(),
-            actual: target.observed_state.clone(),
+            actual: target.observed_state.database_value().to_owned(),
         });
     }
     if target.removed_at.is_some() {
@@ -321,13 +362,13 @@ fn validate_target(target: &PromotionTarget) -> Result<(), PromoteInternalCandid
             runtime_id: target.runtime_id.clone(),
         });
     }
-    if target.deployment_status != "verifying_internal" {
+    if target.deployment_status != DeploymentStatus::VerifyingInternal {
         return Err(PromoteInternalCandidateError::InvalidDeploymentState {
             deployment_id: target.deployment_id.clone(),
-            actual: target.deployment_status.clone(),
+            actual: target.deployment_status.database_value().to_owned(),
         });
     }
-    if target.visibility != "internal" {
+    if target.visibility != Visibility::Internal {
         return Err(PromoteInternalCandidateError::PublicApplication {
             application_id: target.application_id.clone(),
         });

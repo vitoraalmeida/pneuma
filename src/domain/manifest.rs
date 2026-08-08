@@ -55,11 +55,28 @@ pub struct Exposure {
     pub domain: Option<String>,
 }
 
-#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Visibility {
     Internal,
     Public,
+}
+
+impl Visibility {
+    pub fn database_value(self) -> &'static str {
+        match self {
+            Self::Internal => "internal",
+            Self::Public => "public",
+        }
+    }
+
+    pub fn from_database(value: &str) -> Option<Self> {
+        match value {
+            "internal" => Some(Self::Internal),
+            "public" => Some(Self::Public),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug)]

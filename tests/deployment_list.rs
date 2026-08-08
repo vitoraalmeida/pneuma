@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use pneuma::adapters::database;
 use pneuma::use_cases::application_import::import_application;
 use pneuma::use_cases::deployment_create::{DeploymentStatus, create_deployment};
-use pneuma::use_cases::deployment_list::list_deployments;
+use pneuma::use_cases::deployment_list::{ListDeploymentsError, list_deployments};
 
 #[test]
 fn returns_an_empty_list_for_an_application_without_deployments() {
@@ -77,6 +77,29 @@ fn returns_only_deployments_for_the_given_application() {
     assert_eq!(first_deployments[0].commit_sha, "a".repeat(40));
     assert_eq!(second_deployments.len(), 1);
     assert_eq!(second_deployments[0].commit_sha, "b".repeat(40));
+}
+
+#[test]
+fn reports_an_invalid_status_instead_of_panicking() {
+    let mut connection = database::open(Path::new(":memory:")).unwrap();
+    let application = import_application(&mut connection, &fixture_path("valid")).unwrap();
+    let commit = "c".repeat(40);
+    create_deployment(&mut connection, &application.id, &commit, None).unwrap();
+    connection
+        .execute(
+            "UPDATE deployments SET status = 'rolling_back' WHERE application_id = ?1",
+            [&application.id],
+        )
+        .unwrap();
+
+    let error = list_deployments(&connection, &application.id).unwrap_err();
+
+    match error {
+        ListDeploymentsError::InvalidStatus { status } => {
+            assert_eq!(status, "rolling_back");
+        }
+        other => panic!("expected InvalidStatus, got {other:?}"),
+    }
 }
 
 fn fixture_path(name: &str) -> PathBuf {

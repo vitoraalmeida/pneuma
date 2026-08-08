@@ -16,6 +16,7 @@ use crate::adapters::local_runtime::{
     ContainerObservation, ControlContainerError, ObserveContainerError, ObservedRuntimeState,
     container_name, create_container, observe_container, remove_container, start_container,
 };
+use crate::domain::manifest::Visibility;
 use crate::use_cases::deployment_create::{
     CreateDeploymentError, DeploymentStatus, create_deployment,
 };
@@ -23,7 +24,7 @@ use crate::use_cases::deployment_promote_internal::{
     PromoteInternalCandidateError, promote_internal_candidate,
 };
 use crate::use_cases::deployment_promote_public::{
-    PromotePublicCandidateError, begin_public_exposure, promote_public_candidate,
+    ExposureOutcome, PromotePublicCandidateError, begin_public_exposure, promote_public_candidate,
     record_public_exposure_failure,
 };
 use crate::use_cases::deployment_register_runtime::{CandidateRuntime, register_candidate_runtime};
@@ -388,52 +389,13 @@ impl Error for CandidateCleanupError {
     }
 }
 
-pub fn deploy_internal_revision(
-    connection: &mut Connection,
-    application_id: &str,
-    repository_path: &Path,
-    revision: &str,
-    workspace_root: &Path,
-) -> Result<DeployedInternalRevision, DeployInternalRevisionError> {
-    let mut progress = ProgressReporter::disabled();
-    deploy_internal_revision_reporting(
-        connection,
-        application_id,
-        repository_path,
-        revision,
-        workspace_root,
-        None,
-        &mut progress,
-    )
-}
-
-pub fn deploy_internal_revision_with_progress(
-    connection: &mut Connection,
-    application_id: &str,
-    repository_path: &Path,
-    revision: &str,
-    workspace_root: &Path,
-    progress: &mut dyn FnMut(DeploymentProgress),
-) -> Result<DeployedInternalRevision, DeployInternalRevisionError> {
-    let mut progress = ProgressReporter::enabled(progress);
-    deploy_internal_revision_reporting(
-        connection,
-        application_id,
-        repository_path,
-        revision,
-        workspace_root,
-        None,
-        &mut progress,
-    )
-}
-
 pub fn deploy_revision(
     connection: &mut Connection,
     application_id: &str,
     repository_path: &Path,
     revision: &str,
     workspace_root: &Path,
-    public_configuration: &PublicDeploymentConfiguration,
+    public_configuration: Option<&PublicDeploymentConfiguration>,
 ) -> Result<DeployedInternalRevision, DeployInternalRevisionError> {
     let mut progress = ProgressReporter::disabled();
     deploy_internal_revision_reporting(
@@ -442,7 +404,7 @@ pub fn deploy_revision(
         repository_path,
         revision,
         workspace_root,
-        Some(public_configuration),
+        public_configuration,
         &mut progress,
     )
 }
@@ -453,7 +415,7 @@ pub fn deploy_revision_with_progress(
     repository_path: &Path,
     revision: &str,
     workspace_root: &Path,
-    public_configuration: &PublicDeploymentConfiguration,
+    public_configuration: Option<&PublicDeploymentConfiguration>,
     progress: &mut dyn FnMut(DeploymentProgress),
 ) -> Result<DeployedInternalRevision, DeployInternalRevisionError> {
     let mut progress = ProgressReporter::enabled(progress);
@@ -463,7 +425,7 @@ pub fn deploy_revision_with_progress(
         repository_path,
         revision,
         workspace_root,
-        Some(public_configuration),
+        public_configuration,
         &mut progress,
     )
 }
@@ -486,10 +448,11 @@ fn deploy_internal_revision_reporting(
         DeploymentStep::LoadSpecification,
         format!(
             "application {}, visibility {}",
-            specification.application_name, specification.visibility
+            specification.application_name,
+            specification.visibility.database_value()
         ),
     );
-    if specification.visibility == "public" && public_configuration.is_none() {
+    if specification.visibility == Visibility::Public && public_configuration.is_none() {
         return Err(DeployInternalRevisionError::PublicApplication {
             application_id: application_id.to_owned(),
         });
@@ -560,7 +523,7 @@ struct DeploymentSpecification {
     container_port: u16,
     health_path: String,
     expected_status: u16,
-    visibility: String,
+    visibility: Visibility,
 }
 
 struct ResolvedDeploymentSource<'a> {
@@ -692,7 +655,7 @@ fn reconcile_existing_runtime(
         }
     }
 
-    if specification.visibility == "public" {
+    if specification.visibility == Visibility::Public {
         let route_is_active = connection
             .query_row(
                 "SELECT COALESCE(active_runtime_id = ?1, 0)
@@ -945,6 +908,17 @@ fn load_specification(
              WHERE applications.id = ?1",
             [application_id],
             |row| {
+                let visibility_text: String = row.get(7)?;
+                let visibility = Visibility::from_database(&visibility_text).ok_or_else(|| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        7,
+                        rusqlite::types::Type::Text,
+                        Box::new(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!("invalid visibility: {visibility_text}"),
+                        )),
+                    )
+                })?;
                 Ok(DeploymentSpecification {
                     application_id: row.get(0)?,
                     application_name: row.get(1)?,
@@ -953,7 +927,7 @@ fn load_specification(
                     container_port: row.get(4)?,
                     health_path: row.get(5)?,
                     expected_status: row.get(6)?,
-                    visibility: row.get(7)?,
+                    visibility,
                 })
             },
         )
@@ -1152,9 +1126,17 @@ fn execute_candidate(
         )
     })?;
     progress.state_changed(deployment_id, DeploymentStatus::VerifyingInternal);
-    if specification.visibility == "public" {
-        let public_configuration = public_configuration
-            .expect("public deployment configuration was checked before external work");
+    if specification.visibility == Visibility::Public {
+        let Some(public_configuration) = public_configuration else {
+            return Err(failure_needing_persistence(
+                "public_configuration_missing",
+                DeployInternalRevisionError::PublicApplication {
+                    application_id: specification.application_id.clone(),
+                },
+                Some(container_id),
+                Some(&runtime.id),
+            ));
+        };
         return execute_public_candidate(
             connection,
             specification,
@@ -1283,7 +1265,11 @@ fn execute_public_candidate(
         endpoint,
     )
     .map_err(|source| {
-        let diverged = source.recovery_failed();
+        let outcome = if source.recovery_failed() {
+            ExposureOutcome::Diverged
+        } else {
+            ExposureOutcome::Failed
+        };
         public_failure(
             connection,
             &exposure.application_id,
@@ -1291,7 +1277,7 @@ fn execute_public_candidate(
             Box::new(source),
             container_id,
             runtime_id,
-            diverged,
+            outcome,
         )
     })?;
     progress.completed(
@@ -1304,7 +1290,7 @@ fn execute_public_candidate(
         deployment_id,
         DeploymentTransition::TrafficSwitched,
     ) {
-        let (source, diverged) =
+        let (source, outcome) =
             rollback_public_route(source, &materialized, &public_configuration.caddyfile_path);
         return Err(public_failure(
             connection,
@@ -1313,7 +1299,7 @@ fn execute_public_candidate(
             source,
             container_id,
             runtime_id,
-            diverged,
+            outcome,
         ));
     }
     progress.state_changed(deployment_id, DeploymentStatus::VerifyingExternal);
@@ -1326,7 +1312,7 @@ fn execute_public_candidate(
         &specification.health_path,
         specification.expected_status,
     ) {
-        let (source, diverged) =
+        let (source, outcome) =
             rollback_public_route(source, &materialized, &public_configuration.caddyfile_path);
         return Err(public_failure(
             connection,
@@ -1335,7 +1321,7 @@ fn execute_public_candidate(
             source,
             container_id,
             runtime_id,
-            diverged,
+            outcome,
         ));
     }
     progress.completed(
@@ -1350,7 +1336,7 @@ fn execute_public_candidate(
     let promoted = match promote_public_candidate(connection, runtime_id, commit_sha) {
         Ok(promoted) => promoted,
         Err(source) => {
-            let (source, diverged) =
+            let (source, outcome) =
                 rollback_public_route(source, &materialized, &public_configuration.caddyfile_path);
             return Err(public_failure(
                 connection,
@@ -1359,7 +1345,7 @@ fn execute_public_candidate(
                 source,
                 container_id,
                 runtime_id,
-                diverged,
+                outcome,
             ));
         }
     };
@@ -1437,15 +1423,15 @@ fn rollback_public_route(
     original: impl Error + 'static,
     materialized: &crate::adapters::caddy_exposure::MaterializedCaddyFragment,
     caddyfile_path: &Path,
-) -> (Box<dyn Error>, bool) {
+) -> (Box<dyn Error>, ExposureOutcome) {
     match restore_materialized_caddy_fragment(materialized, caddyfile_path) {
-        Ok(()) => (Box::new(original), false),
+        Ok(()) => (Box::new(original), ExposureOutcome::Failed),
         Err(recovery) => (
             Box::new(PublicRouteRollbackError {
                 original: Box::new(original),
                 recovery,
             }),
-            true,
+            ExposureOutcome::Diverged,
         ),
     }
 }
@@ -1457,22 +1443,17 @@ fn public_failure(
     source: Box<dyn Error>,
     container_id: &str,
     runtime_id: &str,
-    diverged: bool,
+    outcome: ExposureOutcome,
 ) -> FailedExecution {
     let message = source.to_string();
-    let source = match record_public_exposure_failure(
-        connection,
-        application_id,
-        code,
-        &message,
-        diverged,
-    ) {
-        Ok(()) => source,
-        Err(persistence) => Box::new(ExposureFailureRecordingError {
-            original: source,
-            persistence,
-        }),
-    };
+    let source =
+        match record_public_exposure_failure(connection, application_id, code, &message, outcome) {
+            Ok(()) => source,
+            Err(persistence) => Box::new(ExposureFailureRecordingError {
+                original: source,
+                persistence,
+            }),
+        };
     FailedExecution {
         code,
         source,

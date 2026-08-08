@@ -65,6 +65,32 @@ impl DeploymentStatus {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuntimeRole {
+    Candidate,
+    Current,
+    Previous,
+}
+
+impl RuntimeRole {
+    pub(crate) fn database_value(self) -> &'static str {
+        match self {
+            Self::Candidate => "candidate",
+            Self::Current => "current",
+            Self::Previous => "previous",
+        }
+    }
+
+    pub(crate) fn from_database(value: &str) -> Option<Self> {
+        match value {
+            "candidate" => Some(Self::Candidate),
+            "current" => Some(Self::Current),
+            "previous" => Some(Self::Previous),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum CreateDeploymentError {
     InvalidCommit,

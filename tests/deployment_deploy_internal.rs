@@ -12,7 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use pneuma::adapters::database;
 use pneuma::use_cases::application_import::import_application;
 use pneuma::use_cases::deployment_deploy_internal::{
-    DeployInternalRevisionError, deploy_internal_revision, deploy_internal_revision_with_progress,
+    DeployInternalRevisionError, deploy_revision, deploy_revision_with_progress,
 };
 
 const CHILD_CASE: &str = "PNEUMA_DEPLOY_TEST_CASE";
@@ -390,12 +390,13 @@ fn refuses_a_public_application_before_external_work() {
     let mut connection = database::open(&project.database_path).unwrap();
     let unused_workspace = project.root.join("unused-workspace");
 
-    let error = deploy_internal_revision(
+    let error = deploy_revision(
         &mut connection,
         &project.application_id,
         Path::new("missing-repository"),
         "main",
         &unused_workspace,
+        None,
     )
     .unwrap_err();
 
@@ -416,12 +417,13 @@ fn rejects_an_unknown_revision_without_deployment_history() {
     let mut connection = database::open(&project.database_path).unwrap();
     let unused_workspace = project.root.join("unused-workspace");
 
-    let error = deploy_internal_revision(
+    let error = deploy_revision(
         &mut connection,
         &project.application_id,
         &project.repository_path,
         "missing-revision",
         &unused_workspace,
+        None,
     )
     .unwrap_err();
 
@@ -450,23 +452,25 @@ fn deployment_child_process() {
 
     match case.to_str().unwrap() {
         "success" => {
-            let deployed = deploy_internal_revision(
+            let deployed = deploy_revision(
                 &mut connection,
                 &application_id,
                 &repository_path,
                 &first_revision,
                 &workspace_path,
+                None,
             )
             .unwrap();
             assert_eq!(deployed.commit_sha, first_revision);
         }
         "build-failure" => {
-            let error = deploy_internal_revision(
+            let error = deploy_revision(
                 &mut connection,
                 &application_id,
                 &repository_path,
                 &first_revision,
                 &workspace_path,
+                None,
             )
             .unwrap_err();
             assert!(matches!(
@@ -478,21 +482,23 @@ fn deployment_child_process() {
             ));
         }
         "unhealthy-replacement" => {
-            deploy_internal_revision(
+            deploy_revision(
                 &mut connection,
                 &application_id,
                 &repository_path,
                 &first_revision,
                 &workspace_path,
+                None,
             )
             .unwrap();
             let second_revision = required_string(SECOND_REVISION);
-            let error = deploy_internal_revision(
+            let error = deploy_revision(
                 &mut connection,
                 &application_id,
                 &repository_path,
                 &second_revision,
                 &workspace_path,
+                None,
             )
             .unwrap_err();
             assert!(matches!(
@@ -504,58 +510,64 @@ fn deployment_child_process() {
             ));
         }
         "reuse-current" => {
-            let first = deploy_internal_revision(
+            let first = deploy_revision(
                 &mut connection,
                 &application_id,
                 &repository_path,
                 &first_revision,
                 &workspace_path,
+                None,
             )
             .unwrap();
-            let second = deploy_internal_revision(
+            let second = deploy_revision(
                 &mut connection,
                 &application_id,
                 &repository_path,
                 &first_revision,
                 &workspace_path,
+                None,
             )
             .unwrap();
             assert_eq!(second, first);
         }
         "restart-current" => {
-            let first = deploy_internal_revision(
+            let first = deploy_revision(
                 &mut connection,
                 &application_id,
                 &repository_path,
                 &first_revision,
                 &workspace_path,
+                None,
             )
             .unwrap();
-            let second = deploy_internal_revision(
+            let second = deploy_revision(
                 &mut connection,
                 &application_id,
                 &repository_path,
                 &first_revision,
                 &workspace_path,
+                None,
             )
             .unwrap();
             assert_eq!(second, first);
         }
         "replace-missing" => {
-            let first = deploy_internal_revision(
+            let first = deploy_revision(
                 &mut connection,
                 &application_id,
                 &repository_path,
                 &first_revision,
                 &workspace_path,
+                None,
             )
             .unwrap();
-            let second = deploy_internal_revision(
+            let second = deploy_revision(
                 &mut connection,
                 &application_id,
                 &repository_path,
                 &first_revision,
                 &workspace_path,
+                None,
             )
             .unwrap();
             assert_ne!(second.deployment_id, first.deployment_id);
@@ -563,20 +575,22 @@ fn deployment_child_process() {
             assert_eq!(second.commit_sha, first.commit_sha);
         }
         "unhealthy-current" => {
-            deploy_internal_revision(
+            deploy_revision(
                 &mut connection,
                 &application_id,
                 &repository_path,
                 &first_revision,
                 &workspace_path,
+                None,
             )
             .unwrap();
-            let error = deploy_internal_revision(
+            let error = deploy_revision(
                 &mut connection,
                 &application_id,
                 &repository_path,
                 &first_revision,
                 &workspace_path,
+                None,
             )
             .unwrap_err();
             assert!(matches!(
@@ -585,21 +599,23 @@ fn deployment_child_process() {
             ));
         }
         "reactivate-previous" => {
-            let first = deploy_internal_revision(
+            let first = deploy_revision(
                 &mut connection,
                 &application_id,
                 &repository_path,
                 &first_revision,
                 &workspace_path,
+                None,
             )
             .unwrap();
             let second_revision = required_string(SECOND_REVISION);
-            let second = deploy_internal_revision(
+            let second = deploy_revision(
                 &mut connection,
                 &application_id,
                 &repository_path,
                 &second_revision,
                 &workspace_path,
+                None,
             )
             .unwrap();
             let mut progress = Vec::new();
@@ -607,12 +623,13 @@ fn deployment_child_process() {
                 |event: pneuma::use_cases::deployment_deploy_internal::DeploymentProgress| {
                     progress.push(event.to_string());
                 };
-            let reactivated = deploy_internal_revision_with_progress(
+            let reactivated = deploy_revision_with_progress(
                 &mut connection,
                 &application_id,
                 &repository_path,
                 &first_revision,
                 &workspace_path,
+                None,
                 &mut report,
             )
             .unwrap();
@@ -625,29 +642,32 @@ fn deployment_child_process() {
             );
         }
         "unhealthy-previous" => {
-            deploy_internal_revision(
+            deploy_revision(
                 &mut connection,
                 &application_id,
                 &repository_path,
                 &first_revision,
                 &workspace_path,
+                None,
             )
             .unwrap();
             let second_revision = required_string(SECOND_REVISION);
-            deploy_internal_revision(
+            deploy_revision(
                 &mut connection,
                 &application_id,
                 &repository_path,
                 &second_revision,
                 &workspace_path,
+                None,
             )
             .unwrap();
-            let error = deploy_internal_revision(
+            let error = deploy_revision(
                 &mut connection,
                 &application_id,
                 &repository_path,
                 &first_revision,
                 &workspace_path,
+                None,
             )
             .unwrap_err();
             assert!(matches!(

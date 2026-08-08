@@ -2,7 +2,7 @@ use std::env;
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use pneuma::adapters::database::{self, DatabaseError};
@@ -194,201 +194,263 @@ fn run(invocation: Invocation) -> Result<(), CliError> {
         .filter(|path| !path.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(DEFAULT_DATABASE_PATH));
-    if verbose {
-        eprintln!("[verbose] database: {}", database_path.display());
-    }
+    log_verbose(verbose, format!("database: {}", database_path.display()));
     let mut connection =
         database::open(&database_path).map_err(|source| CliError::Database { source })?;
 
     match command {
         Command::Import { repository_path } => {
-            if verbose {
-                eprintln!("[verbose] import repository: {}", repository_path.display());
-            }
-            let application = import_application(&mut connection, &repository_path)
-                .map_err(|source| CliError::Import { source })?;
-            println!("Imported {}", application.name);
-            println!("Status: Registered");
-            println!("Deployment: Not deployed");
+            run_import(&mut connection, verbose, &repository_path)
         }
-        Command::List => {
-            if verbose {
-                eprintln!("[verbose] list registered applications");
-            }
-            let applications =
-                list_applications(&connection).map_err(|source| CliError::List { source })?;
-            for application in applications {
-                let deployment_status = if application_is_deployed(&connection, &application.id)
-                    .map_err(|source| CliError::List { source })?
-                {
-                    "Deployed"
-                } else {
-                    "Not deployed"
-                };
-
-                println!("{}\tRegistered\t{deployment_status}", application.name);
-            }
-        }
+        Command::List => run_list(&connection, verbose),
         Command::Deployments { application_name } => {
-            if verbose {
-                eprintln!("[verbose] resolve application by name: {application_name}");
-            }
-            let application = resolve_application(&connection, &application_name)?;
-            if verbose {
-                eprintln!(
-                    "[verbose] list deployments of application {}",
-                    application.name
-                );
-            }
-            let deployments = list_deployments(&connection, &application.id)
-                .map_err(|source| CliError::ListDeployments { source })?;
-            if deployments.is_empty() {
-                println!("No deployments for {}", application.name);
-            } else {
-                println!("Deployments for {}:", application.name);
-                for deployment in deployments {
-                    let short_commit = &deployment.commit_sha[..7];
-                    let status = format!("{:?}", deployment.status);
-                    match deployment.finished_at {
-                        Some(finished_at) => {
-                            println!(
-                                "{}\t{}\t{}\t{}",
-                                deployment.id, short_commit, status, finished_at
-                            );
-                        }
-                        None => {
-                            println!(
-                                "{}\t{}\t{}\t{}",
-                                deployment.id, short_commit, status, deployment.requested_at
-                            );
-                        }
-                    }
-                }
-            }
+            run_deployments(&connection, verbose, &application_name)
         }
         Command::Status { application_name } => {
-            if verbose {
-                eprintln!("[verbose] resolve application by name: {application_name}");
-            }
-            let application = resolve_application(&connection, &application_name)?;
-            if verbose {
-                eprintln!(
-                    "[verbose] report status of application {}",
-                    application.name
-                );
-            }
-            let observation =
-                report_application_status(&mut connection, &application.id, &application.name)
-                    .map_err(|source| CliError::ApplicationRuntime {
-                        source: Box::new(source),
-                    })?;
-            println!("Application: {}", application.name);
-            println!("Desired state: {:?}", observation.desired_runtime_state);
-            println!("Observed state: {:?}", observation.observed_runtime_state);
-            println!("Runtime: {}", observation.runtime_id);
-            println!("Container: {}", observation.container_id);
+            run_status(&mut connection, verbose, &application_name)
         }
-        Command::Stop { application_name } => {
-            if verbose {
-                eprintln!("[verbose] resolve application by name: {application_name}");
-            }
-            let application = resolve_application(&connection, &application_name)?;
-            if verbose {
-                eprintln!("[verbose] stop application {}", application.name);
-            }
-            let observation = stop_application(&mut connection, &application.id, &application.name)
-                .map_err(|source| CliError::ApplicationRuntime {
-                    source: Box::new(source),
-                })?;
-            println!("Stopped {}", application.name);
-            println!("Desired state: {:?}", observation.desired_runtime_state);
-            println!("Observed state: {:?}", observation.observed_runtime_state);
-        }
+        Command::Stop { application_name } => run_stop(&mut connection, verbose, &application_name),
         Command::Start { application_name } => {
-            if verbose {
-                eprintln!("[verbose] resolve application by name: {application_name}");
-            }
-            let application = resolve_application(&connection, &application_name)?;
-            if verbose {
-                eprintln!("[verbose] start application {}", application.name);
-            }
-            let observation =
-                start_application(&mut connection, &application.id, &application.name).map_err(
-                    |source| CliError::ApplicationRuntime {
-                        source: Box::new(source),
-                    },
-                )?;
-            println!("Started {}", application.name);
-            println!("Desired state: {:?}", observation.desired_runtime_state);
-            println!("Observed state: {:?}", observation.observed_runtime_state);
+            run_start(&mut connection, verbose, &application_name)
         }
         Command::Deploy {
             application_name,
             repository_path,
             revision,
-        } => {
-            if verbose {
-                eprintln!("[verbose] resolve application by name: {application_name}");
+        } => run_deploy(
+            &mut connection,
+            verbose,
+            &application_name,
+            &repository_path,
+            &revision,
+        ),
+    }
+}
+
+fn log_verbose(verbose: bool, message: impl std::fmt::Display) {
+    if verbose {
+        eprintln!("[verbose] {message}");
+    }
+}
+
+fn run_import(
+    connection: &mut rusqlite::Connection,
+    verbose: bool,
+    repository_path: &Path,
+) -> Result<(), CliError> {
+    log_verbose(
+        verbose,
+        format!("import repository: {}", repository_path.display()),
+    );
+    let application = import_application(connection, repository_path)
+        .map_err(|source| CliError::Import { source })?;
+    println!("Imported {}", application.name);
+    println!("Status: Registered");
+    println!("Deployment: Not deployed");
+    Ok(())
+}
+
+fn run_list(connection: &rusqlite::Connection, verbose: bool) -> Result<(), CliError> {
+    log_verbose(verbose, "list registered applications");
+    let applications = list_applications(connection).map_err(|source| CliError::List { source })?;
+    for application in applications {
+        let deployment_status = if application_is_deployed(connection, &application.id)
+            .map_err(|source| CliError::List { source })?
+        {
+            "Deployed"
+        } else {
+            "Not deployed"
+        };
+
+        println!("{}\tRegistered\t{deployment_status}", application.name);
+    }
+    Ok(())
+}
+
+fn run_deployments(
+    connection: &rusqlite::Connection,
+    verbose: bool,
+    application_name: &str,
+) -> Result<(), CliError> {
+    log_verbose(
+        verbose,
+        format!("resolve application by name: {application_name}"),
+    );
+    let application = resolve_application(connection, application_name)?;
+    log_verbose(
+        verbose,
+        format!("list deployments of application {}", application.name),
+    );
+    let deployments = list_deployments(connection, &application.id)
+        .map_err(|source| CliError::ListDeployments { source })?;
+    if deployments.is_empty() {
+        println!("No deployments for {}", application.name);
+    } else {
+        println!("Deployments for {}:", application.name);
+        for deployment in deployments {
+            let short_commit = &deployment.commit_sha[..7];
+            let status = format!("{:?}", deployment.status);
+            match deployment.finished_at {
+                Some(finished_at) => {
+                    println!(
+                        "{}\t{}\t{}\t{}",
+                        deployment.id, short_commit, status, finished_at
+                    );
+                }
+                None => {
+                    println!(
+                        "{}\t{}\t{}\t{}",
+                        deployment.id, short_commit, status, deployment.requested_at
+                    );
+                }
             }
-            let application = resolve_application(&connection, &application_name)?;
-            let workspace_path = env::var_os(WORKSPACE_PATH_ENVIRONMENT_VARIABLE)
-                .filter(|path| !path.is_empty())
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from(DEFAULT_WORKSPACE_PATH));
-            let public_configuration = PublicDeploymentConfiguration {
-                managed_caddy_directory: configured_path(
-                    CADDY_MANAGED_PATH_ENVIRONMENT_VARIABLE,
-                    DEFAULT_CADDY_MANAGED_PATH,
-                ),
-                caddyfile_path: configured_path(
-                    CADDYFILE_PATH_ENVIRONMENT_VARIABLE,
-                    DEFAULT_CADDYFILE_PATH,
-                ),
-            };
-            if verbose {
-                eprintln!(
-                    "[verbose] deployment input: application {}, repository {}, revision {}, workspace {}",
-                    application.name,
-                    repository_path.display(),
-                    revision,
-                    workspace_path.display()
-                );
-            } else {
-                eprintln!("Deploying {}...", application.name);
-            }
-            let deployment = if verbose {
-                let mut report_progress = |event| eprintln!("[verbose] {event}");
-                deploy_revision_with_progress(
-                    &mut connection,
-                    &application.id,
-                    &repository_path,
-                    &revision,
-                    &workspace_path,
-                    &public_configuration,
-                    &mut report_progress,
-                )
-            } else {
-                deploy_revision(
-                    &mut connection,
-                    &application.id,
-                    &repository_path,
-                    &revision,
-                    &workspace_path,
-                    &public_configuration,
-                )
-            };
-            let deployed = deployment.map_err(|source| CliError::Deploy {
-                source: Box::new(source),
-            })?;
-            println!("Deployed {}", application.name);
-            println!("Commit: {}", deployed.commit_sha);
-            println!("Deployment: {}", deployed.deployment_id);
-            println!("Runtime: {}", deployed.runtime_id);
-            println!("Container: {}", deployed.container_name);
-            println!("Status: Succeeded");
         }
     }
+    Ok(())
+}
 
+fn run_status(
+    connection: &mut rusqlite::Connection,
+    verbose: bool,
+    application_name: &str,
+) -> Result<(), CliError> {
+    log_verbose(
+        verbose,
+        format!("resolve application by name: {application_name}"),
+    );
+    let application = resolve_application(connection, application_name)?;
+    log_verbose(
+        verbose,
+        format!("report status of application {}", application.name),
+    );
+    let observation = report_application_status(connection, &application.id, &application.name)
+        .map_err(|source| CliError::ApplicationRuntime {
+            source: Box::new(source),
+        })?;
+    println!("Application: {}", application.name);
+    println!("Desired state: {:?}", observation.desired_runtime_state);
+    println!("Observed state: {:?}", observation.observed_runtime_state);
+    println!("Runtime: {}", observation.runtime_id);
+    println!("Container: {}", observation.container_id);
+    Ok(())
+}
+
+fn run_stop(
+    connection: &mut rusqlite::Connection,
+    verbose: bool,
+    application_name: &str,
+) -> Result<(), CliError> {
+    log_verbose(
+        verbose,
+        format!("resolve application by name: {application_name}"),
+    );
+    let application = resolve_application(connection, application_name)?;
+    log_verbose(verbose, format!("stop application {}", application.name));
+    let observation =
+        stop_application(connection, &application.id, &application.name).map_err(|source| {
+            CliError::ApplicationRuntime {
+                source: Box::new(source),
+            }
+        })?;
+    println!("Stopped {}", application.name);
+    println!("Desired state: {:?}", observation.desired_runtime_state);
+    println!("Observed state: {:?}", observation.observed_runtime_state);
+    Ok(())
+}
+
+fn run_start(
+    connection: &mut rusqlite::Connection,
+    verbose: bool,
+    application_name: &str,
+) -> Result<(), CliError> {
+    log_verbose(
+        verbose,
+        format!("resolve application by name: {application_name}"),
+    );
+    let application = resolve_application(connection, application_name)?;
+    log_verbose(verbose, format!("start application {}", application.name));
+    let observation =
+        start_application(connection, &application.id, &application.name).map_err(|source| {
+            CliError::ApplicationRuntime {
+                source: Box::new(source),
+            }
+        })?;
+    println!("Started {}", application.name);
+    println!("Desired state: {:?}", observation.desired_runtime_state);
+    println!("Observed state: {:?}", observation.observed_runtime_state);
+    Ok(())
+}
+
+fn run_deploy(
+    connection: &mut rusqlite::Connection,
+    verbose: bool,
+    application_name: &str,
+    repository_path: &Path,
+    revision: &str,
+) -> Result<(), CliError> {
+    log_verbose(
+        verbose,
+        format!("resolve application by name: {application_name}"),
+    );
+    let application = resolve_application(connection, application_name)?;
+    let workspace_path = env::var_os(WORKSPACE_PATH_ENVIRONMENT_VARIABLE)
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_WORKSPACE_PATH));
+    let public_configuration = PublicDeploymentConfiguration {
+        managed_caddy_directory: configured_path(
+            CADDY_MANAGED_PATH_ENVIRONMENT_VARIABLE,
+            DEFAULT_CADDY_MANAGED_PATH,
+        ),
+        caddyfile_path: configured_path(
+            CADDYFILE_PATH_ENVIRONMENT_VARIABLE,
+            DEFAULT_CADDYFILE_PATH,
+        ),
+    };
+    if verbose {
+        log_verbose(
+            verbose,
+            format!(
+                "deployment input: application {}, repository {}, revision {}, workspace {}",
+                application.name,
+                repository_path.display(),
+                revision,
+                workspace_path.display()
+            ),
+        );
+    } else {
+        eprintln!("Deploying {}...", application.name);
+    }
+    let deployment = if verbose {
+        let mut report_progress = |event| eprintln!("[verbose] {event}");
+        deploy_revision_with_progress(
+            connection,
+            &application.id,
+            repository_path,
+            revision,
+            &workspace_path,
+            Some(&public_configuration),
+            &mut report_progress,
+        )
+    } else {
+        deploy_revision(
+            connection,
+            &application.id,
+            repository_path,
+            revision,
+            &workspace_path,
+            Some(&public_configuration),
+        )
+    };
+    let deployed = deployment.map_err(|source| CliError::Deploy {
+        source: Box::new(source),
+    })?;
+    println!("Deployed {}", application.name);
+    println!("Commit: {}", deployed.commit_sha);
+    println!("Deployment: {}", deployed.deployment_id);
+    println!("Runtime: {}", deployed.runtime_id);
+    println!("Container: {}", deployed.container_name);
+    println!("Status: Succeeded");
     Ok(())
 }
 

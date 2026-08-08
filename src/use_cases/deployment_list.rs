@@ -15,19 +15,30 @@ pub struct DeploymentSummary {
 }
 
 #[derive(Debug)]
-pub struct ListDeploymentsError {
-    source: rusqlite::Error,
+pub enum ListDeploymentsError {
+    Persistence { source: rusqlite::Error },
+    InvalidStatus { status: String },
 }
 
 impl fmt::Display for ListDeploymentsError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "failed to list deployments: {}", self.source)
+        match self {
+            Self::Persistence { source } => {
+                write!(formatter, "failed to list deployments: {source}")
+            }
+            Self::InvalidStatus { status } => {
+                write!(formatter, "deployment has invalid status `{status}`")
+            }
+        }
     }
 }
 
 impl Error for ListDeploymentsError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(&self.source)
+        match self {
+            Self::Persistence { source } => Some(source),
+            Self::InvalidStatus { .. } => None,
+        }
     }
 }
 
@@ -43,23 +54,36 @@ pub fn list_deployments(
              WHERE d.application_id = ?1
              ORDER BY d.requested_at DESC",
         )
-        .map_err(|source| ListDeploymentsError { source })?;
+        .map_err(|source| ListDeploymentsError::Persistence { source })?;
+
     let rows = statement
         .query_map([application_id], |row| {
-            let status_text: String = row.get(2)?;
-            Ok(DeploymentSummary {
-                id: row.get(0)?,
-                commit_sha: row.get(1)?,
-                status: DeploymentStatus::from_database(&status_text).unwrap(),
-                requested_at: row.get(3)?,
-                finished_at: row.get(4)?,
-            })
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
+            ))
         })
-        .map_err(|source| ListDeploymentsError { source })?;
+        .map_err(|source| ListDeploymentsError::Persistence { source })?;
 
     let mut deployments = Vec::new();
     for row in rows {
-        deployments.push(row.map_err(|source| ListDeploymentsError { source })?);
+        let (id, commit_sha, status_text, requested_at, finished_at) =
+            row.map_err(|source| ListDeploymentsError::Persistence { source })?;
+        let status = DeploymentStatus::from_database(&status_text).ok_or_else(|| {
+            ListDeploymentsError::InvalidStatus {
+                status: status_text,
+            }
+        })?;
+        deployments.push(DeploymentSummary {
+            id,
+            commit_sha,
+            status,
+            requested_at,
+            finished_at,
+        });
     }
 
     Ok(deployments)

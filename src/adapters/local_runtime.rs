@@ -34,6 +34,36 @@ pub enum ObservedRuntimeState {
     Unknown { status: String },
 }
 
+impl ObservedRuntimeState {
+    pub fn database_value(&self) -> &str {
+        match self {
+            Self::Missing => "missing",
+            Self::Created => "created",
+            Self::Starting => "starting",
+            Self::Running => "running",
+            Self::Stopping => "stopping",
+            Self::Stopped => "stopped",
+            Self::Failed => "failed",
+            Self::Unknown { status } => status,
+        }
+    }
+
+    pub fn from_database(value: &str) -> Self {
+        match value {
+            "missing" => Self::Missing,
+            "created" => Self::Created,
+            "starting" => Self::Starting,
+            "running" => Self::Running,
+            "stopping" => Self::Stopping,
+            "stopped" => Self::Stopped,
+            "failed" => Self::Failed,
+            status => Self::Unknown {
+                status: status.to_owned(),
+            },
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct ContainerObservation {
     pub state: ObservedRuntimeState,

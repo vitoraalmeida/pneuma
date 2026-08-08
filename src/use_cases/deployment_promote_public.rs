@@ -3,6 +3,10 @@ use std::fmt;
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
+use crate::adapters::local_runtime::ObservedRuntimeState;
+use crate::domain::manifest::Visibility;
+use crate::use_cases::deployment_create::{DeploymentStatus, RuntimeRole};
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct PublicExposureTarget {
     pub application_id: String,
@@ -14,6 +18,12 @@ pub struct PromotedPublicCandidate {
     pub runtime_id: String,
     pub deployment_id: String,
     pub finished_at: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExposureOutcome {
+    Failed,
+    Diverged,
 }
 
 #[derive(Debug)]
@@ -95,10 +105,10 @@ pub fn begin_public_exposure(
 ) -> Result<PublicExposureTarget, PromotePublicCandidateError> {
     let target = load_target(connection, runtime_id)?;
     validate_runtime(&target)?;
-    if target.deployment_status != "switching_traffic" {
+    if target.deployment_status != DeploymentStatus::SwitchingTraffic {
         return Err(PromotePublicCandidateError::InvalidDeploymentState {
             deployment_id: target.deployment_id,
-            actual: target.deployment_status,
+            actual: target.deployment_status.database_value().to_owned(),
         });
     }
     let domain =
@@ -109,10 +119,10 @@ pub fn begin_public_exposure(
                 application_id: target.application_id.clone(),
                 reason: "public visibility requires a domain".to_owned(),
             })?;
-    if target.visibility != "public" {
+    if target.visibility != Visibility::Public {
         return Err(PromotePublicCandidateError::InvalidExposure {
             application_id: target.application_id,
-            reason: format!("visibility is `{}`", target.visibility),
+            reason: format!("visibility is `{}`", target.visibility.database_value()),
         });
     }
 
@@ -147,12 +157,15 @@ pub fn record_public_exposure_failure(
     application_id: &str,
     code: &str,
     message: &str,
-    diverged: bool,
+    outcome: ExposureOutcome,
 ) -> Result<(), PromotePublicCandidateError> {
     if !is_trimmed_nonempty(code) || !is_trimmed_nonempty(message) {
         return Err(PromotePublicCandidateError::InvalidDiagnostic);
     }
-    let state = if diverged { "diverged" } else { "failed" };
+    let state = match outcome {
+        ExposureOutcome::Failed => "failed",
+        ExposureOutcome::Diverged => "diverged",
+    };
     let updated = connection
         .execute(
             "UPDATE exposures
@@ -191,13 +204,13 @@ pub fn promote_public_candidate(
         .map_err(|source| PromotePublicCandidateError::Persistence { source })?;
     let target = load_target(&transaction, runtime_id)?;
     validate_runtime(&target)?;
-    if target.deployment_status != "verifying_external" {
+    if target.deployment_status != DeploymentStatus::VerifyingExternal {
         return Err(PromotePublicCandidateError::InvalidDeploymentState {
             deployment_id: target.deployment_id,
-            actual: target.deployment_status,
+            actual: target.deployment_status.database_value().to_owned(),
         });
     }
-    if target.visibility != "public" || target.domain.is_none() {
+    if target.visibility != Visibility::Public || target.domain.is_none() {
         return Err(PromotePublicCandidateError::InvalidExposure {
             application_id: target.application_id,
             reason: "visibility or domain changed during deployment".to_owned(),
@@ -296,11 +309,11 @@ struct PromotionTarget {
     runtime_id: String,
     application_id: String,
     deployment_id: String,
-    role: String,
-    observed_state: String,
+    role: RuntimeRole,
+    observed_state: ObservedRuntimeState,
     removed_at: Option<String>,
-    deployment_status: String,
-    visibility: String,
+    deployment_status: DeploymentStatus,
+    visibility: Visibility,
     domain: Option<String>,
 }
 
@@ -325,15 +338,51 @@ fn load_target(
              WHERE runtime_instances.id = ?1",
             [runtime_id],
             |row| {
+                let role_text: String = row.get(2)?;
+                let role = RuntimeRole::from_database(&role_text).ok_or_else(|| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        2,
+                        rusqlite::types::Type::Text,
+                        Box::new(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!("invalid runtime role: {role_text}"),
+                        )),
+                    )
+                })?;
+                let observed_state_text: String = row.get(3)?;
+                let observed_state = ObservedRuntimeState::from_database(&observed_state_text);
+                let status_text: String = row.get(5)?;
+                let deployment_status =
+                    DeploymentStatus::from_database(&status_text).ok_or_else(|| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            5,
+                            rusqlite::types::Type::Text,
+                            Box::new(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                format!("invalid deployment status: {status_text}"),
+                            )),
+                        )
+                    })?;
+                let visibility_text: String = row.get(6)?;
+                let visibility = Visibility::from_database(&visibility_text).ok_or_else(|| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        6,
+                        rusqlite::types::Type::Text,
+                        Box::new(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!("invalid visibility: {visibility_text}"),
+                        )),
+                    )
+                })?;
                 Ok(PromotionTarget {
                     runtime_id: runtime_id.to_owned(),
                     application_id: row.get(0)?,
                     deployment_id: row.get(1)?,
-                    role: row.get(2)?,
-                    observed_state: row.get(3)?,
+                    role,
+                    observed_state,
                     removed_at: row.get(4)?,
-                    deployment_status: row.get(5)?,
-                    visibility: row.get(6)?,
+                    deployment_status,
+                    visibility,
                     domain: row.get(7)?,
                 })
             },
@@ -346,10 +395,13 @@ fn load_target(
 }
 
 fn validate_runtime(target: &PromotionTarget) -> Result<(), PromotePublicCandidateError> {
-    let reason = if target.role != "candidate" {
-        Some(format!("role is `{}`", target.role))
-    } else if target.observed_state != "running" {
-        Some(format!("observed state is `{}`", target.observed_state))
+    let reason = if target.role != RuntimeRole::Candidate {
+        Some(format!("role is `{}`", target.role.database_value()))
+    } else if target.observed_state != ObservedRuntimeState::Running {
+        Some(format!(
+            "observed state is `{}`",
+            target.observed_state.database_value()
+        ))
     } else if target.removed_at.is_some() {
         Some("runtime has been removed".to_owned())
     } else {
