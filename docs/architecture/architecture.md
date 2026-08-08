@@ -23,8 +23,9 @@ Crate único organizado em três camadas:
   produzem a Release e delegam a ele. `deployment_transition` aplica a máquina
   de estados persistida.
 - `src/adapters/` — integrações com sistemas externos (`git_source`,
-  `local_build`, `local_runtime`, `oci_image`, `caddy_exposure`,
-  `external_health`, `health_check`, `database`).
+  `local_build`, `local_runtime`, `oci_image`, `port_allocator`,
+  `systemd_quadlet`, `caddy_exposure`, `external_health`, `health_check`,
+  `database`).
 
 Sem traits, generics, macros ou async: as restrições de
 [`docs/rust-guidelines.md`](../rust-guidelines.md) valem para toda mudança.
@@ -32,8 +33,10 @@ Sem traits, generics, macros ou async: as restrições de
 ## 2. Efeitos externos
 
 Toda integração é um processo filho com argumentos estruturados, sem shell:
-`git`, `podman` (rootless), `caddy`, `curl`. Não existe daemon; cada execução
-da CLI compõe tudo no processo local e termina.
+`git`, `podman` (rootless), `systemctl --user`, `caddy`, `curl` e `df`. O
+Pneuma não possui daemon ou control plane próprio: cada execução da CLI compõe
+tudo no processo local e termina. A supervisão persistente dos containers é do
+user manager do systemd via Quadlet.
 
 ## 3. Persistência
 
@@ -57,22 +60,44 @@ Regras observadas:
   `active`) acontece em uma única transação;
 - o banco não é fonte do estado observado do runtime; o Podman é.
 
+`runtime_port_reservations` (migration 0012) impede que candidatas concorrentes
+recebam a mesma porta loopback. A reserva existe antes de o runtime ser
+registrado, é consumida após o registro e é liberada no cleanup da candidata.
+
+Backup e restore usam a API de backup do SQLite. O restore valida
+`PRAGMA integrity_check`, toma um lock exclusivo `<database>.restore.lock`,
+preserva uma cópia `pre-restore`, substitui o banco por rename atômico e remove
+sidecars WAL antes da próxima abertura.
+
 Todos os paths vêm de variáveis de ambiente (`PNEUMA_DATABASE_PATH`,
-`PNEUMA_WORKSPACE_PATH`, `PNEUMA_CADDY_MANAGED_PATH`, `PNEUMA_CADDYFILE_PATH`),
-com defaults em `/var/lib/pneuma` e `/etc/caddy`.
+`PNEUMA_WORKSPACE_PATH`, `PNEUMA_CADDY_MANAGED_PATH`, `PNEUMA_CADDYFILE_PATH`,
+`PNEUMA_RUNTIME_PORT_RANGE`, `PNEUMA_QUADLET_DIR`), com defaults em
+`/var/lib/pneuma`, `/etc/caddy`, `30000-39999` e
+`$HOME/.config/containers/systemd`.
 
 ## 4. Runtime
 
-- containers nomeados `pneuma-<aplicação>-<commit>` com labels de aplicação,
-  revisão e papel;
-- publicação restrita a loopback: `127.0.0.1::<container_port>`, com a porta do
-  host escolhida pelo Podman — a candidata nunca é alcançável publicamente;
+- cada deployment gera uma unidade Quadlet
+  `pneuma-<aplicação>-<deployment-id>.container` e container de mesmo nome,
+  com labels de aplicação e revisão;
+- publicação restrita a loopback:
+  `127.0.0.1:<porta-reservada>:<container_port>`; a porta fixa é a menor livre
+  em `PNEUMA_RUNTIME_PORT_RANGE`, e a candidata nunca é alcançável
+  publicamente;
 - sem modo privilegiado, mounts arbitrários ou acesso ao socket do Podman;
-- nomes determinísticos permitem reconciliar um redeployment da mesma revisão
-  sem rebuild.
+- a unidade tem `Restart=on-failure`; ela inicia a candidata, mas só é
+  habilitada depois da promoção, portanto apenas o runtime atual volta após
+  reboot.
 
-A supervisão por systemd/Quadlet prevista na D0 não foi implementada; o runtime
-é um container Podman direto.
+O caminho de criação é: reservar porta → escrever a unidade → `systemctl --user
+daemon-reload` → iniciar a unidade → resolver o ID do container pelo nome. A
+falha em qualquer etapa limpa unidade, container, runtime candidato e reserva
+quando já existirem.
+
+Depois de uma promoção transacional bem-sucedida, o Pneuma habilita a unidade
+atual e tenta retirar o runtime anterior (stop, disable, remove unit,
+daemon-reload, remove container e `removed_at`). Essa finalização é best-effort:
+um erro gera warning sem reverter a promoção já concluída.
 
 ### 4.1 Ciclo de vida do runtime
 
@@ -83,7 +108,9 @@ A supervisão por systemd/Quadlet prevista na D0 não foi implementada; o runtim
   e, quando em execução, `host_port`; se o container estiver ausente, persiste
   `missing`/`removed_at` e orienta um novo deployment;
 - `app stop` e `app start` persistem o estado desejado antes do efeito externo,
-  controlam o container e persistem a observação resultante (saga local);
+  controlam a unidade Quadlet e persistem a observação resultante (saga local);
+  um runtime legado sem arquivo Quadlet usa `podman start`/`podman stop` até ser
+  redeployado;
 - parar uma aplicação já parada e iniciar uma já em execução são sucessos
   idempotentes;
 - aplicação registrada mas nunca implantada, e nome desconhecido, falham antes
@@ -130,3 +157,15 @@ Todo `Failed` persiste código, estágio e mensagem; a candidata é removida e a
 Release anterior (rota e runtime) é preservada. Apenas um deployment ativo por
 aplicação é permitido (`create_deployment`). Rollback cria um novo deployment
 (`type = rollback`) a partir da Release anterior bem-sucedida.
+
+## 8. Operação e diagnóstico
+
+- `pneuma database backup <path>` cria uma cópia consistente do SQLite;
+  `pneuma database restore <path>` executa a recuperação descrita na seção de
+  persistência antes de abrir a conexão normal da CLI;
+- `pneuma doctor` verifica banco, migrations, paths, disponibilidade de Git,
+  Podman e Caddy, Podman rootless funcional, validação do Caddyfile, pull das
+  imagens OCI ativas e pelo menos 1 GiB livre nos filesystems do banco e do
+  workspace;
+- o bootstrap habilita linger para o usuário `pneuma`, permitindo que as
+  unidades Quadlet user-level iniciem após reboot sem uma sessão SSH ativa.

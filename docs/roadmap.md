@@ -163,7 +163,7 @@ use_cases/
 - [x] Doctor estendido: rootless funcional, `caddy validate`, pull OCI ativo e espaço em disco
 - [x] `pneuma database backup <path>`
 - [x] `pneuma database restore <path>`
-- [ ] Docs atualizadas (roadmap, arquitetura, scope, README) refletindo OCI-first
+- [x] Docs atualizadas (roadmap, arquitetura, scope, README) refletindo OCI-first
 - [ ] E2E final: CI → GHCR → pull → deploy → health → active → rollback → reboot
 
 ### Modelo de dados alvo (v0.1)
