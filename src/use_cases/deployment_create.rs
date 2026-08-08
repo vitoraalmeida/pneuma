@@ -1,35 +1,47 @@
 use std::error::Error;
 use std::fmt;
 
-use rusqlite::{Connection, TransactionBehavior, params};
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct Revision {
-    pub id: String,
-    pub application_id: String,
-    pub commit_sha: String,
-    pub source_reference: Option<String>,
-    pub discovered_at: String,
-}
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Deployment {
     pub id: String,
     pub application_id: String,
-    pub revision_id: String,
+    pub release_id: String,
+    pub deployment_type: DeploymentType,
     pub status: DeploymentStatus,
     pub requested_at: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeploymentType {
+    Deploy,
+    Rollback,
+}
+
+impl DeploymentType {
+    pub(crate) fn database_value(self) -> &'static str {
+        match self {
+            Self::Deploy => "deploy",
+            Self::Rollback => "rollback",
+        }
+    }
+
+    pub(crate) fn from_database(value: &str) -> Option<Self> {
+        match value {
+            "deploy" => Some(Self::Deploy),
+            "rollback" => Some(Self::Rollback),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeploymentStatus {
     Pending,
-    PreparingSource,
-    Building,
     Starting,
-    VerifyingInternal,
-    SwitchingTraffic,
-    VerifyingExternal,
+    Verifying,
+    Activating,
     Succeeded,
     Failed,
 }
@@ -38,12 +50,9 @@ impl DeploymentStatus {
     pub(crate) fn database_value(self) -> &'static str {
         match self {
             Self::Pending => "pending",
-            Self::PreparingSource => "preparing_source",
-            Self::Building => "building",
             Self::Starting => "starting",
-            Self::VerifyingInternal => "verifying_internal",
-            Self::SwitchingTraffic => "switching_traffic",
-            Self::VerifyingExternal => "verifying_external",
+            Self::Verifying => "verifying",
+            Self::Activating => "activating",
             Self::Succeeded => "succeeded",
             Self::Failed => "failed",
         }
@@ -52,12 +61,9 @@ impl DeploymentStatus {
     pub(crate) fn from_database(value: &str) -> Option<Self> {
         match value {
             "pending" => Some(Self::Pending),
-            "preparing_source" => Some(Self::PreparingSource),
-            "building" => Some(Self::Building),
             "starting" => Some(Self::Starting),
-            "verifying_internal" => Some(Self::VerifyingInternal),
-            "switching_traffic" => Some(Self::SwitchingTraffic),
-            "verifying_external" => Some(Self::VerifyingExternal),
+            "verifying" => Some(Self::Verifying),
+            "activating" => Some(Self::Activating),
             "succeeded" => Some(Self::Succeeded),
             "failed" => Some(Self::Failed),
             _ => None,
@@ -66,26 +72,32 @@ impl DeploymentStatus {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RuntimeRole {
-    Candidate,
-    Current,
-    Previous,
+pub enum RuntimeState {
+    Starting,
+    Running,
+    Stopped,
+    Failed,
+    Removed,
 }
 
-impl RuntimeRole {
+impl RuntimeState {
     pub(crate) fn database_value(self) -> &'static str {
         match self {
-            Self::Candidate => "candidate",
-            Self::Current => "current",
-            Self::Previous => "previous",
+            Self::Starting => "starting",
+            Self::Running => "running",
+            Self::Stopped => "stopped",
+            Self::Failed => "failed",
+            Self::Removed => "removed",
         }
     }
 
     pub(crate) fn from_database(value: &str) -> Option<Self> {
         match value {
-            "candidate" => Some(Self::Candidate),
-            "current" => Some(Self::Current),
-            "previous" => Some(Self::Previous),
+            "starting" => Some(Self::Starting),
+            "running" => Some(Self::Running),
+            "stopped" => Some(Self::Stopped),
+            "failed" => Some(Self::Failed),
+            "removed" => Some(Self::Removed),
             _ => None,
         }
     }
@@ -93,24 +105,29 @@ impl RuntimeRole {
 
 #[derive(Debug)]
 pub enum CreateDeploymentError {
-    InvalidCommit,
+    ReleaseNotFound { release_id: String },
     ApplicationNotFound { application_id: String },
     ActiveDeployment { application_id: String },
+    AlreadyActive { release_id: String },
     Persistence { source: rusqlite::Error },
 }
 
 impl fmt::Display for CreateDeploymentError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidCommit => formatter.write_str(
-                "commit identifier must be a complete 40- or 64-character hexadecimal value",
-            ),
+            Self::ReleaseNotFound { release_id } => {
+                write!(formatter, "release `{release_id}` was not found")
+            }
             Self::ApplicationNotFound { application_id } => {
                 write!(formatter, "application `{application_id}` was not found")
             }
             Self::ActiveDeployment { application_id } => write!(
                 formatter,
                 "application `{application_id}` already has an active deployment"
+            ),
+            Self::AlreadyActive { release_id } => write!(
+                formatter,
+                "release `{release_id}` is already the active deployment"
             ),
             Self::Persistence { source } => {
                 write!(formatter, "failed to create deployment: {source}")
@@ -123,9 +140,10 @@ impl Error for CreateDeploymentError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Persistence { source } => Some(source),
-            Self::InvalidCommit
+            Self::ReleaseNotFound { .. }
             | Self::ApplicationNotFound { .. }
-            | Self::ActiveDeployment { .. } => None,
+            | Self::ActiveDeployment { .. }
+            | Self::AlreadyActive { .. } => None,
         }
     }
 }
@@ -133,16 +151,13 @@ impl Error for CreateDeploymentError {
 pub fn create_deployment(
     connection: &mut Connection,
     application_id: &str,
-    commit_sha: &str,
-    source_reference: Option<&str>,
-) -> Result<(Revision, Deployment), CreateDeploymentError> {
-    if !is_complete_commit(commit_sha) {
-        return Err(CreateDeploymentError::InvalidCommit);
-    }
-
+    release_id: &str,
+    deployment_type: DeploymentType,
+) -> Result<Deployment, CreateDeploymentError> {
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|source| CreateDeploymentError::Persistence { source })?;
+
     let application_exists = transaction
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM applications WHERE id = ?1)",
@@ -156,12 +171,25 @@ pub fn create_deployment(
         });
     }
 
+    let release_exists = transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM releases WHERE id = ?1 AND application_id = ?2)",
+            params![release_id, application_id],
+            |row| row.get::<_, bool>(0),
+        )
+        .map_err(|source| CreateDeploymentError::Persistence { source })?;
+    if !release_exists {
+        return Err(CreateDeploymentError::ReleaseNotFound {
+            release_id: release_id.to_owned(),
+        });
+    }
+
     let active_deployment_exists = transaction
         .query_row(
             "SELECT EXISTS(
                 SELECT 1 FROM deployments
                 WHERE application_id = ?1
-                  AND status NOT IN ('succeeded', 'failed', 'rolled_back')
+                  AND status NOT IN ('succeeded', 'failed')
              )",
             [application_id],
             |row| row.get::<_, bool>(0),
@@ -173,55 +201,52 @@ pub fn create_deployment(
         });
     }
 
-    let revision_id = random_id(&transaction)?;
-    transaction
-        .execute(
-            "INSERT INTO revisions (
-                id, application_id, commit_sha, source_reference
-             ) VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT(application_id, commit_sha) DO NOTHING",
-            params![revision_id, application_id, commit_sha, source_reference],
-        )
-        .map_err(|source| CreateDeploymentError::Persistence { source })?;
-    let revision = transaction
+    let current_release_id: Option<String> = transaction
         .query_row(
-            "SELECT id, application_id, commit_sha, source_reference, discovered_at
-             FROM revisions
-             WHERE application_id = ?1 AND commit_sha = ?2",
-            params![application_id, commit_sha],
-            |row| {
-                Ok(Revision {
-                    id: row.get(0)?,
-                    application_id: row.get(1)?,
-                    commit_sha: row.get(2)?,
-                    source_reference: row.get(3)?,
-                    discovered_at: row.get(4)?,
-                })
-            },
+            "SELECT d.release_id FROM deployments d
+             JOIN applications a ON a.active_deployment_id = d.id
+             WHERE a.id = ?1",
+            [application_id],
+            |row| row.get(0),
         )
+        .optional()
         .map_err(|source| CreateDeploymentError::Persistence { source })?;
+    if current_release_id.as_deref() == Some(release_id)
+        && deployment_type == DeploymentType::Deploy
+    {
+        return Err(CreateDeploymentError::AlreadyActive {
+            release_id: release_id.to_owned(),
+        });
+    }
 
     let deployment_id = random_id(&transaction)?;
     transaction
         .execute(
             "INSERT INTO deployments (
-                id, application_id, revision_id, status
-             ) VALUES (?1, ?2, ?3, 'pending')",
-            params![deployment_id, application_id, revision.id],
+                id, application_id, release_id, type, status
+             ) VALUES (?1, ?2, ?3, ?4, 'pending')",
+            params![
+                deployment_id,
+                application_id,
+                release_id,
+                deployment_type.database_value()
+            ],
         )
         .map_err(|source| CreateDeploymentError::Persistence { source })?;
     let deployment = transaction
         .query_row(
-            "SELECT id, application_id, revision_id, requested_at
+            "SELECT id, application_id, release_id, type, requested_at
              FROM deployments WHERE id = ?1",
             [deployment_id],
             |row| {
                 Ok(Deployment {
                     id: row.get(0)?,
                     application_id: row.get(1)?,
-                    revision_id: row.get(2)?,
+                    release_id: row.get(2)?,
+                    deployment_type: DeploymentType::from_database(&row.get::<_, String>(3)?)
+                        .unwrap_or(DeploymentType::Deploy),
                     status: DeploymentStatus::Pending,
-                    requested_at: row.get(3)?,
+                    requested_at: row.get(4)?,
                 })
             },
         )
@@ -230,15 +255,11 @@ pub fn create_deployment(
         .commit()
         .map_err(|source| CreateDeploymentError::Persistence { source })?;
 
-    Ok((revision, deployment))
+    Ok(deployment)
 }
 
 fn random_id(transaction: &rusqlite::Transaction<'_>) -> Result<String, CreateDeploymentError> {
     transaction
         .query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))
         .map_err(|source| CreateDeploymentError::Persistence { source })
-}
-
-fn is_complete_commit(commit_sha: &str) -> bool {
-    matches!(commit_sha.len(), 40 | 64) && commit_sha.bytes().all(|byte| byte.is_ascii_hexdigit())
 }

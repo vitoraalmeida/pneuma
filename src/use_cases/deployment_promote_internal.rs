@@ -2,14 +2,14 @@ use std::error::Error;
 use std::fmt;
 use std::net::{Ipv4Addr, SocketAddr};
 
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use crate::adapters::health_check::{
     HealthCheckError, HealthCheckFailure, HealthCheckResult, check_internal_health,
 };
 use crate::adapters::local_runtime::ObservedRuntimeState;
 use crate::domain::manifest::Visibility;
-use crate::use_cases::deployment_create::{DeploymentStatus, RuntimeRole};
+use crate::use_cases::deployment_create::{DeploymentStatus, RuntimeState};
 use crate::use_cases::deployment_transition::{TransitionDeploymentError, fail_deployment};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -24,7 +24,7 @@ pub enum PromoteInternalCandidateError {
     RuntimeNotFound {
         runtime_id: String,
     },
-    InvalidRuntimeRole {
+    InvalidRuntimeState {
         runtime_id: String,
         actual: String,
     },
@@ -62,9 +62,9 @@ impl fmt::Display for PromoteInternalCandidateError {
             Self::RuntimeNotFound { runtime_id } => {
                 write!(formatter, "runtime `{runtime_id}` was not found")
             }
-            Self::InvalidRuntimeRole { runtime_id, actual } => write!(
+            Self::InvalidRuntimeState { runtime_id, actual } => write!(
                 formatter,
-                "runtime `{runtime_id}` must be Candidate to be promoted, but is `{actual}`"
+                "runtime `{runtime_id}` must be Starting to be promoted, but is `{actual}`"
             ),
             Self::RuntimeNotRunning { runtime_id, actual } => write!(
                 formatter,
@@ -78,7 +78,7 @@ impl fmt::Display for PromoteInternalCandidateError {
                 actual,
             } => write!(
                 formatter,
-                "deployment `{deployment_id}` must be VerifyingInternal to promote its candidate, but is `{actual}`"
+                "deployment `{deployment_id}` must be Verifying to promote its candidate, but is `{actual}`"
             ),
             Self::PublicApplication { application_id } => write!(
                 formatter,
@@ -111,7 +111,7 @@ impl Error for PromoteInternalCandidateError {
             Self::RecordFailure { source } => Some(source),
             Self::Persistence { source } => Some(source),
             Self::RuntimeNotFound { .. }
-            | Self::InvalidRuntimeRole { .. }
+            | Self::InvalidRuntimeState { .. }
             | Self::RuntimeNotRunning { .. }
             | Self::RuntimeRemoved { .. }
             | Self::InvalidDeploymentState { .. }
@@ -133,8 +133,6 @@ pub fn promote_internal_candidate(
     }
     validate_target(&target)?;
 
-    // Network I/O must not hold a SQLite write transaction. The target is checked again
-    // inside the promotion transaction so a concurrent state change cannot use stale health.
     let health = check_internal_health(target.endpoint, health_path, expected_status)
         .map_err(|source| PromoteInternalCandidateError::HealthCheck { source })?;
     match health {
@@ -166,10 +164,11 @@ pub fn promote_internal_candidate(
 
     let previous_runtime_id = transaction
         .query_row(
-            "SELECT id FROM runtime_instances
-             WHERE application_id = ?1
-               AND role = 'current'
-               AND removed_at IS NULL",
+            "SELECT ri.id FROM runtime_instances ri
+             JOIN applications a ON a.active_deployment_id = ri.deployment_id
+             WHERE ri.application_id = ?1
+               AND ri.state = 'running'
+               AND ri.removed_at IS NULL",
             [&target.application_id],
             |row| row.get::<_, String>(0),
         )
@@ -179,8 +178,8 @@ pub fn promote_internal_candidate(
         transaction
             .execute(
                 "UPDATE runtime_instances
-                 SET role = 'previous', updated_at = CURRENT_TIMESTAMP
-                 WHERE id = ?1 AND role = 'current'",
+                 SET state = 'stopped', updated_at = CURRENT_TIMESTAMP
+                 WHERE id = ?1 AND state = 'running'",
                 [previous_runtime_id],
             )
             .map_err(|source| PromoteInternalCandidateError::Persistence { source })?;
@@ -188,8 +187,8 @@ pub fn promote_internal_candidate(
     transaction
         .execute(
             "UPDATE runtime_instances
-             SET role = 'current', updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?1 AND role = 'candidate'",
+             SET state = 'running', updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?1 AND state = 'starting'",
             [runtime_id],
         )
         .map_err(|source| PromoteInternalCandidateError::Persistence { source })?;
@@ -199,7 +198,7 @@ pub fn promote_internal_candidate(
              SET status = 'succeeded',
                  finished_at = CURRENT_TIMESTAMP,
                  updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?1 AND status = 'verifying_internal'",
+             WHERE id = ?1 AND status = 'verifying'",
             [&target.deployment_id],
         )
         .map_err(|source| PromoteInternalCandidateError::Persistence { source })?;
@@ -212,9 +211,11 @@ pub fn promote_internal_candidate(
     transaction
         .execute(
             "UPDATE applications
-             SET desired_runtime_state = 'running', updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?1",
-            [&target.application_id],
+             SET active_deployment_id = ?1,
+                 desired_runtime_state = 'running',
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?2",
+            params![&target.deployment_id, &target.application_id],
         )
         .map_err(|source| PromoteInternalCandidateError::Persistence { source })?;
     let finished_at = transaction
@@ -240,7 +241,7 @@ struct PromotionTarget {
     application_id: String,
     deployment_id: String,
     endpoint: SocketAddr,
-    role: RuntimeRole,
+    state: RuntimeState,
     observed_state: ObservedRuntimeState,
     removed_at: Option<String>,
     deployment_status: DeploymentStatus,
@@ -258,7 +259,7 @@ fn load_target(
                 runtime_instances.application_id,
                 runtime_instances.deployment_id,
                 runtime_instances.host_port,
-                runtime_instances.role,
+                runtime_instances.state,
                 runtime_instances.last_observed_state,
                 runtime_instances.removed_at,
                 deployments.status,
@@ -271,14 +272,14 @@ fn load_target(
             [runtime_id],
             |row| {
                 let host_port = row.get::<_, u16>(2)?;
-                let role_text: String = row.get(3)?;
-                let role = RuntimeRole::from_database(&role_text).ok_or_else(|| {
+                let state_text: String = row.get(3)?;
+                let state = RuntimeState::from_database(&state_text).ok_or_else(|| {
                     rusqlite::Error::FromSqlConversionFailure(
                         3,
                         rusqlite::types::Type::Text,
                         Box::new(std::io::Error::new(
                             std::io::ErrorKind::InvalidData,
-                            format!("invalid runtime role: {role_text}"),
+                            format!("invalid runtime state: {state_text}"),
                         )),
                     )
                 })?;
@@ -312,7 +313,7 @@ fn load_target(
                     application_id: row.get(0)?,
                     deployment_id: row.get(1)?,
                     endpoint: SocketAddr::from((Ipv4Addr::LOCALHOST, host_port)),
-                    role,
+                    state,
                     observed_state,
                     removed_at: row.get(5)?,
                     deployment_status,
@@ -329,7 +330,7 @@ fn load_target(
 }
 
 fn completed_promotion(target: &PromotionTarget) -> Option<PromotedCandidate> {
-    if target.role != RuntimeRole::Current
+    if target.state != RuntimeState::Running
         || target.deployment_status != DeploymentStatus::Succeeded
     {
         return None;
@@ -345,10 +346,10 @@ fn completed_promotion(target: &PromotionTarget) -> Option<PromotedCandidate> {
 }
 
 fn validate_target(target: &PromotionTarget) -> Result<(), PromoteInternalCandidateError> {
-    if target.role != RuntimeRole::Candidate {
-        return Err(PromoteInternalCandidateError::InvalidRuntimeRole {
+    if target.state != RuntimeState::Starting {
+        return Err(PromoteInternalCandidateError::InvalidRuntimeState {
             runtime_id: target.runtime_id.clone(),
-            actual: target.role.database_value().to_owned(),
+            actual: target.state.database_value().to_owned(),
         });
     }
     if target.observed_state != ObservedRuntimeState::Running {
@@ -362,7 +363,7 @@ fn validate_target(target: &PromotionTarget) -> Result<(), PromoteInternalCandid
             runtime_id: target.runtime_id.clone(),
         });
     }
-    if target.deployment_status != DeploymentStatus::VerifyingInternal {
+    if target.deployment_status != DeploymentStatus::Verifying {
         return Err(PromoteInternalCandidateError::InvalidDeploymentState {
             deployment_id: target.deployment_id.clone(),
             actual: target.deployment_status.database_value().to_owned(),

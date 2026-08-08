@@ -5,12 +5,13 @@ use std::thread;
 
 use pneuma::adapters::database;
 use pneuma::use_cases::application_import::import_application;
-use pneuma::use_cases::deployment_create::create_deployment;
+use pneuma::use_cases::deployment_create::{DeploymentType, create_deployment};
 use pneuma::use_cases::deployment_promote_internal::{
     PromoteInternalCandidateError, promote_internal_candidate,
 };
 use pneuma::use_cases::deployment_register_runtime::register_candidate_runtime;
 use pneuma::use_cases::deployment_transition::{DeploymentTransition, advance_deployment};
+use pneuma::use_cases::release_create::create_release;
 
 #[test]
 fn promotes_a_healthy_internal_candidate_idempotently() {
@@ -26,7 +27,7 @@ fn promotes_a_healthy_internal_candidate_idempotently() {
 
     assert_eq!(repeated, promoted);
     let persisted = runtime_and_deployment_state(&connection, &runtime_id);
-    assert_eq!(persisted.0, "current");
+    assert_eq!(persisted.0, "running");
     assert_eq!(persisted.1, "succeeded");
     assert_eq!(persisted.2.as_deref(), Some(promoted.finished_at.as_str()));
     let desired_state: String = connection
@@ -55,37 +56,37 @@ fn replaces_the_previous_current_runtime_atomically() {
     promote_internal_candidate(&mut connection, &second_runtime, "/healthz", 200).unwrap();
     second_server.join().unwrap();
 
-    let first_role: String = connection
+    let first_state: String = connection
         .query_row(
-            "SELECT role FROM runtime_instances WHERE id = ?1",
+            "SELECT state FROM runtime_instances WHERE id = ?1",
             [&first_runtime],
             |row| row.get(0),
         )
         .unwrap();
-    let second_role: String = connection
+    let second_state: String = connection
         .query_row(
-            "SELECT role FROM runtime_instances WHERE id = ?1",
+            "SELECT state FROM runtime_instances WHERE id = ?1",
             [&second_runtime],
             |row| row.get(0),
         )
         .unwrap();
-    let current_count: i64 = connection
+    let running_count: i64 = connection
         .query_row(
             "SELECT COUNT(*) FROM runtime_instances
-             WHERE role = 'current' AND removed_at IS NULL",
+             WHERE state = 'running' AND removed_at IS NULL",
             [],
             |row| row.get(0),
         )
         .unwrap();
     let previous_promotion =
         promote_internal_candidate(&mut connection, &first_runtime, "/healthz", 200).unwrap_err();
-    assert_eq!(first_role, "previous");
-    assert_eq!(second_role, "current");
-    assert_eq!(current_count, 1);
+    assert_eq!(first_state, "stopped");
+    assert_eq!(second_state, "running");
+    assert_eq!(running_count, 1);
     assert!(matches!(
         previous_promotion,
-        PromoteInternalCandidateError::InvalidRuntimeRole { actual, .. }
-            if actual == "previous"
+        PromoteInternalCandidateError::InvalidRuntimeState { actual, .. }
+            if actual == "stopped"
     ));
 }
 
@@ -111,10 +112,10 @@ fn unhealthy_candidate_fails_without_replacing_the_current_runtime() {
     ));
     assert_eq!(
         runtime_and_deployment_state(&connection, &first_runtime).0,
-        "current"
+        "running"
     );
     let candidate_state = runtime_and_deployment_state(&connection, &candidate);
-    assert_eq!(candidate_state.0, "candidate");
+    assert_eq!(candidate_state.0, "starting");
     assert_eq!(candidate_state.1, "failed");
     let failure: (String, String) = connection
         .query_row(
@@ -126,10 +127,7 @@ fn unhealthy_candidate_fails_without_replacing_the_current_runtime() {
         .unwrap();
     assert_eq!(
         failure,
-        (
-            "health_check_failed".to_owned(),
-            "verifying_internal".to_owned()
-        )
+        ("health_check_failed".to_owned(), "verifying".to_owned())
     );
 }
 
@@ -155,22 +153,24 @@ fn add_verifying_candidate(
     runtime_character: char,
     endpoint: SocketAddr,
 ) -> String {
-    let application = import_application(connection, &fixture_path(fixture)).unwrap();
+    let application = import_application(connection, &fixture_path(fixture), None).unwrap();
     let commit_sha = commit_character.to_string().repeat(40);
-    let (_, deployment) = create_deployment(
+    let release = create_release(
         connection,
         &application.id,
+        "localhost/test",
         &commit_sha,
         Some("test-revision"),
     )
     .unwrap();
-    for transition in [
-        DeploymentTransition::Start,
-        DeploymentTransition::SourcePrepared,
-        DeploymentTransition::ImageBuilt,
-    ] {
-        advance_deployment(connection, &deployment.id, transition).unwrap();
-    }
+    let deployment = create_deployment(
+        connection,
+        &application.id,
+        &release.id,
+        DeploymentType::Deploy,
+    )
+    .unwrap();
+    advance_deployment(connection, &deployment.id, DeploymentTransition::Start).unwrap();
     let external_runtime_id = runtime_character.to_string().repeat(64);
     let runtime = register_candidate_runtime(
         connection,
@@ -195,7 +195,7 @@ fn runtime_and_deployment_state(
 ) -> (String, String, Option<String>) {
     connection
         .query_row(
-            "SELECT runtime_instances.role, deployments.status, deployments.finished_at
+            "SELECT runtime_instances.state, deployments.status, deployments.finished_at
              FROM runtime_instances
              JOIN deployments ON deployments.id = runtime_instances.deployment_id
              WHERE runtime_instances.id = ?1",

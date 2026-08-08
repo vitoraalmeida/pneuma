@@ -250,11 +250,13 @@ fn load_current_runtime(
                 runtime_instances.external_runtime_id,
                 runtime_instances.container_port
              FROM runtime_instances
-             JOIN deployments ON deployments.id = runtime_instances.deployment_id
-             WHERE runtime_instances.application_id = ?1
-               AND runtime_instances.role = 'current'
-               AND runtime_instances.removed_at IS NULL
-               AND deployments.status = 'succeeded'",
+              JOIN applications
+                ON applications.active_deployment_id = runtime_instances.deployment_id
+              JOIN deployments ON deployments.id = runtime_instances.deployment_id
+              WHERE applications.id = ?1
+                AND runtime_instances.state IN ('running', 'stopped')
+                AND runtime_instances.removed_at IS NULL
+                AND deployments.status = 'succeeded'",
             [application_id],
             |row| {
                 Ok(CurrentRuntime {

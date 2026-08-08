@@ -13,11 +13,18 @@ const MANIFEST_FILE_NAME: &str = "pneuma.toml";
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
     pub schema_version: u32,
+    pub system: Option<System>,
     pub application: Application,
     pub source: Source,
     pub build: Build,
     pub runtime: Runtime,
     pub exposure: Exposure,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct System {
+    pub name: String,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -156,6 +163,15 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), ManifestError> {
         });
     }
 
+    if let Some(system) = &manifest.system {
+        if !is_valid_system_name(&system.name) {
+            return invalid_field(
+                "system.name",
+                "must be 1-63 lowercase ASCII letters, digits, or hyphens and start and end with a letter or digit",
+            );
+        }
+    }
+
     if !is_valid_application_name(&manifest.application.name) {
         return invalid_field(
             "application.name",
@@ -215,6 +231,10 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), ManifestError> {
     }
 
     Ok(())
+}
+
+fn is_valid_system_name(name: &str) -> bool {
+    is_valid_application_name(name)
 }
 
 fn validate_relative_path(field: &'static str, path: &Path) -> Result<(), ManifestError> {

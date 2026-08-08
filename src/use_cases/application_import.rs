@@ -13,6 +13,7 @@ const MANIFEST_PATH: &str = "pneuma.toml";
 pub enum ImportError {
     Manifest { source: ManifestError },
     Persistence { source: rusqlite::Error },
+    SystemRequired,
 }
 
 impl fmt::Display for ImportError {
@@ -27,6 +28,12 @@ impl fmt::Display for ImportError {
                     "failed to persist imported application: {source}"
                 )
             }
+            Self::SystemRequired => {
+                write!(
+                    formatter,
+                    "system is required: specify [system] in manifest or use --system flag"
+                )
+            }
         }
     }
 }
@@ -36,6 +43,7 @@ impl Error for ImportError {
         match self {
             Self::Manifest { source } => Some(source),
             Self::Persistence { source } => Some(source),
+            Self::SystemRequired => None,
         }
     }
 }
@@ -43,11 +51,40 @@ impl Error for ImportError {
 pub fn import_application(
     connection: &mut Connection,
     repository_path: &Path,
+    system_name: Option<&str>,
 ) -> Result<Application, ImportError> {
     let manifest =
         load_manifest(repository_path).map_err(|source| ImportError::Manifest { source })?;
+
+    let resolved_system_name = system_name
+        .or_else(|| manifest.system.as_ref().map(|s| s.name.as_str()))
+        .ok_or(ImportError::SystemRequired)?;
+
     let transaction = connection
         .transaction()
+        .map_err(|source| ImportError::Persistence { source })?;
+
+    let system_id = transaction
+        .query_row("SELECT lower(hex(randomblob(16)))", [], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|source| ImportError::Persistence { source })?;
+
+    transaction
+        .execute(
+            "INSERT INTO systems (id, name, created_at)
+             VALUES (?1, ?2, CURRENT_TIMESTAMP)
+             ON CONFLICT(name) DO NOTHING",
+            params![system_id, resolved_system_name],
+        )
+        .map_err(|source| ImportError::Persistence { source })?;
+
+    let system_id = transaction
+        .query_row(
+            "SELECT id FROM systems WHERE name = ?1",
+            [resolved_system_name],
+            |row| row.get::<_, String>(0),
+        )
         .map_err(|source| ImportError::Persistence { source })?;
 
     let application_id = transaction
@@ -59,15 +96,17 @@ pub fn import_application(
         .execute(
             "INSERT INTO applications (
                 id,
+                system_id,
                 name,
                 desired_runtime_state,
                 spec_version,
                 created_at,
                 updated_at
-            ) VALUES (?1, ?2, 'stopped', ?3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ) VALUES (?1, ?2, ?3, 'stopped', ?4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             ON CONFLICT(name) DO NOTHING",
             params![
                 application_id,
+                system_id,
                 manifest.application.name,
                 manifest.schema_version
             ],
@@ -83,6 +122,7 @@ pub fn import_application(
         .query_row(
             "SELECT
                 applications.id,
+                applications.system_id,
                 applications.name,
                 application_sources.repository_location,
                 application_sources.default_branch
@@ -94,9 +134,11 @@ pub fn import_application(
             |row| {
                 Ok(Application {
                     id: row.get(0)?,
-                    name: row.get(1)?,
-                    repository: row.get(2)?,
-                    default_branch: row.get(3)?,
+                    system_id: row.get(1)?,
+                    name: row.get(2)?,
+                    repository: row.get(3)?,
+                    default_branch: row.get(4)?,
+                    active_deployment_id: None,
                 })
             },
         )

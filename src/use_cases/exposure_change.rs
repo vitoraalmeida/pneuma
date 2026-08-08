@@ -309,11 +309,12 @@ fn find_active_runtime(
     connection
         .query_row(
             "SELECT ri.external_runtime_id, ri.container_port, e.domain
-             FROM runtime_instances ri
-             JOIN exposures e ON e.application_id = ri.application_id
-             WHERE ri.application_id = ?1
-               AND ri.role = 'current'
-               AND ri.removed_at IS NULL",
+              FROM runtime_instances ri
+              JOIN applications a ON a.active_deployment_id = ri.deployment_id
+              JOIN exposures e ON e.application_id = ri.application_id
+              WHERE a.id = ?1
+                AND ri.state = 'running'
+                AND ri.removed_at IS NULL",
             [application_id],
             |row| {
                 Ok(ActiveRuntime {

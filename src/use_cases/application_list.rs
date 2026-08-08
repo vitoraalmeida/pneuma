@@ -27,9 +27,11 @@ pub fn list_applications(connection: &Connection) -> Result<Vec<Application>, Li
         .prepare(
             "SELECT
                 applications.id,
+                applications.system_id,
                 applications.name,
                 application_sources.repository_location,
-                application_sources.default_branch
+                application_sources.default_branch,
+                applications.active_deployment_id
              FROM applications
              JOIN application_sources
                 ON application_sources.application_id = applications.id
@@ -40,9 +42,11 @@ pub fn list_applications(connection: &Connection) -> Result<Vec<Application>, Li
         .query_map([], |row| {
             Ok(Application {
                 id: row.get(0)?,
-                name: row.get(1)?,
-                repository: row.get(2)?,
-                default_branch: row.get(3)?,
+                system_id: row.get(1)?,
+                name: row.get(2)?,
+                repository: row.get(3)?,
+                default_branch: row.get(4)?,
+                active_deployment_id: row.get(5)?,
             })
         })
         .map_err(|source| ListError { source })?;

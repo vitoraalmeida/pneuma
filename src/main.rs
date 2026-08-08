@@ -13,13 +13,14 @@ use pneuma::use_cases::application_list::{ListError, application_is_deployed, li
 use pneuma::use_cases::application_runtime::{
     RuntimeLifecycleError, report_application_status, start_application, stop_application,
 };
-use pneuma::use_cases::deployment_deploy_internal::{
-    DeployInternalRevisionError, PublicDeploymentConfiguration, deploy_revision,
-    deploy_revision_with_progress,
-};
+use pneuma::use_cases::deployment_deploy_release::PublicDeploymentConfiguration;
+use pneuma::use_cases::deployment_deploy_source::{DeploySourceError, deploy_source};
 use pneuma::use_cases::deployment_list::{ListDeploymentsError, list_deployments};
 use pneuma::use_cases::deployment_rollback::{RollbackError, rollback_deployment};
 use pneuma::use_cases::exposure_change::{ExposureChangeError, change_exposure};
+use pneuma::use_cases::system_create::create_system;
+use pneuma::use_cases::system_list::list_systems;
+use pneuma::use_cases::system_show::show_system;
 
 const DATABASE_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_DATABASE_PATH";
 const DEFAULT_DATABASE_PATH: &str = "/var/lib/pneuma/database/pneuma.sqlite3";
@@ -29,7 +30,7 @@ const CADDY_MANAGED_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_CADDY_MANAGED_PATH
 const DEFAULT_CADDY_MANAGED_PATH: &str = "/etc/caddy/applications";
 const CADDYFILE_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_CADDYFILE_PATH";
 const DEFAULT_CADDYFILE_PATH: &str = "/etc/caddy/Caddyfile";
-const USAGE: &str = "Usage:\n  pneuma [--verbose] app import <repository-path>\n  pneuma [--verbose] app list\n  pneuma [--verbose] app deployments <application-name>\n  pneuma [--verbose] app status <application-name>\n  pneuma [--verbose] app stop <application-name>\n  pneuma [--verbose] app start <application-name>\n  pneuma [--verbose] app deploy <application-name> <repository-path> --revision <revision>\n  pneuma [--verbose] deployment rollback <application-name>\n  pneuma [--verbose] app expose <application-name> <public|internal>\n  pneuma version\n  pneuma doctor";
+const USAGE: &str = "Usage:\n  pneuma [--verbose] system create <name> [--description <text>]\n  pneuma [--verbose] system list\n  pneuma [--verbose] system show <name>\n  pneuma [--verbose] app import <repository-path> [--system <system-name>]\n  pneuma [--verbose] app list\n  pneuma [--verbose] app deployments <application-name>\n  pneuma [--verbose] app status <application-name>\n  pneuma [--verbose] app stop <application-name>\n  pneuma [--verbose] app start <application-name>\n  pneuma [--verbose] app deploy <application-name> <repository-path> --revision <revision>\n  pneuma [--verbose] deployment rollback <application-name>\n  pneuma [--verbose] app expose <application-name> <public|internal>\n  pneuma version\n  pneuma doctor";
 
 struct Invocation {
     verbose: bool,
@@ -37,8 +38,17 @@ struct Invocation {
 }
 
 enum Command {
+    SystemCreate {
+        name: String,
+        description: Option<String>,
+    },
+    SystemList,
+    SystemShow {
+        name: String,
+    },
     Import {
         repository_path: PathBuf,
+        system_name: Option<String>,
     },
     List,
     Deployments {
@@ -91,13 +101,22 @@ enum CliError {
         source: Box<RuntimeLifecycleError>,
     },
     Deploy {
-        source: Box<DeployInternalRevisionError>,
+        source: Box<DeploySourceError>,
     },
     Rollback {
         source: RollbackError,
     },
     Expose {
         source: ExposureChangeError,
+    },
+    SystemCreate {
+        source: pneuma::use_cases::system_create::CreateError,
+    },
+    SystemList {
+        source: pneuma::use_cases::system_list::ListSystemsError,
+    },
+    SystemShow {
+        source: pneuma::use_cases::system_show::ShowError,
     },
 }
 
@@ -116,6 +135,9 @@ impl fmt::Display for CliError {
             Self::Deploy { source } => write!(formatter, "{source}"),
             Self::Rollback { source } => write!(formatter, "{source}"),
             Self::Expose { source } => write!(formatter, "{source}"),
+            Self::SystemCreate { source } => write!(formatter, "{source}"),
+            Self::SystemList { source } => write!(formatter, "{source}"),
+            Self::SystemShow { source } => write!(formatter, "{source}"),
         }
     }
 }
@@ -133,6 +155,9 @@ impl Error for CliError {
             Self::ApplicationNotFound { .. } => None,
             Self::Rollback { source } => Some(source),
             Self::Expose { source } => Some(source),
+            Self::SystemCreate { source } => Some(source),
+            Self::SystemList { source } => Some(source),
+            Self::SystemShow { source } => Some(source),
         }
     }
 }
@@ -156,11 +181,51 @@ fn parse_command(arguments: &[OsString]) -> Result<Invocation, CliError> {
         arguments => (false, arguments),
     };
     let command = match arguments {
+        [system, create, name]
+            if system == OsStr::new("system") && create == OsStr::new("create") =>
+        {
+            let name = name.to_str().ok_or(CliError::Usage)?.to_owned();
+            Ok(Command::SystemCreate {
+                name,
+                description: None,
+            })
+        }
+        [system, create, name, description_flag, description]
+            if system == OsStr::new("system")
+                && create == OsStr::new("create")
+                && description_flag == OsStr::new("--description") =>
+        {
+            let name = name.to_str().ok_or(CliError::Usage)?.to_owned();
+            let description = description.to_str().ok_or(CliError::Usage)?.to_owned();
+            Ok(Command::SystemCreate {
+                name,
+                description: Some(description),
+            })
+        }
+        [system, list] if system == OsStr::new("system") && list == OsStr::new("list") => {
+            Ok(Command::SystemList)
+        }
+        [system, show, name] if system == OsStr::new("system") && show == OsStr::new("show") => {
+            let name = name.to_str().ok_or(CliError::Usage)?.to_owned();
+            Ok(Command::SystemShow { name })
+        }
         [app, import, repository_path]
             if app == OsStr::new("app") && import == OsStr::new("import") =>
         {
             Ok(Command::Import {
                 repository_path: PathBuf::from(repository_path),
+                system_name: None,
+            })
+        }
+        [app, import, repository_path, system_flag, system_name]
+            if app == OsStr::new("app")
+                && import == OsStr::new("import")
+                && system_flag == OsStr::new("--system") =>
+        {
+            let system_name = system_name.to_str().ok_or(CliError::Usage)?.to_owned();
+            Ok(Command::Import {
+                repository_path: PathBuf::from(repository_path),
+                system_name: Some(system_name),
             })
         }
         [app, list] if app == OsStr::new("app") && list == OsStr::new("list") => Ok(Command::List),
@@ -269,9 +334,20 @@ fn run(invocation: Invocation) -> Result<(), CliError> {
         database::open(&database_path).map_err(|source| CliError::Database { source })?;
 
     match command {
-        Command::Import { repository_path } => {
-            run_import(&mut connection, verbose, &repository_path)
+        Command::SystemCreate { name, description } => {
+            run_system_create(&mut connection, verbose, &name, description.as_deref())
         }
+        Command::SystemList => run_system_list(&connection, verbose),
+        Command::SystemShow { name } => run_system_show(&connection, verbose, &name),
+        Command::Import {
+            repository_path,
+            system_name,
+        } => run_import(
+            &mut connection,
+            verbose,
+            &repository_path,
+            system_name.as_deref(),
+        ),
         Command::List => run_list(&connection, verbose),
         Command::Deployments { application_name } => {
             run_deployments(&connection, verbose, &application_name)
@@ -315,16 +391,62 @@ fn run_import(
     connection: &mut rusqlite::Connection,
     verbose: bool,
     repository_path: &Path,
+    system_name: Option<&str>,
 ) -> Result<(), CliError> {
     log_verbose(
         verbose,
         format!("import repository: {}", repository_path.display()),
     );
-    let application = import_application(connection, repository_path)
+    let application = import_application(connection, repository_path, system_name)
         .map_err(|source| CliError::Import { source })?;
     println!("Imported {}", application.name);
     println!("Status: Registered");
     println!("Deployment: Not deployed");
+    Ok(())
+}
+
+fn run_system_create(
+    connection: &mut rusqlite::Connection,
+    verbose: bool,
+    name: &str,
+    description: Option<&str>,
+) -> Result<(), CliError> {
+    log_verbose(verbose, format!("create system: {name}"));
+    let system = create_system(connection, name, description)
+        .map_err(|source| CliError::SystemCreate { source })?;
+    println!("Created {}", system.name);
+    Ok(())
+}
+
+fn run_system_list(connection: &rusqlite::Connection, verbose: bool) -> Result<(), CliError> {
+    log_verbose(verbose, "list registered systems");
+    let systems = list_systems(connection).map_err(|source| CliError::SystemList { source })?;
+    for system in systems {
+        println!("{}", system.name);
+    }
+    Ok(())
+}
+
+fn run_system_show(
+    connection: &rusqlite::Connection,
+    verbose: bool,
+    name: &str,
+) -> Result<(), CliError> {
+    log_verbose(verbose, format!("show system: {name}"));
+    let details =
+        show_system(connection, name).map_err(|source| CliError::SystemShow { source })?;
+    println!("System: {}", details.system.name);
+    if let Some(description) = &details.system.description {
+        println!("Description: {description}");
+    }
+    if details.applications.is_empty() {
+        println!("Applications: (none)");
+    } else {
+        println!("Applications:");
+        for application in &details.applications {
+            println!("  {}", application.name);
+        }
+    }
     Ok(())
 }
 
@@ -366,19 +488,26 @@ fn run_deployments(
     } else {
         println!("Deployments for {}:", application.name);
         for deployment in deployments {
-            let short_commit = &deployment.commit_sha[..7];
             let status = format!("{:?}", deployment.status);
             match deployment.finished_at {
-                Some(finished_at) => {
+                Some(_finished_at) => {
                     println!(
-                        "{}\t{}\t{}\t{}",
-                        deployment.id, short_commit, status, finished_at
+                        "{}\t{:?}\t{}\t{}\t{}",
+                        deployment.id,
+                        deployment.deployment_type,
+                        deployment.release_id,
+                        deployment.image_reference,
+                        status
                     );
                 }
                 None => {
                     println!(
-                        "{}\t{}\t{}\t{}",
-                        deployment.id, short_commit, status, deployment.requested_at
+                        "{}\t{:?}\t{}\t{}\t{}",
+                        deployment.id,
+                        deployment.deployment_type,
+                        deployment.release_id,
+                        deployment.image_reference,
+                        status
                     );
                 }
             }
@@ -499,27 +628,14 @@ fn run_deploy(
     } else {
         eprintln!("Deploying {}...", application.name);
     }
-    let deployment = if verbose {
-        let mut report_progress = |event| eprintln!("[verbose] {event}");
-        deploy_revision_with_progress(
-            connection,
-            &application.id,
-            repository_path,
-            revision,
-            &workspace_path,
-            Some(&public_configuration),
-            &mut report_progress,
-        )
-    } else {
-        deploy_revision(
-            connection,
-            &application.id,
-            repository_path,
-            revision,
-            &workspace_path,
-            Some(&public_configuration),
-        )
-    };
+    let deployment = deploy_source(
+        connection,
+        &application.id,
+        repository_path,
+        revision,
+        &workspace_path,
+        Some(&public_configuration),
+    );
     let deployed = deployment.map_err(|source| CliError::Deploy {
         source: Box::new(source),
     })?;
@@ -546,7 +662,17 @@ fn run_rollback(
         verbose,
         format!("rolling back application {}", application.name),
     );
-    let rolled_back = rollback_deployment(connection, &application.id)
+    let public_configuration = PublicDeploymentConfiguration {
+        managed_caddy_directory: configured_path(
+            CADDY_MANAGED_PATH_ENVIRONMENT_VARIABLE,
+            DEFAULT_CADDY_MANAGED_PATH,
+        ),
+        caddyfile_path: configured_path(
+            CADDYFILE_PATH_ENVIRONMENT_VARIABLE,
+            DEFAULT_CADDYFILE_PATH,
+        ),
+    };
+    let rolled_back = rollback_deployment(connection, &application.id, Some(&public_configuration))
         .map_err(|source| CliError::Rollback { source })?;
     println!("Rolled back {}", application.name);
     println!("Commit: {}", rolled_back.commit_sha);

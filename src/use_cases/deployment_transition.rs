@@ -8,11 +8,8 @@ use crate::use_cases::deployment_create::DeploymentStatus;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeploymentTransition {
     Start,
-    SourcePrepared,
-    ImageBuilt,
     RuntimeRunning,
-    InternalVerified,
-    TrafficSwitched,
+    Verified,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -97,9 +94,6 @@ impl Error for TransitionDeploymentError {
     }
 }
 
-/// Applies one supported lifecycle event only when the persisted state is the event's
-/// expected source state. The compare-and-set update prevents retries or competing
-/// callers from silently skipping or repeating deployment work.
 pub fn advance_deployment(
     connection: &Connection,
     deployment_id: &str,
@@ -135,9 +129,6 @@ pub fn advance_deployment(
     })
 }
 
-/// Records a terminal failure together with the stage that was active when it happened.
-/// An immediate transaction keeps the state check, diagnostic fields, and terminal
-/// timestamp atomic so another writer cannot advance the deployment in between them.
 pub fn fail_deployment(
     connection: &mut Connection,
     deployment_id: &str,
@@ -191,37 +182,18 @@ pub fn fail_deployment(
     })
 }
 
-// Keeps the allowed source and destination states for each event in one exhaustive
-// mapping, so callers cannot choose arbitrary state pairs.
 fn transition_states(transition: DeploymentTransition) -> (DeploymentStatus, DeploymentStatus) {
     match transition {
-        DeploymentTransition::Start => {
-            (DeploymentStatus::Pending, DeploymentStatus::PreparingSource)
+        DeploymentTransition::Start => (DeploymentStatus::Pending, DeploymentStatus::Starting),
+        DeploymentTransition::RuntimeRunning => {
+            (DeploymentStatus::Starting, DeploymentStatus::Verifying)
         }
-        DeploymentTransition::SourcePrepared => (
-            DeploymentStatus::PreparingSource,
-            DeploymentStatus::Building,
-        ),
-        DeploymentTransition::ImageBuilt => {
-            (DeploymentStatus::Building, DeploymentStatus::Starting)
+        DeploymentTransition::Verified => {
+            (DeploymentStatus::Verifying, DeploymentStatus::Activating)
         }
-        DeploymentTransition::RuntimeRunning => (
-            DeploymentStatus::Starting,
-            DeploymentStatus::VerifyingInternal,
-        ),
-        DeploymentTransition::InternalVerified => (
-            DeploymentStatus::VerifyingInternal,
-            DeploymentStatus::SwitchingTraffic,
-        ),
-        DeploymentTransition::TrafficSwitched => (
-            DeploymentStatus::SwitchingTraffic,
-            DeploymentStatus::VerifyingExternal,
-        ),
     }
 }
 
-// Loads and decodes the persisted state so a failed compare-and-set can distinguish a
-// missing deployment from a conflicting or unsupported stored state.
 fn load_status(
     connection: &Connection,
     deployment_id: &str,
@@ -245,23 +217,16 @@ fn load_status(
     })
 }
 
-// Limits failure recording to stages implemented by the current deployment flow,
-// preventing a terminal failure or a future promotion state from being overwritten.
 fn can_fail(status: DeploymentStatus) -> bool {
     matches!(
         status,
         DeploymentStatus::Pending
-            | DeploymentStatus::PreparingSource
-            | DeploymentStatus::Building
             | DeploymentStatus::Starting
-            | DeploymentStatus::VerifyingInternal
-            | DeploymentStatus::SwitchingTraffic
-            | DeploymentStatus::VerifyingExternal
+            | DeploymentStatus::Verifying
+            | DeploymentStatus::Activating
     )
 }
 
-// Rejects blank or padded diagnostic fields so every terminal failure remains useful
-// for machine classification and operator inspection.
 fn is_trimmed_nonempty(value: &str) -> bool {
     !value.is_empty() && value.trim() == value
 }

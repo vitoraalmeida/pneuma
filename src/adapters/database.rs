@@ -9,11 +9,27 @@ const DEPLOYMENT_MIGRATION: &str =
     include_str!("../../migrations/0002_revisions_and_deployments.sql");
 const RUNTIME_MIGRATION: &str = include_str!("../../migrations/0003_runtime_instances.sql");
 const EXPOSURE_MIGRATION: &str = include_str!("../../migrations/0004_exposure_materialization.sql");
+const SYSTEM_MIGRATION: &str = include_str!("../../migrations/0005_systems.sql");
+const RELEASE_MIGRATION: &str = include_str!("../../migrations/0006_releases.sql");
+const DEPLOYMENT_RELEASE_MIGRATION: &str =
+    include_str!("../../migrations/0007_deployment_release.sql");
+const RELEASE_IMAGE_REFERENCE_MIGRATION: &str =
+    include_str!("../../migrations/0008_release_image_reference.sql");
+const DEPLOYMENT_RELEASE_APPLICATION_MIGRATION: &str =
+    include_str!("../../migrations/0009_deployment_release_application.sql");
+const RUNTIME_DEPLOYMENT_APPLICATION_MIGRATION: &str =
+    include_str!("../../migrations/0010_runtime_deployment_application.sql");
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, INITIAL_MIGRATION),
     (2, DEPLOYMENT_MIGRATION),
     (3, RUNTIME_MIGRATION),
     (4, EXPOSURE_MIGRATION),
+    (5, SYSTEM_MIGRATION),
+    (6, RELEASE_MIGRATION),
+    (7, DEPLOYMENT_RELEASE_MIGRATION),
+    (8, RELEASE_IMAGE_REFERENCE_MIGRATION),
+    (9, DEPLOYMENT_RELEASE_APPLICATION_MIGRATION),
+    (10, RUNTIME_DEPLOYMENT_APPLICATION_MIGRATION),
 ];
 
 #[derive(Debug)]
@@ -96,21 +112,37 @@ fn migrate(connection: &mut Connection) -> Result<(), DatabaseError> {
             continue;
         }
 
-        let transaction = connection
-            .transaction()
-            .map_err(|source| DatabaseError::Migrate { source })?;
-        transaction
-            .execute_batch(sql)
-            .map_err(|source| DatabaseError::Migrate { source })?;
-        transaction
-            .execute(
-                "INSERT INTO schema_migrations (version) VALUES (?1)",
-                [version],
-            )
-            .map_err(|source| DatabaseError::Migrate { source })?;
-        transaction
-            .commit()
-            .map_err(|source| DatabaseError::Migrate { source })?;
+        let rebuilds_referenced_tables = version == 7;
+        if rebuilds_referenced_tables {
+            connection
+                .execute_batch("PRAGMA foreign_keys = OFF;")
+                .map_err(|source| DatabaseError::Migrate { source })?;
+        }
+
+        let migration_result = (|| {
+            let transaction = connection
+                .transaction()
+                .map_err(|source| DatabaseError::Migrate { source })?;
+            transaction
+                .execute_batch(sql)
+                .map_err(|source| DatabaseError::Migrate { source })?;
+            transaction
+                .execute(
+                    "INSERT INTO schema_migrations (version) VALUES (?1)",
+                    [version],
+                )
+                .map_err(|source| DatabaseError::Migrate { source })?;
+            transaction
+                .commit()
+                .map_err(|source| DatabaseError::Migrate { source })
+        })();
+
+        if rebuilds_referenced_tables {
+            connection
+                .execute_batch("PRAGMA foreign_keys = ON;")
+                .map_err(|source| DatabaseError::Migrate { source })?;
+        }
+        migration_result?;
     }
 
     Ok(())
@@ -151,7 +183,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(migration_count, 4);
+        assert_eq!(migration_count, 10);
         assert_eq!(application_table_count, 1);
         assert_eq!(deployment_table_count, 1);
     }
@@ -167,7 +199,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(migration_count, 4);
+        assert_eq!(migration_count, 10);
     }
 
     #[test]
@@ -361,9 +393,11 @@ mod tests {
         let connection = open(Path::new(":memory:")).unwrap();
         connection
             .execute_batch(
-                "INSERT INTO applications (
-                    id, name, desired_runtime_state, spec_version, created_at, updated_at
-                 ) VALUES ('app-id', 'existing', 'stopped', 1, 'now', 'now');
+                "INSERT INTO systems (id, name, created_at)
+                    VALUES ('system-id', 'test-system', 'now');
+                 INSERT INTO applications (
+                    id, name, system_id, desired_runtime_state, spec_version, created_at, updated_at
+                 ) VALUES ('app-id', 'existing', 'system-id', 'stopped', 1, 'now', 'now');
                  INSERT INTO exposures (
                     application_id, desired_visibility, domain, created_at, updated_at
                  ) VALUES ('app-id', 'public', 'example.com', 'now', 'now');",
@@ -415,5 +449,141 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(error, rusqlite::Error::SqliteFailure(_, _)));
+    }
+
+    #[test]
+    fn upgrades_exposure_materialization_to_systems() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "PRAGMA foreign_keys = ON;
+                 CREATE TABLE schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                 );",
+            )
+            .unwrap();
+        connection.execute_batch(INITIAL_MIGRATION).unwrap();
+        connection.execute_batch(DEPLOYMENT_MIGRATION).unwrap();
+        connection.execute_batch(RUNTIME_MIGRATION).unwrap();
+        connection.execute_batch(EXPOSURE_MIGRATION).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO schema_migrations (version) VALUES (1), (2), (3), (4);
+                 INSERT INTO applications (
+                    id, name, desired_runtime_state, spec_version, created_at, updated_at
+                 ) VALUES ('app-id', 'existing', 'stopped', 1, 'now', 'now');
+                 INSERT INTO exposures (
+                    application_id, desired_visibility, domain, created_at, updated_at
+                 ) VALUES ('app-id', 'public', 'example.com', 'now', 'now');",
+            )
+            .unwrap();
+
+        migrate(&mut connection).unwrap();
+
+        let system_table_exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM sqlite_schema
+                    WHERE type = 'table' AND name = 'systems'
+                 )",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let application_name: String = connection
+            .query_row("SELECT name FROM applications", [], |row| row.get(0))
+            .unwrap();
+
+        assert!(system_table_exists);
+        assert_eq!(application_name, "existing");
+    }
+
+    #[test]
+    fn upgrades_systems_to_deployment_release() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "PRAGMA foreign_keys = ON;
+                 CREATE TABLE schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                 );",
+            )
+            .unwrap();
+        connection.execute_batch(INITIAL_MIGRATION).unwrap();
+        connection.execute_batch(DEPLOYMENT_MIGRATION).unwrap();
+        connection.execute_batch(RUNTIME_MIGRATION).unwrap();
+        connection.execute_batch(EXPOSURE_MIGRATION).unwrap();
+        connection.execute_batch(SYSTEM_MIGRATION).unwrap();
+        connection.execute_batch(RELEASE_MIGRATION).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO schema_migrations (version) VALUES (1), (2), (3), (4), (5), (6);
+                 INSERT INTO systems (id, name, created_at)
+                    VALUES ('system-id', 'test-system', 'now');
+                 INSERT INTO applications (
+                    id, name, system_id, desired_runtime_state, spec_version, created_at, updated_at
+                 ) VALUES ('app-id', 'existing', 'system-id', 'running', 1, 'now', 'now');
+                 INSERT INTO revisions (
+                    id, application_id, commit_sha, discovered_at
+                 ) VALUES (
+                    'revision-id', 'app-id',
+                    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'now'
+                 );
+                 INSERT INTO releases (
+                    id, application_id, image_repository, image_digest, source_revision, created_at
+                 ) VALUES (
+                    'release-id', 'app-id', 'localhost/test',
+                    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'now'
+                 );
+                 INSERT INTO deployments (
+                    id, application_id, revision_id, status,
+                    requested_at, finished_at, created_at, updated_at
+                 ) VALUES (
+                    'deployment-id', 'app-id', 'revision-id', 'succeeded',
+                    'now', 'now', 'now', 'now'
+                 );
+                 INSERT INTO runtime_instances (
+                    id, application_id, revision_id, deployment_id,
+                    external_runtime_id, role, host_address, host_port,
+                    container_port, last_observed_state, last_observed_at
+                 ) VALUES (
+                    'runtime-id', 'app-id', 'revision-id', 'deployment-id',
+                    'external-id', 'current', '127.0.0.1', 30001,
+                    8080, 'running', 'now'
+                 );",
+            )
+            .unwrap();
+
+        migrate(&mut connection).unwrap();
+
+        let release_table_exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM sqlite_schema
+                    WHERE type = 'table' AND name = 'releases'
+                 )",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let deployment_release_id: String = connection
+            .query_row("SELECT release_id FROM deployments", [], |row| row.get(0))
+            .unwrap();
+        let runtime_state: String = connection
+            .query_row("SELECT state FROM runtime_instances", [], |row| row.get(0))
+            .unwrap();
+        let active_deployment_id: Option<String> = connection
+            .query_row("SELECT active_deployment_id FROM applications", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        assert!(release_table_exists);
+        assert_eq!(deployment_release_id, "release-id");
+        assert_eq!(runtime_state, "running");
+        assert_eq!(active_deployment_id, Some("deployment-id".to_owned()));
     }
 }

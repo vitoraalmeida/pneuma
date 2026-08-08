@@ -7,9 +7,9 @@ use pneuma::use_cases::deployment_rollback::{RollbackError, rollback_deployment}
 #[test]
 fn rollback_fails_when_no_previous_deployment_exists() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
-    let application = import_application(&mut connection, &fixture_path("valid")).unwrap();
+    let application = import_application(&mut connection, &fixture_path("valid"), None).unwrap();
 
-    let error = rollback_deployment(&mut connection, &application.id).unwrap_err();
+    let error = rollback_deployment(&mut connection, &application.id, None).unwrap_err();
 
     assert!(matches!(error, RollbackError::NoPreviousDeployment { .. }));
 }
@@ -18,7 +18,7 @@ fn rollback_fails_when_no_previous_deployment_exists() {
 fn rollback_fails_for_unknown_application() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
 
-    let error = rollback_deployment(&mut connection, "non-existent-app").unwrap_err();
+    let error = rollback_deployment(&mut connection, "non-existent-app", None).unwrap_err();
 
     assert!(matches!(error, RollbackError::ApplicationNotFound { .. }));
 }

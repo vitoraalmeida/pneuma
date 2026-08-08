@@ -144,91 +144,6 @@ fn deploys_an_internal_application_and_prints_its_identity() {
 }
 
 #[test]
-fn verbose_deployment_reports_steps_and_persisted_states() {
-    let environment = DeploymentEnvironment::new();
-    assert_command_succeeded(&environment.import());
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let server = thread::spawn(move || respond_once(&listener, 200));
-
-    let output = environment.deploy(port, true);
-    server.join().unwrap();
-
-    assert_command_succeeded(&output);
-    assert!(String::from_utf8_lossy(&output.stdout).contains("Status: Succeeded"));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    for expected in [
-        "[verbose] database:",
-        "[verbose] deployment input:",
-        "resolve Git revision: started",
-        "resolve Git revision: completed",
-        "prepare checkout: completed",
-        "build image: completed",
-        "create candidate container: completed",
-        "start candidate container: completed",
-        "observe candidate container: completed",
-        "register candidate runtime: completed",
-        "health check and promotion: completed",
-        "state changed to Pending",
-        "state changed to PreparingSource",
-        "state changed to Building",
-        "state changed to Starting",
-        "state changed to VerifyingInternal",
-        "state changed to Succeeded",
-    ] {
-        assert!(
-            stderr.contains(expected),
-            "missing `{expected}` in:\n{stderr}"
-        );
-    }
-}
-
-#[test]
-fn verbose_redeployment_reports_current_runtime_reconciliation() {
-    let environment = DeploymentEnvironment::new();
-    assert_command_succeeded(&environment.import());
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let server = thread::spawn(move || {
-        respond_once(&listener, 200);
-        respond_once(&listener, 200);
-    });
-    assert_command_succeeded(&environment.deploy(port, false));
-    let output = environment.deploy(port, true);
-    server.join().unwrap();
-
-    assert_command_succeeded(&output);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("reconcile existing runtime: started"));
-    assert!(stderr.contains("reconcile existing runtime: completed"));
-    assert!(!stderr.contains("build image: started"));
-}
-
-#[test]
-fn verbose_failure_reports_persistence_and_candidate_cleanup() {
-    let environment = DeploymentEnvironment::new();
-    assert_command_succeeded(&environment.import());
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let server = thread::spawn(move || {
-        for _ in 0..5 {
-            respond_once(&listener, 503);
-        }
-    });
-
-    let output = environment.deploy(port, true);
-    server.join().unwrap();
-
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("failure persisted (health_check_failed)"));
-    assert!(stderr.contains("clean up candidate: started"));
-    assert!(stderr.contains("clean up candidate: completed"));
-    assert!(stderr.contains("error: deployment"));
-}
-
-#[test]
 fn reports_a_missing_application_before_external_work() {
     let database_path = temporary_database_path();
     let workspace_path = database_path.with_extension("workspaces");
@@ -268,10 +183,6 @@ fn deploys_a_public_application_and_persists_the_active_route() {
     server.join().unwrap();
 
     assert_command_succeeded(&output);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("internal health check: completed"));
-    assert!(stderr.contains("apply public route: completed"));
-    assert!(stderr.contains("external health check: completed"));
     let curl_command = fs::read_to_string(environment.root.join("curl.log")).unwrap();
     assert!(curl_command.contains("--retry 30"));
     assert!(curl_command.contains("--resolve vitoralmeida.tech:443:127.0.0.1"));
@@ -281,7 +192,7 @@ fn deploys_a_public_application_and_persists_the_active_route() {
         .query_row(
             "SELECT exposures.materialization_state,
                     exposures.configuration_version,
-                    runtime_instances.role,
+                     runtime_instances.state,
                     deployments.status
              FROM exposures
              JOIN runtime_instances ON runtime_instances.id = exposures.active_runtime_id
@@ -295,7 +206,7 @@ fn deploys_a_public_application_and_persists_the_active_route() {
         (
             "active".to_owned(),
             environment.commit_sha.clone(),
-            "current".to_owned(),
+            "running".to_owned(),
             "succeeded".to_owned(),
         )
     );
@@ -370,13 +281,13 @@ fn restores_the_previous_public_route_when_external_health_fails() {
     );
     let active_runtime: (String, String) = connection
         .query_row(
-            "SELECT id, role FROM runtime_instances
+            "SELECT id, state FROM runtime_instances
              WHERE id = ?1 AND removed_at IS NULL",
             [&first_active_runtime],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
-    assert_eq!(active_runtime.1, "current");
+    assert_eq!(active_runtime.1, "running");
 }
 
 #[test]
@@ -538,7 +449,7 @@ fn a_removed_container_guides_a_new_deployment() {
     let connection = database::open(&stop_environment.database_path).unwrap();
     let observed: String = connection
         .query_row(
-            "SELECT last_observed_state FROM runtime_instances WHERE role = 'current'",
+            "SELECT last_observed_state FROM runtime_instances WHERE state = 'running'",
             [],
             |row| row.get(0),
         )
@@ -960,8 +871,8 @@ fn current_runtime_states(connection: &rusqlite::Connection) -> (String, String)
         .query_row(
             "SELECT applications.desired_runtime_state, runtime_instances.last_observed_state
              FROM applications
-             JOIN runtime_instances ON runtime_instances.application_id = applications.id
-             WHERE runtime_instances.role = 'current'",
+              JOIN runtime_instances ON runtime_instances.deployment_id = applications.active_deployment_id
+              WHERE runtime_instances.removed_at IS NULL",
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )

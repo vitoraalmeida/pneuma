@@ -10,7 +10,6 @@ use crate::adapters::local_runtime::ObservedRuntimeState;
 pub struct CandidateRuntime {
     pub id: String,
     pub application_id: String,
-    pub revision_id: String,
     pub deployment_id: String,
     pub external_runtime_id: String,
     pub endpoint: SocketAddr,
@@ -107,8 +106,6 @@ pub fn register_candidate_runtime(
 ) -> Result<CandidateRuntime, RegisterCandidateRuntimeError> {
     validate_runtime(external_runtime_id, endpoint, container_port)?;
 
-    // Registration reads deployment identity and writes the linked runtime as one unit.
-    // An immediate transaction prevents a concurrent state transition between those steps.
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|source| RegisterCandidateRuntimeError::Persistence { source })?;
@@ -129,26 +126,19 @@ pub fn register_candidate_runtime(
 
     let deployment = transaction
         .query_row(
-            "SELECT application_id, revision_id, status
-             FROM deployments WHERE id = ?1",
+            "SELECT application_id, status FROM deployments WHERE id = ?1",
             [deployment_id],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            },
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
         )
         .optional()
         .map_err(|source| RegisterCandidateRuntimeError::Persistence { source })?
         .ok_or_else(|| RegisterCandidateRuntimeError::DeploymentNotFound {
             deployment_id: deployment_id.to_owned(),
         })?;
-    if deployment.2 != "starting" {
+    if deployment.1 != "starting" {
         return Err(RegisterCandidateRuntimeError::InvalidDeploymentState {
             deployment_id: deployment_id.to_owned(),
-            actual: deployment.2,
+            actual: deployment.1,
         });
     }
 
@@ -173,10 +163,9 @@ pub fn register_candidate_runtime(
             "INSERT INTO runtime_instances (
                 id,
                 application_id,
-                revision_id,
                 deployment_id,
                 external_runtime_id,
-                role,
+                state,
                 host_address,
                 host_port,
                 container_port,
@@ -184,12 +173,11 @@ pub fn register_candidate_runtime(
                 last_observed_at
              ) VALUES (
                 lower(hex(randomblob(16))),
-                ?1, ?2, ?3, ?4, 'candidate', '127.0.0.1', ?5, ?6,
+                ?1, ?2, ?3, 'starting', '127.0.0.1', ?4, ?5,
                 'running', CURRENT_TIMESTAMP
              )",
             params![
                 deployment.0,
-                deployment.1,
                 deployment_id,
                 external_runtime_id,
                 endpoint.port(),
@@ -240,7 +228,6 @@ fn load_by_external_id(
             "SELECT
                 id,
                 application_id,
-                revision_id,
                 deployment_id,
                 external_runtime_id,
                 host_port,
@@ -250,17 +237,16 @@ fn load_by_external_id(
              WHERE external_runtime_id = ?1",
             [external_runtime_id],
             |row| {
-                let host_port = row.get::<_, u16>(5)?;
+                let host_port = row.get::<_, u16>(4)?;
                 Ok(CandidateRuntime {
                     id: row.get(0)?,
                     application_id: row.get(1)?,
-                    revision_id: row.get(2)?,
-                    deployment_id: row.get(3)?,
-                    external_runtime_id: row.get(4)?,
+                    deployment_id: row.get(2)?,
+                    external_runtime_id: row.get(3)?,
                     endpoint: SocketAddr::from((Ipv4Addr::LOCALHOST, host_port)),
-                    container_port: row.get(6)?,
+                    container_port: row.get(5)?,
                     observed_state: ObservedRuntimeState::Running,
-                    observed_at: row.get(7)?,
+                    observed_at: row.get(6)?,
                 })
             },
         )

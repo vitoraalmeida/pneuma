@@ -8,7 +8,7 @@ use pneuma::use_cases::application_list::list_applications;
 fn imports_and_persists_the_application_specification() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
 
-    let application = import_application(&mut connection, &fixture_path("valid")).unwrap();
+    let application = import_application(&mut connection, &fixture_path("valid"), None).unwrap();
 
     assert_eq!(application.name, "personal-site");
     assert_eq!(
@@ -81,8 +81,8 @@ fn importing_the_same_application_is_idempotent() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
     let repository = fixture_path("valid");
 
-    let first = import_application(&mut connection, &repository).unwrap();
-    let second = import_application(&mut connection, &repository).unwrap();
+    let first = import_application(&mut connection, &repository, None).unwrap();
+    let second = import_application(&mut connection, &repository, None).unwrap();
 
     let row_counts = connection
         .query_row(
@@ -115,7 +115,7 @@ fn importing_the_same_application_is_idempotent() {
 fn reports_manifest_failures_without_changing_the_catalog() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
 
-    let error = import_application(&mut connection, &fixture_path("missing")).unwrap_err();
+    let error = import_application(&mut connection, &fixture_path("missing"), None).unwrap_err();
     let applications = list_applications(&connection).unwrap();
 
     assert!(matches!(error, ImportError::Manifest { .. }));
@@ -127,7 +127,7 @@ fn reports_manifest_failures_without_changing_the_catalog() {
 fn persists_a_local_repository_kind() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
 
-    import_application(&mut connection, &fixture_path("another")).unwrap();
+    import_application(&mut connection, &fixture_path("another"), None).unwrap();
 
     let repository_kind: String = connection
         .query_row(
@@ -137,6 +137,33 @@ fn persists_a_local_repository_kind() {
         )
         .unwrap();
     assert_eq!(repository_kind, "local");
+}
+
+#[test]
+fn requires_system_from_manifest_or_cli() {
+    let mut connection = database::open(Path::new(":memory:")).unwrap();
+
+    let error = import_application(&mut connection, &fixture_path("valid"), None).unwrap();
+    assert!(!error.system_id.is_empty());
+}
+
+#[test]
+fn cli_system_overrides_manifest() {
+    let mut connection = database::open(Path::new(":memory:")).unwrap();
+
+    let application =
+        import_application(&mut connection, &fixture_path("valid"), Some("cli-system")).unwrap();
+
+    let system_name: String = connection
+        .query_row(
+            "SELECT systems.name FROM systems
+             JOIN applications ON applications.system_id = systems.id
+             WHERE applications.id = ?1",
+            [&application.id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(system_name, "cli-system");
 }
 
 fn fixture_path(name: &str) -> PathBuf {

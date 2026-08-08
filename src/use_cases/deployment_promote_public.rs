@@ -5,7 +5,7 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use crate::adapters::local_runtime::ObservedRuntimeState;
 use crate::domain::manifest::Visibility;
-use crate::use_cases::deployment_create::{DeploymentStatus, RuntimeRole};
+use crate::use_cases::deployment_create::{DeploymentStatus, RuntimeState};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct PublicExposureTarget {
@@ -97,15 +97,13 @@ impl Error for PromotePublicCandidateError {
     }
 }
 
-/// Marks the exposure operation before Caddy is changed while preserving the last
-/// known active route. A crash can therefore be diagnosed as interrupted Applying.
 pub fn begin_public_exposure(
     connection: &Connection,
     runtime_id: &str,
 ) -> Result<PublicExposureTarget, PromotePublicCandidateError> {
     let target = load_target(connection, runtime_id)?;
     validate_runtime(&target)?;
-    if target.deployment_status != DeploymentStatus::SwitchingTraffic {
+    if target.deployment_status != DeploymentStatus::Activating {
         return Err(PromotePublicCandidateError::InvalidDeploymentState {
             deployment_id: target.deployment_id,
             actual: target.deployment_status.database_value().to_owned(),
@@ -150,8 +148,6 @@ pub fn begin_public_exposure(
     })
 }
 
-/// Records materialization failure without clearing the previous active runtime or
-/// configuration version; those fields continue to describe the last known good route.
 pub fn record_public_exposure_failure(
     connection: &Connection,
     application_id: &str,
@@ -186,8 +182,6 @@ pub fn record_public_exposure_failure(
     Ok(())
 }
 
-/// Commits database ownership only after Caddy and the external health check have
-/// succeeded. Runtime role, deployment success, and active exposure change together.
 pub fn promote_public_candidate(
     connection: &mut Connection,
     runtime_id: &str,
@@ -204,7 +198,7 @@ pub fn promote_public_candidate(
         .map_err(|source| PromotePublicCandidateError::Persistence { source })?;
     let target = load_target(&transaction, runtime_id)?;
     validate_runtime(&target)?;
-    if target.deployment_status != DeploymentStatus::VerifyingExternal {
+    if target.deployment_status != DeploymentStatus::Activating {
         return Err(PromotePublicCandidateError::InvalidDeploymentState {
             deployment_id: target.deployment_id,
             actual: target.deployment_status.database_value().to_owned(),
@@ -220,25 +214,26 @@ pub fn promote_public_candidate(
     transaction
         .execute(
             "UPDATE runtime_instances
-             SET role = 'previous', updated_at = CURRENT_TIMESTAMP
+             SET state = 'stopped', updated_at = CURRENT_TIMESTAMP
              WHERE application_id = ?1
-               AND role = 'current'
-               AND removed_at IS NULL",
-            [&target.application_id],
+               AND state = 'running'
+               AND removed_at IS NULL
+               AND id != ?2",
+            params![&target.application_id, runtime_id],
         )
         .map_err(|source| PromotePublicCandidateError::Persistence { source })?;
     let runtime_updated = transaction
         .execute(
             "UPDATE runtime_instances
-             SET role = 'current', updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?1 AND role = 'candidate' AND removed_at IS NULL",
+             SET state = 'running', updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?1 AND state = 'starting' AND removed_at IS NULL",
             [runtime_id],
         )
         .map_err(|source| PromotePublicCandidateError::Persistence { source })?;
     if runtime_updated != 1 {
         return Err(PromotePublicCandidateError::InvalidRuntime {
             runtime_id: runtime_id.to_owned(),
-            reason: "role changed during promotion".to_owned(),
+            reason: "state changed during promotion".to_owned(),
         });
     }
     let exposure_updated = transaction
@@ -269,7 +264,7 @@ pub fn promote_public_candidate(
              SET status = 'succeeded',
                  finished_at = CURRENT_TIMESTAMP,
                  updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?1 AND status = 'verifying_external'",
+             WHERE id = ?1 AND status = 'activating'",
             [&target.deployment_id],
         )
         .map_err(|source| PromotePublicCandidateError::Persistence { source })?;
@@ -282,9 +277,11 @@ pub fn promote_public_candidate(
     transaction
         .execute(
             "UPDATE applications
-             SET desired_runtime_state = 'running', updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?1",
-            [&target.application_id],
+             SET active_deployment_id = ?1,
+                 desired_runtime_state = 'running',
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?2",
+            params![&target.deployment_id, &target.application_id],
         )
         .map_err(|source| PromotePublicCandidateError::Persistence { source })?;
     let finished_at = transaction
@@ -309,7 +306,7 @@ struct PromotionTarget {
     runtime_id: String,
     application_id: String,
     deployment_id: String,
-    role: RuntimeRole,
+    state: RuntimeState,
     observed_state: ObservedRuntimeState,
     removed_at: Option<String>,
     deployment_status: DeploymentStatus,
@@ -326,7 +323,7 @@ fn load_target(
             "SELECT
                 runtime_instances.application_id,
                 runtime_instances.deployment_id,
-                runtime_instances.role,
+                runtime_instances.state,
                 runtime_instances.last_observed_state,
                 runtime_instances.removed_at,
                 deployments.status,
@@ -338,14 +335,14 @@ fn load_target(
              WHERE runtime_instances.id = ?1",
             [runtime_id],
             |row| {
-                let role_text: String = row.get(2)?;
-                let role = RuntimeRole::from_database(&role_text).ok_or_else(|| {
+                let state_text: String = row.get(2)?;
+                let state = RuntimeState::from_database(&state_text).ok_or_else(|| {
                     rusqlite::Error::FromSqlConversionFailure(
                         2,
                         rusqlite::types::Type::Text,
                         Box::new(std::io::Error::new(
                             std::io::ErrorKind::InvalidData,
-                            format!("invalid runtime role: {role_text}"),
+                            format!("invalid runtime state: {state_text}"),
                         )),
                     )
                 })?;
@@ -378,7 +375,7 @@ fn load_target(
                     runtime_id: runtime_id.to_owned(),
                     application_id: row.get(0)?,
                     deployment_id: row.get(1)?,
-                    role,
+                    state,
                     observed_state,
                     removed_at: row.get(4)?,
                     deployment_status,
@@ -395,8 +392,8 @@ fn load_target(
 }
 
 fn validate_runtime(target: &PromotionTarget) -> Result<(), PromotePublicCandidateError> {
-    let reason = if target.role != RuntimeRole::Candidate {
-        Some(format!("role is `{}`", target.role.database_value()))
+    let reason = if target.state != RuntimeState::Starting {
+        Some(format!("state is `{}`", target.state.database_value()))
     } else if target.observed_state != ObservedRuntimeState::Running {
         Some(format!(
             "observed state is `{}`",

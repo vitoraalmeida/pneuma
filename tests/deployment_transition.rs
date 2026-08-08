@@ -2,10 +2,11 @@ use std::path::{Path, PathBuf};
 
 use pneuma::adapters::database;
 use pneuma::use_cases::application_import::import_application;
-use pneuma::use_cases::deployment_create::{DeploymentStatus, create_deployment};
+use pneuma::use_cases::deployment_create::{DeploymentStatus, DeploymentType, create_deployment};
 use pneuma::use_cases::deployment_transition::{
     DeploymentTransition, TransitionDeploymentError, advance_deployment, fail_deployment,
 };
+use pneuma::use_cases::release_create::create_release;
 
 #[test]
 fn advances_in_order_through_internal_verification() {
@@ -13,7 +14,7 @@ fn advances_in_order_through_internal_verification() {
 
     assert_eq!(
         advance_deployment(&connection, &deployment_id, DeploymentTransition::Start).unwrap(),
-        DeploymentStatus::PreparingSource
+        DeploymentStatus::Starting
     );
     let started_at: String = connection
         .query_row(
@@ -22,22 +23,15 @@ fn advances_in_order_through_internal_verification() {
             |row| row.get(0),
         )
         .unwrap();
-    for (transition, expected_status) in [
-        (
-            DeploymentTransition::SourcePrepared,
-            DeploymentStatus::Building,
-        ),
-        (DeploymentTransition::ImageBuilt, DeploymentStatus::Starting),
-        (
-            DeploymentTransition::RuntimeRunning,
-            DeploymentStatus::VerifyingInternal,
-        ),
-    ] {
-        assert_eq!(
-            advance_deployment(&connection, &deployment_id, transition).unwrap(),
-            expected_status
-        );
-    }
+    assert_eq!(
+        advance_deployment(
+            &connection,
+            &deployment_id,
+            DeploymentTransition::RuntimeRunning
+        )
+        .unwrap(),
+        DeploymentStatus::Verifying
+    );
 
     let timestamps = connection
         .query_row(
@@ -61,7 +55,7 @@ fn advances_in_order_through_internal_verification() {
         "status was 503",
     )
     .unwrap();
-    assert_eq!(error.stage, DeploymentStatus::VerifyingInternal);
+    assert_eq!(error.stage, DeploymentStatus::Verifying);
 }
 
 #[test]
@@ -69,11 +63,8 @@ fn advances_through_public_verification_and_can_fail_there() {
     let (mut connection, deployment_id, _) = pending_deployment();
     for transition in [
         DeploymentTransition::Start,
-        DeploymentTransition::SourcePrepared,
-        DeploymentTransition::ImageBuilt,
         DeploymentTransition::RuntimeRunning,
-        DeploymentTransition::InternalVerified,
-        DeploymentTransition::TrafficSwitched,
+        DeploymentTransition::Verified,
     ] {
         advance_deployment(&connection, &deployment_id, transition).unwrap();
     }
@@ -86,7 +77,7 @@ fn advances_through_public_verification_and_can_fail_there() {
     )
     .unwrap();
 
-    assert_eq!(failure.stage, DeploymentStatus::VerifyingExternal);
+    assert_eq!(failure.stage, DeploymentStatus::Activating);
 }
 
 #[test]
@@ -96,13 +87,13 @@ fn rejects_skipped_and_repeated_transitions_without_changing_state() {
     let skipped = advance_deployment(
         &connection,
         &deployment_id,
-        DeploymentTransition::SourcePrepared,
+        DeploymentTransition::RuntimeRunning,
     )
     .unwrap_err();
     assert!(matches!(
         skipped,
         TransitionDeploymentError::Conflict {
-            expected: DeploymentStatus::PreparingSource,
+            expected: DeploymentStatus::Starting,
             actual: DeploymentStatus::Pending,
             ..
         }
@@ -115,7 +106,7 @@ fn rejects_skipped_and_repeated_transitions_without_changing_state() {
         repeated,
         TransitionDeploymentError::Conflict {
             expected: DeploymentStatus::Pending,
-            actual: DeploymentStatus::PreparingSource,
+            actual: DeploymentStatus::Starting,
             ..
         }
     ));
@@ -125,24 +116,18 @@ fn rejects_skipped_and_repeated_transitions_without_changing_state() {
 fn records_a_structured_failure_and_allows_a_later_attempt() {
     let (mut connection, deployment_id, application_id) = pending_deployment();
     advance_deployment(&connection, &deployment_id, DeploymentTransition::Start).unwrap();
-    advance_deployment(
-        &connection,
-        &deployment_id,
-        DeploymentTransition::SourcePrepared,
-    )
-    .unwrap();
 
     let failure = fail_deployment(
         &mut connection,
         &deployment_id,
-        "build_failed",
-        "Containerfile failed",
+        "runtime_failed",
+        "container exited",
     )
     .unwrap();
 
-    assert_eq!(failure.code, "build_failed");
-    assert_eq!(failure.stage, DeploymentStatus::Building);
-    assert_eq!(failure.message, "Containerfile failed");
+    assert_eq!(failure.code, "runtime_failed");
+    assert_eq!(failure.stage, DeploymentStatus::Starting);
+    assert_eq!(failure.message, "container exited");
     assert!(!failure.finished_at.is_empty());
     let persisted = connection
         .query_row(
@@ -164,18 +149,26 @@ fn records_a_structured_failure_and_allows_a_later_attempt() {
         persisted,
         (
             "failed".to_owned(),
-            "build_failed".to_owned(),
-            "building".to_owned(),
-            "Containerfile failed".to_owned(),
+            "runtime_failed".to_owned(),
+            "starting".to_owned(),
+            "container exited".to_owned(),
             failure.finished_at,
         )
     );
 
+    let release = create_release(
+        &mut connection,
+        &application_id,
+        "localhost/test",
+        &"b".repeat(40),
+        None,
+    )
+    .unwrap();
     create_deployment(
         &mut connection,
         &application_id,
-        &"b".repeat(40),
-        Some("main"),
+        &release.id,
+        DeploymentType::Deploy,
     )
     .unwrap();
 }
@@ -234,18 +227,26 @@ fn rejects_incomplete_failure_details_without_changing_state() {
     }
     assert_eq!(
         advance_deployment(&connection, &deployment_id, DeploymentTransition::Start).unwrap(),
-        DeploymentStatus::PreparingSource
+        DeploymentStatus::Starting
     );
 }
 
 fn pending_deployment() -> (rusqlite::Connection, String, String) {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
-    let application = import_application(&mut connection, &fixture_path("valid")).unwrap();
-    let (_, deployment) = create_deployment(
+    let application = import_application(&mut connection, &fixture_path("valid"), None).unwrap();
+    let release = create_release(
         &mut connection,
         &application.id,
+        "localhost/test",
         &"a".repeat(40),
-        Some("main"),
+        None,
+    )
+    .unwrap();
+    let deployment = create_deployment(
+        &mut connection,
+        &application.id,
+        &release.id,
+        DeploymentType::Deploy,
     )
     .unwrap();
     (connection, deployment.id, application.id)

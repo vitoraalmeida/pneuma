@@ -94,7 +94,7 @@ fn main() {
     assert_eq!(
         inspect(
             &container.id,
-            "{{ index .Config.Labels \"io.pneuma.role\" }}"
+            "{{ index .Config.Labels \"io.pneuma.application\" }}"
         ),
         "candidate"
     );

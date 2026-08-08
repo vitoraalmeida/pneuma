@@ -6,7 +6,6 @@ use std::process::Command;
 
 const APPLICATION_LABEL: &str = "io.pneuma.application";
 const REVISION_LABEL: &str = "io.pneuma.revision";
-const ROLE_LABEL: &str = "io.pneuma.role";
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct CreatedContainer {
@@ -254,7 +253,6 @@ pub fn create_container(
     let name = container_name(application_name, commit_sha);
     let application_label = format!("{APPLICATION_LABEL}={application_name}");
     let revision_label = format!("{REVISION_LABEL}={commit_sha}");
-    let role_label = format!("{ROLE_LABEL}=candidate");
     // Let Podman choose an unused host port, but constrain the mapping to loopback so a
     // candidate cannot become publicly reachable before health checks and promotion.
     let port_mapping = format!("127.0.0.1::{container_port}");
@@ -266,7 +264,6 @@ pub fn create_container(
         .arg("--label")
         .arg(revision_label)
         .arg("--label")
-        .arg(role_label)
         .arg("--publish")
         .arg(port_mapping)
         .arg(image_reference)

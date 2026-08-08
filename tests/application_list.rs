@@ -16,8 +16,8 @@ fn returns_an_empty_list_for_an_empty_catalog() {
 #[test]
 fn returns_registered_applications_ordered_by_name() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
-    import_application(&mut connection, &fixture_path("valid")).unwrap();
-    import_application(&mut connection, &fixture_path("another")).unwrap();
+    import_application(&mut connection, &fixture_path("valid"), None).unwrap();
+    import_application(&mut connection, &fixture_path("another"), None).unwrap();
 
     let applications = list_applications(&connection).unwrap();
 

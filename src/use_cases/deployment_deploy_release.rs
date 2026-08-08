@@ -1,24 +1,23 @@
 use std::error::Error;
 use std::fmt;
-use std::fs;
 use std::path::{Path, PathBuf};
 
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension};
 
 use crate::adapters::caddy_exposure::{
     materialize_caddy_fragment, restore_materialized_caddy_fragment,
 };
 use crate::adapters::external_health::check_external_health;
-use crate::adapters::git_source::{ResolveCommitError, create_checkout, resolve_commit};
+use crate::adapters::git_source::ResolveCommitError;
 use crate::adapters::health_check::{HealthCheckError, HealthCheckResult, check_internal_health};
-use crate::adapters::local_build::build_image;
 use crate::adapters::local_runtime::{
-    ContainerObservation, ControlContainerError, ObserveContainerError, ObservedRuntimeState,
-    container_name, create_container, observe_container, remove_container, start_container,
+    ControlContainerError, ObserveContainerError, ObservedRuntimeState, create_container,
+    observe_container, remove_container, start_container,
 };
 use crate::domain::manifest::Visibility;
+use crate::domain::release::Release;
 use crate::use_cases::deployment_create::{
-    CreateDeploymentError, DeploymentStatus, create_deployment,
+    CreateDeploymentError, DeploymentStatus, DeploymentType, create_deployment,
 };
 use crate::use_cases::deployment_promote_internal::{
     PromoteInternalCandidateError, promote_internal_candidate,
@@ -33,7 +32,7 @@ use crate::use_cases::deployment_transition::{
 };
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct DeployedInternalRevision {
+pub struct DeployedRelease {
     pub deployment_id: String,
     pub runtime_id: String,
     pub container_name: String,
@@ -183,7 +182,7 @@ impl<'a> ProgressReporter<'a> {
 }
 
 #[derive(Debug)]
-pub enum DeployInternalRevisionError {
+pub enum DeployReleaseError {
     ApplicationNotFound {
         application_id: String,
     },
@@ -259,7 +258,7 @@ pub enum CandidateCleanupError {
     Persistence { source: rusqlite::Error },
 }
 
-impl fmt::Display for DeployInternalRevisionError {
+impl fmt::Display for DeployReleaseError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ApplicationNotFound { application_id } => {
@@ -344,7 +343,7 @@ impl fmt::Display for DeployInternalRevisionError {
     }
 }
 
-impl Error for DeployInternalRevisionError {
+impl Error for DeployReleaseError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::LoadApplication { source } => Some(source),
@@ -389,56 +388,51 @@ impl Error for CandidateCleanupError {
     }
 }
 
-pub fn deploy_revision(
+pub fn deploy_release(
     connection: &mut Connection,
     application_id: &str,
-    repository_path: &Path,
-    revision: &str,
-    workspace_root: &Path,
+    release: &Release,
+    deployment_type: DeploymentType,
     public_configuration: Option<&PublicDeploymentConfiguration>,
-) -> Result<DeployedInternalRevision, DeployInternalRevisionError> {
+) -> Result<DeployedRelease, DeployReleaseError> {
     let mut progress = ProgressReporter::disabled();
-    deploy_internal_revision_reporting(
+    deploy_release_reporting(
         connection,
         application_id,
-        repository_path,
-        revision,
-        workspace_root,
+        release,
+        deployment_type,
         public_configuration,
         &mut progress,
     )
 }
 
-pub fn deploy_revision_with_progress(
+pub fn deploy_release_with_progress(
     connection: &mut Connection,
     application_id: &str,
-    repository_path: &Path,
-    revision: &str,
-    workspace_root: &Path,
+    release: &Release,
+    deployment_type: DeploymentType,
     public_configuration: Option<&PublicDeploymentConfiguration>,
     progress: &mut dyn FnMut(DeploymentProgress),
-) -> Result<DeployedInternalRevision, DeployInternalRevisionError> {
+) -> Result<DeployedRelease, DeployReleaseError> {
     let mut progress = ProgressReporter::enabled(progress);
-    deploy_internal_revision_reporting(
+    deploy_release_reporting(
         connection,
         application_id,
-        repository_path,
-        revision,
-        workspace_root,
+        release,
+        deployment_type,
         public_configuration,
         &mut progress,
     )
 }
 
-fn deploy_internal_revision_reporting(
+fn deploy_release_reporting(
     connection: &mut Connection,
     application_id: &str,
-    repository_path: &Path,
-    revision: &str,
-    workspace_root: &Path,
+    release: &Release,
+    deployment_type: DeploymentType,
     public_configuration: Option<&PublicDeploymentConfiguration>,
     progress: &mut ProgressReporter<'_>,
-) -> Result<DeployedInternalRevision, DeployInternalRevisionError> {
+) -> Result<DeployedRelease, DeployReleaseError> {
     progress.started(
         DeploymentStep::LoadSpecification,
         format!("application {application_id}"),
@@ -453,62 +447,44 @@ fn deploy_internal_revision_reporting(
         ),
     );
     if specification.visibility == Visibility::Public && public_configuration.is_none() {
-        return Err(DeployInternalRevisionError::PublicApplication {
+        return Err(DeployReleaseError::PublicApplication {
             application_id: application_id.to_owned(),
         });
     }
 
     progress.started(
-        DeploymentStep::ResolveRevision,
-        format!("{revision} in {}", repository_path.display()),
-    );
-    let commit_sha = resolve_commit(repository_path, revision)
-        .map_err(|source| DeployInternalRevisionError::ResolveRevision { source })?;
-    progress.completed(
-        DeploymentStep::ResolveRevision,
-        format!("commit {commit_sha}"),
-    );
-    if let Some(deployed) = reconcile_existing_runtime(
-        connection,
-        application_id,
-        &specification,
-        &commit_sha,
-        progress,
-    )? {
-        return Ok(deployed);
-    }
-    progress.started(
         DeploymentStep::CreateDeployment,
-        format!("commit {commit_sha}"),
+        format!("release {}", release.id),
     );
-    let (_, deployment) =
-        create_deployment(connection, application_id, &commit_sha, Some(revision))
-            .map_err(|source| DeployInternalRevisionError::CreateDeployment { source })?;
+    let deployment = create_deployment(connection, application_id, &release.id, deployment_type)
+        .map_err(|source| DeployReleaseError::CreateDeployment { source })?;
     progress.completed(
         DeploymentStep::CreateDeployment,
         format!("deployment {}", deployment.id),
     );
     progress.state_changed(&deployment.id, DeploymentStatus::Pending);
 
-    let source = ResolvedDeploymentSource {
-        repository_path,
-        commit_sha: &commit_sha,
-        workspace_root,
-    };
     let execution = execute_deployment(
         connection,
         &deployment.id,
         &specification,
-        &source,
+        &release.image_reference,
+        release
+            .source_revision
+            .as_deref()
+            .unwrap_or(&release.image_reference),
         public_configuration,
         progress,
     );
     match execution {
-        Ok((runtime_id, container_name, finished_at)) => Ok(DeployedInternalRevision {
+        Ok((runtime_id, container_name, finished_at)) => Ok(DeployedRelease {
             deployment_id: deployment.id,
             runtime_id,
             container_name,
-            commit_sha,
+            commit_sha: release
+                .source_revision
+                .clone()
+                .unwrap_or_else(|| release.image_reference.clone()),
             finished_at,
         }),
         Err(failed) => finish_failed_deployment(connection, &deployment.id, failed, progress),
@@ -518,374 +494,16 @@ fn deploy_internal_revision_reporting(
 struct DeploymentSpecification {
     application_id: String,
     application_name: String,
-    containerfile: PathBuf,
-    context: PathBuf,
     container_port: u16,
     health_path: String,
     expected_status: u16,
     visibility: Visibility,
 }
 
-struct ResolvedDeploymentSource<'a> {
-    repository_path: &'a Path,
-    commit_sha: &'a str,
-    workspace_root: &'a Path,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ExistingRuntimeRole {
-    Current,
-    Previous,
-}
-
-impl ExistingRuntimeRole {
-    fn database_value(self) -> &'static str {
-        match self {
-            Self::Current => "current",
-            Self::Previous => "previous",
-        }
-    }
-}
-
-struct ExistingRuntime {
-    runtime_id: String,
-    deployment_id: String,
-    external_runtime_id: String,
-    container_port: u16,
-    finished_at: String,
-    role: ExistingRuntimeRole,
-}
-
-fn reconcile_existing_runtime(
-    connection: &mut Connection,
-    application_id: &str,
-    specification: &DeploymentSpecification,
-    commit_sha: &str,
-    progress: &mut ProgressReporter<'_>,
-) -> Result<Option<DeployedInternalRevision>, DeployInternalRevisionError> {
-    let Some(runtime) = load_existing_runtime(connection, application_id, commit_sha)? else {
-        return Ok(None);
-    };
-    progress.started(
-        DeploymentStep::ReconcileRuntime,
-        format!(
-            "runtime {}, role {:?}, commit {commit_sha}",
-            runtime.runtime_id, runtime.role
-        ),
-    );
-
-    let observation = observe_container(&runtime.external_runtime_id, runtime.container_port)
-        .map_err(
-            |source| DeployInternalRevisionError::ObserveExistingRuntime {
-                runtime_id: runtime.runtime_id.clone(),
-                source,
-            },
-        )?;
-    persist_existing_observation(connection, &runtime, &observation)?;
-
-    let endpoint = match observation.state {
-        ObservedRuntimeState::Missing => {
-            progress.completed(
-                DeploymentStep::ReconcileRuntime,
-                format!(
-                    "runtime {} is missing; a new deployment is required",
-                    runtime.runtime_id
-                ),
-            );
-            return Ok(None);
-        }
-        ObservedRuntimeState::Running => observation.endpoint.ok_or_else(|| {
-            DeployInternalRevisionError::ExistingRuntimeUnavailable {
-                runtime_id: runtime.runtime_id.clone(),
-                state: ObservedRuntimeState::Running,
-            }
-        })?,
-        ObservedRuntimeState::Created | ObservedRuntimeState::Stopped => {
-            start_container(&runtime.external_runtime_id).map_err(|source| {
-                DeployInternalRevisionError::StartExistingRuntime {
-                    runtime_id: runtime.runtime_id.clone(),
-                    source,
-                }
-            })?;
-            let observation =
-                observe_container(&runtime.external_runtime_id, runtime.container_port).map_err(
-                    |source| DeployInternalRevisionError::ObserveExistingRuntime {
-                        runtime_id: runtime.runtime_id.clone(),
-                        source,
-                    },
-                )?;
-            persist_existing_observation(connection, &runtime, &observation)?;
-            match observation {
-                ContainerObservation {
-                    state: ObservedRuntimeState::Running,
-                    endpoint: Some(endpoint),
-                } => endpoint,
-                observation => {
-                    return Err(DeployInternalRevisionError::ExistingRuntimeUnavailable {
-                        runtime_id: runtime.runtime_id,
-                        state: observation.state,
-                    });
-                }
-            }
-        }
-        state => {
-            return Err(DeployInternalRevisionError::ExistingRuntimeUnavailable {
-                runtime_id: runtime.runtime_id,
-                state,
-            });
-        }
-    };
-
-    let health = check_internal_health(
-        endpoint,
-        &specification.health_path,
-        specification.expected_status,
-    )
-    .map_err(|source| DeployInternalRevisionError::CheckExistingRuntime {
-        runtime_id: runtime.runtime_id.clone(),
-        source,
-    })?;
-    match health {
-        HealthCheckResult::Healthy { .. } => {}
-        result @ HealthCheckResult::Unhealthy { .. } => {
-            return Err(DeployInternalRevisionError::ExistingRuntimeUnhealthy {
-                runtime_id: runtime.runtime_id,
-                result,
-            });
-        }
-    }
-
-    if specification.visibility == Visibility::Public {
-        let route_is_active = connection
-            .query_row(
-                "SELECT COALESCE(active_runtime_id = ?1, 0)
-                        AND materialization_state IN ('active', 'failed')
-                 FROM exposures WHERE application_id = ?2",
-                params![runtime.runtime_id, application_id],
-                |row| row.get::<_, bool>(0),
-            )
-            .map_err(|source| DeployInternalRevisionError::LoadExistingRuntime { source })?;
-        if runtime.role != ExistingRuntimeRole::Current || !route_is_active {
-            return Err(DeployInternalRevisionError::ExistingPublicRouteMismatch {
-                runtime_id: runtime.runtime_id,
-            });
-        }
-    }
-
-    if runtime.role == ExistingRuntimeRole::Previous {
-        reactivate_previous_runtime(connection, application_id, &runtime.runtime_id)?;
-    }
-
-    progress.completed(
-        DeploymentStep::ReconcileRuntime,
-        match runtime.role {
-            ExistingRuntimeRole::Current => {
-                format!("runtime {} is running and healthy", runtime.runtime_id)
-            }
-            ExistingRuntimeRole::Previous => {
-                format!("runtime {} reactivated as Current", runtime.runtime_id)
-            }
-        },
-    );
-    Ok(Some(DeployedInternalRevision {
-        deployment_id: runtime.deployment_id,
-        runtime_id: runtime.runtime_id,
-        container_name: container_name(&specification.application_name, commit_sha),
-        commit_sha: commit_sha.to_owned(),
-        finished_at: runtime.finished_at,
-    }))
-}
-
-fn load_existing_runtime(
-    connection: &Connection,
-    application_id: &str,
-    commit_sha: &str,
-) -> Result<Option<ExistingRuntime>, DeployInternalRevisionError> {
-    let runtime = connection
-        .query_row(
-            "SELECT
-                runtime_instances.id,
-                runtime_instances.deployment_id,
-                runtime_instances.external_runtime_id,
-                runtime_instances.container_port,
-                deployments.finished_at,
-                runtime_instances.role = 'current'
-             FROM runtime_instances
-             JOIN revisions ON revisions.id = runtime_instances.revision_id
-             JOIN deployments ON deployments.id = runtime_instances.deployment_id
-             WHERE runtime_instances.application_id = ?1
-               AND revisions.commit_sha = ?2
-               AND runtime_instances.role IN ('current', 'previous')
-               AND runtime_instances.removed_at IS NULL
-               AND deployments.status = 'succeeded'
-               AND deployments.finished_at IS NOT NULL
-             ORDER BY
-                CASE runtime_instances.role WHEN 'current' THEN 0 ELSE 1 END,
-                runtime_instances.created_at DESC
-             LIMIT 1",
-            params![application_id, commit_sha],
-            |row| {
-                let role = if row.get::<_, bool>(5)? {
-                    ExistingRuntimeRole::Current
-                } else {
-                    ExistingRuntimeRole::Previous
-                };
-                Ok(ExistingRuntime {
-                    runtime_id: row.get(0)?,
-                    deployment_id: row.get(1)?,
-                    external_runtime_id: row.get(2)?,
-                    container_port: row.get(3)?,
-                    finished_at: row.get(4)?,
-                    role,
-                })
-            },
-        )
-        .optional()
-        .map_err(|source| DeployInternalRevisionError::LoadExistingRuntime { source })?;
-    Ok(runtime)
-}
-
-fn persist_existing_observation(
-    connection: &Connection,
-    runtime: &ExistingRuntime,
-    observation: &ContainerObservation,
-) -> Result<(), DeployInternalRevisionError> {
-    let state = observed_state_database_value(&observation.state);
-    let role = runtime.role.database_value();
-    let updated = if observation.state == ObservedRuntimeState::Missing {
-        connection.execute(
-            "UPDATE runtime_instances
-             SET last_observed_state = 'missing',
-                 last_observed_at = CURRENT_TIMESTAMP,
-                 removed_at = CURRENT_TIMESTAMP,
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?1 AND role = ?2 AND removed_at IS NULL",
-            params![runtime.runtime_id, role],
-        )
-    } else if let Some(endpoint) = observation.endpoint {
-        connection.execute(
-            "UPDATE runtime_instances
-             SET last_observed_state = ?2,
-                 host_port = ?3,
-                 last_observed_at = CURRENT_TIMESTAMP,
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?1 AND role = ?4 AND removed_at IS NULL",
-            params![runtime.runtime_id, state, endpoint.port(), role],
-        )
-    } else {
-        connection.execute(
-            "UPDATE runtime_instances
-             SET last_observed_state = ?2,
-                 last_observed_at = CURRENT_TIMESTAMP,
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?1 AND role = ?3 AND removed_at IS NULL",
-            params![runtime.runtime_id, state, role],
-        )
-    }
-    .map_err(
-        |source| DeployInternalRevisionError::PersistExistingRuntime {
-            runtime_id: runtime.runtime_id.clone(),
-            source,
-        },
-    )?;
-    if updated != 1 {
-        return Err(DeployInternalRevisionError::ExistingRuntimeChanged {
-            runtime_id: runtime.runtime_id.clone(),
-        });
-    }
-    Ok(())
-}
-
-fn reactivate_previous_runtime(
-    connection: &mut Connection,
-    application_id: &str,
-    runtime_id: &str,
-) -> Result<(), DeployInternalRevisionError> {
-    // Health validation happens before this transaction. The immediate transaction then
-    // makes the role swap indivisible, so the unique Current role is never ambiguous.
-    let transaction = connection
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(
-            |source| DeployInternalRevisionError::ReactivatePreviousRuntime {
-                runtime_id: runtime_id.to_owned(),
-                source,
-            },
-        )?;
-    let current_runtime_id = transaction
-        .query_row(
-            "SELECT id FROM runtime_instances
-             WHERE application_id = ?1
-               AND role = 'current'
-               AND removed_at IS NULL",
-            [application_id],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .map_err(
-            |source| DeployInternalRevisionError::ReactivatePreviousRuntime {
-                runtime_id: runtime_id.to_owned(),
-                source,
-            },
-        )?;
-    if let Some(current_runtime_id) = current_runtime_id {
-        transaction
-            .execute(
-                "UPDATE runtime_instances
-                 SET role = 'previous', updated_at = CURRENT_TIMESTAMP
-                 WHERE id = ?1 AND role = 'current' AND removed_at IS NULL",
-                [current_runtime_id],
-            )
-            .map_err(
-                |source| DeployInternalRevisionError::ReactivatePreviousRuntime {
-                    runtime_id: runtime_id.to_owned(),
-                    source,
-                },
-            )?;
-    }
-    let updated = transaction
-        .execute(
-            "UPDATE runtime_instances
-             SET role = 'current', updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?1 AND role = 'previous' AND removed_at IS NULL",
-            [runtime_id],
-        )
-        .map_err(
-            |source| DeployInternalRevisionError::ReactivatePreviousRuntime {
-                runtime_id: runtime_id.to_owned(),
-                source,
-            },
-        )?;
-    if updated != 1 {
-        return Err(DeployInternalRevisionError::ExistingRuntimeChanged {
-            runtime_id: runtime_id.to_owned(),
-        });
-    }
-    transaction.commit().map_err(|source| {
-        DeployInternalRevisionError::ReactivatePreviousRuntime {
-            runtime_id: runtime_id.to_owned(),
-            source,
-        }
-    })?;
-    Ok(())
-}
-
-fn observed_state_database_value(state: &ObservedRuntimeState) -> &'static str {
-    match state {
-        ObservedRuntimeState::Missing => "missing",
-        ObservedRuntimeState::Created => "created",
-        ObservedRuntimeState::Starting => "starting",
-        ObservedRuntimeState::Running => "running",
-        ObservedRuntimeState::Stopping => "stopping",
-        ObservedRuntimeState::Stopped => "stopped",
-        ObservedRuntimeState::Failed => "failed",
-        ObservedRuntimeState::Unknown { .. } => "unknown",
-    }
-}
-
 fn load_specification(
     connection: &Connection,
     application_id: &str,
-) -> Result<DeploymentSpecification, DeployInternalRevisionError> {
+) -> Result<DeploymentSpecification, DeployReleaseError> {
     connection
         .query_row(
             "SELECT
@@ -922,8 +540,6 @@ fn load_specification(
                 Ok(DeploymentSpecification {
                     application_id: row.get(0)?,
                     application_name: row.get(1)?,
-                    containerfile: PathBuf::from(row.get::<_, String>(2)?),
-                    context: PathBuf::from(row.get::<_, String>(3)?),
                     container_port: row.get(4)?,
                     health_path: row.get(5)?,
                     expected_status: row.get(6)?,
@@ -932,8 +548,8 @@ fn load_specification(
             },
         )
         .optional()
-        .map_err(|source| DeployInternalRevisionError::LoadApplication { source })?
-        .ok_or_else(|| DeployInternalRevisionError::ApplicationNotFound {
+        .map_err(|source| DeployReleaseError::LoadApplication { source })?
+        .ok_or_else(|| DeployReleaseError::ApplicationNotFound {
             application_id: application_id.to_owned(),
         })
 }
@@ -950,69 +566,23 @@ fn execute_deployment(
     connection: &mut Connection,
     deployment_id: &str,
     specification: &DeploymentSpecification,
-    source: &ResolvedDeploymentSource<'_>,
+    image_reference: &str,
+    source_revision: &str,
     public_configuration: Option<&PublicDeploymentConfiguration>,
     progress: &mut ProgressReporter<'_>,
 ) -> Result<(String, String, String), FailedExecution> {
     advance_deployment(connection, deployment_id, DeploymentTransition::Start).map_err(
         |source| failure_needing_persistence("deployment_transition_failed", source, None, None),
     )?;
-    progress.state_changed(deployment_id, DeploymentStatus::PreparingSource);
-    let checkout_path = source.workspace_root.join(deployment_id);
-    progress.started(
-        DeploymentStep::PrepareCheckout,
-        checkout_path.display().to_string(),
-    );
-    fs::create_dir_all(source.workspace_root).map_err(|source| {
-        failure_needing_persistence("source_preparation_failed", source, None, None)
-    })?;
-    create_checkout(source.repository_path, source.commit_sha, &checkout_path).map_err(
-        |source| failure_needing_persistence("source_preparation_failed", source, None, None),
-    )?;
-    progress.completed(
-        DeploymentStep::PrepareCheckout,
-        checkout_path.display().to_string(),
-    );
-    advance_deployment(
-        connection,
-        deployment_id,
-        DeploymentTransition::SourcePrepared,
-    )
-    .map_err(|source| {
-        failure_needing_persistence("deployment_transition_failed", source, None, None)
-    })?;
-    progress.state_changed(deployment_id, DeploymentStatus::Building);
-    progress.started(
-        DeploymentStep::BuildImage,
-        format!(
-            "application {}, commit {}",
-            specification.application_name, source.commit_sha
-        ),
-    );
-    let image = build_image(
-        &checkout_path,
-        &specification.application_name,
-        source.commit_sha,
-        &specification.containerfile,
-        &specification.context,
-    )
-    .map_err(|source| failure_needing_persistence("image_build_failed", source, None, None))?;
-    progress.completed(
-        DeploymentStep::BuildImage,
-        format!("image {}", image.reference),
-    );
-    advance_deployment(connection, deployment_id, DeploymentTransition::ImageBuilt).map_err(
-        |source| failure_needing_persistence("deployment_transition_failed", source, None, None),
-    )?;
     progress.state_changed(deployment_id, DeploymentStatus::Starting);
     progress.started(
         DeploymentStep::CreateContainer,
-        format!("image {}", image.reference),
+        format!("image {image_reference}"),
     );
     let container = create_container(
-        &image.reference,
+        image_reference,
         &specification.application_name,
-        source.commit_sha,
+        source_revision,
         specification.container_port,
     )
     .map_err(|source| failure_needing_persistence("runtime_creation_failed", source, None, None))?;
@@ -1026,7 +596,7 @@ fn execute_deployment(
         deployment_id,
         specification,
         &container.id,
-        source.commit_sha,
+        source_revision,
         public_configuration,
         progress,
     )?;
@@ -1125,12 +695,12 @@ fn execute_candidate(
             Some(&runtime.id),
         )
     })?;
-    progress.state_changed(deployment_id, DeploymentStatus::VerifyingInternal);
+    progress.state_changed(deployment_id, DeploymentStatus::Verifying);
     if specification.visibility == Visibility::Public {
         let Some(public_configuration) = public_configuration else {
             return Err(failure_needing_persistence(
                 "public_configuration_missing",
-                DeployInternalRevisionError::PublicApplication {
+                DeployReleaseError::PublicApplication {
                     application_id: specification.application_id.clone(),
                 },
                 Some(container_id),
@@ -1230,20 +800,17 @@ fn execute_public_candidate(
         DeploymentStep::InternalHealthCheck,
         format!("runtime {runtime_id} is healthy"),
     );
-    advance_deployment(
-        connection,
-        deployment_id,
-        DeploymentTransition::InternalVerified,
-    )
-    .map_err(|source| {
-        failure_needing_persistence(
-            "deployment_transition_failed",
-            source,
-            Some(container_id),
-            Some(runtime_id),
-        )
-    })?;
-    progress.state_changed(deployment_id, DeploymentStatus::SwitchingTraffic);
+    advance_deployment(connection, deployment_id, DeploymentTransition::Verified).map_err(
+        |source| {
+            failure_needing_persistence(
+                "deployment_transition_failed",
+                source,
+                Some(container_id),
+                Some(runtime_id),
+            )
+        },
+    )?;
+    progress.state_changed(deployment_id, DeploymentStatus::Activating);
 
     let exposure = begin_public_exposure(connection, runtime_id).map_err(|source| {
         failure_needing_persistence(
@@ -1284,25 +851,6 @@ fn execute_public_candidate(
         DeploymentStep::ApplyPublicRoute,
         format!("fragment {}", materialized.path.display()),
     );
-
-    if let Err(source) = advance_deployment(
-        connection,
-        deployment_id,
-        DeploymentTransition::TrafficSwitched,
-    ) {
-        let (source, outcome) =
-            rollback_public_route(source, &materialized, &public_configuration.caddyfile_path);
-        return Err(public_failure(
-            connection,
-            &exposure.application_id,
-            "deployment_transition_failed",
-            source,
-            container_id,
-            runtime_id,
-            outcome,
-        ));
-    }
-    progress.state_changed(deployment_id, DeploymentStatus::VerifyingExternal);
     progress.started(
         DeploymentStep::ExternalHealthCheck,
         format!("https://{}{}", exposure.domain, specification.health_path),
@@ -1468,7 +1016,7 @@ fn finish_failed_deployment(
     deployment_id: &str,
     failed: FailedExecution,
     progress: &mut ProgressReporter<'_>,
-) -> Result<DeployedInternalRevision, DeployInternalRevisionError> {
+) -> Result<DeployedRelease, DeployReleaseError> {
     let failure = failed.source.to_string();
     let record_error = if failed.failure_persisted {
         progress.failure_persisted(deployment_id, failed.code);
@@ -1502,21 +1050,21 @@ fn finish_failed_deployment(
     };
 
     if let Some(source) = cleanup_error {
-        return Err(DeployInternalRevisionError::Cleanup {
+        return Err(DeployReleaseError::Cleanup {
             deployment_id: deployment_id.to_owned(),
             failure,
             source: Box::new(source),
         });
     }
     if let Some(source) = record_error {
-        return Err(DeployInternalRevisionError::RecordFailure {
+        return Err(DeployReleaseError::RecordFailure {
             deployment_id: deployment_id.to_owned(),
             failure,
             source,
         });
     }
 
-    Err(DeployInternalRevisionError::DeploymentFailed {
+    Err(DeployReleaseError::DeploymentFailed {
         deployment_id: deployment_id.to_owned(),
         code: failed.code,
         source: failed.source,
@@ -1586,17 +1134,17 @@ fn cleanup_candidate(
     runtime_id: Option<&str>,
 ) -> Result<(), CandidateCleanupError> {
     if let Some(runtime_id) = runtime_id {
-        let role = connection
+        let state = connection
             .query_row(
-                "SELECT role FROM runtime_instances WHERE id = ?1",
+                "SELECT state FROM runtime_instances WHERE id = ?1",
                 [runtime_id],
                 |row| row.get::<_, String>(0),
             )
             .optional()
             .map_err(|source| CandidateCleanupError::Persistence { source })?;
-        // A promotion error may have an uncertain external outcome. Never remove a runtime
-        // that the database already recognizes as Current or Previous during reconciliation.
-        if role.as_deref().is_some_and(|role| role != "candidate") {
+        // A promotion error may have an uncertain external outcome. Never remove an
+        // already active runtime.
+        if state.as_deref().is_some_and(|state| state != "starting") {
             return Ok(());
         }
     }
@@ -1611,7 +1159,7 @@ fn cleanup_candidate(
                      last_observed_at = CURRENT_TIMESTAMP,
                      removed_at = CURRENT_TIMESTAMP,
                      updated_at = CURRENT_TIMESTAMP
-                 WHERE id = ?1 AND role = 'candidate' AND removed_at IS NULL",
+                  WHERE id = ?1 AND state = 'starting' AND removed_at IS NULL",
                 [runtime_id],
             )
             .map_err(|source| CandidateCleanupError::Persistence { source })?;
