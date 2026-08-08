@@ -71,9 +71,9 @@ System (novo)
 | Exposure materialization state | ✅ |
 | Deployment history | ✅ |
 | Local Git checkout + local OCI build | ✅ |
-| CLI (import, list, status, deploy, start, stop, expose, deployments, version) | ✅ |
+| CLI (import, list, status, deploy, start, stop, visibility set, deployments, version) | ✅ |
 | Rollback (reusa deployment antigo, troca roles) | ✅ |
-| Expose public/internal (funcional, nome antigo) | ✅ |
+| Expose public/internal (funcional, renomeado para `visibility set`) | ✅ |
 | Doctor (8 checks: DB, migrations, workspace, Caddy dirs, Caddyfile, git, podman, caddy) | ✅ |
 | Version | ✅ |
 | Staging validation (`staging.vitoralmeida.tech`) | ✅ |
@@ -152,10 +152,10 @@ use_cases/
 
 #### 6. Histórico + visibility
 
-- [ ] Histórico baseado em Release/digest (não mais commit_sha)
-- [ ] Saída: `DEPLOYMENT | RELEASE | SOURCE | STATUS`
-- [ ] Renomear CLI: `app expose` → `app visibility set <app> public|internal`
-- [ ] Mensagens de saída alinhadas com o termo "visibility"
+- [x] Histórico baseado em Release/digest (não mais commit_sha)
+- [x] Saída: `DEPLOYMENT | RELEASE | SOURCE | STATUS`
+- [x] Renomear CLI: `app expose` → `app visibility set <app> public|internal`
+- [x] Mensagens de saída alinhadas com o termo "visibility"
 
 #### 7. Operabilidade final
 
