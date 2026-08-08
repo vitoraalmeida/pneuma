@@ -205,7 +205,13 @@ pub fn create_deployment(
         .query_row(
             "SELECT d.release_id FROM deployments d
              JOIN applications a ON a.active_deployment_id = d.id
-             WHERE a.id = ?1",
+             WHERE a.id = ?1
+               AND EXISTS (
+                   SELECT 1 FROM runtime_instances ri
+                   WHERE ri.deployment_id = d.id
+                     AND ri.state IN ('running', 'stopped')
+                     AND ri.removed_at IS NULL
+               )",
             [application_id],
             |row| row.get(0),
         )

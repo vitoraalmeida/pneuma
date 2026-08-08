@@ -722,6 +722,33 @@ fn a_removed_container_guides_a_new_deployment() {
 }
 
 #[test]
+fn redeploys_a_verified_oci_image_after_its_container_is_removed() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    let digest = format!("sha256:{}", "a".repeat(64));
+    let reference = format!("registry.example/team/service@{digest}");
+
+    let first_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let first_port = first_listener.local_addr().unwrap().port();
+    let first_server = thread::spawn(move || respond_once(&first_listener, 200));
+    assert_command_succeeded(&environment.deploy_oci(&reference, first_port));
+    first_server.join().unwrap();
+
+    fs::write(environment.root.join("podman-removed"), "removed").unwrap();
+    let status = environment.run_lifecycle("status");
+    assert!(!status.status.success());
+    assert!(String::from_utf8_lossy(&status.stderr).contains("is missing"));
+
+    let second_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let second_port = second_listener.local_addr().unwrap().port();
+    let second_server = thread::spawn(move || respond_once(&second_listener, 200));
+    let output = environment.deploy_oci(&reference, second_port);
+    second_server.join().unwrap();
+
+    assert_command_succeeded(&output);
+}
+
+#[test]
 fn lists_deployments_for_a_deployed_application() {
     let environment = DeploymentEnvironment::new();
     assert_command_succeeded(&environment.import());
