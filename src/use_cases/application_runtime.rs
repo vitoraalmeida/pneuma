@@ -9,8 +9,7 @@ use crate::adapters::local_runtime::{
     ObservedRuntimeState, observe_container, resolve_container_id, start_container, stop_container,
 };
 use crate::adapters::systemd_quadlet::{
-    QuadletError, container_name, disable, enable, start as start_unit, stop as stop_unit,
-    unit_exists, unit_name,
+    QuadletError, container_name, start as start_unit, stop as stop_unit, unit_exists, unit_name,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -228,11 +227,6 @@ fn transition_application(
             source,
         })? {
             if desired_runtime_state == DesiredRuntimeState::Running {
-                enable(&unit).map_err(|source| RuntimeLifecycleError::Supervision {
-                    operation: "enabling",
-                    runtime_id: runtime.runtime_id.clone(),
-                    source,
-                })?;
                 start_unit(&unit).map_err(|source| RuntimeLifecycleError::Supervision {
                     operation,
                     runtime_id: runtime.runtime_id.clone(),
@@ -241,11 +235,6 @@ fn transition_application(
             } else {
                 stop_unit(&unit).map_err(|source| RuntimeLifecycleError::Supervision {
                     operation,
-                    runtime_id: runtime.runtime_id.clone(),
-                    source,
-                })?;
-                disable(&unit).map_err(|source| RuntimeLifecycleError::Supervision {
-                    operation: "disabling",
                     runtime_id: runtime.runtime_id.clone(),
                     source,
                 })?;

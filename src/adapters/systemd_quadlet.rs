@@ -133,12 +133,6 @@ pub fn start(unit: &str) -> Result<(), QuadletError> {
 pub fn stop(unit: &str) -> Result<(), QuadletError> {
     control("stopping", unit, &["stop"])
 }
-pub fn enable(unit: &str) -> Result<(), QuadletError> {
-    control("enabling", unit, &["enable"])
-}
-pub fn disable(unit: &str) -> Result<(), QuadletError> {
-    control("disabling", unit, &["disable"])
-}
 
 fn quadlet_directory() -> Result<PathBuf, QuadletError> {
     if let Some(directory) =

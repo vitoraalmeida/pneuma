@@ -18,8 +18,7 @@ use crate::adapters::port_allocator::{
     PortAllocationError, consume_port_reservation, release_port, reserve_port,
 };
 use crate::adapters::systemd_quadlet::{
-    QuadletError, container_name, daemon_reload, disable, enable, remove_unit, start, stop,
-    unit_name, write_unit,
+    QuadletError, container_name, daemon_reload, remove_unit, start, stop, unit_name, write_unit,
 };
 use crate::domain::manifest::Visibility;
 use crate::domain::release::Release;
@@ -803,12 +802,7 @@ fn execute_candidate(
             progress,
         );
         if completed.is_ok() {
-            finalize_runtime_supervision(
-                connection,
-                specification,
-                deployment_id,
-                previous_runtime.as_ref(),
-            );
+            finalize_runtime_supervision(connection, specification, previous_runtime.as_ref());
         }
         return completed;
     }
@@ -846,12 +840,7 @@ fn execute_candidate(
         format!("runtime {} promoted to Current", runtime.id),
     );
     progress.state_changed(deployment_id, DeploymentStatus::Succeeded);
-    finalize_runtime_supervision(
-        connection,
-        specification,
-        deployment_id,
-        previous_runtime.as_ref(),
-    );
+    finalize_runtime_supervision(connection, specification, previous_runtime.as_ref());
 
     Ok((runtime.id, promoted.finished_at))
 }
@@ -1296,22 +1285,16 @@ fn load_previous_runtime(
 fn finalize_runtime_supervision(
     connection: &Connection,
     specification: &DeploymentSpecification,
-    deployment_id: &str,
     previous: Option<&PreviousRuntime>,
 ) {
-    let current_unit = unit_name(&specification.application_name, deployment_id);
-    if let Err(source) = enable(&current_unit) {
-        eprintln!(
-            "warning: promoted runtime is active but its Quadlet unit could not be enabled: {source}"
-        );
-    }
+    // The Quadlet generator enables the unit for boot start itself by applying the
+    // [Install] section of the .container file, so no `systemctl enable` is needed.
     let Some(previous) = previous else {
         return;
     };
     let previous_unit = unit_name(&specification.application_name, &previous.deployment_id);
     let retirement = (|| -> Result<(), QuadletError> {
         stop(&previous_unit)?;
-        disable(&previous_unit)?;
         remove_unit(&previous_unit)?;
         daemon_reload()?;
         Ok(())

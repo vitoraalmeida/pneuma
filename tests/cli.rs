@@ -162,7 +162,7 @@ fn deploys_an_internal_application_and_prints_its_identity() {
 }
 
 #[test]
-fn deploy_writes_and_enables_a_per_deployment_quadlet_unit() {
+fn deploy_writes_a_boot_enabled_quadlet_unit() {
     let environment = DeploymentEnvironment::new();
     assert_command_succeeded(&environment.import());
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
