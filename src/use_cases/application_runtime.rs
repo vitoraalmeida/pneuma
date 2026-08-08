@@ -5,11 +5,12 @@ use std::net::SocketAddr;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::adapters::local_runtime::{
-    ContainerCommandOutput, ControlContainerError, ObserveContainerError, ObservedRuntimeState,
-    observe_container, start_container, stop_container,
+    ContainerCommandOutput, ContainerObservation, ControlContainerError, ObserveContainerError,
+    ObservedRuntimeState, observe_container, resolve_container_id, start_container, stop_container,
 };
 use crate::adapters::systemd_quadlet::{
-    QuadletError, disable, enable, start as start_unit, stop as stop_unit, unit_exists, unit_name,
+    QuadletError, container_name, disable, enable, start as start_unit, stop as stop_unit,
+    unit_exists, unit_name,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -145,11 +146,8 @@ pub fn report_application_status(
 ) -> Result<RuntimeObservation, RuntimeLifecycleError> {
     let runtime = load_current_runtime(connection, application_id, application_name)?;
     let desired_runtime_state = load_desired_state(connection, application_id)?;
-    let observation = observe_container(&runtime.external_runtime_id, runtime.container_port)
-        .map_err(|source| RuntimeLifecycleError::Observe {
-            runtime_id: runtime.runtime_id.clone(),
-            source,
-        })?;
+    let (observation, external_runtime_id) =
+        observe_current_runtime(connection, &runtime, application_name)?;
     if observation.state == ObservedRuntimeState::Missing {
         persist_observation(connection, &runtime, &observation)?;
         return Err(RuntimeLifecycleError::ContainerMissing {
@@ -162,7 +160,7 @@ pub fn report_application_status(
         desired_runtime_state,
         observed_runtime_state: observation.state,
         runtime_id: runtime.runtime_id,
-        container_id: runtime.external_runtime_id,
+        container_id: external_runtime_id,
         endpoint: observation.endpoint,
     })
 }
@@ -212,11 +210,8 @@ fn transition_application(
     // The desired state is the operator's intent and is persisted before any external
     // effect, so an interrupted control operation still leaves the intent recorded.
     set_desired_state(connection, application_id, desired_runtime_state)?;
-    let observation = observe_container(&runtime.external_runtime_id, runtime.container_port)
-        .map_err(|source| RuntimeLifecycleError::Observe {
-            runtime_id: runtime.runtime_id.clone(),
-            source,
-        })?;
+    let (observation, external_runtime_id) =
+        observe_current_runtime(connection, &runtime, application_name)?;
     if observation.state == ObservedRuntimeState::Missing {
         persist_observation(connection, &runtime, &observation)?;
         return Err(RuntimeLifecycleError::ContainerMissing {
@@ -256,20 +251,18 @@ fn transition_application(
                 })?;
             }
         } else {
-            control(&runtime.external_runtime_id).map_err(|source| {
-                RuntimeLifecycleError::Control {
-                    operation,
-                    runtime_id: runtime.runtime_id.clone(),
-                    source: Box::new(source),
-                }
+            control(&external_runtime_id).map_err(|source| RuntimeLifecycleError::Control {
+                operation,
+                runtime_id: runtime.runtime_id.clone(),
+                source: Box::new(source),
             })?;
         }
-        observe_container(&runtime.external_runtime_id, runtime.container_port).map_err(
-            |source| RuntimeLifecycleError::Observe {
+        observe_container(&external_runtime_id, runtime.container_port).map_err(|source| {
+            RuntimeLifecycleError::Observe {
                 runtime_id: runtime.runtime_id.clone(),
                 source,
-            },
-        )?
+            }
+        })?
     };
     persist_observation(connection, &runtime, &observation)?;
 
@@ -277,9 +270,48 @@ fn transition_application(
         desired_runtime_state,
         observed_runtime_state: observation.state,
         runtime_id: runtime.runtime_id,
-        container_id: runtime.external_runtime_id,
+        container_id: external_runtime_id,
         endpoint: observation.endpoint,
     })
+}
+
+// Quadlet recreates the container under the stable `pneuma-{application}-{deployment}`
+// name with a fresh id whenever its unit restarts (for example, after a reboot). The
+// persisted runtime identity can therefore go stale; reconcile it against the name
+// before concluding the runtime is gone.
+fn observe_current_runtime(
+    connection: &Connection,
+    runtime: &CurrentRuntime,
+    application_name: &str,
+) -> Result<(ContainerObservation, String), RuntimeLifecycleError> {
+    let observation = observe_container(&runtime.external_runtime_id, runtime.container_port)
+        .map_err(|source| RuntimeLifecycleError::Observe {
+            runtime_id: runtime.runtime_id.clone(),
+            source,
+        })?;
+    if observation.state != ObservedRuntimeState::Missing {
+        return Ok((observation, runtime.external_runtime_id.clone()));
+    }
+    let resolved =
+        match resolve_container_id(&container_name(application_name, &runtime.deployment_id)) {
+            Ok(id) => id,
+            Err(_) => return Ok((observation, runtime.external_runtime_id.clone())),
+        };
+    connection
+        .execute(
+            "UPDATE runtime_instances
+             SET external_runtime_id = ?1, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?2 AND removed_at IS NULL",
+            params![&resolved, &runtime.runtime_id],
+        )
+        .map_err(|source| RuntimeLifecycleError::Persistence { source })?;
+    let observation = observe_container(&resolved, runtime.container_port).map_err(|source| {
+        RuntimeLifecycleError::Observe {
+            runtime_id: runtime.runtime_id.clone(),
+            source,
+        }
+    })?;
+    Ok((observation, resolved))
 }
 
 struct CurrentRuntime {

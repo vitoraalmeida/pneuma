@@ -749,6 +749,45 @@ fn redeploys_a_verified_oci_image_after_its_container_is_removed() {
 }
 
 #[test]
+fn status_reconciles_a_container_recreated_under_the_stable_name() {
+    let mut environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    let reference = format!("registry.example/team/service@sha256:{}", "a".repeat(64));
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || respond_once(&listener, 200));
+    assert_command_succeeded(&environment.deploy_oci(&reference, port));
+    server.join().unwrap();
+
+    let connection = database::open(&environment.database_path).unwrap();
+    let recorded: String = connection
+        .query_row(
+            "SELECT external_runtime_id FROM runtime_instances",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    let replacement = "c".repeat(64);
+    environment.stale_container_id = Some(recorded.clone());
+    environment.replacement_container_id = Some(replacement.clone());
+
+    let status = environment.run_lifecycle("status");
+    assert_command_succeeded(&status);
+    let stdout = String::from_utf8(status.stdout).unwrap();
+    assert!(stdout.contains(&format!("Container: {replacement}")));
+    let connection = database::open(&environment.database_path).unwrap();
+    let reconciled: String = connection
+        .query_row(
+            "SELECT external_runtime_id FROM runtime_instances",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(reconciled, replacement);
+}
+
+#[test]
 fn lists_deployments_for_a_deployed_application() {
     let environment = DeploymentEnvironment::new();
     assert_command_succeeded(&environment.import());
@@ -1008,6 +1047,8 @@ struct DeploymentEnvironment {
     managed_caddy_directory: PathBuf,
     caddyfile_path: PathBuf,
     commit_sha: String,
+    stale_container_id: Option<String>,
+    replacement_container_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1068,6 +1109,8 @@ impl DeploymentEnvironment {
             managed_caddy_directory,
             caddyfile_path,
             commit_sha,
+            stale_container_id: None,
+            replacement_container_id: None,
         }
     }
 
@@ -1113,7 +1156,8 @@ impl DeploymentEnvironment {
     }
 
     fn run_lifecycle(&self, subcommand: &str) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_pneuma"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_pneuma"));
+        command
             .env("PNEUMA_DATABASE_PATH", &self.database_path)
             .env("PNEUMA_WORKSPACE_PATH", &self.workspace_path)
             .env("PATH", executable_path(&self.fake_bin))
@@ -1131,7 +1175,14 @@ impl DeploymentEnvironment {
             .env(
                 "PNEUMA_FAKE_PODMAN_REMOVED",
                 self.root.join("podman-removed"),
-            )
+            );
+        if let Some(stale) = &self.stale_container_id {
+            command.env("PNEUMA_FAKE_PODMAN_STALE_ID", stale);
+        }
+        if let Some(replacement) = &self.replacement_container_id {
+            command.env("PNEUMA_FAKE_PODMAN_ID", replacement);
+        }
+        command
             .args(["app", subcommand, &self.application_name])
             .output()
             .unwrap()
@@ -1295,8 +1346,13 @@ case "$1" in
         fi
         ;;
     container)
-        if [ "$2" = "exists" ] && [ -f "${PNEUMA_FAKE_PODMAN_REMOVED:-}" ]; then
-            exit 1
+        if [ "$2" = "exists" ]; then
+            if [ -f "${PNEUMA_FAKE_PODMAN_REMOVED:-}" ]; then
+                exit 1
+            fi
+            if [ -n "${PNEUMA_FAKE_PODMAN_STALE_ID:-}" ] && [ "$3" = "$PNEUMA_FAKE_PODMAN_STALE_ID" ]; then
+                exit 1
+            fi
         fi
         ;;
     create)
@@ -1314,18 +1370,25 @@ case "$1" in
         ;;
     inspect)
         if [ "$2" = "--format" ] && [ "$3" = "{{.Id}}" ]; then
-            count=0
-            if [ -n "${PNEUMA_FAKE_PODMAN_COUNT:-}" ] && [ -f "$PNEUMA_FAKE_PODMAN_COUNT" ]; then
-                count=$(sed -n '1p' "$PNEUMA_FAKE_PODMAN_COUNT")
+            if [ -f "${PNEUMA_FAKE_PODMAN_REMOVED:-}" ]; then
+                exit 1
             fi
-            count=$((count + 1))
-            if [ -n "${PNEUMA_FAKE_PODMAN_COUNT:-}" ]; then
-                printf '%s\n' "$count" > "$PNEUMA_FAKE_PODMAN_COUNT"
-            fi
-            if [ "$count" -eq 1 ]; then
-                printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'
+            if [ -n "${PNEUMA_FAKE_PODMAN_ID:-}" ]; then
+                printf '%s\n' "$PNEUMA_FAKE_PODMAN_ID"
             else
-                printf 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n'
+                count=0
+                if [ -n "${PNEUMA_FAKE_PODMAN_COUNT:-}" ] && [ -f "$PNEUMA_FAKE_PODMAN_COUNT" ]; then
+                    count=$(sed -n '1p' "$PNEUMA_FAKE_PODMAN_COUNT")
+                fi
+                count=$((count + 1))
+                if [ -n "${PNEUMA_FAKE_PODMAN_COUNT:-}" ]; then
+                    printf '%s\n' "$count" > "$PNEUMA_FAKE_PODMAN_COUNT"
+                fi
+                if [ "$count" -eq 1 ]; then
+                    printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'
+                else
+                    printf 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n'
+                fi
             fi
         elif [ -n "${PNEUMA_FAKE_CONTAINER_STATE:-}" ] && [ -f "$PNEUMA_FAKE_CONTAINER_STATE" ]; then
             sed -n '1p' "$PNEUMA_FAKE_CONTAINER_STATE"
