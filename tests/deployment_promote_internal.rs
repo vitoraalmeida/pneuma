@@ -158,6 +158,7 @@ fn add_verifying_candidate(
     let release = create_release(
         connection,
         &application.id,
+        &format!("localhost/test:{commit_sha}"),
         "localhost/test",
         &commit_sha,
         Some("test-revision"),

@@ -23,6 +23,7 @@ fn returns_deployments_ordered_newest_first() {
     let first_release = create_release(
         &mut connection,
         &application.id,
+        &format!("localhost/test:{}", "a".repeat(40)),
         "localhost/test",
         &"a".repeat(40),
         Some(&"a".repeat(40)),
@@ -31,6 +32,7 @@ fn returns_deployments_ordered_newest_first() {
     let second_release = create_release(
         &mut connection,
         &application.id,
+        &format!("localhost/test:{}", "b".repeat(40)),
         "localhost/test",
         &"b".repeat(40),
         Some(&"b".repeat(40)),
@@ -95,6 +97,7 @@ fn returns_only_deployments_for_the_given_application() {
     let first_release = create_release(
         &mut connection,
         &first.id,
+        &format!("localhost/test:{}", "a".repeat(40)),
         "localhost/test",
         &"a".repeat(40),
         None,
@@ -103,6 +106,7 @@ fn returns_only_deployments_for_the_given_application() {
     let second_release = create_release(
         &mut connection,
         &second.id,
+        &format!("localhost/test:{}", "b".repeat(40)),
         "localhost/test",
         &"b".repeat(40),
         None,

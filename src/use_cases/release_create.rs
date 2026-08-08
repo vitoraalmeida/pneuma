@@ -36,6 +36,7 @@ impl Error for CreateReleaseError {
 pub fn create_release(
     connection: &mut Connection,
     application_id: &str,
+    image_reference: &str,
     image_repository: &str,
     image_digest: &str,
     source_revision: Option<&str>,
@@ -67,11 +68,12 @@ pub fn create_release(
         .execute(
             "INSERT INTO releases (
                 id, application_id, image_reference, image_repository, image_digest, source_revision, created_at
-             ) VALUES (?1, ?2, ?3 || ':' || ?4, ?3, ?4, ?5, CURRENT_TIMESTAMP)
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, CURRENT_TIMESTAMP)
              ON CONFLICT(application_id, image_digest) DO NOTHING",
             params![
                 release_id,
                 application_id,
+                image_reference,
                 image_repository,
                 image_digest,
                 source_revision

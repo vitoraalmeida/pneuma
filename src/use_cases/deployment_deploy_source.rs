@@ -77,7 +77,7 @@ pub fn deploy_source(
             source: Box::new(source),
         }
     })?;
-    build_image(
+    let image = build_image(
         &checkout_path,
         &application_name,
         &commit_sha,
@@ -91,6 +91,7 @@ pub fn deploy_source(
     let release = create_release(
         connection,
         application_id,
+        &image.reference,
         &image_repository,
         &commit_sha,
         Some(&commit_sha),

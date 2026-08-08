@@ -3,6 +3,7 @@ use std::fmt;
 
 use rusqlite::{Connection, OptionalExtension};
 
+use crate::adapters::oci_image::{OciImageReference, PullImageError, pull_image};
 use crate::domain::release::Release;
 use crate::use_cases::deployment_create::DeploymentType;
 use crate::use_cases::deployment_deploy_release::{
@@ -14,6 +15,7 @@ pub enum RollbackError {
     ApplicationNotFound { application_id: String },
     NoPreviousDeployment { application_id: String },
     Persistence { source: rusqlite::Error },
+    PullImage { source: PullImageError },
     DeployRelease { source: DeployReleaseError },
 }
 
@@ -30,6 +32,9 @@ impl fmt::Display for RollbackError {
             Self::Persistence { source } => {
                 write!(formatter, "failed to load rollback release: {source}")
             }
+            Self::PullImage { source } => {
+                write!(formatter, "failed to pull rollback image: {source}")
+            }
             Self::DeployRelease { source } => write!(formatter, "{source}"),
         }
     }
@@ -39,6 +44,7 @@ impl Error for RollbackError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Persistence { source } => Some(source),
+            Self::PullImage { source } => Some(source),
             Self::DeployRelease { source } => Some(source),
             Self::ApplicationNotFound { .. } | Self::NoPreviousDeployment { .. } => None,
         }
@@ -63,6 +69,10 @@ pub fn rollback_deployment(
         });
     }
     let release = previous_release(connection, application_id)?;
+    if OciImageReference::parse(&release.image_reference).is_ok() {
+        pull_image(&release.image_reference)
+            .map_err(|source| RollbackError::PullImage { source })?;
+    }
     deploy_release(
         connection,
         application_id,

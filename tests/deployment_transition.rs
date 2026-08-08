@@ -159,6 +159,7 @@ fn records_a_structured_failure_and_allows_a_later_attempt() {
     let release = create_release(
         &mut connection,
         &application_id,
+        &format!("localhost/test:{}", "b".repeat(40)),
         "localhost/test",
         &"b".repeat(40),
         None,
@@ -237,6 +238,7 @@ fn pending_deployment() -> (rusqlite::Connection, String, String) {
     let release = create_release(
         &mut connection,
         &application.id,
+        &format!("localhost/test:{}", "a".repeat(40)),
         "localhost/test",
         &"a".repeat(40),
         None,

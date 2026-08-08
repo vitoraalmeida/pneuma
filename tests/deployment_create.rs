@@ -14,6 +14,7 @@ fn persists_a_pending_deployment_atomically() {
     let release = create_release(
         &mut connection,
         &application.id,
+        &format!("localhost/test:{}", "a".repeat(40)),
         "localhost/test",
         &"a".repeat(40),
         Some(&"a".repeat(40)),
@@ -41,6 +42,7 @@ fn rejects_a_second_active_deployment_for_the_application() {
     let first_release = create_release(
         &mut connection,
         &application.id,
+        &format!("localhost/test:{}", "a".repeat(40)),
         "localhost/test",
         &"a".repeat(40),
         None,
@@ -49,6 +51,7 @@ fn rejects_a_second_active_deployment_for_the_application() {
     let second_release = create_release(
         &mut connection,
         &application.id,
+        &format!("localhost/test:{}", "b".repeat(40)),
         "localhost/test",
         &"b".repeat(40),
         None,
@@ -88,6 +91,7 @@ fn reuses_a_release_for_a_later_deployment_attempt() {
     let release = create_release(
         &mut connection,
         &application.id,
+        &format!("localhost/test:{}", "a".repeat(40)),
         "localhost/test",
         &"a".repeat(40),
         None,
@@ -155,6 +159,7 @@ fn database_rejects_a_release_from_another_application() {
     let release = create_release(
         &mut connection,
         &first.id,
+        &format!("localhost/test:{}", "a".repeat(40)),
         "localhost/test",
         &"a".repeat(40),
         None,

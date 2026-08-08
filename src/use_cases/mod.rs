@@ -2,6 +2,7 @@ pub mod application_import;
 pub mod application_list;
 pub mod application_runtime;
 pub mod deployment_create;
+pub mod deployment_deploy_oci;
 pub mod deployment_deploy_release;
 pub mod deployment_deploy_source;
 pub mod deployment_list;

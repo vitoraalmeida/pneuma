@@ -464,15 +464,13 @@ fn deploy_release_reporting(
     );
     progress.state_changed(&deployment.id, DeploymentStatus::Pending);
 
+    let runtime_identity = release.source_revision.as_deref().unwrap_or(&release.id);
     let execution = execute_deployment(
         connection,
         &deployment.id,
         &specification,
         &release.image_reference,
-        release
-            .source_revision
-            .as_deref()
-            .unwrap_or(&release.image_reference),
+        runtime_identity,
         public_configuration,
         progress,
     );
@@ -481,10 +479,7 @@ fn deploy_release_reporting(
             deployment_id: deployment.id,
             runtime_id,
             container_name,
-            commit_sha: release
-                .source_revision
-                .clone()
-                .unwrap_or_else(|| release.image_reference.clone()),
+            commit_sha: runtime_identity.to_owned(),
             finished_at,
         }),
         Err(failed) => finish_failed_deployment(connection, &deployment.id, failed, progress),

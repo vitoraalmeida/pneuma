@@ -50,6 +50,7 @@ fn requires_a_starting_deployment() {
     let release = create_release(
         &mut connection,
         &application.id,
+        &format!("localhost/test:{}", "a".repeat(40)),
         "localhost/test",
         &"a".repeat(40),
         None,
@@ -264,6 +265,7 @@ fn add_starting_deployment(
     let release = create_release(
         connection,
         &application.id,
+        &format!("localhost/test:{commit_sha}"),
         "localhost/test",
         &commit_sha,
         None,
