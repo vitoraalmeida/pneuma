@@ -139,6 +139,7 @@ enum CliError {
     SystemShow {
         source: pneuma::use_cases::system_show::ShowError,
     },
+    Doctor,
 }
 
 impl fmt::Display for CliError {
@@ -163,6 +164,7 @@ impl fmt::Display for CliError {
             Self::SystemCreate { source } => write!(formatter, "{source}"),
             Self::SystemList { source } => write!(formatter, "{source}"),
             Self::SystemShow { source } => write!(formatter, "{source}"),
+            Self::Doctor => formatter.write_str("one or more diagnostic checks failed"),
         }
     }
 }
@@ -185,6 +187,7 @@ impl Error for CliError {
             Self::SystemCreate { source } => Some(source),
             Self::SystemList { source } => Some(source),
             Self::SystemShow { source } => Some(source),
+            Self::Doctor => None,
         }
     }
 }
@@ -1113,8 +1116,9 @@ fn run_doctor(connection: &rusqlite::Connection, verbose: bool) -> Result<(), Cl
 
     if all_ok {
         println!("\nAll checks passed!");
+        Ok(())
     } else {
         println!("\nSome checks failed. Please review the output above.");
+        Err(CliError::Doctor)
     }
-    Ok(())
 }

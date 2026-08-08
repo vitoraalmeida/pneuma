@@ -86,6 +86,27 @@ fn reports_database_open_errors_and_returns_failure() {
 }
 
 #[test]
+fn doctor_returns_failure_when_a_check_fails() {
+    let database_path = temporary_database_path();
+    let missing_workspace = temporary_database_path().join("missing");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_pneuma"))
+        .env("PNEUMA_DATABASE_PATH", &database_path)
+        .env("PNEUMA_WORKSPACE_PATH", &missing_workspace)
+        .args([OsStr::new("doctor")])
+        .output()
+        .unwrap();
+    let _ = fs::remove_file(&database_path);
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("one or more diagnostic checks failed"),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn reports_usage_for_an_unknown_command() {
     let output = Command::new(env!("CARGO_BIN_EXE_pneuma"))
         .args(["unknown"])
