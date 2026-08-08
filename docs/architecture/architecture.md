@@ -8,19 +8,23 @@ Crate único organizado em três camadas:
 
 - `src/main.rs` — CLI fina com parsing manual de argumentos (sem clap); compõe
   configuração e chama os casos de uso; não contém lógica de domínio.
-- `src/domain/` — tipos de domínio puros (`application`, `manifest`), sem
-  dependências externas.
+- `src/domain/` — tipos de domínio puros (`application`, `manifest`, `release`,
+  `system`), sem dependências externas.
 - `src/use_cases/` — casos de uso que orquestram adapters e domínio
   (`application_import`, `application_list`, `application_runtime`,
-  `deployment_create`, `deployment_deploy_internal`, `deployment_list`,
-  `deployment_promote_internal`, `deployment_promote_public`,
-  `deployment_register_runtime`, `deployment_transition`).
-  `deployment_deploy_internal` orquestra o deployment inteiro, interno e
-  público, emitindo progresso passo a passo. `deployment_transition` aplica a
-  máquina de estados persistida.
+  `deployment_create`, `deployment_deploy_oci`, `deployment_deploy_release`,
+  `deployment_deploy_source`, `deployment_list`, `deployment_promote_internal`,
+  `deployment_promote_public`, `deployment_register_runtime`,
+  `deployment_rollback`, `deployment_transition`, `exposure_change`,
+  `release_create`, `system_create`, `system_list`, `system_show`).
+  `deployment_deploy_release` orquestra o deployment inteiro (runtime, health,
+  Caddy e ativação) a partir de uma Release imutável; os caminhos OCI
+  (`deployment_deploy_oci`) e de fonte local (`deployment_deploy_source`)
+  produzem a Release e delegam a ele. `deployment_transition` aplica a máquina
+  de estados persistida.
 - `src/adapters/` — integrações com sistemas externos (`git_source`,
-  `local_build`, `local_runtime`, `caddy_exposure`, `external_health`,
-  `health_check`, `database`).
+  `local_build`, `local_runtime`, `oci_image`, `caddy_exposure`,
+  `external_health`, `health_check`, `database`).
 
 Sem traits, generics, macros ou async: as restrições de
 [`docs/rust-guidelines.md`](../rust-guidelines.md) valem para toda mudança.
@@ -37,6 +41,12 @@ SQLite (rusqlite bundled) é a única persistência. Migrations versionadas e
 imutáveis vivem em `migrations/` e são registradas via `include_str!` em
 `src/adapters/database.rs`, que aplica as pendentes em cada abertura de conexão
 (`PRAGMA foreign_keys = ON`).
+
+A especificação da aplicação é persistida na importação do `pneuma.toml`
+(schema v2): `application_sources` e `application_build_specs` existem apenas
+quando o manifesto declara `[source]`/`[build]` (caminho `deploy-source`), e
+`application_delivery_specs` sempre guarda o repositório OCI permitido
+(`[delivery] image`), usado para validar o `app deploy --image`.
 
 Regras observadas:
 
@@ -68,9 +78,9 @@ A supervisão por systemd/Quadlet prevista na D0 não foi implementada; o runtim
 
 - a promoção do deployment marca `applications.desired_runtime_state` como
   `running`, persistindo a intenção junto da ativação;
-- `app status` observa o container atual (`role = 'current'`) no Podman e
-  registra a observação: `last_observed_state`, `last_observed_at` e, quando em
-  execução, `host_port`; se o container estiver ausente, persiste
+- `app status` observa o container do deployment ativo (`active_deployment_id`)
+  no Podman e registra a observação: `last_observed_state`, `last_observed_at`
+  e, quando em execução, `host_port`; se o container estiver ausente, persiste
   `missing`/`removed_at` e orienta um novo deployment;
 - `app stop` e `app start` persistem o estado desejado antes do efeito externo,
   controlam o container e persistem a observação resultante (saga local);
@@ -104,24 +114,19 @@ diretório gerenciado, importado pelo `Caddyfile` principal:
 ```mermaid
 stateDiagram-v2
     [*] --> Pending
-    Pending --> PreparingSource
-    PreparingSource --> Building
-    Building --> Starting
-    Starting --> VerifyingInternal
-    VerifyingInternal --> Succeeded : aplicação interna
-    VerifyingInternal --> SwitchingTraffic : aplicação pública
-    SwitchingTraffic --> VerifyingExternal
-    VerifyingExternal --> Succeeded
+    Pending --> Starting
+    Starting --> Verifying
+    Verifying --> Activating : aplicação pública
+    Verifying --> Succeeded : aplicação interna
+    Activating --> Succeeded
 
     Pending --> Failed
-    PreparingSource --> Failed
-    Building --> Failed
     Starting --> Failed
-    VerifyingInternal --> Failed
-    SwitchingTraffic --> Failed
-    VerifyingExternal --> Failed
+    Verifying --> Failed
+    Activating --> Failed
 ```
 
 Todo `Failed` persiste código, estágio e mensagem; a candidata é removida e a
-revisão anterior (rota e runtime) é preservada. Apenas um deployment ativo por
-aplicação é permitido (`create_deployment`).
+Release anterior (rota e runtime) é preservada. Apenas um deployment ativo por
+aplicação é permitido (`create_deployment`). Rollback cria um novo deployment
+(`type = rollback`) a partir da Release anterior bem-sucedida.

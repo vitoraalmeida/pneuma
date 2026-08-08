@@ -12,10 +12,10 @@ fn imports_and_persists_the_application_specification() {
 
     assert_eq!(application.name, "personal-site");
     assert_eq!(
-        application.repository,
-        "https://github.com/vitoraalmeida/vitoralmeida.tech"
+        application.repository.as_deref(),
+        Some("https://github.com/vitoraalmeida/vitoralmeida.tech")
     );
-    assert_eq!(application.default_branch, "main");
+    assert_eq!(application.default_branch.as_deref(), Some("main"));
 
     let specification = connection
         .query_row(
@@ -29,7 +29,9 @@ fn imports_and_persists_the_application_specification() {
                 health_check_specs.path,
                 health_check_specs.expected_status,
                 exposures.desired_visibility,
-                exposures.domain
+                exposures.domain,
+                application_delivery_specs.delivery_type,
+                application_delivery_specs.image_repository
              FROM applications
              JOIN application_sources
                 ON application_sources.application_id = applications.id
@@ -40,7 +42,9 @@ fn imports_and_persists_the_application_specification() {
              JOIN health_check_specs
                 ON health_check_specs.application_id = applications.id
              JOIN exposures
-                ON exposures.application_id = applications.id",
+                ON exposures.application_id = applications.id
+             JOIN application_delivery_specs
+                ON application_delivery_specs.application_id = applications.id",
             [],
             |row| {
                 Ok((
@@ -54,6 +58,8 @@ fn imports_and_persists_the_application_specification() {
                     row.get::<_, i64>(7)?,
                     row.get::<_, String>(8)?,
                     row.get::<_, Option<String>>(9)?,
+                    row.get::<_, String>(10)?,
+                    row.get::<_, String>(11)?,
                 ))
             },
         )
@@ -63,7 +69,7 @@ fn imports_and_persists_the_application_specification() {
         specification,
         (
             "stopped".to_owned(),
-            1,
+            2,
             "remote".to_owned(),
             "Containerfile".to_owned(),
             ".".to_owned(),
@@ -72,6 +78,8 @@ fn imports_and_persists_the_application_specification() {
             200,
             "public".to_owned(),
             Some("vitoralmeida.tech".to_owned()),
+            "oci".to_owned(),
+            "ghcr.io/vitoraalmeida/vitoralmeida.tech".to_owned(),
         )
     );
 }
@@ -92,7 +100,8 @@ fn importing_the_same_application_is_idempotent() {
                 (SELECT COUNT(*) FROM application_build_specs),
                 (SELECT COUNT(*) FROM application_runtime_specs),
                 (SELECT COUNT(*) FROM health_check_specs),
-                (SELECT COUNT(*) FROM exposures)",
+                (SELECT COUNT(*) FROM exposures),
+                (SELECT COUNT(*) FROM application_delivery_specs)",
             [],
             |row| {
                 Ok((
@@ -102,13 +111,14 @@ fn importing_the_same_application_is_idempotent() {
                     row.get::<_, i64>(3)?,
                     row.get::<_, i64>(4)?,
                     row.get::<_, i64>(5)?,
+                    row.get::<_, i64>(6)?,
                 ))
             },
         )
         .unwrap();
 
     assert_eq!(first, second);
-    assert_eq!(row_counts, (1, 1, 1, 1, 1, 1));
+    assert_eq!(row_counts, (1, 1, 1, 1, 1, 1, 1));
 }
 
 #[test]
@@ -137,6 +147,37 @@ fn persists_a_local_repository_kind() {
         )
         .unwrap();
     assert_eq!(repository_kind, "local");
+}
+
+#[test]
+fn persists_delivery_without_source_or_build_specs() {
+    let mut connection = database::open(Path::new(":memory:")).unwrap();
+
+    import_application(&mut connection, &fixture_path("oci-only"), None).unwrap();
+
+    let delivery: (String, String) = connection
+        .query_row(
+            "SELECT delivery_type, image_repository FROM application_delivery_specs",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        delivery,
+        ("oci".to_owned(), "registry.example/team/service".to_owned())
+    );
+    let source_count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM application_sources", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let build_count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM application_build_specs", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(source_count, 0);
+    assert_eq!(build_count, 0);
 }
 
 #[test]

@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use pneuma::domain::manifest::{ManifestError, Visibility, load_manifest, parse_manifest};
+use pneuma::domain::manifest::{
+    DeliveryType, ManifestError, Visibility, load_manifest, parse_manifest,
+};
 
 const VALID_MANIFEST: &str = include_str!("fixtures/valid/pneuma.toml");
 
@@ -10,10 +12,18 @@ fn loads_and_validates_a_repository_manifest() {
 
     let manifest = load_manifest(&repository).expect("valid fixture should load");
 
-    assert_eq!(manifest.schema_version, 1);
+    assert_eq!(manifest.schema_version, 2);
     assert_eq!(manifest.application.name, "personal-site");
-    assert_eq!(manifest.source.branch, "main");
-    assert_eq!(manifest.build.containerfile, Path::new("Containerfile"));
+    assert_eq!(manifest.delivery.delivery_type, DeliveryType::Oci);
+    assert_eq!(
+        manifest.delivery.image,
+        "ghcr.io/vitoraalmeida/vitoralmeida.tech"
+    );
+    assert_eq!(manifest.source.as_ref().unwrap().branch, "main");
+    assert_eq!(
+        manifest.build.as_ref().unwrap().containerfile,
+        Path::new("Containerfile")
+    );
     assert_eq!(manifest.runtime.container_port, 8080);
     assert_eq!(manifest.runtime.healthcheck_path, "/healthz");
     assert_eq!(manifest.exposure.default_visibility, Visibility::Public);
@@ -35,13 +45,13 @@ fn reports_a_missing_manifest_with_its_path() {
 
 #[test]
 fn rejects_an_unsupported_schema_version() {
-    let contents = VALID_MANIFEST.replace("schema_version = 1", "schema_version = 2");
+    let contents = VALID_MANIFEST.replace("schema_version = 2", "schema_version = 3");
 
-    let error = parse_manifest(&contents).expect_err("schema version 2 should fail");
+    let error = parse_manifest(&contents).expect_err("schema version 3 should fail");
 
     assert!(matches!(
         error,
-        ManifestError::UnsupportedSchemaVersion { found: 2 }
+        ManifestError::UnsupportedSchemaVersion { found: 3 }
     ));
 }
 
@@ -67,6 +77,21 @@ fn rejects_invalid_manifest_fields() {
             "application.name",
             "name = \"personal-site\"",
             "name = \"personal-site-\"",
+        ),
+        (
+            "delivery.image",
+            "image = \"ghcr.io/vitoraalmeida/vitoralmeida.tech\"",
+            "image = \"ghcr.io/foo@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"",
+        ),
+        (
+            "delivery.image",
+            "image = \"ghcr.io/vitoraalmeida/vitoralmeida.tech\"",
+            "image = \"\"",
+        ),
+        (
+            "delivery.image",
+            "image = \"ghcr.io/vitoraalmeida/vitoralmeida.tech\"",
+            "image = \" ghcr.io/foo \"",
         ),
         (
             "source.repository",
@@ -241,6 +266,65 @@ fn allows_internal_exposure_without_a_domain() {
 
     assert_eq!(manifest.exposure.default_visibility, Visibility::Internal);
     assert_eq!(manifest.exposure.domain, None);
+}
+
+#[test]
+fn requires_a_delivery_section() {
+    let contents = VALID_MANIFEST.replace(
+        "type = \"oci\"\nimage = \"ghcr.io/vitoraalmeida/vitoralmeida.tech\"\n\n",
+        "",
+    );
+
+    let error = parse_manifest(&contents).expect_err("missing delivery should fail");
+
+    assert!(matches!(error, ManifestError::Parse { .. }));
+    assert!(error.to_string().contains("delivery"));
+}
+
+#[test]
+fn rejects_an_unknown_delivery_type() {
+    let contents = VALID_MANIFEST.replace("type = \"oci\"", "type = \"git\"");
+
+    let error = parse_manifest(&contents).expect_err("unknown delivery type should fail");
+
+    assert!(matches!(error, ManifestError::Parse { .. }));
+    assert!(error.to_string().contains("unknown variant"));
+}
+
+#[test]
+fn allows_a_manifest_without_source_and_build() {
+    let contents = VALID_MANIFEST
+        .replace(
+            "[source]\nrepository = \"https://github.com/vitoraalmeida/vitoralmeida.tech\"\nbranch = \"main\"\n\n",
+            "",
+        )
+        .replace(
+            "[build]\ncontainerfile = \"Containerfile\"\ncontext = \".\"\n\n",
+            "",
+        );
+
+    let manifest = parse_manifest(&contents).expect("source and build should be optional");
+
+    assert_eq!(manifest.source, None);
+    assert_eq!(manifest.build, None);
+}
+
+#[test]
+fn requires_source_and_build_together() {
+    let contents = VALID_MANIFEST.replace(
+        "[build]\ncontainerfile = \"Containerfile\"\ncontext = \".\"\n\n",
+        "",
+    );
+
+    let error = parse_manifest(&contents).expect_err("build missing should fail");
+
+    assert!(matches!(
+        error,
+        ManifestError::InvalidField {
+            field: "source",
+            ..
+        }
+    ));
 }
 
 #[test]

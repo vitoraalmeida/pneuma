@@ -127,7 +127,7 @@ pub fn import_application(
                 application_sources.repository_location,
                 application_sources.default_branch
              FROM applications
-             JOIN application_sources
+             LEFT JOIN application_sources
                 ON application_sources.application_id = applications.id
              WHERE applications.name = ?1",
             [&manifest.application.name],
@@ -156,11 +156,6 @@ fn persist_specification(
     application_id: &str,
     manifest: &Manifest,
 ) -> Result<(), ImportError> {
-    let repository_kind = if manifest.source.repository.contains("://") {
-        "remote"
-    } else {
-        "local"
-    };
     let visibility = match &manifest.exposure.default_visibility {
         Visibility::Internal => "internal",
         Visibility::Public => "public",
@@ -168,40 +163,69 @@ fn persist_specification(
 
     transaction
         .execute(
-            "INSERT INTO application_sources (
+            "INSERT INTO application_delivery_specs (
                 application_id,
-                repository_location,
-                repository_kind,
-                default_branch,
-                manifest_path,
-                created_at,
-                updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-            params![
-                application_id,
-                manifest.source.repository,
-                repository_kind,
-                manifest.source.branch,
-                MANIFEST_PATH
-            ],
-        )
-        .map_err(|source| ImportError::Persistence { source })?;
-    transaction
-        .execute(
-            "INSERT INTO application_build_specs (
-                application_id,
-                containerfile_path,
-                context_path,
+                delivery_type,
+                image_repository,
                 created_at,
                 updated_at
             ) VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
             params![
                 application_id,
-                manifest.build.containerfile.to_string_lossy(),
-                manifest.build.context.to_string_lossy()
+                manifest.delivery.delivery_type.database_value(),
+                manifest.delivery.image
             ],
         )
         .map_err(|source| ImportError::Persistence { source })?;
+
+    if let Some(source) = &manifest.source {
+        let repository_kind = if source.repository.contains("://") {
+            "remote"
+        } else {
+            "local"
+        };
+
+        transaction
+            .execute(
+                "INSERT INTO application_sources (
+                    application_id,
+                    repository_location,
+                    repository_kind,
+                    default_branch,
+                    manifest_path,
+                    created_at,
+                    updated_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+                params![
+                    application_id,
+                    source.repository,
+                    repository_kind,
+                    source.branch,
+                    MANIFEST_PATH
+                ],
+            )
+            .map_err(|source| ImportError::Persistence { source })?;
+    }
+
+    if let Some(build) = &manifest.build {
+        transaction
+            .execute(
+                "INSERT INTO application_build_specs (
+                    application_id,
+                    containerfile_path,
+                    context_path,
+                    created_at,
+                    updated_at
+                ) VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+                params![
+                    application_id,
+                    build.containerfile.to_string_lossy(),
+                    build.context.to_string_lossy()
+                ],
+            )
+            .map_err(|source| ImportError::Persistence { source })?;
+    }
+
     transaction
         .execute(
             "INSERT INTO application_runtime_specs (

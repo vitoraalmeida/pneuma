@@ -78,6 +78,29 @@ fn rejects_an_unpinned_oci_reference_before_external_work() {
     ));
 }
 
+#[test]
+fn rejects_a_repository_not_allowed_by_the_delivery_spec_before_pull() {
+    let mut connection = database::open(Path::new(":memory:")).unwrap();
+    let application = import_application(&mut connection, &fixture_path("another"), None).unwrap();
+    let digest = format!("sha256:{}", "a".repeat(64));
+    let reference = format!("registry.example/other/service@{digest}");
+
+    let error = deploy_oci(&mut connection, &application.id, &reference, None).unwrap_err();
+
+    assert!(matches!(
+        error,
+        DeployOciError::RepositoryMismatch {
+            allowed,
+            actual,
+            ..
+        } if allowed == "registry.example/team/service" && actual == "registry.example/other/service"
+    ));
+    let release_count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM releases", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(release_count, 0);
+}
+
 struct FakePodman {
     root: PathBuf,
     bin: PathBuf,

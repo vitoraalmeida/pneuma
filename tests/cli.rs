@@ -207,6 +207,58 @@ fn rejects_a_mutable_oci_tag_without_podman_work() {
 }
 
 #[test]
+fn rejects_an_oci_repository_not_allowed_by_the_delivery_spec() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    let digest = format!("sha256:{}", "a".repeat(64));
+    let reference = format!("registry.example/other/service@{digest}");
+
+    let output = environment.deploy_oci(&reference, 30000);
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("only accepts images from"),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!environment.root.join("podman.log").exists());
+}
+
+#[test]
+fn oci_only_application_rejects_deploy_source() {
+    let environment = DeploymentEnvironment::from_fixture("oci-only", "oci-only-app");
+    assert_command_succeeded(&environment.import());
+
+    let output = Command::new(env!("CARGO_BIN_EXE_pneuma"))
+        .env("PNEUMA_DATABASE_PATH", &environment.database_path)
+        .env("PNEUMA_WORKSPACE_PATH", &environment.workspace_path)
+        .env(
+            "PNEUMA_CADDY_MANAGED_PATH",
+            &environment.managed_caddy_directory,
+        )
+        .env("PNEUMA_CADDYFILE_PATH", &environment.caddyfile_path)
+        .env("PATH", executable_path(&environment.fake_bin))
+        .env("PNEUMA_FAKE_PORT", "30000")
+        .env(
+            "PNEUMA_FAKE_PODMAN_LOG",
+            environment.root.join("podman.log"),
+        )
+        .args(["app", "deploy-source", &environment.application_name])
+        .arg(&environment.repository_path)
+        .args(["--revision", "HEAD"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("has no [source]/[build] configuration"),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!environment.root.join("podman.log").exists());
+}
+
+#[test]
 fn oci_pull_and_digest_failures_create_no_release_or_runtime() {
     for failure in [OciFailure::Pull, OciFailure::DigestMismatch] {
         let environment = DeploymentEnvironment::new();

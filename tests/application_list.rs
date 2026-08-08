@@ -23,8 +23,8 @@ fn returns_registered_applications_ordered_by_name() {
 
     assert_eq!(applications.len(), 2);
     assert_eq!(applications[0].name, "another-site");
-    assert_eq!(applications[0].repository, ".");
-    assert_eq!(applications[0].default_branch, "trunk");
+    assert_eq!(applications[0].repository.as_deref(), Some("."));
+    assert_eq!(applications[0].default_branch.as_deref(), Some("trunk"));
     assert_eq!(applications[1].name, "personal-site");
 }
 

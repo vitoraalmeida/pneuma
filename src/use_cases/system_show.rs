@@ -69,7 +69,7 @@ pub fn show_system(connection: &Connection, system_name: &str) -> Result<SystemD
                 application_sources.default_branch,
                 applications.active_deployment_id
              FROM applications
-             JOIN application_sources
+             LEFT JOIN application_sources
                 ON application_sources.application_id = applications.id
              WHERE applications.system_id = ?1
              ORDER BY applications.name",

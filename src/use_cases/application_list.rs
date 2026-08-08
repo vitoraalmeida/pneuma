@@ -33,7 +33,7 @@ pub fn list_applications(connection: &Connection) -> Result<Vec<Application>, Li
                 application_sources.default_branch,
                 applications.active_deployment_id
              FROM applications
-             JOIN application_sources
+             LEFT JOIN application_sources
                 ON application_sources.application_id = applications.id
              ORDER BY applications.name",
         )

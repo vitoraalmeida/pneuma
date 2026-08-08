@@ -6,7 +6,7 @@ use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
 
-const SUPPORTED_SCHEMA_VERSION: u32 = 1;
+const SUPPORTED_SCHEMA_VERSION: u32 = 2;
 const MANIFEST_FILE_NAME: &str = "pneuma.toml";
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -15,8 +15,9 @@ pub struct Manifest {
     pub schema_version: u32,
     pub system: Option<System>,
     pub application: Application,
-    pub source: Source,
-    pub build: Build,
+    pub delivery: Delivery,
+    pub source: Option<Source>,
+    pub build: Option<Build>,
     pub runtime: Runtime,
     pub exposure: Exposure,
 }
@@ -31,6 +32,28 @@ pub struct System {
 #[serde(deny_unknown_fields)]
 pub struct Application {
     pub name: String,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Delivery {
+    #[serde(rename = "type")]
+    pub delivery_type: DeliveryType,
+    pub image: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum DeliveryType {
+    Oci,
+}
+
+impl DeliveryType {
+    pub fn database_value(self) -> &'static str {
+        match self {
+            Self::Oci => "oci",
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -179,21 +202,38 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), ManifestError> {
         );
     }
 
-    if !is_trimmed_nonempty(&manifest.source.repository) {
+    if manifest.delivery.delivery_type != DeliveryType::Oci {
+        return invalid_field("delivery.type", "must be `oci`");
+    }
+
+    if manifest.delivery.image.contains('@') {
         return invalid_field(
-            "source.repository",
-            "must be non-empty and have no surrounding whitespace",
+            "delivery.image",
+            "must be a repository without a tag or digest",
         );
     }
 
-    if !is_trimmed_nonempty(&manifest.source.branch)
-        || manifest.source.branch.chars().any(char::is_whitespace)
-    {
-        return invalid_field("source.branch", "must be a non-empty branch name");
+    if !is_valid_delivery_image(&manifest.delivery.image) {
+        return invalid_field(
+            "delivery.image",
+            "must be a non-empty OCI repository without surrounding whitespace",
+        );
     }
 
-    validate_relative_path("build.containerfile", &manifest.build.containerfile)?;
-    validate_relative_path("build.context", &manifest.build.context)?;
+    if manifest.source.is_some() != manifest.build.is_some() {
+        return invalid_field(
+            "source",
+            "must be provided together with [build]; both are only required for deploy-source",
+        );
+    }
+
+    if let Some(source) = &manifest.source {
+        validate_source(source)?;
+    }
+
+    if let Some(build) = &manifest.build {
+        validate_build(build)?;
+    }
 
     if manifest.runtime.container_port == 0 {
         return invalid_field("runtime.container_port", "must be between 1 and 65535");
@@ -233,6 +273,28 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), ManifestError> {
     Ok(())
 }
 
+fn validate_source(source: &Source) -> Result<(), ManifestError> {
+    if !is_trimmed_nonempty(&source.repository) {
+        return invalid_field(
+            "source.repository",
+            "must be non-empty and have no surrounding whitespace",
+        );
+    }
+
+    if !is_trimmed_nonempty(&source.branch) || source.branch.chars().any(char::is_whitespace) {
+        return invalid_field("source.branch", "must be a non-empty branch name");
+    }
+
+    Ok(())
+}
+
+fn validate_build(build: &Build) -> Result<(), ManifestError> {
+    validate_relative_path("build.containerfile", &build.containerfile)?;
+    validate_relative_path("build.context", &build.context)?;
+
+    Ok(())
+}
+
 fn is_valid_system_name(name: &str) -> bool {
     is_valid_application_name(name)
 }
@@ -263,6 +325,13 @@ fn is_valid_application_name(name: &str) -> bool {
 
 fn is_trimmed_nonempty(value: &str) -> bool {
     !value.is_empty() && value.trim() == value
+}
+
+fn is_valid_delivery_image(image: &str) -> bool {
+    is_trimmed_nonempty(image)
+        && image.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'/' | b'_' | b'-' | b':')
+        })
 }
 
 pub(crate) fn is_valid_domain(domain: &str) -> bool {

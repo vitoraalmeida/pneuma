@@ -19,6 +19,8 @@ const DEPLOYMENT_RELEASE_APPLICATION_MIGRATION: &str =
     include_str!("../../migrations/0009_deployment_release_application.sql");
 const RUNTIME_DEPLOYMENT_APPLICATION_MIGRATION: &str =
     include_str!("../../migrations/0010_runtime_deployment_application.sql");
+const DELIVERY_MIGRATION: &str =
+    include_str!("../../migrations/0011_application_delivery_specs.sql");
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, INITIAL_MIGRATION),
     (2, DEPLOYMENT_MIGRATION),
@@ -30,6 +32,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (8, RELEASE_IMAGE_REFERENCE_MIGRATION),
     (9, DEPLOYMENT_RELEASE_APPLICATION_MIGRATION),
     (10, RUNTIME_DEPLOYMENT_APPLICATION_MIGRATION),
+    (11, DELIVERY_MIGRATION),
 ];
 
 #[derive(Debug)]
@@ -183,7 +186,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(migration_count, 10);
+        assert_eq!(migration_count, 11);
         assert_eq!(application_table_count, 1);
         assert_eq!(deployment_table_count, 1);
     }
@@ -199,7 +202,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(migration_count, 10);
+        assert_eq!(migration_count, 11);
     }
 
     #[test]

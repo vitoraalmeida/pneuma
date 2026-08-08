@@ -15,6 +15,7 @@ use crate::use_cases::release_create::{CreateReleaseError, create_release};
 
 #[derive(Debug)]
 pub enum DeploySourceError {
+    NoSourceConfiguration { application_name: String },
     ResolveRevision { source: ResolveCommitError },
     PrepareCheckout { source: Box<dyn Error> },
     BuildImage { source: Box<dyn Error> },
@@ -25,6 +26,10 @@ pub enum DeploySourceError {
 impl fmt::Display for DeploySourceError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::NoSourceConfiguration { application_name } => write!(
+                formatter,
+                "application `{application_name}` has no [source]/[build] configuration; use `app deploy --image` for OCI delivery"
+            ),
             Self::ResolveRevision { source } => write!(formatter, "{source}"),
             Self::PrepareCheckout { source } => {
                 write!(formatter, "failed to prepare source: {source}")
@@ -43,6 +48,7 @@ impl Error for DeploySourceError {
             Self::PrepareCheckout { source } | Self::BuildImage { source } => Some(source.as_ref()),
             Self::CreateRelease { source } => Some(source),
             Self::DeployRelease { source } => Some(source),
+            Self::NoSourceConfiguration { .. } => None,
         }
     }
 }
@@ -60,12 +66,24 @@ pub fn deploy_source(
             "SELECT applications.name, application_build_specs.containerfile_path,
                     application_build_specs.context_path
              FROM applications
-             JOIN application_build_specs ON application_build_specs.application_id = applications.id
+             LEFT JOIN application_build_specs
+                ON application_build_specs.application_id = applications.id
              WHERE applications.id = ?1",
             [application_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            },
         )
-        .map_err(|source| DeploySourceError::PrepareCheckout { source: Box::new(source) })?;
+        .map_err(|source| DeploySourceError::PrepareCheckout {
+            source: Box::new(source),
+        })?;
+    let Some((containerfile, context)) = containerfile.zip(context) else {
+        return Err(DeploySourceError::NoSourceConfiguration { application_name });
+    };
     let commit_sha = resolve_commit(repository_path, revision)
         .map_err(|source| DeploySourceError::ResolveRevision { source })?;
     let checkout_path = workspace_root.join(format!("source-{commit_sha}"));

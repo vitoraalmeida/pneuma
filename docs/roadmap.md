@@ -47,6 +47,7 @@ System (novo)
       ├── desired_runtime_state
       ├── desired_visibility
       ├── active_deployment_id
+      ├── delivery_spec (type, image_repository)
       │
       └── Release (novo)
             └── Deployment
@@ -76,15 +77,20 @@ System (novo)
 | Doctor (8 checks: DB, migrations, workspace, Caddy dirs, Caddyfile, git, podman, caddy) | ✅ |
 | Version | ✅ |
 | Staging validation (`staging.vitoralmeida.tech`) | ✅ |
+| System (entidade, migration, CLI create/list/show) | ✅ |
+| Release imutável + engine DeployRelease/DeploySource | ✅ |
+| OCI adapter (pull + digest) + `app deploy --image` | ✅ |
+| `app deploy-source` (build local como caminho alternativo) | ✅ |
+| Manifest v2 com `[delivery]` + enforcement de repositório | ✅ |
 
 ### Pendente — 7 entregas
 
 #### 1. System
 
-- [ ] Entidade `System` (id, name, description?, created_at)
-- [ ] `Application.system_id`
-- [ ] Migration `0005_systems`
-- [ ] CLI: `pneuma system create`, `system list`, `system show`
+- [x] Entidade `System` (id, name, description?, created_at)
+- [x] `Application.system_id`
+- [x] Migration `0005_systems`
+- [x] CLI: `pneuma system create`, `system list`, `system show`
 
 #### 2. Release + refatoração do engine de deploy
 
@@ -94,53 +100,55 @@ responsabilidades claras.
 
 **Domínio:**
 
-- [ ] Entidade `Release` (id, application_id, image_repository, image_digest, source_revision?, created_at)
-- [ ] Migration `0006_releases`
-- [ ] Migration `0007_deployment_release` (deployment referencia release, não mais revision)
-- [ ] Remover `RuntimeRole` (candidate/current/previous); RuntimeInstance ganha estados próprios: `starting | running | stopped | failed | removed`
-- [ ] `Application.active_deployment_id` substitui roles; deployment ativo → release ativa → runtime ativo
-- [ ] Deployment states: `pending | starting | verifying | activating | succeeded | failed` (remover `preparing_source`, `building`, `switching_traffic`, `verifying_external`)
-- [ ] Rollback cria novo deployment (type=rollback) a partir da Release anterior; não depende de container anterior existir
+- [x] Entidade `Release` (id, application_id, image_repository, image_digest, source_revision?, created_at)
+- [x] Migration `0006_releases`
+- [x] Migration `0007_deployment_release` (deployment referencia release, não mais revision)
+- [x] Remover `RuntimeRole` (candidate/current/previous); RuntimeInstance ganha estados próprios: `starting | running | stopped | failed | removed`
+- [x] `Application.active_deployment_id` substitui roles; deployment ativo → release ativa → runtime ativo
+- [x] Deployment states: `pending | starting | verifying | activating | succeeded | failed` (remover `preparing_source`, `building`, `switching_traffic`, `verifying_external`)
+- [x] Rollback cria novo deployment (type=rollback) a partir da Release anterior; não depende de container anterior existir
 
 **Engine split:**
 
-- [ ] `DeploySource` (`release_build_source.rs`): resolve Git → checkout → build → cria Release local → chama `DeployRelease`
-- [ ] `DeployRelease` (`deployment_deploy.rs`): ensure image → create deployment → create runtime → start → verify → activate
-- [ ] Remover `reconcile_existing_runtime()` do deploy; mesma Release ativa → no-op, app parada → `app start`, release anterior → rollback
-- [ ] `DeploymentSpecification` simplificado: sem containerfile/context; apenas application_id, image, container_port, health_path, expected_status, visibility
+- [x] `DeploySource` (`deployment_deploy_source.rs`): resolve Git → checkout → build → cria Release local → chama `DeployRelease`
+- [x] `DeployRelease` (`deployment_deploy_release.rs`): ensure image → create deployment → create runtime → start → verify → activate
+- [x] Remover `reconcile_existing_runtime()` do deploy; mesma Release ativa → no-op, app parada → `app start`, release anterior → rollback
+- [x] `DeploymentSpecification` simplificado: sem containerfile/context; apenas application_id, image, container_port, health_path, expected_status, visibility
 
 **Nova estrutura de use_cases:**
 
 ```text
 use_cases/
 ├── release_create.rs          ← cria Release (OCI ou local)
-├── release_build_source.rs    ← DeploySource: git → build → Release → DeployRelease
-├── deployment_deploy.rs       ← DeployRelease: orquestrador linear
-├── deployment_activate.rs     ← ativação (internal: mark active; public: Caddy + health externo)
-├── deployment_fail.rs         ← persistência de falha + cleanup
+├── deployment_deploy_oci.rs   ← DeployOci: pull/verifica → Release → DeployRelease
+├── deployment_deploy_source.rs← DeploySource: git → build → Release → DeployRelease
+├── deployment_deploy_release.rs ← DeployRelease: orquestrador linear
+├── deployment_transition.rs   ← máquina de estados persistida
 ├── deployment_rollback.rs     ← rollback como novo deployment
-├── runtime_start.rs           ← lifecycle start
-├── runtime_stop.rs            ← lifecycle stop
-└── visibility_change.rs       ← public ↔ internal sem redeploy
+├── application_runtime.rs     ← lifecycle start/stop/status
+├── exposure_change.rs         ← public ↔ internal sem redeploy
+└── ...
 ```
 
 #### 3. OCI adapter
 
-- [ ] Adapter OCI: `podman pull`, `podman image inspect`, validar digest corresponde ao solicitado
-- [ ] `DeployRelease` passa a aceitar imagem de registry (além de imagem local do build)
-- [ ] CLI: `pneuma app deploy <app> --image <repo@sha256:...>` como caminho oficial
-- [ ] Rejeitar tags mutáveis (exigir digest)
+- [x] Adapter OCI: `podman pull`, `podman image inspect`, validar digest corresponde ao solicitado
+- [x] `DeployRelease` passa a aceitar imagem de registry (além de imagem local do build)
+- [x] CLI: `pneuma app deploy <app> --image <repo@sha256:...>` como caminho oficial
+- [x] Rejeitar tags mutáveis (exigir digest)
 
 #### 4. deploy-source (CLI)
 
-- [ ] CLI: `pneuma app deploy-source <app> <repo> --revision <rev>` (caminho alternativo)
-- [ ] Engine único: `DeploySource` já criado na entrega 2; aqui apenas expor na CLI
+- [x] CLI: `pneuma app deploy-source <app> <repo> --revision <rev>` (caminho alternativo)
+- [x] Engine único: `DeploySource` já criado na entrega 2; aqui apenas expor na CLI
 
 #### 5. Manifesto com `[delivery]`
 
-- [ ] Seção `[delivery]` no manifesto: `type = "oci"`, `image = "ghcr.io/..."`
-- [ ] `[source]` e `[build]` tornam-se opcionais (apenas para deploy-source)
-- [ ] `schema_version = 2`
+- [x] Seção `[delivery]` no manifesto: `type = "oci"`, `image = "ghcr.io/..."`
+- [x] `[source]` e `[build]` tornam-se opcionais (apenas para deploy-source)
+- [x] `schema_version = 2`
+- [x] Persistir `application_delivery_specs` na importação
+- [x] `app deploy --image` rejeita repositório diferente do permitido; `deploy-source` exige `[source]`/`[build]`
 
 #### 6. Histórico + visibility
 
