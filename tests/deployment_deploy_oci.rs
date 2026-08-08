@@ -48,7 +48,8 @@ fn deploys_a_verified_oci_image_and_persists_its_exact_reference() {
     assert_eq!(release.2, "registry.example/team/service");
     assert_eq!(release.3, digest);
     assert_eq!(release.4, None);
-    assert_eq!(deployed.commit_sha, release.0);
+    assert_eq!(deployed.image_reference, release.1);
+    assert_eq!(deployed.source_revision, release.4);
     assert!(environment.log().contains(&reference));
     assert!(
         environment

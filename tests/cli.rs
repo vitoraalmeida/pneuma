@@ -144,6 +144,118 @@ fn deploys_an_internal_application_and_prints_its_identity() {
 }
 
 #[test]
+fn deploys_a_verified_oci_image_and_persists_its_release() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    let digest = format!("sha256:{}", "a".repeat(64));
+    let reference = format!("registry.example/team/service@{digest}");
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || respond_once(&listener, 200));
+
+    let output = environment.deploy_oci(&reference, port);
+    server.join().unwrap();
+
+    assert_command_succeeded(&output);
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "Deploying another-site...\n"
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains(&format!("Image: {reference}\n")));
+    assert!(!stdout.contains("Commit:"));
+    let connection = database::open(&environment.database_path).unwrap();
+    let release: (String, String, String, Option<String>) = connection
+        .query_row(
+            "SELECT image_reference, image_repository, image_digest, source_revision FROM releases",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        release,
+        (
+            reference.clone(),
+            "registry.example/team/service".to_owned(),
+            digest.clone(),
+            None,
+        )
+    );
+    let commands: Vec<String> = fs::read_to_string(environment.root.join("podman.log"))
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(commands[0], format!("pull {reference}"));
+    assert_eq!(
+        commands[1],
+        format!("image inspect --format {{{{.Digest}}}} {reference}")
+    );
+    assert!(commands[2].starts_with("create "));
+}
+
+#[test]
+fn rejects_a_mutable_oci_tag_without_podman_work() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+
+    let output = environment.deploy_oci("registry.example/team/service:latest", 30000);
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("must be"));
+    assert!(!environment.root.join("podman.log").exists());
+}
+
+#[test]
+fn oci_pull_and_digest_failures_create_no_release_or_runtime() {
+    for failure in [OciFailure::Pull, OciFailure::DigestMismatch] {
+        let environment = DeploymentEnvironment::new();
+        assert_command_succeeded(&environment.import());
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let reference = format!("registry.example/team/service@{digest}");
+
+        let output = environment.deploy_oci_with_failure(&reference, failure);
+
+        assert!(!output.status.success());
+        let connection = database::open(&environment.database_path).unwrap();
+        for table in ["releases", "deployments", "runtime_instances"] {
+            let count: i64 = connection
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(count, 0, "{table} must remain empty after {failure:?}");
+        }
+        let commands = fs::read_to_string(environment.root.join("podman.log")).unwrap();
+        match failure {
+            OciFailure::Pull => assert_eq!(commands, format!("pull {reference}\n")),
+            OciFailure::DigestMismatch => {
+                assert!(commands.starts_with(&format!("pull {reference}\n")));
+                assert!(commands.contains("image inspect --format {{.Digest}}"));
+                assert!(!commands.contains("create "));
+            }
+        }
+    }
+}
+
+#[test]
+fn source_deploy_is_explicit_and_old_deploy_syntax_is_usage() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    environment.deploy_current_revision();
+
+    let old_syntax = Command::new(env!("CARGO_BIN_EXE_pneuma"))
+        .args(["app", "deploy", &environment.application_name])
+        .arg(&environment.repository_path)
+        .args(["--revision", "HEAD"])
+        .output()
+        .unwrap();
+
+    assert!(!old_syntax.status.success());
+    assert!(String::from_utf8_lossy(&old_syntax.stderr).contains("Usage:"));
+}
+
+#[test]
 fn reports_a_missing_application_before_external_work() {
     let database_path = temporary_database_path();
     let workspace_path = database_path.with_extension("workspaces");
@@ -153,7 +265,7 @@ fn reports_a_missing_application_before_external_work() {
         .env("PNEUMA_WORKSPACE_PATH", &workspace_path)
         .args([
             "app",
-            "deploy",
+            "deploy-source",
             "missing-application",
             "missing-repository",
             "--revision",
@@ -296,14 +408,14 @@ fn accepts_native_repository_paths_but_requires_textual_name_and_revision() {
     let invalid_utf8 = OsString::from_vec(vec![0xff]);
     let native_path = Command::new(env!("CARGO_BIN_EXE_pneuma"))
         .env("PNEUMA_DATABASE_PATH", &database_path)
-        .args(["app", "deploy", "missing-application"])
+        .args(["app", "deploy-source", "missing-application"])
         .arg(&invalid_utf8)
         .args(["--revision", "main"])
         .output()
         .unwrap();
     let invalid_name = Command::new(env!("CARGO_BIN_EXE_pneuma"))
         .env("PNEUMA_DATABASE_PATH", &database_path)
-        .args(["app", "deploy"])
+        .args(["app", "deploy-source"])
         .arg(&invalid_utf8)
         .args(["repository", "--revision", "main"])
         .output()
@@ -312,7 +424,7 @@ fn accepts_native_repository_paths_but_requires_textual_name_and_revision() {
         .env("PNEUMA_DATABASE_PATH", &database_path)
         .args([
             "app",
-            "deploy",
+            "deploy-source",
             "missing-application",
             "repository",
             "--revision",
@@ -569,6 +681,12 @@ struct DeploymentEnvironment {
     commit_sha: String,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum OciFailure {
+    Pull,
+    DigestMismatch,
+}
+
 impl DeploymentEnvironment {
     fn new() -> Self {
         Self::from_fixture("another", "another-site")
@@ -705,9 +823,61 @@ impl DeploymentEnvironment {
             command.arg("--verbose");
         }
         command
-            .args(["app", "deploy", &self.application_name])
+            .args(["app", "deploy-source", &self.application_name])
             .arg(&self.repository_path)
             .args(["--revision", "HEAD"])
+            .output()
+            .unwrap()
+    }
+
+    fn deploy_oci(&self, reference: &str, port: u16) -> Output {
+        self.run_oci_deploy(reference, port, None)
+    }
+
+    fn deploy_oci_with_failure(&self, reference: &str, failure: OciFailure) -> Output {
+        self.run_oci_deploy(reference, 30000, Some(failure))
+    }
+
+    fn run_oci_deploy(&self, reference: &str, port: u16, failure: Option<OciFailure>) -> Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_pneuma"));
+        command
+            .env("PNEUMA_DATABASE_PATH", &self.database_path)
+            .env("PNEUMA_WORKSPACE_PATH", &self.workspace_path)
+            .env("PNEUMA_CADDY_MANAGED_PATH", &self.managed_caddy_directory)
+            .env("PNEUMA_CADDYFILE_PATH", &self.caddyfile_path)
+            .env("PATH", executable_path(&self.fake_bin))
+            .env("PNEUMA_FAKE_PORT", port.to_string())
+            .env("PNEUMA_FAKE_PODMAN_COUNT", self.root.join("podman-count"))
+            .env("PNEUMA_FAKE_PODMAN_LOG", self.root.join("podman.log"));
+        match failure {
+            Some(OciFailure::Pull) => {
+                command.env(
+                    "PNEUMA_FAKE_PODMAN_PULL_FAILURE",
+                    self.root.join("pull-failure"),
+                );
+                fs::write(self.root.join("pull-failure"), "fail").unwrap();
+            }
+            Some(OciFailure::DigestMismatch) => {
+                command.env(
+                    "PNEUMA_FAKE_PODMAN_DIGEST",
+                    format!("sha256:{}", "b".repeat(64)),
+                );
+            }
+            None => {
+                command.env(
+                    "PNEUMA_FAKE_PODMAN_DIGEST",
+                    format!("sha256:{}", "a".repeat(64)),
+                );
+            }
+        }
+        command
+            .args([
+                "app",
+                "deploy",
+                &self.application_name,
+                "--image",
+                reference,
+            ])
             .output()
             .unwrap()
     }
@@ -766,6 +936,24 @@ fi
 
 case "$1" in
     build)
+        ;;
+    pull)
+        if [ -f "${PNEUMA_FAKE_PODMAN_PULL_FAILURE:-}" ]; then
+            printf 'pull failed\n' >&2
+            exit 1
+        fi
+        ;;
+    image)
+        if [ "$2" = "inspect" ] && [ "$3" = "--format" ] && [ "$4" = "{{.Digest}}" ]; then
+            if [ -n "${PNEUMA_FAKE_PODMAN_DIGEST:-}" ]; then
+                printf '%s\n' "$PNEUMA_FAKE_PODMAN_DIGEST"
+            else
+                printf 'sha256:%s\n' "$(printf 'a%.0s' $(seq 1 64))"
+            fi
+        else
+            printf 'unsupported fake Podman command: %s\n' "$*" >&2
+            exit 1
+        fi
         ;;
     container)
         if [ "$2" = "exists" ] && [ -f "${PNEUMA_FAKE_PODMAN_REMOVED:-}" ]; then

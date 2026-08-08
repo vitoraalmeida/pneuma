@@ -36,7 +36,8 @@ pub struct DeployedRelease {
     pub deployment_id: String,
     pub runtime_id: String,
     pub container_name: String,
-    pub commit_sha: String,
+    pub image_reference: String,
+    pub source_revision: Option<String>,
     pub finished_at: String,
 }
 
@@ -479,7 +480,8 @@ fn deploy_release_reporting(
             deployment_id: deployment.id,
             runtime_id,
             container_name,
-            commit_sha: runtime_identity.to_owned(),
+            image_reference: release.image_reference.clone(),
+            source_revision: release.source_revision.clone(),
             finished_at,
         }),
         Err(failed) => finish_failed_deployment(connection, &deployment.id, failed, progress),

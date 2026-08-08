@@ -13,6 +13,7 @@ use pneuma::use_cases::application_list::{ListError, application_is_deployed, li
 use pneuma::use_cases::application_runtime::{
     RuntimeLifecycleError, report_application_status, start_application, stop_application,
 };
+use pneuma::use_cases::deployment_deploy_oci::{DeployOciError, deploy_oci};
 use pneuma::use_cases::deployment_deploy_release::PublicDeploymentConfiguration;
 use pneuma::use_cases::deployment_deploy_source::{DeploySourceError, deploy_source};
 use pneuma::use_cases::deployment_list::{ListDeploymentsError, list_deployments};
@@ -30,7 +31,7 @@ const CADDY_MANAGED_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_CADDY_MANAGED_PATH
 const DEFAULT_CADDY_MANAGED_PATH: &str = "/etc/caddy/applications";
 const CADDYFILE_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_CADDYFILE_PATH";
 const DEFAULT_CADDYFILE_PATH: &str = "/etc/caddy/Caddyfile";
-const USAGE: &str = "Usage:\n  pneuma [--verbose] system create <name> [--description <text>]\n  pneuma [--verbose] system list\n  pneuma [--verbose] system show <name>\n  pneuma [--verbose] app import <repository-path> [--system <system-name>]\n  pneuma [--verbose] app list\n  pneuma [--verbose] app deployments <application-name>\n  pneuma [--verbose] app status <application-name>\n  pneuma [--verbose] app stop <application-name>\n  pneuma [--verbose] app start <application-name>\n  pneuma [--verbose] app deploy <application-name> <repository-path> --revision <revision>\n  pneuma [--verbose] deployment rollback <application-name>\n  pneuma [--verbose] app expose <application-name> <public|internal>\n  pneuma version\n  pneuma doctor";
+const USAGE: &str = "Usage:\n  pneuma [--verbose] system create <name> [--description <text>]\n  pneuma [--verbose] system list\n  pneuma [--verbose] system show <name>\n  pneuma [--verbose] app import <repository-path> [--system <system-name>]\n  pneuma [--verbose] app list\n  pneuma [--verbose] app deployments <application-name>\n  pneuma [--verbose] app status <application-name>\n  pneuma [--verbose] app stop <application-name>\n  pneuma [--verbose] app start <application-name>\n  pneuma [--verbose] app deploy <application-name> --image <repository@sha256:...>\n  pneuma [--verbose] app deploy-source <application-name> <repository-path> --revision <revision>\n  pneuma [--verbose] deployment rollback <application-name>\n  pneuma [--verbose] app expose <application-name> <public|internal>\n  pneuma version\n  pneuma doctor";
 
 struct Invocation {
     verbose: bool,
@@ -64,6 +65,10 @@ enum Command {
         application_name: String,
     },
     Deploy {
+        application_name: String,
+        image_reference: String,
+    },
+    DeploySource {
         application_name: String,
         repository_path: PathBuf,
         revision: String,
@@ -100,7 +105,10 @@ enum CliError {
     ApplicationRuntime {
         source: Box<RuntimeLifecycleError>,
     },
-    Deploy {
+    DeployOci {
+        source: Box<DeployOciError>,
+    },
+    DeploySource {
         source: Box<DeploySourceError>,
     },
     Rollback {
@@ -132,7 +140,8 @@ impl fmt::Display for CliError {
                 write!(formatter, "application `{application_name}` was not found")
             }
             Self::ApplicationRuntime { source } => write!(formatter, "{source}"),
-            Self::Deploy { source } => write!(formatter, "{source}"),
+            Self::DeployOci { source } => write!(formatter, "{source}"),
+            Self::DeploySource { source } => write!(formatter, "{source}"),
             Self::Rollback { source } => write!(formatter, "{source}"),
             Self::Expose { source } => write!(formatter, "{source}"),
             Self::SystemCreate { source } => write!(formatter, "{source}"),
@@ -150,7 +159,8 @@ impl Error for CliError {
             Self::Import { source } => Some(source),
             Self::List { source } => Some(source),
             Self::ListDeployments { source } => Some(source),
-            Self::Deploy { source } => Some(source.as_ref()),
+            Self::DeployOci { source } => Some(source.as_ref()),
+            Self::DeploySource { source } => Some(source.as_ref()),
             Self::ApplicationRuntime { source } => Some(source.as_ref()),
             Self::ApplicationNotFound { .. } => None,
             Self::Rollback { source } => Some(source),
@@ -251,20 +261,32 @@ fn parse_command(arguments: &[OsString]) -> Result<Invocation, CliError> {
             let application_name = application_name.to_str().ok_or(CliError::Usage)?.to_owned();
             Ok(Command::Start { application_name })
         }
+        [app, deploy, application_name, image_option, image_reference]
+            if app == OsStr::new("app")
+                && deploy == OsStr::new("deploy")
+                && image_option == OsStr::new("--image") =>
+        {
+            let application_name = application_name.to_str().ok_or(CliError::Usage)?.to_owned();
+            let image_reference = image_reference.to_str().ok_or(CliError::Usage)?.to_owned();
+            Ok(Command::Deploy {
+                application_name,
+                image_reference,
+            })
+        }
         [
             app,
-            deploy,
+            deploy_source,
             application_name,
             repository_path,
             revision_option,
             revision,
         ] if app == OsStr::new("app")
-            && deploy == OsStr::new("deploy")
+            && deploy_source == OsStr::new("deploy-source")
             && revision_option == OsStr::new("--revision") =>
         {
             let application_name = application_name.to_str().ok_or(CliError::Usage)?.to_owned();
             let revision = revision.to_str().ok_or(CliError::Usage)?.to_owned();
-            Ok(Command::Deploy {
+            Ok(Command::DeploySource {
                 application_name,
                 repository_path: PathBuf::from(repository_path),
                 revision,
@@ -361,9 +383,18 @@ fn run(invocation: Invocation) -> Result<(), CliError> {
         }
         Command::Deploy {
             application_name,
+            image_reference,
+        } => run_deploy_oci(
+            &mut connection,
+            verbose,
+            &application_name,
+            &image_reference,
+        ),
+        Command::DeploySource {
+            application_name,
             repository_path,
             revision,
-        } => run_deploy(
+        } => run_deploy_source(
             &mut connection,
             verbose,
             &application_name,
@@ -588,7 +619,7 @@ fn run_start(
     Ok(())
 }
 
-fn run_deploy(
+fn run_deploy_source(
     connection: &mut rusqlite::Connection,
     verbose: bool,
     application_name: &str,
@@ -636,11 +667,61 @@ fn run_deploy(
         &workspace_path,
         Some(&public_configuration),
     );
-    let deployed = deployment.map_err(|source| CliError::Deploy {
+    let deployed = deployment.map_err(|source| CliError::DeploySource {
         source: Box::new(source),
     })?;
     println!("Deployed {}", application.name);
-    println!("Commit: {}", deployed.commit_sha);
+    println!("Commit: {}", deployed.source_revision.unwrap_or_default());
+    println!("Deployment: {}", deployed.deployment_id);
+    println!("Runtime: {}", deployed.runtime_id);
+    println!("Container: {}", deployed.container_name);
+    println!("Status: Succeeded");
+    Ok(())
+}
+
+fn run_deploy_oci(
+    connection: &mut rusqlite::Connection,
+    verbose: bool,
+    application_name: &str,
+    image_reference: &str,
+) -> Result<(), CliError> {
+    log_verbose(
+        verbose,
+        format!("resolve application by name: {application_name}"),
+    );
+    let application = resolve_application(connection, application_name)?;
+    let public_configuration = PublicDeploymentConfiguration {
+        managed_caddy_directory: configured_path(
+            CADDY_MANAGED_PATH_ENVIRONMENT_VARIABLE,
+            DEFAULT_CADDY_MANAGED_PATH,
+        ),
+        caddyfile_path: configured_path(
+            CADDYFILE_PATH_ENVIRONMENT_VARIABLE,
+            DEFAULT_CADDYFILE_PATH,
+        ),
+    };
+    if verbose {
+        log_verbose(
+            verbose,
+            format!(
+                "deployment input: application {}, image {image_reference}",
+                application.name
+            ),
+        );
+    } else {
+        eprintln!("Deploying {}...", application.name);
+    }
+    let deployed = deploy_oci(
+        connection,
+        &application.id,
+        image_reference,
+        Some(&public_configuration),
+    )
+    .map_err(|source| CliError::DeployOci {
+        source: Box::new(source),
+    })?;
+    println!("Deployed {}", application.name);
+    println!("Image: {}", deployed.image_reference);
     println!("Deployment: {}", deployed.deployment_id);
     println!("Runtime: {}", deployed.runtime_id);
     println!("Container: {}", deployed.container_name);
@@ -675,7 +756,10 @@ fn run_rollback(
     let rolled_back = rollback_deployment(connection, &application.id, Some(&public_configuration))
         .map_err(|source| CliError::Rollback { source })?;
     println!("Rolled back {}", application.name);
-    println!("Commit: {}", rolled_back.commit_sha);
+    println!("Image: {}", rolled_back.image_reference);
+    if let Some(source_revision) = rolled_back.source_revision {
+        println!("Source revision: {source_revision}");
+    }
     println!("Deployment: {}", rolled_back.deployment_id);
     println!("Runtime: {}", rolled_back.runtime_id);
     println!("Status: Succeeded");
