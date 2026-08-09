@@ -74,7 +74,7 @@ System (novo)
 | CLI (import, list, status, deploy, start, stop, visibility set, deployments, version) | ✅ |
 | Rollback (reusa deployment antigo, troca roles) | ✅ |
 | Expose public/internal (funcional, renomeado para `visibility set`) | ✅ |
-| Doctor (8 checks: DB, migrations, workspace, Caddy dirs, Caddyfile, git, podman, caddy) | ✅ |
+| Doctor (13 checks: DB, migrations, workspace, Caddy dirs, Caddyfile/config, git, podman, rootless, Quadlet generator, OCI images, disk, caddy) | ✅ |
 | Version | ✅ |
 | Staging validation (`staging.vitoralmeida.tech`) | ✅ |
 | System (entidade, migration, CLI create/list/show) | ✅ |
@@ -164,7 +164,12 @@ use_cases/
 - [x] `pneuma database backup <path>`
 - [x] `pneuma database restore <path>`
 - [x] Docs atualizadas (roadmap, arquitetura, scope, README) refletindo OCI-first
-- [ ] E2E final: CI → GHCR → pull → deploy → health → active → rollback → reboot
+- [x] E2E final: CI → GHCR → pull → deploy → health → active → rollback → reboot
+
+**v0.1.0 concluída em 8 de agosto de 2026** — todos os critérios de aceite da
+seção 7 de [`product/v0.1-scope.md`](product/v0.1-scope.md) foram validados na
+VPS de produção (`srv655252`, Debian 13). A próxima versão é a v0.2 (CI/CD
+automatizado).
 
 ### Modelo de dados alvo (v0.1)
 
