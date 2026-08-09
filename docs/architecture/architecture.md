@@ -24,8 +24,8 @@ Crate único organizado em três camadas:
   de estados persistida.
 - `src/adapters/` — integrações com sistemas externos (`git_source`,
   `local_build`, `local_runtime`, `oci_image`, `port_allocator`,
-  `systemd_quadlet`, `caddy_exposure`, `external_health`, `health_check`,
-  `database`).
+  `systemd_quadlet`, `caddy_exposure`, `health_check_external`,
+  `health_check_internal`, `database`).
 
 Sem traits, generics, macros ou async: as restrições de
 [`docs/rust-guidelines.md`](../rust-guidelines.md) valem para toda mudança.

@@ -8,7 +8,7 @@ use crate::adapters::caddy_exposure::{
     CaddyRecoveryError, MaterializeCaddyFragmentError, materialize_caddy_fragment,
     remove_caddy_fragment, restore_materialized_caddy_fragment,
 };
-use crate::adapters::external_health::{ExternalHealthCheckError, check_external_health};
+use crate::adapters::health_check_external::{ExternalHealthCheckError, check_external_health};
 use crate::adapters::local_runtime::{
     ContainerObservation, ObserveContainerError, ObservedRuntimeState, observe_container,
 };

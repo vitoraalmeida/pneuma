@@ -4,7 +4,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
-use crate::adapters::health_check::{
+use crate::adapters::health_check_internal::{
     HealthCheckError, HealthCheckFailure, HealthCheckResult, check_internal_health,
 };
 use crate::adapters::local_runtime::ObservedRuntimeState;

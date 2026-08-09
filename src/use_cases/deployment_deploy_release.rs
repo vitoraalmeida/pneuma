@@ -7,8 +7,8 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::adapters::caddy_exposure::{
     materialize_caddy_fragment, restore_materialized_caddy_fragment,
 };
-use crate::adapters::external_health::check_external_health;
-use crate::adapters::health_check::{HealthCheckResult, check_internal_health};
+use crate::adapters::health_check_external::check_external_health;
+use crate::adapters::health_check_internal::{HealthCheckResult, check_internal_health};
 use crate::adapters::local_runtime::{
     ControlContainerError, ObservedRuntimeState, observe_container, remove_container,
     resolve_container_id,

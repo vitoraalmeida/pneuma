@@ -6,7 +6,7 @@ use std::process::{Command, Output};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use pneuma::adapters::health_check::{HealthCheckResult, check_internal_health};
+use pneuma::adapters::health_check_internal::{HealthCheckResult, check_internal_health};
 use pneuma::adapters::local_build::build_image;
 use pneuma::adapters::local_runtime::{
     ControlContainerError, CreateContainerError, ObservedRuntimeState, create_container,

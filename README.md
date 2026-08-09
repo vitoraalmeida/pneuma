@@ -213,8 +213,8 @@ pneuma/
 │       ├── local_runtime.rs         # Container lifecycle
 │       ├── oci_image.rs             # OCI image pull
 │       ├── caddy_exposure.rs        # Caddy integration
-│       ├── health_check.rs          # Internal health checks
-│       ├── external_health.rs       # External health checks
+│       ├── health_check_internal.rs # Internal health checks
+│       ├── health_check_external.rs # External health checks
 │       ├── systemd_quadlet.rs       # Quadlet unit management
 │       ├── port_allocator.rs        # Runtime port allocation
 │       └── database.rs              # SQLite and migrations
