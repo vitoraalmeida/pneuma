@@ -32,7 +32,7 @@ Depois que a imagem passar no CI e estiver publicada no registry, importe o
 checkout que contém o manifesto v2 e implante o digest exato:
 
 ```bash
-pneuma app import /srv/vitoralmeida.tech
+pneuma app import /var/lib/pneuma/checkouts/vitoralmeida.tech
 pneuma --verbose app deploy vitoralmeida-tech-prod \
   --image ghcr.io/owner/vitoralmeida-tech@sha256:<digest>
 ```

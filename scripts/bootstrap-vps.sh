@@ -37,7 +37,7 @@ APPLICATION_SOURCE_URL="${2:-}"
 PNEUMA_USER="pneuma"
 PNEUMA_HOME="/home/$PNEUMA_USER"
 PNEUMA_SOURCE_PATH="$PNEUMA_HOME/pneuma"
-APPLICATION_PATH="/srv/vitoralmeida.tech"
+APPLICATION_PATH="/var/lib/pneuma/checkouts/vitoralmeida.tech"
 SSH_DIR="$PNEUMA_HOME/.ssh"
 SSH_KEY="$SSH_DIR/id_ed25519"
 
