@@ -65,6 +65,8 @@ bash scripts/bootstrap-vps.sh <pneuma-source-url> [application-repository-url]
 
 See [`docs/operations/vps-bootstrap.md`](docs/operations/vps-bootstrap.md) for the full Debian 13 guide, and `scripts/bootstrap-vps.sh` for prerequisites.
 
+For a step-by-step walkthrough from a fresh VPS to a deployed site, see [`docs/usage-guide.md`](docs/usage-guide.md).
+
 ## Quick start
 
 1. **Write a manifest** in your application repository:
