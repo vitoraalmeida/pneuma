@@ -59,7 +59,7 @@ System (novo)
 | Capacidade | Status |
 |---|---|
 | Application entity + catálogo | ✅ |
-| SQLite + migrations (4) | ✅ |
+| SQLite + migrations (12) | ✅ |
 | Deployment persistence + state machine | ✅ |
 | RuntimeInstance persistence | ✅ |
 | Podman rootless (build, create, start, stop, inspect) | ✅ |
@@ -72,8 +72,8 @@ System (novo)
 | Deployment history | ✅ |
 | Local Git checkout + local OCI build | ✅ |
 | CLI (import, list, status, deploy, start, stop, visibility set, deployments, version) | ✅ |
-| Rollback (reusa deployment antigo, troca roles) | ✅ |
-| Expose public/internal (funcional, renomeado para `visibility set`) | ✅ |
+| Rollback (novo deployment da Release anterior, não depende do container antigo) | ✅ |
+| Visibility set (public/internal) independente do lifecycle | ✅ |
 | Doctor (13 checks: DB, migrations, workspace, Caddy dirs, Caddyfile/config, git, podman, rootless, Quadlet generator, OCI images, disk, caddy) | ✅ |
 | Version | ✅ |
 | Staging validation (`staging.vitoralmeida.tech`) | ✅ |
