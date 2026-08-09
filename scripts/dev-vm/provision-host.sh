@@ -11,32 +11,29 @@
 #   - persistent Pneuma directories with VPS-like permissions
 #   - PNEUMA_* environment variables on the pneuma user profile
 #
-# This script provisions the host only; it never builds Pneuma. Install the
-# binary separately with scripts/dev-vm/install-pneuma.sh or deploy it from the
-# development host with scripts/dev-vm/deploy.sh.
+# This script provisions the host only; it never builds Pneuma. The Pneuma
+# binary is installed as a separate step after provisioning (see section 4 of
+# docs/operations/dev-vm-tutorial.md).
 #
 # Prerequisites:
 # - Debian 13 (trixie) VM — Debian 12 ships Podman 4.3.1 without the Quadlet
 #   user generator, which Pneuma requires to supervise runtimes across reboots.
+# - The VM must already have the provisioning SSH key installed (for example
+#   root's authorized_keys) so this script can be run over SSH.
 # - Run this script as root
 # - Internet access
 # - Caddy available from the configured APT repositories
 #
 # Usage:
-#   bash provision-host.sh [ssh-public-key-file]
-#
-# Examples:
 #   bash provision-host.sh
-#   bash provision-host.sh /home/dev/.ssh/pneuma-dev.pub
 #
-# The optional argument installs the given public key into the pneuma user's
-# authorized_keys so the development host can SSH in with the exclusive VM key.
+# Example (from the development host, after ssh-copy-id):
+#   ssh pneuma-dev 'sudo bash /tmp/provision-host.sh'
 
 set -euo pipefail
 
 PNEUMA_USER="pneuma"
 PNEUMA_HOME="/home/$PNEUMA_USER"
-SSH_PUBLIC_KEY_FILE="${1:-}"
 
 if [[ "$(id -u)" -ne 0 ]]; then
     echo "Run this script as root."
@@ -86,21 +83,11 @@ fi
 passwd -l "$PNEUMA_USER"
 loginctl enable-linger "$PNEUMA_USER"
 
-install -d -o "$PNEUMA_USER" -g "$PNEUMA_USER" -m 0700 "$PNEUMA_HOME/.ssh"
 install -d -o "$PNEUMA_USER" -g "$PNEUMA_USER" -m 0750 \
     /var/lib/pneuma/database \
     /var/lib/pneuma/checkouts \
     "$PNEUMA_HOME/.config/containers/systemd"
 install -d -o "$PNEUMA_USER" -g caddy -m 0750 /etc/caddy/applications
-
-if [[ -n "$SSH_PUBLIC_KEY_FILE" ]]; then
-    if [[ ! -f "$SSH_PUBLIC_KEY_FILE" ]]; then
-        echo "SSH public key file not found: $SSH_PUBLIC_KEY_FILE"
-        exit 1
-    fi
-    install -o "$PNEUMA_USER" -g "$PNEUMA_USER" -m 0600 \
-        "$SSH_PUBLIC_KEY_FILE" "$PNEUMA_HOME/.ssh/authorized_keys"
-fi
 
 if [[ -f /etc/caddy/Caddyfile ]]; then
     cp -a /etc/caddy/Caddyfile \
@@ -160,6 +147,6 @@ echo "Open a Pneuma shell:"
 echo "  sudo -iu $PNEUMA_USER"
 echo
 echo "Next steps:"
-echo "  1. Install the Pneuma binary (scripts/dev-vm/install-pneuma.sh)"
-echo "     or deploy from the dev host (scripts/dev-vm/deploy.sh)."
+echo "  1. Install the Pneuma binary as a separate step (see section 4 of"
+echo "     docs/operations/dev-vm-tutorial.md)."
 echo "  2. Run: pneuma doctor"

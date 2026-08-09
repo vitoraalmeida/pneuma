@@ -13,38 +13,62 @@ networking, instalação do binário e reboot/recovery.
 
 ## 1. Pré-requisitos
 
-- VM Debian 13 (trixie) já criada e acessível por SSH a partir do host de
-  desenvolvimento — Debian 12 (bookworm) entrega Podman 4.3.1, que **não
-  inclui** o gerador Quadlet (`podman-user-generator`).
-- Host de desenvolvimento Linux com acesso SSH por chave para a VM.
-- Aplicações fixture pequenas e determinísticas para os testes (seção 7).
+- VM Debian 13 (trixie) **básica** já criada e acessível por SSH a partir do
+  host de desenvolvimento — Debian 12 (bookworm) entrega Podman 4.3.1, que
+  **não inclui** o gerador Quadlet (`podman-user-generator`).
+- Chave SSH **exclusiva** para a VM, gerada no host antes do provisionamento
+  (seção 2).
+- Aplicações fixture pequenas e determinísticas para os testes (seção 6).
 
-> **Nota:** uma conta administrativa (por exemplo `dev`) com `sudo` serve
-> apenas para o provisionamento. O Pneuma roda sob o usuário dedicado `pneuma`,
-> sem acesso ao root, replicando o modelo da VPS.
+> **Nota:** uma conta com acesso root (por exemplo `root` ou um usuário com
+> `sudo`) serve apenas para o provisionamento. O Pneuma roda sob o usuário
+> dedicado `pneuma`, sem acesso ao root, replicando o modelo da VPS.
 
-## 2. Configurar o acesso SSH
+## 2. Gerar a chave SSH e configurar o acesso
 
-Confirme o SSH e copie a chave pública exclusiva da VM:
+Gere uma chave exclusiva para a VM no host de desenvolvimento (conforme o
+plano, o usuário `pneuma` não usa a chave do GitHub):
 
 ```bash
-ssh-copy-id dev@pneuma-dev
-ssh pneuma-dev
+ssh-keygen -t ed25519 -f ~/.ssh/pneuma-dev -N "" -C "pneuma-dev VM key"
 ```
 
-Para um endereço previsível, adicione ao `/etc/hosts` do host de
-desenvolvimento o IP que a VM recebeu na rede (ex.: `192.168.122.50 pneuma-dev`).
+Copie a chave pública para uma conta de provisionamento da VM (root ou
+administrativa). Com `ssh-copy-id`, informando o IP que a VM recebeu na rede
+(ex.: `192.168.122.50`):
+
+```bash
+ssh-copy-id -i ~/.ssh/pneuma-dev.pub root@192.168.122.50
+```
+
+O Debian aceita login root por chave (`PermitRootLogin prohibit-password`) sem
+expor a senha. Configure o `~/.ssh/config` do host para acesso previsível:
+
+```text
+Host pneuma-dev
+    HostName 192.168.122.50
+    User root
+    IdentityFile ~/.ssh/pneuma-dev
+    IdentitiesOnly yes
+```
+
+E adicione ao `/etc/hosts` do host: `192.168.122.50 pneuma-dev`. Confirme:
+
+```bash
+ssh pneuma-dev 'hostname'
+```
 
 ## 3. Provisionar o host
 
-Envie o script de provisionamento para a VM e execute como root:
+Com a chave de provisionamento já instalada, envie o script e execute como
+root na VM:
 
 ```bash
 scp scripts/dev-vm/provision-host.sh pneuma-dev:/tmp/
 ssh pneuma-dev 'sudo bash /tmp/provision-host.sh'
 ```
 
-O script:
+O script assume uma VM Debian básica e:
 
 1. instala Podman, `uidmap`, `fuse-overlayfs`, Caddy, Git, `sqlite3` e `curl`;
 2. verifica o gerador Quadlet (`podman-user-generator` >= 4.4);
@@ -55,43 +79,29 @@ O script:
 7. valida `caddy validate` e inicia o serviço;
 8. confirma Podman rootless com `podman info`.
 
-Se quiser que o script já instale a chave pública SSH do host de desenvolvimento
-no usuário `pneuma`:
-
-```bash
-ssh pneuma-dev 'sudo bash /tmp/provision-host.sh /home/dev/.ssh/pneuma-dev.pub'
-```
+O script **não** instala a chave SSH nem o binário: o acesso de provisionamento
+é pré-existente e a instalação do Pneuma é um passo separado (seção 4).
 
 ## 4. Instalar o binário Pneuma na VM
 
 A VM não compila nem clona o repositório. O ciclo parte do binário compilado no
-host. Há dois caminhos:
-
-### Caminho rápido (recomendado)
-
-Do host de desenvolvimento, dentro do repositório do Pneuma:
+host, e a instalação é um passo **separado** do provisionamento: envie o
+binário e instale em `/usr/local/bin/pneuma`:
 
 ```bash
-./scripts/dev-vm/deploy.sh
-```
-
-O script executa `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test
---all-features` e `cargo build --release`; envia `target/release/pneuma` por
-SCP para `/tmp/pneuma-new`; valida o binário na VM; instala em
-`/usr/local/bin/pneuma`; e executa `pneuma doctor`. Falha imediatamente em
-qualquer erro.
-
-### Caminho manual
-
-Se o binário já foi compilado:
-
-```bash
+cargo build --release
 scp target/release/pneuma pneuma-dev:/tmp/pneuma-new
-ssh pneuma-dev 'sudo bash /tmp/install-pneuma.sh /tmp/pneuma-new'
+ssh pneuma-dev 'sudo install -o root -g root -m 0755 /tmp/pneuma-new /usr/local/bin/pneuma'
 ```
 
-O `install-pneuma.sh` valida o binário (version + doctor) antes e depois de
-instalar, para que uma build quebrada nunca substitua um runtime funcionando.
+Valide o binário antes de instalar e rode `pneuma doctor` como o usuário
+`pneuma` depois, para que uma build quebrada nunca substitua um runtime
+funcionando:
+
+```bash
+ssh pneuma-dev '/usr/local/bin/pneuma version'
+ssh pneuma-dev 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma doctor"'
+```
 
 ## 5. Verificação
 
@@ -113,7 +123,13 @@ O ciclo normal de desenvolvimento passa a ser:
 ```text
 editar código
     ↓
-./scripts/dev-vm/deploy.sh
+cargo build --release
+    ↓
+scp target/release/pneuma pneuma-dev:/tmp/pneuma-new
+    ↓
+ssh pneuma-dev 'sudo install ... /usr/local/bin/pneuma'
+    ↓
+ssh pneuma-dev 'runuser -u pneuma -- bash -lc "cd $HOME && pneuma doctor"'
     ↓
 Pneuma atualizado e validado na VM
 ```
@@ -186,8 +202,6 @@ pública (DNS e TLS reais).
 ## Referências
 
 - `scripts/dev-vm/provision-host.sh` — provisionamento do host.
-- `scripts/dev-vm/install-pneuma.sh` — instalação do binário na VM.
-- `scripts/dev-vm/deploy.sh` — ciclo build + SCP + install + doctor.
 - `scripts/dev-vm/smoke.sh` — verificação básica (version, doctor, app list).
 - [`vps-bootstrap.md`](vps-bootstrap.md) — bootstrap da VPS de produção.
 - [`public-deployment.md`](public-deployment.md) — deployment público.
