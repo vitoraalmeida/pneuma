@@ -15,13 +15,13 @@ Designed for personal sites and small projects that need production-grade deploy
 ```
 pneuma.toml manifest
     ↓
-pneuma app import <repository>
+CI builds a container image and pushes it to a registry
+    ↓
+pneuma app import <repository-path>
     ↓
 pneuma app deploy <app> --image ghcr.io/owner/app@sha256:...
     ↓
-Git checkout → Podman build → Container create → Health check
-    ↓
-Promote to current runtime
+Pull image → Container create → Health check → Promote release
     ↓
 Caddy reverse proxy (if public)
 ```
@@ -34,7 +34,7 @@ Caddy reverse proxy (if public)
 - **Atomic deployments**: candidate containers are validated before promotion; failed deployments preserve the previous version
 - **Caddy integration**: automatic reverse proxy configuration for public apps
 - **Lifecycle management**: start, stop, and status commands with idempotent operations
-- **Deployment history**: track all deployment attempts with commit, status, and timestamps
+- **Deployment history**: track all deployment attempts with release, status, and timestamps
 - **SQLite persistence**: all state in a single database file with versioned migrations and backup/restore commands
 
 ## Requirements
@@ -42,7 +42,7 @@ Caddy reverse proxy (if public)
 - **Rust** 1.85 or later (for building from source)
 - **Podman** with rootless mode configured
 - **Caddy** for public app exposure
-- **Git** for source repository operations
+- **Git** for `deploy-source` builds and imports
 
 ## Installation
 
@@ -82,10 +82,6 @@ name = "my-app"
 type = "oci"
 image = "ghcr.io/user/my-app"
 
-[build]
-containerfile = "Containerfile"
-context = "."
-
 [runtime]
 container_port = 8080
 healthcheck_path = "/healthz"
@@ -118,18 +114,23 @@ pneuma app status my-app
 
 | Command | Description |
 |---------|-------------|
+| `pneuma system create <name>` | Create a system to group applications |
+| `pneuma system list` | List all systems |
+| `pneuma system show <name>` | Show a system and its applications |
 | `pneuma app import <repository-path>` | Import an application from a local repository |
-| `pneuma app deploy <app> --image <repository@sha256:...>` | Deploy an immutable OCI release |
-| `pneuma app deploy-source <app> <repository> --revision <revision>` | Build and deploy a local source revision |
-| `pneuma app visibility set <app> <public\|internal>` | Set desired public visibility |
-| `pneuma database backup <path>` | Create a consistent SQLite backup |
-| `pneuma database restore <path>` | Validate and restore a SQLite backup |
 | `pneuma app list` | List all registered applications |
-| `pneuma app deploy <app> <repository> --revision <rev>` | Deploy a specific revision |
+| `pneuma app deploy <app> --image <repository@sha256:...>` | Deploy an immutable OCI release |
+| `pneuma app deploy-source <app> <repository-path> --revision <revision>` | Build and deploy a local source revision |
+| `pneuma app visibility set <app> <public\|internal>` | Set desired public visibility |
 | `pneuma app status <app>` | Show desired and observed runtime state |
 | `pneuma app start <app>` | Start a stopped application |
 | `pneuma app stop <app>` | Stop a running application |
 | `pneuma app deployments <app>` | List deployment history |
+| `pneuma deployment rollback <app>` | Roll back to the previous release |
+| `pneuma database backup <path>` | Create a consistent SQLite backup |
+| `pneuma database restore <path>` | Validate and restore a SQLite backup |
+| `pneuma version` | Print version |
+| `pneuma doctor` | Verify host prerequisites |
 
 Add `--verbose` before the command to see step-by-step progress.
 
@@ -138,18 +139,14 @@ Add `--verbose` before the command to see step-by-step progress.
 The `pneuma.toml` manifest declares application configuration:
 
 ```toml
-schema_version = 1
+schema_version = 2
 
 [application]
 name = "personal-site"
 
-[source]
-repository = "https://github.com/user/personal-site"
-branch = "main"
-
-[build]
-containerfile = "Containerfile"
-context = "."
+[delivery]
+type = "oci"
+image = "ghcr.io/user/personal-site"
 
 [runtime]
 container_port = 8080
@@ -163,16 +160,19 @@ domain = "example.com"
 
 **Fields:**
 
+- `schema_version`: manifest schema version (currently `2`)
 - `name`: application identifier (used in all commands)
-- `repository`: Git repository URL
-- `branch`: default branch for reference
-- `containerfile`: path to Containerfile relative to context
-- `context`: build context directory
+- `delivery.type`: delivery model (`oci`); the image is produced by CI
+- `delivery.image`: OCI repository that CI pushes immutable images to
+- `containerfile`: path to Containerfile relative to context (only for `deploy-source`)
+- `context`: build context directory (only for `deploy-source`)
 - `container_port`: port exposed by the container
 - `healthcheck_path`: HTTP path for health checks
 - `expected_status`: expected HTTP status code (typically 200)
 - `default_visibility`: `internal` or `public`
 - `domain`: required for public apps, ignored for internal
+
+The `[source]` and `[build]` sections are only needed for `deploy-source` local builds; they must be provided together.
 
 ## Configuration
 
@@ -194,22 +194,29 @@ pneuma/
 │   ├── lib.rs                       # Module declarations
 │   ├── domain/                      # Pure domain types
 │   │   ├── application.rs           # Application model
-│   │   └── manifest.rs              # Manifest parsing
+│   │   ├── manifest.rs              # Manifest parsing
+│   │   ├── release.rs               # Release model
+│   │   └── system.rs                # System model
 │   ├── use_cases/                   # Business logic
 │   │   ├── application_import.rs    # Application import
 │   │   ├── application_list.rs      # Application list
 │   │   ├── application_runtime.rs   # Lifecycle management
 │   │   ├── deployment_create.rs     # Deployment creation
-│   │   ├── deployment_deploy_internal.rs # Deployment orchestrator
+│   │   ├── deployment_deploy_oci.rs # OCI image deployment entry point
+│   │   ├── deployment_deploy_release.rs # Deployment orchestrator
+│   │   ├── deployment_deploy_source.rs  # Local source builds
 │   │   ├── deployment_transition.rs # State machine
 │   │   └── ...                      # Other use cases
 │   └── adapters/                    # External integrations
 │       ├── git_source.rs            # Git adapter
 │       ├── local_build.rs           # Podman build
 │       ├── local_runtime.rs         # Container lifecycle
+│       ├── oci_image.rs             # OCI image pull
 │       ├── caddy_exposure.rs        # Caddy integration
 │       ├── health_check.rs          # Internal health checks
 │       ├── external_health.rs       # External health checks
+│       ├── systemd_quadlet.rs       # Quadlet unit management
+│       ├── port_allocator.rs        # Runtime port allocation
 │       └── database.rs              # SQLite and migrations
 ├── migrations/                      # Versioned SQL migrations
 ├── scripts/                         # Operational scripts
@@ -233,9 +240,9 @@ See `docs/rust-guidelines.md` for code conventions and `AGENTS.md` for contribut
 
 ## Roadmap
 
-- **v0.1** (current): Import and deploy from source with health checks and Caddy exposure
-- **v0.2**: Build images in CI, deploy by OCI digest
-- **v0.3**: Automatic deployment triggered by GitHub Actions via SSH
+- **v0.1** (released): OCI-first deployments — immutable image pulls, rootless Quadlet runtime, health checks, Caddy exposure, rollback, and VPS operations
+- **v0.2** (planned): automatic deployments triggered by CI
+- **v0.3** (planned): GitHub Actions integration via SSH
 
 See `docs/roadmap.md` for the full product vision.
 
