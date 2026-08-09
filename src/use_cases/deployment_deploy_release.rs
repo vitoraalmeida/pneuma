@@ -8,11 +8,10 @@ use crate::adapters::caddy_exposure::{
     materialize_caddy_fragment, restore_materialized_caddy_fragment,
 };
 use crate::adapters::external_health::check_external_health;
-use crate::adapters::git_source::ResolveCommitError;
-use crate::adapters::health_check::{HealthCheckError, HealthCheckResult, check_internal_health};
+use crate::adapters::health_check::{HealthCheckResult, check_internal_health};
 use crate::adapters::local_runtime::{
-    ControlContainerError, ObserveContainerError, ObservedRuntimeState, observe_container,
-    remove_container, resolve_container_id,
+    ControlContainerError, ObservedRuntimeState, observe_container, remove_container,
+    resolve_container_id,
 };
 use crate::adapters::port_allocator::{
     PortAllocationError, consume_port_reservation, release_port, reserve_port,
@@ -56,11 +55,7 @@ pub struct PublicDeploymentConfiguration {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeploymentStep {
     LoadSpecification,
-    ResolveRevision,
-    ReconcileRuntime,
     CreateDeployment,
-    PrepareCheckout,
-    BuildImage,
     CreateContainer,
     StartContainer,
     ObserveContainer,
@@ -97,11 +92,7 @@ impl fmt::Display for DeploymentStep {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = match self {
             Self::LoadSpecification => "load application specification",
-            Self::ResolveRevision => "resolve Git revision",
-            Self::ReconcileRuntime => "reconcile existing runtime",
             Self::CreateDeployment => "create deployment",
-            Self::PrepareCheckout => "prepare checkout",
-            Self::BuildImage => "build image",
             Self::CreateContainer => "create candidate container",
             Self::StartContainer => "start candidate container",
             Self::ObserveContainer => "observe candidate container",
@@ -199,46 +190,6 @@ pub enum DeployReleaseError {
     LoadApplication {
         source: rusqlite::Error,
     },
-    ResolveRevision {
-        source: ResolveCommitError,
-    },
-    LoadExistingRuntime {
-        source: rusqlite::Error,
-    },
-    ObserveExistingRuntime {
-        runtime_id: String,
-        source: ObserveContainerError,
-    },
-    StartExistingRuntime {
-        runtime_id: String,
-        source: ControlContainerError,
-    },
-    PersistExistingRuntime {
-        runtime_id: String,
-        source: rusqlite::Error,
-    },
-    ExistingRuntimeChanged {
-        runtime_id: String,
-    },
-    ExistingRuntimeUnavailable {
-        runtime_id: String,
-        state: ObservedRuntimeState,
-    },
-    CheckExistingRuntime {
-        runtime_id: String,
-        source: HealthCheckError,
-    },
-    ExistingRuntimeUnhealthy {
-        runtime_id: String,
-        result: HealthCheckResult,
-    },
-    ExistingPublicRouteMismatch {
-        runtime_id: String,
-    },
-    ReactivatePreviousRuntime {
-        runtime_id: String,
-        source: rusqlite::Error,
-    },
     CreateDeployment {
         source: CreateDeploymentError,
     },
@@ -285,46 +236,6 @@ impl fmt::Display for DeployReleaseError {
                     "failed to load deployment specification: {source}"
                 )
             }
-            Self::ResolveRevision { source } => write!(formatter, "{source}"),
-            Self::LoadExistingRuntime { source } => {
-                write!(formatter, "failed to load the existing runtime: {source}")
-            }
-            Self::ObserveExistingRuntime { runtime_id, source } => write!(
-                formatter,
-                "failed to observe existing runtime `{runtime_id}`: {source}"
-            ),
-            Self::StartExistingRuntime { runtime_id, source } => write!(
-                formatter,
-                "failed to restart existing runtime `{runtime_id}`: {source}"
-            ),
-            Self::PersistExistingRuntime { runtime_id, source } => write!(
-                formatter,
-                "failed to persist observation of existing runtime `{runtime_id}`: {source}"
-            ),
-            Self::ExistingRuntimeChanged { runtime_id } => write!(
-                formatter,
-                "existing runtime `{runtime_id}` changed while it was being reconciled"
-            ),
-            Self::ExistingRuntimeUnavailable { runtime_id, state } => write!(
-                formatter,
-                "existing runtime `{runtime_id}` cannot be reconciled from state {state:?}"
-            ),
-            Self::CheckExistingRuntime { runtime_id, source } => write!(
-                formatter,
-                "failed to check existing runtime `{runtime_id}` health: {source}"
-            ),
-            Self::ExistingRuntimeUnhealthy { runtime_id, result } => write!(
-                formatter,
-                "existing runtime `{runtime_id}` is unhealthy: {result:?}"
-            ),
-            Self::ExistingPublicRouteMismatch { runtime_id } => write!(
-                formatter,
-                "public runtime `{runtime_id}` is healthy but is not the active materialized route"
-            ),
-            Self::ReactivatePreviousRuntime { runtime_id, source } => write!(
-                formatter,
-                "failed to reactivate previous runtime `{runtime_id}`: {source}"
-            ),
             Self::CreateDeployment { source } => write!(formatter, "{source}"),
             Self::DeploymentFailed {
                 deployment_id,
@@ -358,23 +269,11 @@ impl Error for DeployReleaseError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::LoadApplication { source } => Some(source),
-            Self::ResolveRevision { source } => Some(source),
-            Self::LoadExistingRuntime { source } => Some(source),
-            Self::ObserveExistingRuntime { source, .. } => Some(source),
-            Self::StartExistingRuntime { source, .. } => Some(source),
-            Self::PersistExistingRuntime { source, .. } => Some(source),
-            Self::CheckExistingRuntime { source, .. } => Some(source),
-            Self::ReactivatePreviousRuntime { source, .. } => Some(source),
             Self::CreateDeployment { source } => Some(source),
             Self::DeploymentFailed { source, .. } => Some(source.as_ref()),
             Self::RecordFailure { source, .. } => Some(source),
             Self::Cleanup { source, .. } => Some(source.as_ref()),
-            Self::ApplicationNotFound { .. }
-            | Self::PublicApplication { .. }
-            | Self::ExistingRuntimeChanged { .. }
-            | Self::ExistingRuntimeUnavailable { .. }
-            | Self::ExistingRuntimeUnhealthy { .. }
-            | Self::ExistingPublicRouteMismatch { .. } => None,
+            Self::ApplicationNotFound { .. } | Self::PublicApplication { .. } => None,
         }
     }
 }
