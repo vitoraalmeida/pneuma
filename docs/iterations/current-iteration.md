@@ -4,26 +4,16 @@
 
 **Atualizado em:** 8 de agosto de 2026
 
-## Iteração — Histórico por Release/digest e CLI de visibility (entrega 6 da v0.1 OCI)
+## Iteração — Operabilidade final (entrega 7 da v0.1 OCI)
 
-Objetivo: alinhar o histórico de deployments ao conceito de Release imutável
-(release/digest, não commit_sha) e renomear a CLI de exposição para o termo
-"visibility", com saídas coerentes.
+Objetivo: tornar runtimes sobreviventes a reboot via Quadlet e concluir as
+operações de recuperação e diagnóstico da v0.1.
 
 ### Critérios de aceite
 
-- [x] `app deployments` imprime `DEPLOYMENT | RELEASE | SOURCE | STATUS`, com a
-      coluna RELEASE baseada no digest imutável da imagem e SOURCE na revisão de
-      origem (`-` para releases entregues por OCI).
-- [x] CLI renomeada: `app expose <app> <public|internal>` → `app visibility set
-      <app> <public|internal>`; o comando antigo retorna usage.
-- [x] Saídas de sucesso e logs verbose alinhadas com o termo "visibility"
-      (`Visibility for <app>: Public|Internal`).
-- [x] `visibility set` segue operando a materialização do Caddy: público cria o
-      fragmento e valida a rota; interno remove o fragmento; o estado desejado é
-      persistido separadamente da materialização.
-- [x] Testes CLI cobrem o toggle public↔internal, rejeição do comando antigo e
-      de visibilidade desconhecida, e a coluna SOURCE (`-`) para OCI.
-- [x] Docs (roadmap, scope) refletem a entrega 6.
-- [x] Os quatro checks passam: fmt, clippy `-D warnings`, test `--all-features`,
-      build `--release`.
+- [x] Deployment reserva porta loopback fixa e gera uma unidade Quadlet por deployment.
+- [x] Candidata inicia pelo systemd user manager; a unidade somente é habilitada após promoção.
+- [x] `app start` e `app stop` controlam unidades Quadlet, com fallback para runtimes legados.
+- [x] Backup e restore SQLite são expostos na CLI com validação e cópia pre-restore.
+- [x] Doctor valida Podman rootless e a configuração Caddy.
+- [x] Documentação OCI-first, pull de registry, espaço em disco e E2E de reboot no VPS.
