@@ -1,0 +1,27 @@
+schema_version = 2
+
+[system]
+name = "fixtures-test"
+
+[application]
+name = "unhealthy-http"
+
+[delivery]
+type = "oci"
+image = "localhost:5000/unhealthy-http"
+
+[source]
+repository = "local"
+branch = "main"
+
+[build]
+containerfile = "Containerfile"
+context = "."
+
+[runtime]
+container_port = 8080
+healthcheck_path = "/healthz"
+expected_status = 200
+
+[exposure]
+default_visibility = "internal"

@@ -19,6 +19,12 @@ networking, instalação do binário e reboot/recovery.
 - Chave SSH **exclusiva** para a VM, gerada no host antes do provisionamento
   (seção 2).
 - Aplicações fixture pequenas e determinísticas para os testes (seção 6).
+- Registry local (container `registry:2` na porta 5000) para entregar as
+  fixtures por digest (seção 6.2).
+
+> **Nota:** a VM usa rede NAT do libvirt com DHCP; o IP pode mudar entre
+> restores de snapshot. Ao reconectar depois de um restore, confira o IP atual
+> (`virsh -c qemu:///system domifaddr <vm>`) e atualize `~/.ssh/config`.
 
 > **Nota:** uma conta com acesso root (por exemplo `root` ou um usuário com
 > `sudo`) serve apenas para o provisionamento. O Pneuma roda sob o usuário
@@ -147,12 +153,75 @@ Manter as fixtures independentes do site pessoal, pequenas e determinísticas:
 | `redirect-public` | HTTP simples atrás do Caddy | Visibility e proxy |
 
 Cada fixture vive em `scripts/dev-vm/fixtures/<nome>/` com seu `pneuma.toml` e
-Containerfile. Para registrar e deployar uma fixture no fluxo de integração:
+Containerfile.
+
+### 6.1. Copiar e importar
+
+Copie as fixtures para o checkout na VM (owner `pneuma:pneuma`) e registre-as:
 
 ```bash
-pneuma app import /var/lib/pneuma/checkouts/<fixture>
-pneuma app deploy <fixture-app> --image <registry>/<fixture>@sha256:<digest>
+scp -r scripts/dev-vm/fixtures pneuma-dev:/var/lib/pneuma/checkouts/
+ssh pneuma-dev 'chown -R pneuma:pneuma /var/lib/pneuma/checkouts/fixtures'
+ssh pneuma-dev 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma app import /var/lib/pneuma/checkouts/fixtures/healthy-http"'
 ```
+
+> **Atenção:** `app import` usa `ON CONFLICT(name) DO NOTHING`; um re-import após
+> alterar `pneuma.toml` **não** atualiza a entrega registrada. Para trocar o
+> repositório/entrega de uma fixture já registrada, atualize o banco:
+>
+> ```bash
+> runuser -u pneuma -- bash -lc 'cd $HOME && sqlite3 /var/lib/pneuma/database/pneuma.sqlite3 \
+>   "UPDATE application_delivery_specs SET image_repository = replace(image_repository, \
+>   '\''localhost/'\'', '\''localhost:5000/'\'')"'
+> ```
+
+### 6.2. Registry local e deploy por digest
+
+As fixtures são construídas e publicadas num registry local (container
+`registry:2`, porta 5000). **O digest usado no deploy é o do manifest no
+registry, não o Image ID local** — o push reescreve o manifest para OCI. Para
+obter o digest do registry:
+
+```bash
+curl -s -H "Accept: application/vnd.oci.image.manifest.v1+json" \
+  http://localhost:5000/v2/<fixture>/manifests/latest -D - -o /dev/null \
+  | grep -i docker-content-digest
+```
+
+Configure o registry como inseguro em `/etc/containers/registries.conf.d/pneuma-dev.conf`
+(formato v2; o antigo `[registries.insecure]` é rejeitado):
+
+```text
+[[registry]]
+location = "localhost:5000"
+insecure = true
+```
+
+Construa, publique e deploye:
+
+```bash
+podman build -t localhost:5000/<fixture>:latest /var/lib/pneuma/checkouts/fixtures/<fixture>
+podman push --tls-verify=false localhost:5000/<fixture>:latest
+pneuma app deploy <fixture> --image localhost:5000/<fixture>@sha256:<digest-do-registry>
+```
+
+> **Enforcement de repositório:** o deploy só aceita imagens cujo repositório
+> (`localhost:5000/<fixture>`) bate com `[delivery] image` do `pneuma.toml`.
+> O argumento `--image` aceita apenas `<repository>@sha256:<hex>` (o digest
+> solto é rejeitado).
+
+### 6.3. Resultado esperado da bateria
+
+| Fixture | Deploy | Observação |
+|---|---|---|
+| `healthy-http` | Succeeded | Porta host alocada; `/` responde a versão |
+| `unhealthy-http` | Failed | Health check recebe 500 |
+| `slow-start` | Failed | Health 503 dentro da janela de verificação |
+| `bad-port` | Failed | Conexão recusada (porta divergente) |
+| `redirect-public` | Succeeded | Requer Caddy com `local_certs` (seção 7) |
+
+Upgrade e rollback usam um digest novo/antigo do mesmo repositório; a cada
+deploy o runtime anterior é retirado e o novo ganha uma porta host nova.
 
 ## 7. DNS local e Caddy
 
@@ -164,22 +233,43 @@ do host:
 192.168.122.50 api.pneuma.test
 ```
 
-HTTP é suficiente para a maioria dos cenários; TLS público/Let's Encrypt
-continua sendo validado somente na VPS.
+Aplicações públicas passam por **external health check via HTTPS**; sem um
+domínio real o Caddy precisa emitir certificados locais. Habilite `local_certs`
+no Caddyfile da VM e confie na CA raiz:
+
+```caddy
+{
+    local_certs
+}
+```
+
+```bash
+# CA raiz local do Caddy (caminho de exemplo) — instalá-la no trust store
+sudo cp /var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt \
+  /usr/local/share/ca-certificates/caddy-local-root.crt
+sudo update-ca-certificates
+```
+
+Sem isso, o health check externo de uma app `public` falha com erro de TLS e o
+deploy é marcado Failed (em produção não é necessário: Let's Encrypt emite o
+certificado real).
 
 ## 8. Snapshots e reset
 
-Crie pelo menos três snapshots via `virt-manager` ou `virsh`:
+Crie pelo menos dois snapshots via `virt-manager` ou `virsh`
+(`-c qemu:///system`):
 
 | Snapshot | Estado |
 |---|---|
-| `00-debian-clean` | Debian instalado, antes do provisionamento |
-| `10-pneuma-host-ready` | Podman/Caddy/user/diretórios prontos |
-| `20-pneuma-fixtures-ready` | Fixtures registradas e baseline E2E |
+| `pneuma-dev-base` | Podman/Caddy/user/diretórios prontos, Pneuma instalado |
+| `pneuma-dev-fixtures-ready` | Fixtures registradas, registry local, Caddy `local_certs`, baseline E2E |
 
 Testes destrutivos (rollback, reboot, recovery, Caddy quebrado, banco
-inconsistente) devem começar de `10` ou `20`, sem acumular estado invisível
+inconsistente) devem começar de `pneuma-dev-base`, sem acumular estado invisível
 entre execuções.
+
+> **Nota:** a VM usa DHCP do libvirt; após restaurar um snapshot o IP pode
+> mudar (o atual está em `~/.ssh/config`). Não confie no IP antigo.
 
 ## 9. Segurança do ambiente
 
@@ -196,12 +286,14 @@ entre execuções.
 Com a VM pronta, os cenários E2E obrigatórios (seção 9 do plano) podem ser
 automatizados em `scripts/dev-vm/e2e.sh`, cobrindo import, deploy por digest,
 release saudável/unhealthy, rollback, visibility, stop/start, reboot e
-backup/restore. A VPS passa a ser usada apenas para smoke final de integração
-pública (DNS e TLS reais).
+backup/restore. Upgrade/rollback e reboot já foram validados manualmente na VM:
+o Quadlet (via `[Install] WantedBy=default.target`) restaura as aplicações no
+boot com linger habilitado, sem `systemctl enable` explícito. A VPS passa a ser
+usada apenas para smoke final de integração pública (DNS e TLS reais).
 
 ## Referências
 
 - `scripts/dev-vm/provision-host.sh` — provisionamento do host.
 - `scripts/dev-vm/smoke.sh` — verificação básica (version, doctor, app list).
-- [`vps-bootstrap.md`](vps-bootstrap.md) — bootstrap da VPS de produção.
-- [`public-deployment.md`](public-deployment.md) — deployment público.
+- `scripts/dev-vm/fixtures/` — cinco fixtures determinísticas para os cenários
+  E2E (seção 6).
