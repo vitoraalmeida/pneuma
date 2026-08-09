@@ -63,7 +63,7 @@ For a complete VPS setup (Podman, Caddy, user creation, directories), use the bo
 bash scripts/bootstrap-vps.sh <pneuma-source-url> [application-repository-url]
 ```
 
-See `scripts/bootstrap-vps.sh` for prerequisites and details.
+See [`docs/operations/vps-bootstrap.md`](docs/operations/vps-bootstrap.md) for the full Debian 13 guide, and `scripts/bootstrap-vps.sh` for prerequisites.
 
 ## Quick start
 

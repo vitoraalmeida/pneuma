@@ -62,11 +62,15 @@ Após o primeiro deployment Quadlet, confirme que a unidade está habilitada e
 sobrevive a reboot:
 
 ```bash
-systemctl --user is-enabled pneuma-vitoralmeida-tech-prod-<deployment-id>.service
-systemctl --user is-active pneuma-vitoralmeida-tech-prod-<deployment-id>.service
-pneuma app status vitoralmeida-tech-prod
+ls -l "$XDG_RUNTIME_DIR/systemd/generator/default.target.wants/pneuma-<app>-*.service"
+systemctl --user is-active pneuma-<app>-*.service
+pneuma app status <app>
 pneuma doctor
 ```
+
+Unidades Quadlet geradas com `[Install] WantedBy=default.target` aparecem
+como `generated` em `systemctl --user is-enabled`; a verificação correta é o
+symlink do gerador acima.
 
 Depois de reiniciar a VPS, `app status` deve observar o runtime como `Running` e
 o endpoint público deve retornar o status esperado. `pneuma app start` e

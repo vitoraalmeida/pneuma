@@ -20,4 +20,5 @@ altera; um **registro** descreve algo executado e não muda.
 |---|---|
 | [`operations/staging-validation.md`](operations/staging-validation.md) | Validação manual do contrato do site em staging (ago/2026) |
 | [`operations/public-deployment.md`](operations/public-deployment.md) | Procedimento e pré-requisitos do deployment público no host |
+| [`operations/vps-bootstrap.md`](operations/vps-bootstrap.md) | Bootstrap de VPS limpa (Debian 13) com Quadlet e GHCR (ago/2026) |
 | [`operations/backup-and-restore.md`](operations/backup-and-restore.md) | Backup consistente e recuperação do banco SQLite |
