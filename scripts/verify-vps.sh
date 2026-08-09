@@ -172,10 +172,11 @@ else
         report fail "no Quadlet unit found (redeploy with the current binary to generate it)"
     fi
 
-    if systemctl --user is-enabled pneuma-$PNEUMA_USER_APP-*.service >/dev/null 2>&1; then
-        report ok "Quadlet unit is enabled"
+    GENERATOR_WANTS_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/systemd/generator/default.target.wants"
+    if compgen -G "$GENERATOR_WANTS_DIR/pneuma-$PNEUMA_USER_APP-*.service" >/dev/null; then
+        report ok "Quadlet unit is boot-enabled (generator WantedBy default.target)"
     else
-        report fail "Quadlet unit is not enabled"
+        report fail "Quadlet unit is not boot-enabled (generator symlink missing in $GENERATOR_WANTS_DIR)"
     fi
 
     if systemctl --user is-active pneuma-$PNEUMA_USER_APP-*.service >/dev/null 2>&1; then
@@ -221,10 +222,10 @@ else
         report fail "pneuma database restore failed"
     fi
 
-    if pneuma deployment list "$PNEUMA_USER_APP" >"$LOG_DIR/deployments.log" 2>&1; then
-        report ok "pneuma deployment list succeeded"
+    if pneuma app deployments "$PNEUMA_USER_APP" >"$LOG_DIR/deployments.log" 2>&1; then
+        report ok "pneuma app deployments succeeded"
     else
-        report fail "pneuma deployment list failed"
+        report fail "pneuma app deployments failed"
     fi
 fi
 
