@@ -3,13 +3,16 @@
 # Pneuma VPS bootstrap script
 #
 # Prerequisites:
-# - Debian or Ubuntu VPS
+# - Debian 13 (trixie) VPS — Debian 12 ships Podman 4.3.1 without the Quadlet
+#   user generator, which Pneuma requires to supervise runtimes across reboots.
 # - Run this script as root
 # - Internet access
 # - Caddy available from the configured APT repositories
 # - DNS A/AAAA records point to this VPS
 # - TCP ports 80 and 443 are open
 # - Nginx or another service does not own ports 80/443
+#
+# See docs/operations/vps-bootstrap.md for the full guide.
 #
 # Git prerequisites:
 # - Public HTTPS repositories do not need an SSH key.
@@ -59,6 +62,25 @@ apt-get install -y \
     uidmap \
     fuse-overlayfs \
     caddy
+
+QUADLET_GENERATOR=""
+for candidate in \
+    /usr/lib/systemd/user-generators/podman-user-generator \
+    /lib/systemd/user-generators/podman-user-generator; do
+    if [[ -x "$candidate" ]]; then
+        QUADLET_GENERATOR="$candidate"
+        break
+    fi
+done
+
+if [[ -z "$QUADLET_GENERATOR" ]]; then
+    echo
+    echo "Podman Quadlet user generator not found (podman-user-generator)."
+    echo "Pneuma supervises runtimes with Quadlet units, which require"
+    echo "Podman >= 4.4. Debian 12 ships Podman 4.3.1 without it."
+    echo "Use Debian 13 (trixie) or newer, then rerun this script."
+    exit 1
+fi
 
 if ! id "$PNEUMA_USER" >/dev/null 2>&1; then
     useradd \
