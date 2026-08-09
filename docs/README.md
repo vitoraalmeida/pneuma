@@ -10,6 +10,7 @@ altera; um **registro** descreve algo executado e não muda.
 |---|---|
 | [`rust-guidelines.md`](rust-guidelines.md) | Convenções obrigatórias de código Rust |
 | [`usage-guide.md`](usage-guide.md) | Guia passo a passo de uso numa VPS nova: bootstrap, deploy, operação |
+| [`operations/dev-vm-tutorial.md`](operations/dev-vm-tutorial.md) | Tutorial da VM de desenvolvimento (Debian 13): criação, provisionamento, deploy e E2E |
 | [`architecture/architecture.md`](architecture/architecture.md) | Arquitetura implementada: estrutura, runtime Quadlet, exposição, persistência e máquina de estados |
 | [`product/v0.1-scope.md`](product/v0.1-scope.md) | Contrato da v0.1: capacidades, aceite final, não objetivos |
 | [`iterations/current-iteration.md`](iterations/current-iteration.md) | Iteração em andamento (o único acompanhamento de trabalho) |
