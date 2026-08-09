@@ -56,8 +56,8 @@ Regras observadas:
 - transações curtas, nunca abertas durante Git, build, Podman, Caddy ou HTTP;
 - intenção persistida antes dos efeitos; conclusão persistida após confirmar o
   efeito (saga local, sem transação distribuída);
-- a promoção pública (runtime `current`, deployment `succeeded` e exposição
-  `active`) acontece em uma única transação;
+- a promoção pública (runtime do deployment ativo, deployment `succeeded` e
+  exposição `active`) acontece em uma única transação;
 - o banco não é fonte do estado observado do runtime; o Podman é.
 
 `runtime_port_reservations` (migration 0012) impede que candidatas concorrentes
