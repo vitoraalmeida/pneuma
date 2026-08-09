@@ -1,26 +1,28 @@
-# Roadmap consolidado do Pneuma — v0.1 a v0.6
+# Roadmap consolidado do Pneuma — v0.1 a v0.5
 
 **Status:** documento vivo — contrato de evolução do projeto
 **Aplicação-piloto:** `vitoralmeida.tech`
 
-## Fluxo unificado (v0.1+)
+## Fluxo unificado (v0.1 → v0.2)
 
 ```text
-                    ┌─ OCI Registry (ghcr.io)
-                    │   image@sha256:...
-                    ▼
-               Create Release
-                    │
-                    ▼
-               DeployRelease
-                    ▲
-                    │
-                    └─ Local build (deploy-source)
-                         source → build → Release
+Git branch
+    ↓ (v0.2: app deploy --branch)
+git ls-remote → CommitSha
+    ↓ (v0.2: convenção image:<commit>)
+OCI Registry (ghcr.io)
+    │   image@sha256:...
+    ▼
+Create Release
+    │
+    ▼
+DeployRelease
 ```
 
-O CI produz o artefato. O Pneuma recebe o artefato e o opera. Ambos os caminhos
-produzem uma Release e passam pelo mesmo engine de deployment.
+O CI produz o artifact (como `image:<commit-sha>`), o Pneuma descobre o artifact
+do commit e o opera. A v0.1 ainda aceita a Release vinda de build local
+(`deploy-source`); a v0.2 remove esse caminho e torna `Git → CI → OCI → Release
+→ deployment` o único fluxo.
 
 ## Princípios
 
@@ -197,86 +199,159 @@ RuntimeInstance
 
 ---
 
-## v0.2 — CI/CD automatizado
+## v0.2 — Git-aware OCI Delivery
 
-CI produz imagem e aciona deployment via SSH.
+O Pneuma passa de "opera uma imagem OCI que recebo" para "encontra o artifact do
+commit de uma branch e o implanta". Pneuma deixa de construir aplicações: **CI
+produz artifacts, Pneuma descobre e opera artifacts.**
 
-- [ ] GitHub Actions: workflow de validação (PR: format, lint, test, build)
-- [ ] GitHub Actions: build + push GHCR (merge na main)
-- [ ] CLI não interativa (`--non-interactive`, output estruturado, exit codes)
-- [ ] Exclusão mútua de deployment (um por aplicação por vez)
-- [ ] Chave de idempotência (`--idempotency-key`)
-- [ ] Usuário SSH dedicado (`pneuma-deployer`, forced command)
-- [ ] GitHub Actions: stage de deploy (SSH → `pneuma app deploy`)
-- [ ] Rollback automático em falha de health check
-- [ ] Auditoria completa (workflow, run ID, timestamps, requested_by)
-- [ ] Política de retenção de imagens
+```text
+Git branch → commit → OCI digest → Release → deployment
+```
+
+Princípios e mudanças estruturais:
+
+- **Remover build local:** `app deploy-source`, `deployment_deploy_source`,
+  `local_build`, `[build]`, `application_build_specs` e checkout permanente de
+  build. O único artifact deployável é `image@digest`.
+- **Import apenas por Git remoto:** `pneuma app import <git-url>
+  [--manifest <path>]` substitui o import por path local. Checkout somente
+  temporário (clone → ler `pneuma.toml` → persistir → remover). `import` não
+  faz deployment; `active_deployment_id = null`, runtime desejado = stopped.
+- **Manifest schema v3:** sem `[source]`/`[build]`. Repository vem do import,
+  branch vem do deploy, OCI/runtime/exposure vêm do manifesto. Convenção
+  `deploy/<environment>/pneuma.toml` (dev/staging/production); environments
+  ainda não são entidade do domínio.
+- **Persistência:** regra arquitetural — use cases decidem o que deve acontecer,
+  stores SQLite decidem como persistir atomicamente. `SqliteApplicationStore`,
+  `SqliteDeploymentStore`, `SqliteRuntimeStore`, `SqliteReleaseStore`
+  (orientados a capacidades, não repository por tabela). Reads simples (`app
+  list`, `system list`, histórico) continuam queries diretas. Nunca abrir
+  transação durante Git/registry/Podman/Caddy (I/O externo fora da transação;
+  persistir em transação curta no fim).
+- **Deploy por branch:** `pneuma app deploy <app> --branch <branch>`
+  (mutuamente exclusivo com `--image`). Novo use case `DeployByBranch`
+  (`deployment_deploy_branch.rs`): branch → `git ls-remote` → `CommitSha`
+  (congelado para o deployment) → convenção `image:<commit-sha>` → resolver
+  tag → digest → `DeployOci`. Se o CI ainda não publicou o artifact →
+  `ArtifactNotFound`, sem fallback para `:latest`/anterior/build local.
+- **Release correlaciona source e artifact:** `source_revision`, `image_repository`,
+  `image_digest`, `image_reference`.
+- **Fases de implementação:**
+
+  - A — simplificar: remover `deploy-source`, `deployment_deploy_source`,
+    `local_build`, `[build]`, `application_build_specs`, import por path local,
+    source local e checkout permanente.
+  - B — separar persistência: criar os quatro SQLite stores e migrar
+    create/transition/fail/promotion, runtime persistence, release/rollback.
+  - C — novo schema: manifest v3, `deploy/<environment>/pneuma.toml`, novas
+    migrations (nunca alterar as históricas).
+  - D — import Git remoto: `app import <git-url>`, `--manifest`, checkout
+    temporário, persistir `repository_url`/`manifest_path`, idempotência.
+  - E — Git resolution: adapter de Git remoto, `resolve_branch()`, `CommitSha`,
+    erros de auth/repositório/branch.
+  - F — OCI discovery: convenção `image:<commit>`, resolver tag do commit →
+    digest, nunca devolver tag mutável ao engine.
+  - G — deploy por branch: `DeployByBranch`, `--branch`, exclusão mútua com
+    `--image`, persistir `source_revision`.
+  - H — aplicação real: mover manifestos do website, importar staging, testar
+    `--branch staging`, automatizar staging no Actions, importar production,
+    testar `--branch main` e rollback.
+
+**Definition of Done:** `pneuma app import <git-url> --manifest
+deploy/staging/pneuma.toml` seguido de `pneuma app deploy
+vitoralmeida-tech-staging --branch staging` encontra e implanta o artifact
+correto — sem clone manual na VPS, import por path, build local, `podman build`
+pelo Pneuma, descoberta manual de digest ou edição manual de Caddy.
 
 ---
 
-## v0.3 — Deploy automático
+## v0.3 — Reconciliation, automation & CI/CD
+
+Com Git/source/artifact bem definidos, o Pneuma evolui de command-driven para
+declarativo (estado desejado vs observado) e o CI/CD automatiza o deploy.
+
+### Reconciliação e automação
+
+- [ ] Desired vs observed state
+- [ ] Drift detection e automatic recovery
+- [ ] Deployment recovery
+- [ ] Melhor convergência de restart/reboot
+- [ ] Registry watcher (deploy quando o artifact da branch fica disponível)
+- [ ] Automatic deploy policies
+- [ ] Melhorias de candidate/activation
+
+### CI/CD automatizado
 
 Merge na main termina com nova versão implantada e verificada.
 
+- [ ] GitHub Actions: workflow de validação (PR: format, lint, test, build)
+- [ ] GitHub Actions: build + push GHCR, publicado como `image:<commit-sha>`
+- [ ] GitHub Actions: stage de deploy (SSH → `pneuma app deploy --branch`)
 - [ ] Pipeline completo: merge → CI → SSH → deploy → health → active
-- [ ] Caddy atômico (temp → validate → swap → reload → verify externo)
-- [ ] External health check pós-troca com auto-rollback
-- [ ] Container candidato (blue-green simplificado)
-- [ ] Preflight checks antes da troca de runtime
-- [ ] Descoberta de releases (`pneuma release refresh`)
-- [ ] Release list/status na CLI
+- [ ] CLI não interativa (`--non-interactive`, output estruturado, exit codes)
+- [ ] Exclusão mútua de deployment (um por aplicação por vez)
+- [ ] Chave de idempotência (`--idempotency-key`)
+- [ ] Rollback automático em falha de health check
+- [ ] Auditoria completa (workflow, run ID, timestamps, requested_by)
+- [ ] Política de retenção de imagens
+- [ ] Usuário SSH dedicado (`pneuma-deployer`, forced command)
+
+Segurança do deploy automático: GitHub Actions → SSH key exclusiva → usuário
+`pneuma` (sem senha, sem sudo). Inicialmente chave dedicada normal; depois
+`authorized_keys` com forced command restrito à aplicação de staging.
 
 ---
 
-## v0.4 — Multi-app e inter-app
+## v0.4 — Application topology
 
-Sistemas com múltiplas aplicações comunicando-se.
+Adicionar relacionamento entre Applications: o Pneuma passa a entender como as
+aplicações se relacionam, não apenas como cada uma roda isoladamente.
 
-- [ ] Topologia de System (relações declaradas entre aplicações)
-- [ ] Ordem de deploy por dependência
-- [ ] Service discovery gerenciado (DNS ou injeção de ambiente)
-- [ ] Redes compartilhadas entre aplicações do mesmo System
-- [ ] Configuração de comunicação app-to-app
-- [ ] Visão e operação no nível de System
+- [ ] Service relationships (`Application A depends on Application B`)
+- [ ] Internal services
+- [ ] Application dependencies
+- [ ] Network/service addressing
+- [ ] System como agrupador real
+- [ ] Service discovery básico
 
 ---
 
-## v0.5 — Segurança e identidade
+## v0.5 — Network security, identity and secure S2S
 
-Identidade de workload e proteção de comunicação.
+Segurança e identidade de workload; as relações declaradas na v0.4 alimentam as
+políticas.
 
-- [ ] mTLS entre aplicações (pneuma-proxy sidecar)
-- [ ] SPIFFE/SPIRE workload identity
-- [ ] Gestão de secrets (injeção, rotação)
+### Network enforcement
+
+- [ ] `pneuma-netd` (nftables, default deny, conectividade explícita)
+
+### Workload identity
+
+- [ ] SPIFFE + SPIRE (cada `RuntimeInstance` recebe identidade própria)
+
+### `pneuma-proxy`
+
+- [ ] Um proxy por `RuntimeInstance` (mTLS, authn, authz, telemetria)
+
+### Artifact security
+
 - [ ] SBOM generation e enforcement
 - [ ] Verificação de assinatura de imagem (cosign/Notation)
 - [ ] Admission policies (rejeitar imagem não assinada)
-- [ ] Network policies (nftables/pneuma-netd)
+- [ ] Gestão de secrets (injeção, rotação)
 - [ ] Threat model implementado
 
 ---
 
-## v0.6 — API e observabilidade
+## Fora do escopo (congelado além da v0.5)
 
-Interfaces remotas e monitoramento.
-
-- [ ] HTTP API (REST, mesmos casos de uso da CLI)
-- [ ] Webhooks (triggers de deploy, notificações de status)
-- [ ] Registry watcher (auto-descoberta de novas imagens)
-- [ ] Observabilidade básica (métricas, logs estruturados)
-- [ ] TUI (interface interativa no terminal)
-- [ ] Multi-host (scheduler, agentes remotos)
-- [ ] Reconciliação contínua (desejado vs observado)
-
----
-
-## Fora do escopo (congelado até v0.6)
-
-TUI (exceto v0.6), API HTTP (exceto v0.6), webhooks, registry watcher, múltiplos
-hosts, scheduler, comunicação declarativa entre apps, dependencies, service
-discovery, pneuma-netd, nftables, network policies, SPIFFE/SPIRE, workload
-identity, pneuma-proxy, mTLS, secrets, SBOM, signature enforcement, admission
-policies, reconciliação contínua, managed builds como feature oficial, canary,
-rollout gradual, autoscaling, Kubernetes, RBAC, multiusuário.
+TUI, API HTTP, webhooks, observabilidade centralizada, múltiplos hosts,
+scheduler, agentes remotos, reconciliação distribuída, comunicação declarativa
+entre apps, dependencies, service discovery além do básico da v0.4,
+pneuma-netd, nftables, network policies, SPIFFE/SPIRE, workload identity,
+pneuma-proxy, mTLS, secrets, SBOM, signature enforcement, admission policies,
+managed builds como feature oficial, canary, rollout gradual, autoscaling,
+Kubernetes, RBAC, multiusuário.
 
 Cada item é descongelado na versão que o introduz explicitamente.

@@ -1,19 +1,47 @@
 # Iteração atual
 
-**Status:** concluída
+**Status:** em andamento
 
-**Atualizado em:** 8 de agosto de 2026
+**Atualizado em:** 9 de agosto de 2026
 
-## Iteração — Operabilidade final (entrega 7 da v0.1 OCI)
+## Iteração — v0.2 Git-aware OCI Delivery
 
-Objetivo: tornar runtimes sobreviventes a reboot via Quadlet e concluir as
-operações de recuperação e diagnóstico da v0.1.
+Objetivo: tornar o Pneuma um sistema de **discovery e deployment** de artifacts
+OCI produzidos pelo CI. Pneuma deixa de construir aplicações; o fluxo passa a
+ser `Git branch → commit → OCI digest → Release → deployment`.
 
-### Critérios de aceite
+### Critérios de aceite (Definition of Done)
 
-- [x] Deployment reserva porta loopback fixa e gera uma unidade Quadlet por deployment.
-- [x] Candidata inicia pelo systemd user manager; a unidade somente é habilitada após promoção.
-- [x] `app start` e `app stop` controlam unidades Quadlet, com fallback para runtimes legados.
-- [x] Backup e restore SQLite são expostos na CLI com validação e cópia pre-restore.
-- [x] Doctor valida Podman rootless e a configuração Caddy.
-- [x] Documentação OCI-first, pull de registry, espaço em disco e E2E de reboot no VPS.
+- `pneuma app import <git-url> --manifest deploy/staging/pneuma.toml` registra
+  a aplicação a partir de um repositório Git remoto, sem deployment;
+- `pneuma app deploy vitoralmeida-tech-staging --branch staging` encontra e
+  implanta o artifact do commit da branch, sem clone manual, build local,
+  descoberta manual de digest ou edição manual de Caddy;
+- `pneuma app deploy <app> --branch <branch>` e `--image <repo>@sha256:<hex>`
+  são mutuamente exclusivos;
+- uso de cases state-changing relevantes não contêm SQL diretamente;
+  persistência e atomicidade ficam nos SQLite stores.
+
+### Fases
+
+- [ ] **A — simplificar:** remover `deploy-source`, `deployment_deploy_source`,
+  `local_build`, `[build]`, `application_build_specs`, import por path local,
+  source local e checkout permanente de build.
+- [ ] **B — separar persistência:** criar `SqliteApplicationStore`,
+  `SqliteDeploymentStore`, `SqliteRuntimeStore`, `SqliteReleaseStore`; migrar
+  create/transition/fail/promotion, runtime persistence e release/rollback.
+- [ ] **C — novo schema:** manifest v3 (sem `[source]`/`[build]`),
+  `deploy/<environment>/pneuma.toml`, novas migrations (nunca alterar as
+  históricas).
+- [ ] **D — import Git remoto:** `app import <git-url>`, `--manifest`, checkout
+  temporário, persistir `repository_url`/`manifest_path`, idempotência.
+- [ ] **E — Git resolution:** adapter de Git remoto, `resolve_branch()`,
+  `CommitSha`, erros de auth/repositório/branch.
+- [ ] **F — OCI discovery:** convenção `image:<commit>`, resolver tag do commit
+  → digest, nunca devolver tag mutável ao engine.
+- [ ] **G — deploy por branch:** `DeployByBranch`
+  (`deployment_deploy_branch.rs`), `--branch`, exclusão mútua com `--image`,
+  persistir `source_revision`.
+- [ ] **H — aplicação real:** mover manifestos do website, importar staging,
+  testar `--branch staging`, automatizar staging no Actions, importar
+  production, testar `--branch main` e rollback.

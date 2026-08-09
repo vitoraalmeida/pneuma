@@ -30,6 +30,14 @@ Crate único organizado em três camadas:
 Sem traits, generics, macros ou async: as restrições de
 [`docs/rust-guidelines.md`](../rust-guidelines.md) valem para toda mudança.
 
+> **Direção v0.2** (ver [`roadmap.md`](../roadmap.md)): o Pneuma deixa de
+> construir aplicações. `deploy-source`, `deployment_deploy_source`,
+> `local_build`, `[build]` e o import por path local serão removidos; o único
+> artifact deployável passa a ser `image@digest` descoberto pelo CI
+> (`Git branch → commit → OCI digest`), e a persistência passa a ser organizada
+> em SQLite stores por capacidade. Este documento descreve a v0.1 como
+> implementada.
+
 ## 2. Efeitos externos
 
 Toda integração é um processo filho com argumentos estruturados, sem shell:
