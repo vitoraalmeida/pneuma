@@ -223,6 +223,39 @@ pneuma app deploy <fixture> --image localhost:5000/<fixture>@sha256:<digest-do-r
 Upgrade e rollback usam um digest novo/antigo do mesmo repositório; a cada
 deploy o runtime anterior é retirado e o novo ganha uma porta host nova.
 
+### 6.4. Scripts de automação do ciclo
+
+Os scripts em `scripts/dev-vm/` automatizam o ciclo de desenvolvimento contra a
+VM (todos aceitam `[ssh-host]` opcional, default `pneuma-dev`):
+
+| Script | O que faz | Quando usar |
+|---|---|---|
+| `sync-binary.sh` | `cargo build --release` + scp + install + `pneuma doctor` | Após alterar código Rust |
+| `rebuild-fixtures.sh` | Copia fixtures, build + push no registry local, mostra digests | Após editar fixtures/`server.py` |
+| `deploy-all-fixtures.sh` | Import + deploy de todas as fixtures por digest | Após reset ou mudança de fixtures |
+| `reset-fixtures.sh` | Para apps, remove units/containers/Caddy fragments/checkouts, recria o DB | Voltar a um estado limpo |
+| `overview.sh` | Status de apps, containers, units, Caddy e registry de uma vez | Debug rápido |
+| `e2e.sh` | Reset → rebuild → deploy → verifica health → upgrade → rollback → reboot → verifica | Bateria completa de regressão |
+
+Fluxo típico de desenvolvimento:
+
+```bash
+scripts/dev-vm/sync-binary.sh        # depois de cada mudança de código
+scripts/dev-vm/overview.sh           # inspecionar o estado
+```
+
+Fluxo de reset completo:
+
+```bash
+scripts/dev-vm/reset-fixtures.sh
+scripts/dev-vm/rebuild-fixtures.sh
+scripts/dev-vm/deploy-all-fixtures.sh
+```
+
+> **Nota:** `e2e.sh` reinicia a VM (`sudo reboot`) e espera ela voltar; não o
+> execute durante trabalho não persistido na VM. O `reset-fixtures.sh` apaga o
+> banco e os checkouts — a VM volta ao estado pós-provisionamento.
+
 ## 7. DNS local e Caddy
 
 Para validar o proxy do Caddy sem DNS público, use nomes locais no `/etc/hosts`
@@ -283,17 +316,20 @@ entre execuções.
 
 ## 10. Próximos passos
 
-Com a VM pronta, os cenários E2E obrigatórios (seção 9 do plano) podem ser
-automatizados em `scripts/dev-vm/e2e.sh`, cobrindo import, deploy por digest,
-release saudável/unhealthy, rollback, visibility, stop/start, reboot e
-backup/restore. Upgrade/rollback e reboot já foram validados manualmente na VM:
-o Quadlet (via `[Install] WantedBy=default.target`) restaura as aplicações no
-boot com linger habilitado, sem `systemctl enable` explícito. A VPS passa a ser
-usada apenas para smoke final de integração pública (DNS e TLS reais).
+A bateria `scripts/dev-vm/e2e.sh` já cobre o ciclo principal (import, deploy por
+digest, upgrade, rollback e reboot). Upgrade/rollback e reboot foram validados
+na VM: o Quadlet (via `[Install] WantedBy=default.target`) restaura as
+aplicações no boot com linger habilitado, sem `systemctl enable` explícito.
+Com a v0.2 (Git-aware), o `e2e.sh` evoluirá para validar `app import <git-url>`
+e `app deploy --branch`. A VPS passa a ser usada apenas para smoke final de
+integração pública (DNS e TLS reais).
 
 ## Referências
 
 - `scripts/dev-vm/provision-host.sh` — provisionamento do host.
 - `scripts/dev-vm/smoke.sh` — verificação básica (version, doctor, app list).
+- `scripts/dev-vm/sync-binary.sh` — build + deploy do binário na VM.
+- `scripts/dev-vm/{rebuild,deploy-all,reset,overview,e2e}.sh` — automação do
+  ciclo de fixtures (seção 6.4).
 - `scripts/dev-vm/fixtures/` — cinco fixtures determinísticas para os cenários
   E2E (seção 6).
