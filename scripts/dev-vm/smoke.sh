@@ -20,7 +20,7 @@ set -euo pipefail
 SSH_HOST="${1:-}"
 
 if [[ -n "$SSH_HOST" ]]; then
-    ssh "$SSH_HOST" "bash -s" < "$0"
+    ssh "$SSH_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && bash -s'" < "$0"
     exit $?
 fi
 
