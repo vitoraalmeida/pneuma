@@ -1098,6 +1098,21 @@ fn run_doctor(connection: &rusqlite::Connection, verbose: bool) -> Result<(), Cl
         }
     }
 
+    log_verbose(verbose, "checking Podman Quadlet user generator");
+    const QUADLET_GENERATOR_CANDIDATES: &[&str] = &[
+        "/usr/lib/systemd/user-generators/podman-user-generator",
+        "/lib/systemd/user-generators/podman-user-generator",
+    ];
+    let quadlet_generator = QUADLET_GENERATOR_CANDIDATES
+        .iter()
+        .find(|path| std::path::Path::new(path).is_file());
+    if let Some(generator) = quadlet_generator {
+        println!("✓ Podman Quadlet user generator: {generator}");
+    } else {
+        println!("✗ Podman Quadlet user generator: not found (install Podman >= 4.4 or Debian 13)");
+        all_ok = false;
+    }
+
     log_verbose(verbose, "checking Caddy availability");
     match std::process::Command::new("caddy").arg("version").output() {
         Ok(output) if output.status.success() => {
