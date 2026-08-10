@@ -52,8 +52,9 @@ imutáveis vivem em `migrations/` e são registradas via `include_str!` em
 (`PRAGMA foreign_keys = ON`).
 
 A especificação da aplicação é persistida na importação do `pneuma.toml`
-(schema v2): `application_sources` existe quando o manifesto declara `[source]`,
-e `application_delivery_specs` sempre guarda o repositório OCI permitido
+(schema v3): `application_sources` existe quando o import informa
+`repository_url` (vem do comando, não do manifesto), e
+`application_delivery_specs` sempre guarda o repositório OCI permitido
 (`[delivery] image`), usado para validar o `app deploy --image`.
 
 Regras observadas:

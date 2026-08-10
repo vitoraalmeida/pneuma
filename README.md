@@ -28,7 +28,7 @@ Caddy reverse proxy (if public)
 
 ## Features
 
-- **OCI-first**: deploy digest-pinned releases declared by `[delivery]`; `deploy-source` remains available for local builds
+- **OCI-first**: deploy digest-pinned releases declared by `[delivery]`
 - **Rootless containers**: runs on Podman without root privileges
 - **Health checks**: internal (loopback) and external (public endpoint) verification
 - **Atomic deployments**: candidate containers are validated before promotion; failed deployments preserve the previous version
@@ -42,7 +42,7 @@ Caddy reverse proxy (if public)
 - **Rust** 1.85 or later (for building from source)
 - **Podman** with rootless mode configured
 - **Caddy** for public app exposure
-- **Git** for `deploy-source` builds and imports
+- **Git** for application imports
 
 ## Installation
 
@@ -73,7 +73,7 @@ For a step-by-step walkthrough from a fresh VPS to a deployed site, see [`docs/u
 
 ```toml
 # pneuma.toml
-schema_version = 2
+schema_version = 3
 
 [application]
 name = "my-app"
@@ -117,10 +117,9 @@ pneuma app status my-app
 | `pneuma system create <name>` | Create a system to group applications |
 | `pneuma system list` | List all systems |
 | `pneuma system show <name>` | Show a system and its applications |
-| `pneuma app import <repository-path>` | Import an application from a local repository |
+| `pneuma app import <repository-path>` | Import an application from a repository |
 | `pneuma app list` | List all registered applications |
 | `pneuma app deploy <app> --image <repository@sha256:...>` | Deploy an immutable OCI release |
-| `pneuma app deploy-source <app> <repository-path> --revision <revision>` | Build and deploy a local source revision |
 | `pneuma app visibility set <app> <public\|internal>` | Set desired public visibility |
 | `pneuma app status <app>` | Show desired and observed runtime state |
 | `pneuma app start <app>` | Start a stopped application |
@@ -139,7 +138,7 @@ Add `--verbose` before the command to see step-by-step progress.
 The `pneuma.toml` manifest declares application configuration:
 
 ```toml
-schema_version = 2
+schema_version = 3
 
 [application]
 name = "personal-site"
@@ -160,19 +159,18 @@ domain = "example.com"
 
 **Fields:**
 
-- `schema_version`: manifest schema version (currently `2`)
+- `schema_version`: manifest schema version (currently `3`)
 - `name`: application identifier (used in all commands)
 - `delivery.type`: delivery model (`oci`); the image is produced by CI
 - `delivery.image`: OCI repository that CI pushes immutable images to
-- `containerfile`: path to Containerfile relative to context (only for `deploy-source`)
-- `context`: build context directory (only for `deploy-source`)
 - `container_port`: port exposed by the container
 - `healthcheck_path`: HTTP path for health checks
 - `expected_status`: expected HTTP status code (typically 200)
 - `default_visibility`: `internal` or `public`
 - `domain`: required for public apps, ignored for internal
 
-The `[source]` and `[build]` sections are only needed for `deploy-source` local builds; they must be provided together.
+The repository URL comes from the `pneuma app import` command, not from the
+manifest; the branch comes from the deploy command.
 
 ## Configuration
 
@@ -204,12 +202,10 @@ pneuma/
 │   │   ├── deployment_create.rs     # Deployment creation
 │   │   ├── deployment_deploy_oci.rs # OCI image deployment entry point
 │   │   ├── deployment_deploy_release.rs # Deployment orchestrator
-│   │   ├── deployment_deploy_source.rs  # Local source builds
 │   │   ├── deployment_transition.rs # State machine
 │   │   └── ...                      # Other use cases
 │   └── adapters/                    # External integrations
 │       ├── git_source.rs            # Git adapter
-│       ├── local_build.rs           # Podman build
 │       ├── local_runtime.rs         # Container lifecycle
 │       ├── oci_image.rs             # OCI image pull
 │       ├── caddy_exposure.rs        # Caddy integration
