@@ -1,13 +1,12 @@
 use std::env;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use pneuma::adapters::health_check_internal::{HealthCheckResult, check_internal_health};
-use pneuma::adapters::local_build::build_image;
 use pneuma::adapters::local_runtime::{
     ControlContainerError, CreateContainerError, ObservedRuntimeState, create_container,
     observe_container, start_container, stop_container,
@@ -148,18 +147,16 @@ fn main() {
     )
     .unwrap();
     let commit_sha = format!("{:040x}", unique_suffix());
-    let built = build_image(
-        &temporary_directory.path,
-        "pneuma-runtime-test",
-        &commit_sha,
-        Path::new("Containerfile"),
-        Path::new("."),
-    )
-    .unwrap();
-    let image = TestImage::new(built.reference.clone());
+    let reference = format!("localhost/pneuma/pneuma-runtime-test:{commit_sha}");
+    let build_output = Command::new("podman")
+        .args(["build", "--tag", &reference, "--file", "Containerfile", "."])
+        .current_dir(&temporary_directory.path)
+        .output()
+        .unwrap();
+    assert_command_succeeded(&build_output);
+    let image = TestImage::new(reference.clone());
 
-    let created =
-        create_container(&built.reference, "pneuma-runtime-test", &commit_sha, 8080).unwrap();
+    let created = create_container(&reference, "pneuma-runtime-test", &commit_sha, 8080).unwrap();
     let container = TestContainer::new(created.id.clone());
 
     assert_eq!(
@@ -204,8 +201,7 @@ fn main() {
         "bindings: {port_bindings}"
     );
 
-    let error =
-        create_container(&built.reference, "pneuma-runtime-test", &commit_sha, 8080).unwrap_err();
+    let error = create_container(&reference, "pneuma-runtime-test", &commit_sha, 8080).unwrap_err();
     assert!(matches!(
         error,
         CreateContainerError::Create {

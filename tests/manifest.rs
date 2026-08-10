@@ -20,10 +20,6 @@ fn loads_and_validates_a_repository_manifest() {
         "ghcr.io/vitoraalmeida/vitoralmeida.tech"
     );
     assert_eq!(manifest.source.as_ref().unwrap().branch, "main");
-    assert_eq!(
-        manifest.build.as_ref().unwrap().containerfile,
-        Path::new("Containerfile")
-    );
     assert_eq!(manifest.runtime.container_port, 8080);
     assert_eq!(manifest.runtime.healthcheck_path, "/healthz");
     assert_eq!(manifest.exposure.default_visibility, Visibility::Public);
@@ -109,13 +105,6 @@ fn rejects_invalid_manifest_fields() {
             "branch = \"main branch\"",
         ),
         ("source.branch", "branch = \"main\"", "branch = \"\""),
-        (
-            "build.containerfile",
-            "containerfile = \"Containerfile\"",
-            "containerfile = \"/Containerfile\"",
-        ),
-        ("build.context", "context = \".\"", "context = \"../site\""),
-        ("build.context", "context = \".\"", "context = \"\""),
         (
             "runtime.container_port",
             "container_port = 8080",
@@ -292,39 +281,15 @@ fn rejects_an_unknown_delivery_type() {
 }
 
 #[test]
-fn allows_a_manifest_without_source_and_build() {
-    let contents = VALID_MANIFEST
-        .replace(
-            "[source]\nrepository = \"https://github.com/vitoraalmeida/vitoralmeida.tech\"\nbranch = \"main\"\n\n",
-            "",
-        )
-        .replace(
-            "[build]\ncontainerfile = \"Containerfile\"\ncontext = \".\"\n\n",
-            "",
-        );
-
-    let manifest = parse_manifest(&contents).expect("source and build should be optional");
-
-    assert_eq!(manifest.source, None);
-    assert_eq!(manifest.build, None);
-}
-
-#[test]
-fn requires_source_and_build_together() {
+fn allows_a_manifest_without_source() {
     let contents = VALID_MANIFEST.replace(
-        "[build]\ncontainerfile = \"Containerfile\"\ncontext = \".\"\n\n",
+        "[source]\nrepository = \"https://github.com/vitoraalmeida/vitoralmeida.tech\"\nbranch = \"main\"\n\n",
         "",
     );
 
-    let error = parse_manifest(&contents).expect_err("build missing should fail");
+    let manifest = parse_manifest(&contents).expect("source should be optional");
 
-    assert!(matches!(
-        error,
-        ManifestError::InvalidField {
-            field: "source",
-            ..
-        }
-    ));
+    assert_eq!(manifest.source, None);
 }
 
 #[test]

@@ -14,10 +14,6 @@ image = "localhost:5000/healthy-http"
 repository = "local"
 branch = "main"
 
-[build]
-containerfile = "Containerfile"
-context = "."
-
 [runtime]
 container_port = 8080
 healthcheck_path = "/healthz"

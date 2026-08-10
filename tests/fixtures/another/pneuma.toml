@@ -14,10 +14,6 @@ image = "registry.example/team/service"
 repository = "."
 branch = "trunk"
 
-[build]
-containerfile = "Containerfile"
-context = "."
-
 [runtime]
 container_port = 8080
 healthcheck_path = "/healthz"

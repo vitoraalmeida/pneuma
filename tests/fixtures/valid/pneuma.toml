@@ -14,10 +14,6 @@ image = "ghcr.io/vitoraalmeida/vitoralmeida.tech"
 repository = "https://github.com/vitoraalmeida/vitoralmeida.tech"
 branch = "main"
 
-[build]
-containerfile = "Containerfile"
-context = "."
-
 [runtime]
 container_port = 8080
 healthcheck_path = "/healthz"

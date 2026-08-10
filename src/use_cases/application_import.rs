@@ -207,25 +207,6 @@ fn persist_specification(
             .map_err(|source| ImportError::Persistence { source })?;
     }
 
-    if let Some(build) = &manifest.build {
-        transaction
-            .execute(
-                "INSERT INTO application_build_specs (
-                    application_id,
-                    containerfile_path,
-                    context_path,
-                    created_at,
-                    updated_at
-                ) VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-                params![
-                    application_id,
-                    build.containerfile.to_string_lossy(),
-                    build.context.to_string_lossy()
-                ],
-            )
-            .map_err(|source| ImportError::Persistence { source })?;
-    }
-
     transaction
         .execute(
             "INSERT INTO application_runtime_specs (

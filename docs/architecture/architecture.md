@@ -13,17 +13,16 @@ Crate único organizado em três camadas:
 - `src/use_cases/` — casos de uso que orquestram adapters e domínio
   (`application_import`, `application_list`, `application_runtime`,
   `deployment_create`, `deployment_deploy_oci`, `deployment_deploy_release`,
-  `deployment_deploy_source`, `deployment_list`, `deployment_promote_internal`,
+  `deployment_list`, `deployment_promote_internal`,
   `deployment_promote_public`, `deployment_register_runtime`,
   `deployment_rollback`, `deployment_transition`, `exposure_change`,
   `release_create`, `system_create`, `system_list`, `system_show`).
   `deployment_deploy_release` orquestra o deployment inteiro (runtime, health,
-  Caddy e ativação) a partir de uma Release imutável; os caminhos OCI
-  (`deployment_deploy_oci`) e de fonte local (`deployment_deploy_source`)
-  produzem a Release e delegam a ele. `deployment_transition` aplica a máquina
-  de estados persistida.
+  Caddy e ativação) a partir de uma Release imutável; o caminho OCI
+  (`deployment_deploy_oci`) produz a Release e delega a ele.
+  `deployment_transition` aplica a máquina de estados persistida.
 - `src/adapters/` — integrações com sistemas externos (`git_source`,
-  `local_build`, `local_runtime`, `oci_image`, `port_allocator`,
+  `local_runtime`, `oci_image`, `port_allocator`,
   `systemd_quadlet`, `caddy_exposure`, `health_check_external`,
   `health_check_internal`, `database`).
 
@@ -31,12 +30,11 @@ Sem traits, generics, macros ou async: as restrições de
 [`docs/rust-guidelines.md`](../rust-guidelines.md) valem para toda mudança.
 
 > **Direção v0.2** (ver [`roadmap.md`](../roadmap.md)): o Pneuma deixa de
-> construir aplicações. `deploy-source`, `deployment_deploy_source`,
-> `local_build`, `[build]` e o import por path local serão removidos; o único
-> artifact deployável passa a ser `image@digest` descoberto pelo CI
-> (`Git branch → commit → OCI digest`), e a persistência passa a ser organizada
-> em SQLite stores por capacidade. Este documento descreve a v0.1 como
-> implementada.
+> construir aplicações. O único artifact deployável é `image@digest` descoberto
+> pelo CI (`Git branch → commit → OCI digest`), e a persistência passa a ser
+> organizada em SQLite stores por capacidade. A Fase A da iteração atual removeu
+> `deploy-source`, `deployment_deploy_source`, `local_build` e `[build]`.
+> Este documento descreve a v0.1 com as simplificações da Fase A aplicadas.
 
 ## 2. Efeitos externos
 
@@ -54,9 +52,8 @@ imutáveis vivem em `migrations/` e são registradas via `include_str!` em
 (`PRAGMA foreign_keys = ON`).
 
 A especificação da aplicação é persistida na importação do `pneuma.toml`
-(schema v2): `application_sources` e `application_build_specs` existem apenas
-quando o manifesto declara `[source]`/`[build]` (caminho `deploy-source`), e
-`application_delivery_specs` sempre guarda o repositório OCI permitido
+(schema v2): `application_sources` existe quando o manifesto declara `[source]`,
+e `application_delivery_specs` sempre guarda o repositório OCI permitido
 (`[delivery] image`), usado para validar o `app deploy --image`.
 
 Regras observadas:

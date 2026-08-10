@@ -3,7 +3,6 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
-use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -141,15 +140,15 @@ fn deploys_an_internal_application_and_prints_its_identity() {
     let lines: Vec<&str> = stdout.lines().collect();
     assert_eq!(lines.len(), 6);
     assert_eq!(lines[0], "Deployed another-site");
-    assert_eq!(lines[1], format!("Commit: {}", environment.commit_sha));
+    let digest = format!("sha256:{}", "a".repeat(64));
+    assert_eq!(
+        lines[1],
+        format!("Image: {}@{digest}", environment.image_repository)
+    );
     assert_identifier_line(lines[2], "Deployment: ");
     assert_identifier_line(lines[3], "Runtime: ");
     assert!(lines[4].starts_with("Container: pneuma-another-site-"));
     assert_eq!(lines[5], "Status: Succeeded");
-    assert_eq!(
-        fs::read_dir(&environment.workspace_path).unwrap().count(),
-        1
-    );
     let connection = database::open(&environment.database_path).unwrap();
     let desired_state: String = connection
         .query_row(
@@ -306,40 +305,6 @@ fn rejects_an_oci_repository_not_allowed_by_the_delivery_spec() {
 }
 
 #[test]
-fn oci_only_application_rejects_deploy_source() {
-    let environment = DeploymentEnvironment::from_fixture("oci-only", "oci-only-app");
-    assert_command_succeeded(&environment.import());
-
-    let output = Command::new(env!("CARGO_BIN_EXE_pneuma"))
-        .env("PNEUMA_DATABASE_PATH", &environment.database_path)
-        .env("PNEUMA_WORKSPACE_PATH", &environment.workspace_path)
-        .env(
-            "PNEUMA_CADDY_MANAGED_PATH",
-            &environment.managed_caddy_directory,
-        )
-        .env("PNEUMA_CADDYFILE_PATH", &environment.caddyfile_path)
-        .env("PATH", executable_path(&environment.fake_bin))
-        .env("PNEUMA_FAKE_PORT", "30000")
-        .env(
-            "PNEUMA_FAKE_PODMAN_LOG",
-            environment.root.join("podman.log"),
-        )
-        .args(["app", "deploy-source", &environment.application_name])
-        .arg(&environment.repository_path)
-        .args(["--revision", "HEAD"])
-        .output()
-        .unwrap();
-
-    assert!(!output.status.success());
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("has no [source]/[build] configuration"),
-        "unexpected stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(!environment.root.join("podman.log").exists());
-}
-
-#[test]
 fn oci_pull_and_digest_failures_create_no_release_or_runtime() {
     for failure in [OciFailure::Pull, OciFailure::DigestMismatch] {
         let environment = DeploymentEnvironment::new();
@@ -372,70 +337,6 @@ fn oci_pull_and_digest_failures_create_no_release_or_runtime() {
 }
 
 #[test]
-fn source_deploy_is_explicit_and_old_deploy_syntax_is_usage() {
-    let environment = DeploymentEnvironment::new();
-    assert_command_succeeded(&environment.import());
-    environment.deploy_current_revision();
-
-    let old_syntax = Command::new(env!("CARGO_BIN_EXE_pneuma"))
-        .args(["app", "deploy", &environment.application_name])
-        .arg(&environment.repository_path)
-        .args(["--revision", "HEAD"])
-        .output()
-        .unwrap();
-
-    assert!(!old_syntax.status.success());
-    assert!(String::from_utf8_lossy(&old_syntax.stderr).contains("Usage:"));
-}
-
-#[test]
-fn a_failed_deploy_retry_reuses_the_checkout() {
-    let environment = DeploymentEnvironment::new();
-    assert_command_succeeded(&environment.import());
-
-    let failing_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-    let failing_port = failing_listener.local_addr().unwrap().port();
-    let failing_server = thread::spawn(move || respond_unhealthy(&failing_listener, 5));
-    let first = environment.deploy(failing_port, false);
-    failing_server.join().unwrap();
-    assert!(!first.status.success());
-
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let server = thread::spawn(move || respond_once(&listener, 200));
-    assert_command_succeeded(&environment.deploy(port, false));
-    server.join().unwrap();
-}
-
-#[test]
-fn reports_a_missing_application_before_external_work() {
-    let database_path = temporary_database_path();
-    let workspace_path = database_path.with_extension("workspaces");
-
-    let output = Command::new(env!("CARGO_BIN_EXE_pneuma"))
-        .env("PNEUMA_DATABASE_PATH", &database_path)
-        .env("PNEUMA_WORKSPACE_PATH", &workspace_path)
-        .args([
-            "app",
-            "deploy-source",
-            "missing-application",
-            "missing-repository",
-            "--revision",
-            "main",
-        ])
-        .output()
-        .unwrap();
-    let _ = fs::remove_file(&database_path);
-
-    assert!(!output.status.success());
-    assert!(
-        String::from_utf8_lossy(&output.stderr)
-            .contains("application `missing-application` was not found")
-    );
-    assert!(!workspace_path.exists());
-}
-
-#[test]
 fn deploys_a_public_application_and_persists_the_active_route() {
     let environment = DeploymentEnvironment::public();
     assert_command_succeeded(&environment.import());
@@ -452,24 +353,22 @@ fn deploys_a_public_application_and_persists_the_active_route() {
     assert!(curl_command.contains("--resolve vitoralmeida.tech:443:127.0.0.1"));
     assert!(curl_command.contains("https://vitoralmeida.tech/healthz"));
     let connection = database::open(&environment.database_path).unwrap();
-    let state: (String, String, String, String) = connection
+    let state: (String, String, String) = connection
         .query_row(
             "SELECT exposures.materialization_state,
-                    exposures.configuration_version,
                      runtime_instances.state,
                     deployments.status
              FROM exposures
              JOIN runtime_instances ON runtime_instances.id = exposures.active_runtime_id
              JOIN deployments ON deployments.id = runtime_instances.deployment_id",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .unwrap();
     assert_eq!(
         state,
         (
             "active".to_owned(),
-            environment.commit_sha.clone(),
             "running".to_owned(),
             "succeeded".to_owned(),
         )
@@ -499,8 +398,11 @@ fn restores_the_previous_public_route_when_external_health_fails() {
     let first_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let first_port = first_listener.local_addr().unwrap().port();
     let first_server = thread::spawn(move || respond_once(&first_listener, 200));
-    assert_command_succeeded(&environment.deploy(first_port, false));
+    let first_digest = format!("sha256:{}", "a".repeat(64));
+    let first_reference = format!("{}@{first_digest}", environment.image_repository);
+    let first_output = environment.deploy_oci(&first_reference, first_port);
     first_server.join().unwrap();
+    assert_command_succeeded(&first_output);
     let connection = database::open(&environment.database_path).unwrap();
     let first_active_runtime: String = connection
         .query_row("SELECT active_runtime_id FROM exposures", [], |row| {
@@ -518,10 +420,52 @@ fn restores_the_previous_public_route_when_external_health_fails() {
     environment.commit("second revision");
     let second_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let second_port = second_listener.local_addr().unwrap().port();
-    let second_server = thread::spawn(move || respond_once(&second_listener, 200));
+    let _second_server = thread::spawn(move || {
+        for _ in 0..10 {
+            if let Ok((mut stream, _)) = second_listener.accept() {
+                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+            }
+        }
+    });
 
-    let output = environment.deploy_with_external_status(second_port, false, 503);
-    second_server.join().unwrap();
+    let digest = format!("sha256:{}", "b".repeat(64));
+    let reference = format!("{}@{digest}", environment.image_repository);
+    let mut command = Command::new(env!("CARGO_BIN_EXE_pneuma"));
+    let output = command
+        .env("PNEUMA_DATABASE_PATH", &environment.database_path)
+        .env("PNEUMA_WORKSPACE_PATH", &environment.workspace_path)
+        .env(
+            "PNEUMA_CADDY_MANAGED_PATH",
+            &environment.managed_caddy_directory,
+        )
+        .env("PNEUMA_CADDYFILE_PATH", &environment.caddyfile_path)
+        .env("PNEUMA_QUADLET_DIR", environment.root.join("quadlets"))
+        .env("PATH", executable_path(&environment.fake_bin))
+        .env("PNEUMA_FAKE_PORT", second_port.to_string())
+        .env(
+            "PNEUMA_RUNTIME_PORT_RANGE",
+            format!("{second_port}-{second_port}"),
+        )
+        .env(
+            "PNEUMA_FAKE_PODMAN_COUNT",
+            environment.root.join("podman-count"),
+        )
+        .env(
+            "PNEUMA_FAKE_PODMAN_LOG",
+            environment.root.join("podman.log"),
+        )
+        .env("PNEUMA_FAKE_CURL_LOG", environment.root.join("curl.log"))
+        .env("PNEUMA_FAKE_CURL_STATUS", "503")
+        .env("PNEUMA_FAKE_PODMAN_DIGEST", &digest)
+        .args([
+            "app",
+            "deploy",
+            &environment.application_name,
+            "--image",
+            &reference,
+        ])
+        .output()
+        .unwrap();
 
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("external_health_check_failed"));
@@ -552,48 +496,6 @@ fn restores_the_previous_public_route_when_external_health_fails() {
         )
         .unwrap();
     assert_eq!(active_runtime.1, "running");
-}
-
-#[test]
-fn accepts_native_repository_paths_but_requires_textual_name_and_revision() {
-    let database_path = temporary_database_path();
-    let invalid_utf8 = OsString::from_vec(vec![0xff]);
-    let native_path = Command::new(env!("CARGO_BIN_EXE_pneuma"))
-        .env("PNEUMA_DATABASE_PATH", &database_path)
-        .args(["app", "deploy-source", "missing-application"])
-        .arg(&invalid_utf8)
-        .args(["--revision", "main"])
-        .output()
-        .unwrap();
-    let invalid_name = Command::new(env!("CARGO_BIN_EXE_pneuma"))
-        .env("PNEUMA_DATABASE_PATH", &database_path)
-        .args(["app", "deploy-source"])
-        .arg(&invalid_utf8)
-        .args(["repository", "--revision", "main"])
-        .output()
-        .unwrap();
-    let invalid_revision = Command::new(env!("CARGO_BIN_EXE_pneuma"))
-        .env("PNEUMA_DATABASE_PATH", &database_path)
-        .args([
-            "app",
-            "deploy-source",
-            "missing-application",
-            "repository",
-            "--revision",
-        ])
-        .arg(invalid_utf8)
-        .output()
-        .unwrap();
-    let _ = fs::remove_file(&database_path);
-
-    assert!(
-        String::from_utf8_lossy(&native_path.stderr)
-            .contains("application `missing-application` was not found")
-    );
-    for output in [invalid_name, invalid_revision] {
-        assert!(!output.status.success());
-        assert!(String::from_utf8_lossy(&output.stderr).contains("Usage:"));
-    }
 }
 
 #[test]
@@ -809,7 +711,7 @@ fn lists_deployments_for_a_deployed_application() {
     );
     assert_eq!(lines[1], "DEPLOYMENT\tRELEASE\tSOURCE\tSTATUS");
     assert!(lines[2].contains("Succeeded"));
-    assert!(lines[2].contains(&environment.commit_sha));
+    assert!(lines[2].contains("\t-\t"));
 }
 
 #[test]
@@ -1046,7 +948,7 @@ struct DeploymentEnvironment {
     application_name: String,
     managed_caddy_directory: PathBuf,
     caddyfile_path: PathBuf,
-    commit_sha: String,
+    image_repository: String,
     stale_container_id: Option<String>,
     replacement_container_id: Option<String>,
 }
@@ -1095,9 +997,17 @@ impl DeploymentEnvironment {
             format!("import {}/*.caddy\n", managed_caddy_directory.display()),
         )
         .unwrap();
-        let commit_sha = git(&repository_path, &["rev-parse", "HEAD"])
-            .trim()
-            .to_owned();
+        let manifest_content =
+            fs::read_to_string(fixture_path(fixture).join("pneuma.toml")).unwrap();
+        let image_repository = manifest_content
+            .lines()
+            .find(|line| line.starts_with("image = "))
+            .map(|line| {
+                line.trim_start_matches("image = ")
+                    .trim_matches('"')
+                    .to_owned()
+            })
+            .unwrap_or_else(|| "registry.example/team/service".to_owned());
 
         Self {
             root,
@@ -1108,7 +1018,7 @@ impl DeploymentEnvironment {
             application_name: application_name.to_owned(),
             managed_caddy_directory,
             caddyfile_path,
-            commit_sha,
+            image_repository,
             stale_container_id: None,
             replacement_container_id: None,
         }
@@ -1205,15 +1115,26 @@ impl DeploymentEnvironment {
             .env("PNEUMA_FAKE_PORT", port.to_string())
             .env("PNEUMA_RUNTIME_PORT_RANGE", format!("{port}-{port}"))
             .env("PNEUMA_FAKE_PODMAN_COUNT", self.root.join("podman-count"))
+            .env("PNEUMA_FAKE_PODMAN_LOG", self.root.join("podman.log"))
             .env("PNEUMA_FAKE_CURL_LOG", self.root.join("curl.log"))
-            .env("PNEUMA_FAKE_CURL_STATUS", external_status.to_string());
+            .env("PNEUMA_FAKE_CURL_STATUS", external_status.to_string())
+            .env(
+                "PNEUMA_FAKE_PODMAN_DIGEST",
+                format!("sha256:{}", "a".repeat(64)),
+            );
         if verbose {
             command.arg("--verbose");
         }
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let reference = format!("{}@{digest}", self.image_repository);
         command
-            .args(["app", "deploy-source", &self.application_name])
-            .arg(&self.repository_path)
-            .args(["--revision", "HEAD"])
+            .args([
+                "app",
+                "deploy",
+                &self.application_name,
+                "--image",
+                &reference,
+            ])
             .output()
             .unwrap()
     }
@@ -1238,7 +1159,9 @@ impl DeploymentEnvironment {
             .env("PNEUMA_FAKE_PORT", port.to_string())
             .env("PNEUMA_RUNTIME_PORT_RANGE", format!("{port}-{port}"))
             .env("PNEUMA_FAKE_PODMAN_COUNT", self.root.join("podman-count"))
-            .env("PNEUMA_FAKE_PODMAN_LOG", self.root.join("podman.log"));
+            .env("PNEUMA_FAKE_PODMAN_LOG", self.root.join("podman.log"))
+            .env("PNEUMA_FAKE_CURL_LOG", self.root.join("curl.log"))
+            .env("PNEUMA_FAKE_CURL_STATUS", "200");
         match failure {
             Some(OciFailure::Pull) => {
                 command.env(
@@ -1483,12 +1406,6 @@ fn respond_once(listener: &TcpListener, status: u16) {
     read_request(&mut stream);
     let response = format!("HTTP/1.1 {status} Test\r\nContent-Length: 0\r\n\r\n");
     stream.write_all(response.as_bytes()).unwrap();
-}
-
-fn respond_unhealthy(listener: &TcpListener, attempts: usize) {
-    for _ in 0..attempts {
-        respond_once(listener, 500);
-    }
 }
 
 fn read_request(stream: &mut TcpStream) {

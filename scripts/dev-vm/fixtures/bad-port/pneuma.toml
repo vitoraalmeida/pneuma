@@ -14,10 +14,6 @@ image = "localhost:5000/bad-port"
 repository = "local"
 branch = "main"
 
-[build]
-containerfile = "Containerfile"
-context = "."
-
 [runtime]
 container_port = 8080
 healthcheck_path = "/healthz"

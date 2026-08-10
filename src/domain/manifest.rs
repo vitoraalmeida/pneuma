@@ -2,7 +2,7 @@ use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::io;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -17,7 +17,6 @@ pub struct Manifest {
     pub application: Application,
     pub delivery: Delivery,
     pub source: Option<Source>,
-    pub build: Option<Build>,
     pub runtime: Runtime,
     pub exposure: Exposure,
 }
@@ -61,13 +60,6 @@ impl DeliveryType {
 pub struct Source {
     pub repository: String,
     pub branch: String,
-}
-
-#[derive(Debug, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct Build {
-    pub containerfile: PathBuf,
-    pub context: PathBuf,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -220,19 +212,8 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), ManifestError> {
         );
     }
 
-    if manifest.source.is_some() != manifest.build.is_some() {
-        return invalid_field(
-            "source",
-            "must be provided together with [build]; both are only required for deploy-source",
-        );
-    }
-
     if let Some(source) = &manifest.source {
         validate_source(source)?;
-    }
-
-    if let Some(build) = &manifest.build {
-        validate_build(build)?;
     }
 
     if manifest.runtime.container_port == 0 {
@@ -288,28 +269,8 @@ fn validate_source(source: &Source) -> Result<(), ManifestError> {
     Ok(())
 }
 
-fn validate_build(build: &Build) -> Result<(), ManifestError> {
-    validate_relative_path("build.containerfile", &build.containerfile)?;
-    validate_relative_path("build.context", &build.context)?;
-
-    Ok(())
-}
-
 fn is_valid_system_name(name: &str) -> bool {
     is_valid_application_name(name)
-}
-
-fn validate_relative_path(field: &'static str, path: &Path) -> Result<(), ManifestError> {
-    if path.as_os_str().is_empty()
-        || path.is_absolute()
-        || path
-            .components()
-            .any(|component| matches!(component, Component::ParentDir | Component::Prefix(_)))
-    {
-        return invalid_field(field, "must be a relative path confined to the checkout");
-    }
-
-    Ok(())
 }
 
 fn is_valid_application_name(name: &str) -> bool {

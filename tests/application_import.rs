@@ -23,8 +23,6 @@ fn imports_and_persists_the_application_specification() {
                 applications.desired_runtime_state,
                 applications.spec_version,
                 application_sources.repository_kind,
-                application_build_specs.containerfile_path,
-                application_build_specs.context_path,
                 application_runtime_specs.container_port,
                 health_check_specs.path,
                 health_check_specs.expected_status,
@@ -35,8 +33,6 @@ fn imports_and_persists_the_application_specification() {
              FROM applications
              JOIN application_sources
                 ON application_sources.application_id = applications.id
-             JOIN application_build_specs
-                ON application_build_specs.application_id = applications.id
              JOIN application_runtime_specs
                 ON application_runtime_specs.application_id = applications.id
              JOIN health_check_specs
@@ -51,15 +47,13 @@ fn imports_and_persists_the_application_specification() {
                     row.get::<_, String>(0)?,
                     row.get::<_, i64>(1)?,
                     row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(3)?,
                     row.get::<_, String>(4)?,
                     row.get::<_, i64>(5)?,
                     row.get::<_, String>(6)?,
-                    row.get::<_, i64>(7)?,
+                    row.get::<_, Option<String>>(7)?,
                     row.get::<_, String>(8)?,
-                    row.get::<_, Option<String>>(9)?,
-                    row.get::<_, String>(10)?,
-                    row.get::<_, String>(11)?,
+                    row.get::<_, String>(9)?,
                 ))
             },
         )
@@ -71,8 +65,6 @@ fn imports_and_persists_the_application_specification() {
             "stopped".to_owned(),
             2,
             "remote".to_owned(),
-            "Containerfile".to_owned(),
-            ".".to_owned(),
             8080,
             "/healthz".to_owned(),
             200,
@@ -97,7 +89,6 @@ fn importing_the_same_application_is_idempotent() {
             "SELECT
                 (SELECT COUNT(*) FROM applications),
                 (SELECT COUNT(*) FROM application_sources),
-                (SELECT COUNT(*) FROM application_build_specs),
                 (SELECT COUNT(*) FROM application_runtime_specs),
                 (SELECT COUNT(*) FROM health_check_specs),
                 (SELECT COUNT(*) FROM exposures),
@@ -111,14 +102,13 @@ fn importing_the_same_application_is_idempotent() {
                     row.get::<_, i64>(3)?,
                     row.get::<_, i64>(4)?,
                     row.get::<_, i64>(5)?,
-                    row.get::<_, i64>(6)?,
                 ))
             },
         )
         .unwrap();
 
     assert_eq!(first, second);
-    assert_eq!(row_counts, (1, 1, 1, 1, 1, 1, 1));
+    assert_eq!(row_counts, (1, 1, 1, 1, 1, 1));
 }
 
 #[test]
@@ -171,13 +161,7 @@ fn persists_delivery_without_source_or_build_specs() {
             row.get(0)
         })
         .unwrap();
-    let build_count: i64 = connection
-        .query_row("SELECT COUNT(*) FROM application_build_specs", [], |row| {
-            row.get(0)
-        })
-        .unwrap();
     assert_eq!(source_count, 0);
-    assert_eq!(build_count, 0);
 }
 
 #[test]
