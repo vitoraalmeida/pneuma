@@ -24,10 +24,10 @@ ser `Git branch → commit → OCI digest → Release → deployment`.
 
 ### Fases
 
-- [ ] **A — simplificar:** remover `deploy-source`, `deployment_deploy_source`,
+- [x] **A — simplificar:** remover `deploy-source`, `deployment_deploy_source`,
   `local_build`, `[build]`, `application_build_specs`, import por path local,
   source local e checkout permanente de build.
-- [ ] **B — separar persistência:** criar `SqliteApplicationStore`,
+- [x] **B — separar persistência:** criar `SqliteApplicationStore`,
   `SqliteDeploymentStore`, `SqliteRuntimeStore`, `SqliteReleaseStore`; migrar
   create/transition/fail/promotion, runtime persistence e release/rollback.
 - [ ] **C — novo schema:** manifest v3 (sem `[source]`/`[build]`),
