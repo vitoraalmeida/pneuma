@@ -1,8 +1,9 @@
 use std::error::Error;
 use std::fmt;
 
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, TransactionBehavior};
 
+use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
 use crate::use_cases::deployment_create::DeploymentStatus;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -94,34 +95,36 @@ impl Error for TransitionDeploymentError {
     }
 }
 
+impl From<DeploymentStoreError> for TransitionDeploymentError {
+    fn from(error: DeploymentStoreError) -> Self {
+        match error {
+            DeploymentStoreError::NotFound { deployment_id } => {
+                Self::DeploymentNotFound { deployment_id }
+            }
+            DeploymentStoreError::InvalidStatus {
+                deployment_id,
+                status,
+            } => Self::InvalidPersistedStatus {
+                deployment_id,
+                status,
+            },
+            DeploymentStoreError::Persistence { source } => Self::Persistence { source },
+        }
+    }
+}
+
 pub fn advance_deployment(
     connection: &Connection,
     deployment_id: &str,
     transition: DeploymentTransition,
 ) -> Result<DeploymentStatus, TransitionDeploymentError> {
     let (expected, next) = transition_states(transition);
-    let updated = connection
-        .execute(
-            "UPDATE deployments
-             SET status = ?1,
-                 started_at = CASE
-                    WHEN status = 'pending' THEN CURRENT_TIMESTAMP
-                    ELSE started_at
-                 END,
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?2 AND status = ?3",
-            params![
-                next.database_value(),
-                deployment_id,
-                expected.database_value()
-            ],
-        )
-        .map_err(|source| TransitionDeploymentError::Persistence { source })?;
-    if updated == 1 {
+    let advanced = deployment_store::advance_status(connection, deployment_id, expected, next)?;
+    if advanced {
         return Ok(next);
     }
 
-    let actual = load_status(connection, deployment_id)?;
+    let actual = deployment_store::load_status(connection, deployment_id)?;
     Err(TransitionDeploymentError::Conflict {
         deployment_id: deployment_id.to_owned(),
         expected,
@@ -142,7 +145,7 @@ pub fn fail_deployment(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|source| TransitionDeploymentError::Persistence { source })?;
-    let stage = load_status(&transaction, deployment_id)?;
+    let stage = deployment_store::load_status(&transaction, deployment_id)?;
     if !can_fail(stage) {
         return Err(TransitionDeploymentError::CannotFail {
             deployment_id: deployment_id.to_owned(),
@@ -150,26 +153,8 @@ pub fn fail_deployment(
         });
     }
 
-    transaction
-        .execute(
-            "UPDATE deployments
-             SET status = 'failed',
-                 finished_at = CURRENT_TIMESTAMP,
-                 failure_code = ?1,
-                 failure_stage = ?2,
-                 failure_message = ?3,
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?4 AND status = ?2",
-            params![code, stage.database_value(), message, deployment_id],
-        )
-        .map_err(|source| TransitionDeploymentError::Persistence { source })?;
-    let finished_at = transaction
-        .query_row(
-            "SELECT finished_at FROM deployments WHERE id = ?1",
-            [deployment_id],
-            |row| row.get(0),
-        )
-        .map_err(|source| TransitionDeploymentError::Persistence { source })?;
+    let finished_at =
+        deployment_store::mark_failed(&transaction, deployment_id, stage, code, message)?;
     transaction
         .commit()
         .map_err(|source| TransitionDeploymentError::Persistence { source })?;
@@ -192,29 +177,6 @@ fn transition_states(transition: DeploymentTransition) -> (DeploymentStatus, Dep
             (DeploymentStatus::Verifying, DeploymentStatus::Activating)
         }
     }
-}
-
-fn load_status(
-    connection: &Connection,
-    deployment_id: &str,
-) -> Result<DeploymentStatus, TransitionDeploymentError> {
-    let status = connection
-        .query_row(
-            "SELECT status FROM deployments WHERE id = ?1",
-            [deployment_id],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .map_err(|source| TransitionDeploymentError::Persistence { source })?
-        .ok_or_else(|| TransitionDeploymentError::DeploymentNotFound {
-            deployment_id: deployment_id.to_owned(),
-        })?;
-    DeploymentStatus::from_database(&status).ok_or_else(|| {
-        TransitionDeploymentError::InvalidPersistedStatus {
-            deployment_id: deployment_id.to_owned(),
-            status,
-        }
-    })
 }
 
 fn can_fail(status: DeploymentStatus) -> bool {

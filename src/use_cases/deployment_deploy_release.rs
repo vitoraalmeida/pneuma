@@ -2,7 +2,7 @@ use std::error::Error;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::Connection;
 
 use crate::adapters::caddy_exposure::{
     materialize_caddy_fragment, restore_materialized_caddy_fragment,
@@ -16,6 +16,8 @@ use crate::adapters::local_runtime::{
 use crate::adapters::port_allocator::{
     PortAllocationError, consume_port_reservation, release_port, reserve_port,
 };
+use crate::adapters::stores::application_store::{self, ApplicationStoreError};
+use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
 use crate::adapters::systemd_quadlet::{
     QuadletError, container_name, daemon_reload, remove_unit, start, stop, unit_name, write_unit,
 };
@@ -418,54 +420,46 @@ fn load_specification(
     connection: &Connection,
     application_id: &str,
 ) -> Result<DeploymentSpecification, DeployReleaseError> {
-    connection
-        .query_row(
-            "SELECT
-                applications.id,
-                applications.name,
-                application_build_specs.containerfile_path,
-                application_build_specs.context_path,
-                application_runtime_specs.container_port,
-                health_check_specs.path,
-                health_check_specs.expected_status,
-                exposures.desired_visibility
-             FROM applications
-             JOIN application_build_specs
-                ON application_build_specs.application_id = applications.id
-             JOIN application_runtime_specs
-                ON application_runtime_specs.application_id = applications.id
-             JOIN health_check_specs
-                ON health_check_specs.application_id = applications.id
-             JOIN exposures ON exposures.application_id = applications.id
-             WHERE applications.id = ?1",
-            [application_id],
-            |row| {
-                let visibility_text: String = row.get(7)?;
-                let visibility = Visibility::from_database(&visibility_text).ok_or_else(|| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        7,
-                        rusqlite::types::Type::Text,
-                        Box::new(std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            format!("invalid visibility: {visibility_text}"),
-                        )),
-                    )
-                })?;
-                Ok(DeploymentSpecification {
-                    application_id: row.get(0)?,
-                    application_name: row.get(1)?,
-                    container_port: row.get(4)?,
-                    health_path: row.get(5)?,
-                    expected_status: row.get(6)?,
-                    visibility,
-                })
-            },
-        )
-        .optional()
-        .map_err(|source| DeployReleaseError::LoadApplication { source })?
-        .ok_or_else(|| DeployReleaseError::ApplicationNotFound {
-            application_id: application_id.to_owned(),
-        })
+    let spec = match application_store::load_deployment_specification(connection, application_id) {
+        Ok(Some(spec)) => spec,
+        Ok(None) => {
+            return Err(DeployReleaseError::ApplicationNotFound {
+                application_id: application_id.to_owned(),
+            });
+        }
+        Err(ApplicationStoreError::NotFound { application_id }) => {
+            return Err(DeployReleaseError::ApplicationNotFound { application_id });
+        }
+        Err(ApplicationStoreError::SystemNotFound { .. }) => {
+            return Err(DeployReleaseError::LoadApplication {
+                source: rusqlite::Error::QueryReturnedNoRows,
+            });
+        }
+        Err(ApplicationStoreError::Persistence { source }) => {
+            return Err(DeployReleaseError::LoadApplication { source });
+        }
+    };
+
+    let visibility =
+        Visibility::from_database(&spec.5).ok_or_else(|| DeployReleaseError::LoadApplication {
+            source: rusqlite::Error::FromSqlConversionFailure(
+                5,
+                rusqlite::types::Type::Text,
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("invalid visibility: {}", spec.5),
+                )),
+            ),
+        })?;
+
+    Ok(DeploymentSpecification {
+        application_id: spec.0,
+        application_name: spec.1,
+        container_port: spec.2,
+        health_path: spec.3,
+        expected_status: spec.4,
+        visibility,
+    })
 }
 
 struct FailedExecution {
@@ -1161,24 +1155,20 @@ fn load_previous_runtime(
     application_id: &str,
     candidate_runtime_id: &str,
 ) -> Result<Option<PreviousRuntime>, rusqlite::Error> {
-    connection
-        .query_row(
-            "SELECT id, deployment_id, external_runtime_id
-             FROM runtime_instances
-             WHERE application_id = ?1
-               AND state = 'running'
-               AND removed_at IS NULL
-               AND id != ?2",
-            [application_id, candidate_runtime_id],
-            |row| {
-                Ok(PreviousRuntime {
-                    runtime_id: row.get(0)?,
-                    deployment_id: row.get(1)?,
-                    external_runtime_id: row.get(2)?,
-                })
-            },
-        )
-        .optional()
+    runtime_store::load_previous_runtime(connection, application_id, candidate_runtime_id)
+        .map(|opt| {
+            opt.map(
+                |(runtime_id, deployment_id, external_runtime_id)| PreviousRuntime {
+                    runtime_id,
+                    deployment_id,
+                    external_runtime_id,
+                },
+            )
+        })
+        .map_err(|e| match e {
+            RuntimeStoreError::Persistence { source } => source,
+            _ => rusqlite::Error::QueryReturnedNoRows,
+        })
 }
 
 fn finalize_runtime_supervision(
@@ -1212,12 +1202,7 @@ fn finalize_runtime_supervision(
         );
         return;
     }
-    if let Err(source) = connection.execute(
-        "UPDATE runtime_instances
-         SET state = 'removed', removed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-         WHERE id = ?1 AND state = 'stopped' AND removed_at IS NULL",
-        [&previous.runtime_id],
-    ) {
+    if let Err(source) = runtime_store::mark_runtime_removed(connection, &previous.runtime_id) {
         eprintln!(
             "warning: previous runtime {} was retired but could not be marked removed: {source}",
             previous.runtime_id
@@ -1233,14 +1218,15 @@ fn cleanup_candidate(
     runtime_id: Option<&str>,
 ) -> Result<(), CandidateCleanupError> {
     if let Some(runtime_id) = runtime_id {
-        let state = connection
-            .query_row(
-                "SELECT state FROM runtime_instances WHERE id = ?1",
-                [runtime_id],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .map_err(|source| CandidateCleanupError::Persistence { source })?;
+        let state =
+            runtime_store::load_runtime_state(connection, runtime_id).map_err(|source| {
+                CandidateCleanupError::Persistence {
+                    source: match source {
+                        RuntimeStoreError::Persistence { source } => source,
+                        _ => rusqlite::Error::QueryReturnedNoRows,
+                    },
+                }
+            })?;
         // A promotion error may have an uncertain external outcome. Never remove an
         // already active runtime.
         if state.as_deref().is_some_and(|state| state != "starting") {
@@ -1258,17 +1244,14 @@ fn cleanup_candidate(
             .map_err(|source| CandidateCleanupError::RemoveContainer { source })?;
     }
     if let Some(runtime_id) = runtime_id {
-        connection
-            .execute(
-                "UPDATE runtime_instances
-                 SET last_observed_state = 'missing',
-                     last_observed_at = CURRENT_TIMESTAMP,
-                     removed_at = CURRENT_TIMESTAMP,
-                     updated_at = CURRENT_TIMESTAMP
-                  WHERE id = ?1 AND state = 'starting' AND removed_at IS NULL",
-                [runtime_id],
-            )
-            .map_err(|source| CandidateCleanupError::Persistence { source })?;
+        runtime_store::mark_starting_runtime_missing(connection, runtime_id).map_err(|source| {
+            CandidateCleanupError::Persistence {
+                source: match source {
+                    RuntimeStoreError::Persistence { source } => source,
+                    _ => rusqlite::Error::QueryReturnedNoRows,
+                },
+            }
+        })?;
     }
     release_port(connection, deployment_id)
         .map_err(|source| CandidateCleanupError::ReleasePort { source })?;

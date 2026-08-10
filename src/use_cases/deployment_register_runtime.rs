@@ -2,9 +2,11 @@ use std::error::Error;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
 
 use crate::adapters::local_runtime::ObservedRuntimeState;
+use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
+use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct CandidateRuntime {
@@ -97,6 +99,41 @@ impl Error for RegisterCandidateRuntimeError {
     }
 }
 
+impl From<DeploymentStoreError> for RegisterCandidateRuntimeError {
+    fn from(error: DeploymentStoreError) -> Self {
+        match error {
+            DeploymentStoreError::NotFound { deployment_id } => {
+                Self::DeploymentNotFound { deployment_id }
+            }
+            DeploymentStoreError::InvalidStatus {
+                deployment_id,
+                status,
+            } => Self::InvalidDeploymentState {
+                deployment_id,
+                actual: status,
+            },
+            DeploymentStoreError::Persistence { source } => Self::Persistence { source },
+        }
+    }
+}
+
+impl From<RuntimeStoreError> for RegisterCandidateRuntimeError {
+    fn from(error: RuntimeStoreError) -> Self {
+        match error {
+            RuntimeStoreError::NotFound { runtime_id } => Self::ExternalRuntimeConflict {
+                external_runtime_id: runtime_id,
+            },
+            RuntimeStoreError::InvalidState { .. } => Self::Persistence {
+                source: rusqlite::Error::QueryReturnedNoRows,
+            },
+            RuntimeStoreError::PortAlreadyReserved { port } => Self::EndpointConflict {
+                endpoint: SocketAddr::from((Ipv4Addr::LOCALHOST, port)),
+            },
+            RuntimeStoreError::Persistence { source } => Self::Persistence { source },
+        }
+    }
+}
+
 pub fn register_candidate_runtime(
     connection: &mut Connection,
     deployment_id: &str,
@@ -124,17 +161,11 @@ pub fn register_candidate_runtime(
         });
     }
 
-    let deployment = transaction
-        .query_row(
-            "SELECT application_id, status FROM deployments WHERE id = ?1",
-            [deployment_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-        )
-        .optional()
-        .map_err(|source| RegisterCandidateRuntimeError::Persistence { source })?
-        .ok_or_else(|| RegisterCandidateRuntimeError::DeploymentNotFound {
-            deployment_id: deployment_id.to_owned(),
-        })?;
+    let deployment =
+        deployment_store::load_deployment_for_registration(&transaction, deployment_id)?
+            .ok_or_else(|| RegisterCandidateRuntimeError::DeploymentNotFound {
+                deployment_id: deployment_id.to_owned(),
+            })?;
     if deployment.1 != "starting" {
         return Err(RegisterCandidateRuntimeError::InvalidDeploymentState {
             deployment_id: deployment_id.to_owned(),
@@ -142,49 +173,25 @@ pub fn register_candidate_runtime(
         });
     }
 
-    let endpoint_registered = transaction
-        .query_row(
-            "SELECT EXISTS(
-                SELECT 1 FROM runtime_instances
-                WHERE host_address = '127.0.0.1'
-                  AND host_port = ?1
-                  AND removed_at IS NULL
-             )",
-            [endpoint.port()],
-            |row| row.get::<_, bool>(0),
-        )
-        .map_err(|source| RegisterCandidateRuntimeError::Persistence { source })?;
-    if endpoint_registered {
+    let port_reserved =
+        runtime_store::port_is_reserved(&transaction, "127.0.0.1", endpoint.port())?;
+    if port_reserved {
         return Err(RegisterCandidateRuntimeError::EndpointConflict { endpoint });
     }
 
-    transaction
-        .execute(
-            "INSERT INTO runtime_instances (
-                id,
-                application_id,
-                deployment_id,
-                external_runtime_id,
-                state,
-                host_address,
-                host_port,
-                container_port,
-                last_observed_state,
-                last_observed_at
-             ) VALUES (
-                lower(hex(randomblob(16))),
-                ?1, ?2, ?3, 'starting', '127.0.0.1', ?4, ?5,
-                'running', CURRENT_TIMESTAMP
-             )",
-            params![
-                deployment.0,
-                deployment_id,
-                external_runtime_id,
-                endpoint.port(),
-                container_port
-            ],
-        )
-        .map_err(|source| RegisterCandidateRuntimeError::Persistence { source })?;
+    let runtime_id = runtime_store::generate_id(&transaction)?;
+    runtime_store::insert_runtime(
+        &transaction,
+        &runtime_id,
+        &deployment.0,
+        deployment_id,
+        external_runtime_id,
+        "starting",
+        "127.0.0.1",
+        endpoint.port(),
+        container_port,
+    )?;
+
     let runtime = load_by_external_id(&transaction, external_runtime_id)?.ok_or_else(|| {
         RegisterCandidateRuntimeError::Persistence {
             source: rusqlite::Error::QueryReturnedNoRows,

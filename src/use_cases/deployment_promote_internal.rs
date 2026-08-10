@@ -2,12 +2,15 @@ use std::error::Error;
 use std::fmt;
 use std::net::{Ipv4Addr, SocketAddr};
 
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
 
 use crate::adapters::health_check_internal::{
     HealthCheckError, HealthCheckFailure, HealthCheckResult, check_internal_health,
 };
 use crate::adapters::local_runtime::ObservedRuntimeState;
+use crate::adapters::stores::application_store::{self, ApplicationStoreError};
+use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
+use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
 use crate::domain::manifest::Visibility;
 use crate::use_cases::deployment_create::{DeploymentStatus, RuntimeState};
 use crate::use_cases::deployment_transition::{TransitionDeploymentError, fail_deployment};
@@ -162,69 +165,67 @@ pub fn promote_internal_candidate(
     }
     validate_target(&target)?;
 
-    let previous_runtime_id = transaction
-        .query_row(
-            "SELECT ri.id FROM runtime_instances ri
-             JOIN applications a ON a.active_deployment_id = ri.deployment_id
-             WHERE ri.application_id = ?1
-               AND ri.state = 'running'
-               AND ri.removed_at IS NULL",
-            [&target.application_id],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .map_err(|source| PromoteInternalCandidateError::Persistence { source })?;
+    let previous_runtime_id =
+        runtime_store::load_active_runtime_for_application(&transaction, &target.application_id)
+            .map_err(|source| PromoteInternalCandidateError::Persistence {
+                source: match source {
+                    RuntimeStoreError::Persistence { source } => source,
+                    _ => rusqlite::Error::QueryReturnedNoRows,
+                },
+            })?;
     if let Some(previous_runtime_id) = previous_runtime_id {
-        transaction
-            .execute(
-                "UPDATE runtime_instances
-                 SET state = 'stopped', updated_at = CURRENT_TIMESTAMP
-                 WHERE id = ?1 AND state = 'running'",
-                [previous_runtime_id],
-            )
-            .map_err(|source| PromoteInternalCandidateError::Persistence { source })?;
+        runtime_store::stop_runtime(&transaction, &previous_runtime_id).map_err(|source| {
+            PromoteInternalCandidateError::Persistence {
+                source: match source {
+                    RuntimeStoreError::Persistence { source } => source,
+                    _ => rusqlite::Error::QueryReturnedNoRows,
+                },
+            }
+        })?;
     }
-    transaction
-        .execute(
-            "UPDATE runtime_instances
-             SET state = 'running', updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?1 AND state = 'starting'",
-            [runtime_id],
-        )
-        .map_err(|source| PromoteInternalCandidateError::Persistence { source })?;
-    let updated = transaction
-        .execute(
-            "UPDATE deployments
-             SET status = 'succeeded',
-                 finished_at = CURRENT_TIMESTAMP,
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?1 AND status = 'verifying'",
-            [&target.deployment_id],
-        )
-        .map_err(|source| PromoteInternalCandidateError::Persistence { source })?;
-    if updated != 1 {
+    runtime_store::start_runtime(&transaction, runtime_id).map_err(|source| {
+        PromoteInternalCandidateError::Persistence {
+            source: match source {
+                RuntimeStoreError::Persistence { source } => source,
+                _ => rusqlite::Error::QueryReturnedNoRows,
+            },
+        }
+    })?;
+    let updated = deployment_store::mark_succeeded(
+        &transaction,
+        &target.deployment_id,
+        DeploymentStatus::Verifying,
+    )
+    .map_err(|source| PromoteInternalCandidateError::Persistence {
+        source: match source {
+            DeploymentStoreError::Persistence { source } => source,
+            _ => rusqlite::Error::QueryReturnedNoRows,
+        },
+    })?;
+    if !updated {
         return Err(PromoteInternalCandidateError::InvalidDeploymentState {
             deployment_id: target.deployment_id,
             actual: "changed during promotion".to_owned(),
         });
     }
-    transaction
-        .execute(
-            "UPDATE applications
-             SET active_deployment_id = ?1,
-                 desired_runtime_state = 'running',
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?2",
-            params![&target.deployment_id, &target.application_id],
-        )
-        .map_err(|source| PromoteInternalCandidateError::Persistence { source })?;
-    let finished_at = transaction
-        .query_row(
-            "SELECT finished_at FROM deployments WHERE id = ?1",
-            [&target.deployment_id],
-            |row| row.get(0),
-        )
-        .map_err(|source| PromoteInternalCandidateError::Persistence { source })?;
+    application_store::activate_deployment(
+        &transaction,
+        &target.application_id,
+        &target.deployment_id,
+    )
+    .map_err(|source| PromoteInternalCandidateError::Persistence {
+        source: match source {
+            ApplicationStoreError::Persistence { source } => source,
+            _ => rusqlite::Error::QueryReturnedNoRows,
+        },
+    })?;
+    let finished_at = deployment_store::load_finished_at(&transaction, &target.deployment_id)
+        .map_err(|source| PromoteInternalCandidateError::Persistence {
+            source: match source {
+                DeploymentStoreError::Persistence { source } => source,
+                _ => rusqlite::Error::QueryReturnedNoRows,
+            },
+        })?;
     transaction
         .commit()
         .map_err(|source| PromoteInternalCandidateError::Persistence { source })?;

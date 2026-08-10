@@ -1,8 +1,10 @@
 use std::error::Error;
 use std::fmt;
 
-use rusqlite::{Connection, params};
+use rusqlite::Connection;
 
+use crate::adapters::stores::application_store::{self, ApplicationStoreError};
+use crate::adapters::stores::release_store::{self, ReleaseStoreError};
 use crate::domain::release::Release;
 
 #[derive(Debug)]
@@ -33,6 +35,34 @@ impl Error for CreateReleaseError {
     }
 }
 
+impl From<ApplicationStoreError> for CreateReleaseError {
+    fn from(error: ApplicationStoreError) -> Self {
+        match error {
+            ApplicationStoreError::NotFound { application_id } => {
+                Self::ApplicationNotFound { application_id }
+            }
+            ApplicationStoreError::SystemNotFound { .. } => Self::ApplicationNotFound {
+                application_id: "unknown".to_owned(),
+            },
+            ApplicationStoreError::Persistence { source } => Self::Persistence { source },
+        }
+    }
+}
+
+impl From<ReleaseStoreError> for CreateReleaseError {
+    fn from(error: ReleaseStoreError) -> Self {
+        match error {
+            ReleaseStoreError::NotFound { .. } => Self::ApplicationNotFound {
+                application_id: "unknown".to_owned(),
+            },
+            ReleaseStoreError::ApplicationNotFound { application_id } => {
+                Self::ApplicationNotFound { application_id }
+            }
+            ReleaseStoreError::Persistence { source } => Self::Persistence { source },
+        }
+    }
+}
+
 pub fn create_release(
     connection: &mut Connection,
     application_id: &str,
@@ -45,65 +75,39 @@ pub fn create_release(
         .transaction()
         .map_err(|source| CreateReleaseError::Persistence { source })?;
 
-    let application_exists = transaction
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM applications WHERE id = ?1)",
-            [application_id],
-            |row| row.get::<_, bool>(0),
-        )
-        .map_err(|source| CreateReleaseError::Persistence { source })?;
-    if !application_exists {
+    let exists = application_store::application_exists(&transaction, application_id)?;
+    if !exists {
         return Err(CreateReleaseError::ApplicationNotFound {
             application_id: application_id.to_owned(),
         });
     }
 
-    let release_id = transaction
-        .query_row("SELECT lower(hex(randomblob(16)))", [], |row| {
-            row.get::<_, String>(0)
-        })
-        .map_err(|source| CreateReleaseError::Persistence { source })?;
+    let release_id = release_store::generate_id(&transaction)?;
 
-    transaction
-        .execute(
-            "INSERT INTO releases (
-                id, application_id, image_reference, image_repository, image_digest, source_revision, created_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, CURRENT_TIMESTAMP)
-             ON CONFLICT(application_id, image_digest) DO NOTHING",
-            params![
-                release_id,
-                application_id,
-                image_reference,
-                image_repository,
-                image_digest,
-                source_revision
-            ],
-        )
-        .map_err(|source| CreateReleaseError::Persistence { source })?;
+    release_store::insert_release(
+        &transaction,
+        &release_id,
+        application_id,
+        image_reference,
+        image_repository,
+        image_digest,
+        source_revision,
+    )?;
 
-    let release = transaction
-        .query_row(
-            "SELECT id, application_id, image_reference, image_repository, image_digest, source_revision, created_at
-             FROM releases
-             WHERE application_id = ?1 AND image_digest = ?2",
-            params![application_id, image_digest],
-            |row| {
-                Ok(Release {
-                    id: row.get(0)?,
-                    application_id: row.get(1)?,
-                    image_reference: row.get(2)?,
-                    image_repository: row.get(3)?,
-                    image_digest: row.get(4)?,
-                    source_revision: row.get(5)?,
-                    created_at: row.get(6)?,
-                })
-            },
-        )
-        .map_err(|source| CreateReleaseError::Persistence { source })?;
+    let store_release =
+        release_store::load_release_by_digest(&transaction, application_id, image_digest)?;
 
     transaction
         .commit()
         .map_err(|source| CreateReleaseError::Persistence { source })?;
 
-    Ok(release)
+    Ok(Release {
+        id: store_release.id,
+        application_id: store_release.application_id,
+        image_reference: store_release.image_reference,
+        image_repository: store_release.image_repository,
+        image_digest: store_release.image_digest,
+        source_revision: store_release.source_revision,
+        created_at: store_release.created_at,
+    })
 }
