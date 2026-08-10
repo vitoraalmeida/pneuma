@@ -10,7 +10,8 @@ use pneuma::use_cases::release_create::create_release;
 #[test]
 fn persists_a_pending_deployment_atomically() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
-    let application = import_application(&mut connection, &fixture_path("valid"), None).unwrap();
+    let application =
+        import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
     let release = create_release(
         &mut connection,
         &application.id,
@@ -38,7 +39,8 @@ fn persists_a_pending_deployment_atomically() {
 #[test]
 fn rejects_a_second_active_deployment_for_the_application() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
-    let application = import_application(&mut connection, &fixture_path("valid"), None).unwrap();
+    let application =
+        import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
     let first_release = create_release(
         &mut connection,
         &application.id,
@@ -87,7 +89,8 @@ fn rejects_a_second_active_deployment_for_the_application() {
 #[test]
 fn reuses_a_release_for_a_later_deployment_attempt() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
-    let application = import_application(&mut connection, &fixture_path("valid"), None).unwrap();
+    let application =
+        import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
     let release = create_release(
         &mut connection,
         &application.id,
@@ -154,8 +157,10 @@ fn rejects_a_missing_release_and_missing_application() {
 #[test]
 fn database_rejects_a_release_from_another_application() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
-    let first = import_application(&mut connection, &fixture_path("valid"), None).unwrap();
-    let second = import_application(&mut connection, &fixture_path("another"), None).unwrap();
+    let first =
+        import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
+    let second =
+        import_application(&mut connection, &fixture_path("another"), None, None, None).unwrap();
     let release = create_release(
         &mut connection,
         &first.id,

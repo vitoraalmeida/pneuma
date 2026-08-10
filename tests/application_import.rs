@@ -8,14 +8,21 @@ use pneuma::use_cases::application_list::list_applications;
 fn imports_and_persists_the_application_specification() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
 
-    let application = import_application(&mut connection, &fixture_path("valid"), None).unwrap();
+    let application = import_application(
+        &mut connection,
+        &fixture_path("valid"),
+        None,
+        Some("https://github.com/vitoraalmeida/vitoralmeida.tech"),
+        Some("deploy/staging/pneuma.toml"),
+    )
+    .unwrap();
 
     assert_eq!(application.name, "personal-site");
     assert_eq!(
         application.repository.as_deref(),
         Some("https://github.com/vitoraalmeida/vitoralmeida.tech")
     );
-    assert_eq!(application.default_branch.as_deref(), Some("main"));
+    assert_eq!(application.default_branch.as_deref(), None);
 
     let specification = connection
         .query_row(
@@ -23,6 +30,7 @@ fn imports_and_persists_the_application_specification() {
                 applications.desired_runtime_state,
                 applications.spec_version,
                 application_sources.repository_kind,
+                application_sources.manifest_path,
                 application_runtime_specs.container_port,
                 health_check_specs.path,
                 health_check_specs.expected_status,
@@ -47,13 +55,14 @@ fn imports_and_persists_the_application_specification() {
                     row.get::<_, String>(0)?,
                     row.get::<_, i64>(1)?,
                     row.get::<_, String>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, i64>(5)?,
-                    row.get::<_, String>(6)?,
-                    row.get::<_, Option<String>>(7)?,
-                    row.get::<_, String>(8)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, Option<String>>(8)?,
                     row.get::<_, String>(9)?,
+                    row.get::<_, String>(10)?,
                 ))
             },
         )
@@ -63,8 +72,9 @@ fn imports_and_persists_the_application_specification() {
         specification,
         (
             "stopped".to_owned(),
-            2,
+            3,
             "remote".to_owned(),
+            "deploy/staging/pneuma.toml".to_owned(),
             8080,
             "/healthz".to_owned(),
             200,
@@ -81,8 +91,23 @@ fn importing_the_same_application_is_idempotent() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
     let repository = fixture_path("valid");
 
-    let first = import_application(&mut connection, &repository, None).unwrap();
-    let second = import_application(&mut connection, &repository, None).unwrap();
+    let repository_url = "https://github.com/vitoraalmeida/vitoralmeida.tech";
+    let first = import_application(
+        &mut connection,
+        &repository,
+        None,
+        Some(repository_url),
+        Some("deploy/staging/pneuma.toml"),
+    )
+    .unwrap();
+    let second = import_application(
+        &mut connection,
+        &repository,
+        None,
+        Some(repository_url),
+        Some("deploy/staging/pneuma.toml"),
+    )
+    .unwrap();
 
     let row_counts = connection
         .query_row(
@@ -115,7 +140,8 @@ fn importing_the_same_application_is_idempotent() {
 fn reports_manifest_failures_without_changing_the_catalog() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
 
-    let error = import_application(&mut connection, &fixture_path("missing"), None).unwrap_err();
+    let error = import_application(&mut connection, &fixture_path("missing"), None, None, None)
+        .unwrap_err();
     let applications = list_applications(&connection).unwrap();
 
     assert!(matches!(error, ImportError::Manifest { .. }));
@@ -127,7 +153,14 @@ fn reports_manifest_failures_without_changing_the_catalog() {
 fn persists_a_local_repository_kind() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
 
-    import_application(&mut connection, &fixture_path("another"), None).unwrap();
+    import_application(
+        &mut connection,
+        &fixture_path("another"),
+        None,
+        Some("."),
+        Some("pneuma.toml"),
+    )
+    .unwrap();
 
     let repository_kind: String = connection
         .query_row(
@@ -143,7 +176,7 @@ fn persists_a_local_repository_kind() {
 fn persists_delivery_without_source_or_build_specs() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
 
-    import_application(&mut connection, &fixture_path("oci-only"), None).unwrap();
+    import_application(&mut connection, &fixture_path("oci-only"), None, None, None).unwrap();
 
     let delivery: (String, String) = connection
         .query_row(
@@ -168,7 +201,8 @@ fn persists_delivery_without_source_or_build_specs() {
 fn requires_system_from_manifest_or_cli() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
 
-    let application = import_application(&mut connection, &fixture_path("valid"), None).unwrap();
+    let application =
+        import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
     assert!(application.system_id.is_some());
 }
 
@@ -176,8 +210,14 @@ fn requires_system_from_manifest_or_cli() {
 fn cli_system_overrides_manifest() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
 
-    let application =
-        import_application(&mut connection, &fixture_path("valid"), Some("cli-system")).unwrap();
+    let application = import_application(
+        &mut connection,
+        &fixture_path("valid"),
+        Some("cli-system"),
+        None,
+        None,
+    )
+    .unwrap();
 
     let system_name: String = connection
         .query_row(

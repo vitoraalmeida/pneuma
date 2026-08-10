@@ -46,7 +46,8 @@ fn persists_a_running_candidate_linked_to_its_deployment() {
 #[test]
 fn requires_a_starting_deployment() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
-    let application = import_application(&mut connection, &fixture_path("valid"), None).unwrap();
+    let application =
+        import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
     let release = create_release(
         &mut connection,
         &application.id,
@@ -234,7 +235,8 @@ fn database_rejects_a_runtime_identity_from_another_application() {
         8080,
     )
     .unwrap();
-    let second = import_application(&mut connection, &fixture_path("another"), None).unwrap();
+    let second =
+        import_application(&mut connection, &fixture_path("another"), None, None, None).unwrap();
 
     let error = connection
         .execute(
@@ -256,7 +258,8 @@ fn add_starting_deployment(
     connection: &mut rusqlite::Connection,
     fixture: &str,
 ) -> (String, String) {
-    let application = import_application(connection, &fixture_path(fixture), None).unwrap();
+    let application =
+        import_application(connection, &fixture_path(fixture), None, None, None).unwrap();
     let commit_sha = if fixture == "valid" {
         "a".repeat(40)
     } else {

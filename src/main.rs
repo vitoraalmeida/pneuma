@@ -452,8 +452,14 @@ fn run_import(
         verbose,
         format!("import repository: {}", repository_path.display()),
     );
-    let application = import_application(connection, repository_path, system_name)
-        .map_err(|source| CliError::Import { source })?;
+    let application = import_application(
+        connection,
+        repository_path,
+        system_name,
+        Some(repository_path.to_str().ok_or(CliError::Usage)?),
+        Some("pneuma.toml"),
+    )
+    .map_err(|source| CliError::Import { source })?;
     println!("Imported {}", application.name);
     println!("Status: Registered");
     println!("Deployment: Not deployed");

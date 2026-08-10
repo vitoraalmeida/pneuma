@@ -111,20 +111,20 @@ pub fn insert_delivery_spec(
 pub fn insert_source_spec(
     transaction: &Transaction<'_>,
     application_id: &str,
-    repository_location: &str,
+    repository_url: &str,
     repository_kind: &str,
-    default_branch: &str,
+    default_branch: Option<&str>,
     manifest_path: &str,
 ) -> Result<(), ApplicationStoreError> {
     transaction
         .execute(
             "INSERT INTO application_sources (
-                application_id, repository_location, repository_kind,
+                application_id, repository_url, repository_kind,
                 default_branch, manifest_path, created_at, updated_at
             ) VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
             params![
                 application_id,
-                repository_location,
+                repository_url,
                 repository_kind,
                 default_branch,
                 manifest_path

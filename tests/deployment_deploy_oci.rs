@@ -15,7 +15,8 @@ use pneuma::use_cases::deployment_deploy_oci::{DeployOciError, deploy_oci};
 #[test]
 fn deploys_a_verified_oci_image_and_persists_its_exact_reference() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
-    let application = import_application(&mut connection, &fixture_path("another"), None).unwrap();
+    let application =
+        import_application(&mut connection, &fixture_path("another"), None, None, None).unwrap();
     let digest = format!("sha256:{}", "a".repeat(64));
     let reference = format!("registry.example/team/service@{digest}");
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
@@ -81,7 +82,8 @@ fn rejects_an_unpinned_oci_reference_before_external_work() {
 #[test]
 fn rejects_a_repository_not_allowed_by_the_delivery_spec_before_pull() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
-    let application = import_application(&mut connection, &fixture_path("another"), None).unwrap();
+    let application =
+        import_application(&mut connection, &fixture_path("another"), None, None, None).unwrap();
     let digest = format!("sha256:{}", "a".repeat(64));
     let reference = format!("registry.example/other/service@{digest}");
 

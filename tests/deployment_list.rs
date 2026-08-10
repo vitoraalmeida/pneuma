@@ -9,7 +9,8 @@ use pneuma::use_cases::release_create::create_release;
 #[test]
 fn returns_an_empty_list_for_an_application_without_deployments() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
-    let application = import_application(&mut connection, &fixture_path("valid"), None).unwrap();
+    let application =
+        import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
 
     let deployments = list_deployments(&connection, &application.id).unwrap();
 
@@ -19,7 +20,8 @@ fn returns_an_empty_list_for_an_application_without_deployments() {
 #[test]
 fn returns_deployments_ordered_newest_first() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
-    let application = import_application(&mut connection, &fixture_path("valid"), None).unwrap();
+    let application =
+        import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
     let first_release = create_release(
         &mut connection,
         &application.id,
@@ -92,8 +94,10 @@ fn returns_deployments_ordered_newest_first() {
 #[test]
 fn returns_only_deployments_for_the_given_application() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
-    let first = import_application(&mut connection, &fixture_path("valid"), None).unwrap();
-    let second = import_application(&mut connection, &fixture_path("another"), None).unwrap();
+    let first =
+        import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
+    let second =
+        import_application(&mut connection, &fixture_path("another"), None, None, None).unwrap();
     let first_release = create_release(
         &mut connection,
         &first.id,

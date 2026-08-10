@@ -5,9 +5,9 @@ use std::path::Path;
 use rusqlite::{Connection, params};
 
 use crate::domain::application::Application;
-use crate::domain::manifest::{Manifest, ManifestError, Visibility, load_manifest};
+use crate::domain::manifest::{Manifest, ManifestError, Visibility, load_manifest_at};
 
-const MANIFEST_PATH: &str = "pneuma.toml";
+const DEFAULT_MANIFEST_PATH: &str = "pneuma.toml";
 
 #[derive(Debug)]
 pub enum ImportError {
@@ -52,9 +52,12 @@ pub fn import_application(
     connection: &mut Connection,
     repository_path: &Path,
     system_name: Option<&str>,
+    repository_url: Option<&str>,
+    manifest_path: Option<&str>,
 ) -> Result<Application, ImportError> {
-    let manifest =
-        load_manifest(repository_path).map_err(|source| ImportError::Manifest { source })?;
+    let manifest_path = manifest_path.unwrap_or(DEFAULT_MANIFEST_PATH);
+    let manifest = load_manifest_at(repository_path, manifest_path)
+        .map_err(|source| ImportError::Manifest { source })?;
 
     let resolved_system_name = system_name
         .or_else(|| manifest.system.as_ref().map(|s| s.name.as_str()))
@@ -115,7 +118,13 @@ pub fn import_application(
         == 1;
 
     if inserted {
-        persist_specification(&transaction, &application_id, &manifest)?;
+        persist_specification(
+            &transaction,
+            &application_id,
+            &manifest,
+            repository_url,
+            manifest_path,
+        )?;
     }
 
     let application = transaction
@@ -124,7 +133,7 @@ pub fn import_application(
                 applications.id,
                 applications.system_id,
                 applications.name,
-                application_sources.repository_location,
+                application_sources.repository_url,
                 application_sources.default_branch
              FROM applications
              LEFT JOIN application_sources
@@ -155,6 +164,8 @@ fn persist_specification(
     transaction: &rusqlite::Transaction<'_>,
     application_id: &str,
     manifest: &Manifest,
+    repository_url: Option<&str>,
+    manifest_path: &str,
 ) -> Result<(), ImportError> {
     let visibility = match &manifest.exposure.default_visibility {
         Visibility::Internal => "internal",
@@ -178,8 +189,8 @@ fn persist_specification(
         )
         .map_err(|source| ImportError::Persistence { source })?;
 
-    if let Some(source) = &manifest.source {
-        let repository_kind = if source.repository.contains("://") {
+    if let Some(repository_url) = repository_url {
+        let repository_kind = if repository_url.contains("://") {
             "remote"
         } else {
             "local"
@@ -189,19 +200,18 @@ fn persist_specification(
             .execute(
                 "INSERT INTO application_sources (
                     application_id,
-                    repository_location,
+                    repository_url,
                     repository_kind,
                     default_branch,
                     manifest_path,
                     created_at,
                     updated_at
-                ) VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+                ) VALUES (?1, ?2, ?3, NULL, ?4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
                 params![
                     application_id,
-                    source.repository,
+                    repository_url,
                     repository_kind,
-                    source.branch,
-                    MANIFEST_PATH
+                    manifest_path
                 ],
             )
             .map_err(|source| ImportError::Persistence { source })?;

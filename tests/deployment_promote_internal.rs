@@ -153,7 +153,8 @@ fn add_verifying_candidate(
     runtime_character: char,
     endpoint: SocketAddr,
 ) -> String {
-    let application = import_application(connection, &fixture_path(fixture), None).unwrap();
+    let application =
+        import_application(connection, &fixture_path(fixture), None, None, None).unwrap();
     let commit_sha = commit_character.to_string().repeat(40);
     let release = create_release(
         connection,

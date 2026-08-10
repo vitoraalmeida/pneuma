@@ -65,7 +65,7 @@ pub fn show_system(connection: &Connection, system_name: &str) -> Result<SystemD
                 applications.id,
                 applications.system_id,
                 applications.name,
-                application_sources.repository_location,
+                application_sources.repository_url,
                 application_sources.default_branch,
                 applications.active_deployment_id
              FROM applications
