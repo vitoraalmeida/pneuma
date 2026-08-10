@@ -8,6 +8,60 @@ use crate::adapters::port_allocator::{PortAllocationError, release_port};
 use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
 use crate::adapters::systemd_quadlet::{QuadletError, daemon_reload, remove_unit, stop, unit_name};
 
+#[derive(Debug, Clone)]
+pub(crate) struct CandidateResources {
+    pub unit_name: Option<String>,
+    pub container_id: Option<String>,
+    pub runtime_id: Option<String>,
+    pub port_reserved: bool,
+}
+
+impl CandidateResources {
+    pub(crate) fn empty() -> Self {
+        Self {
+            unit_name: None,
+            container_id: None,
+            runtime_id: None,
+            port_reserved: false,
+        }
+    }
+
+    pub(crate) fn with_container(container_id: &str) -> Self {
+        Self {
+            container_id: Some(container_id.to_owned()),
+            ..Self::empty()
+        }
+    }
+
+    pub(crate) fn with_container_and_runtime(container_id: &str, runtime_id: &str) -> Self {
+        Self {
+            container_id: Some(container_id.to_owned()),
+            runtime_id: Some(runtime_id.to_owned()),
+            ..Self::empty()
+        }
+    }
+
+    pub(crate) fn with_unit(mut self, unit_name: &str) -> Self {
+        self.unit_name = Some(unit_name.to_owned());
+        self
+    }
+
+    pub(crate) fn with_port(mut self) -> Self {
+        self.port_reserved = true;
+        self
+    }
+
+    pub(crate) fn with_container_mut(mut self, container_id: &str) -> Self {
+        self.container_id = Some(container_id.to_owned());
+        self
+    }
+
+    pub(crate) fn with_runtime_mut(mut self, runtime_id: &str) -> Self {
+        self.runtime_id = Some(runtime_id.to_owned());
+        self
+    }
+}
+
 #[derive(Debug)]
 pub enum CandidateCleanupError {
     StopUnit { source: QuadletError },

@@ -9,14 +9,7 @@ use crate::adapters::caddy_exposure::{
 };
 use crate::adapters::health_check_external::check_external_health;
 use crate::adapters::health_check_internal::{HealthCheckResult, check_internal_health};
-use crate::adapters::local_runtime::{
-    ObservedRuntimeState, observe_container, resolve_container_id,
-};
-use crate::adapters::port_allocator::{consume_port_reservation, reserve_port};
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
-use crate::adapters::systemd_quadlet::{
-    container_name, daemon_reload, start, unit_name, write_unit,
-};
 use crate::domain::manifest::Visibility;
 use crate::domain::release::Release;
 use crate::use_cases::deployment_create::{
@@ -30,9 +23,13 @@ use crate::use_cases::deployment_promote_public::{
     ExposureOutcome, PromotePublicCandidateError, begin_public_exposure, promote_public_candidate,
     record_public_exposure_failure,
 };
-use crate::use_cases::deployment_register_runtime::{CandidateRuntime, register_candidate_runtime};
+use crate::use_cases::deployment_register_runtime::CandidateRuntime;
 use crate::use_cases::deployment_runtime_cleanup::{
-    CandidateCleanupError, cleanup_failed_candidate, load_previous_runtime, retire_previous_runtime,
+    CandidateCleanupError, CandidateResources, cleanup_failed_candidate, load_previous_runtime,
+    retire_previous_runtime,
+};
+use crate::use_cases::deployment_start_candidate::{
+    CandidateStartError, CandidateStartInput, start_candidate,
 };
 use crate::use_cases::deployment_transition::{
     DeploymentTransition, TransitionDeploymentError, advance_deployment, fail_deployment,
@@ -297,49 +294,6 @@ fn load_specification(
     })
 }
 
-struct CandidateResources {
-    unit_name: Option<String>,
-    container_id: Option<String>,
-    runtime_id: Option<String>,
-    port_reserved: bool,
-}
-
-impl CandidateResources {
-    fn empty() -> Self {
-        Self {
-            unit_name: None,
-            container_id: None,
-            runtime_id: None,
-            port_reserved: false,
-        }
-    }
-
-    fn with_container(container_id: &str) -> Self {
-        Self {
-            container_id: Some(container_id.to_owned()),
-            ..Self::empty()
-        }
-    }
-
-    fn with_container_and_runtime(container_id: &str, runtime_id: &str) -> Self {
-        Self {
-            container_id: Some(container_id.to_owned()),
-            runtime_id: Some(runtime_id.to_owned()),
-            ..Self::empty()
-        }
-    }
-
-    fn with_unit(mut self, unit_name: &str) -> Self {
-        self.unit_name = Some(unit_name.to_owned());
-        self
-    }
-
-    fn with_port(mut self) -> Self {
-        self.port_reserved = true;
-        self
-    }
-}
-
 struct FailedExecution {
     code: &'static str,
     source: Box<dyn Error>,
@@ -356,199 +310,113 @@ fn execute_deployment(
     public_configuration: Option<&PublicDeploymentConfiguration>,
     progress: &mut ProgressReporter<'_>,
 ) -> Result<(String, String, String), FailedExecution> {
-    advance_deployment(connection, deployment_id, DeploymentTransition::Start).map_err(
-        |source| failure_needing_persistence("deployment_transition_failed", source, None, None),
-    )?;
     progress.state_changed(deployment_id, DeploymentStatus::Starting);
     progress.started(
         DeploymentStep::CreateContainer,
         format!("image {image_reference}"),
     );
-    let host_port = reserve_port(connection, &specification.application_id, deployment_id)
-        .map_err(|source| {
-            failure_needing_persistence("runtime_port_allocation_failed", source, None, None)
-        })?;
-    let unit = write_unit(
-        &specification.application_name,
+
+    let input = CandidateStartInput {
+        connection,
         deployment_id,
+        application_id: &specification.application_id,
+        application_name: &specification.application_name,
         image_reference,
-        specification.container_port,
-        host_port,
+        container_port: specification.container_port,
         source_revision,
-    )
-    .map_err(|source| {
-        candidate_failure(
-            "runtime_unit_creation_failed",
+    };
+
+    let candidate = start_candidate(input).map_err(|err| match err {
+        CandidateStartError::PortAllocation { source } => {
+            failure_needing_persistence("runtime_port_allocation_failed", source, None, None)
+        }
+        CandidateStartError::UnitCreation { source, resources } => FailedExecution {
+            code: "runtime_unit_creation_failed",
+            source: Box::new(source),
+            failure_persisted: false,
+            resources: *resources,
+        },
+        CandidateStartError::UnitReload { source, resources } => FailedExecution {
+            code: "runtime_unit_reload_failed",
+            source: Box::new(source),
+            failure_persisted: false,
+            resources: *resources,
+        },
+        CandidateStartError::UnitStart { source, resources } => FailedExecution {
+            code: "runtime_start_failed",
+            source: Box::new(source),
+            failure_persisted: false,
+            resources: *resources,
+        },
+        CandidateStartError::ContainerResolution { source, resources } => FailedExecution {
+            code: "runtime_resolution_failed",
             source,
-            None,
-            None,
-            None,
-            true,
-        )
-    })?;
-    daemon_reload().map_err(|source| {
-        candidate_failure(
-            "runtime_unit_reload_failed",
+            failure_persisted: false,
+            resources: *resources,
+        },
+        CandidateStartError::ContainerObservation { source, resources } => FailedExecution {
+            code: "runtime_observation_failed",
             source,
-            None,
-            None,
-            Some(&unit),
-            true,
-        )
+            failure_persisted: false,
+            resources: *resources,
+        },
+        CandidateStartError::RuntimeRegistration { source, resources } => FailedExecution {
+            code: "runtime_registration_failed",
+            source,
+            failure_persisted: false,
+            resources: *resources,
+        },
+        CandidateStartError::PortPersistence { source, resources } => FailedExecution {
+            code: "runtime_port_persistence_failed",
+            source: Box::new(source),
+            failure_persisted: false,
+            resources: *resources,
+        },
+        CandidateStartError::DeploymentTransition { source, resources } => FailedExecution {
+            code: "deployment_transition_failed",
+            source: Box::new(source),
+            failure_persisted: false,
+            resources: *resources,
+        },
     })?;
+
     progress.completed(
         DeploymentStep::CreateContainer,
-        format!("unit {unit}, endpoint 127.0.0.1:{host_port}"),
+        format!(
+            "unit {}, endpoint 127.0.0.1:{}",
+            candidate.unit_name, candidate.port
+        ),
     );
-
-    progress.started(DeploymentStep::StartContainer, format!("unit {unit}"));
-    start(&unit).map_err(|source| {
-        candidate_failure(
-            "runtime_start_failed",
-            source,
-            None,
-            None,
-            Some(&unit),
-            true,
-        )
-    })?;
-    let name = container_name(&specification.application_name, deployment_id);
-    let container_id = resolve_container_id(&name).map_err(|source| {
-        candidate_failure(
-            "runtime_resolution_failed",
-            source,
-            None,
-            None,
-            Some(&unit),
-            true,
-        )
-    })?;
     progress.completed(
         DeploymentStep::StartContainer,
-        format!("container {container_id}"),
+        format!("container {}", candidate.runtime.external_runtime_id),
     );
-
-    let (runtime_id, finished_at) = execute_candidate(
-        connection,
-        deployment_id,
-        specification,
-        &container_id,
-        source_revision,
-        public_configuration,
-        progress,
-    )
-    .map_err(|mut failed| {
-        failed.resources = failed.resources.with_unit(&unit).with_port();
-        failed
-    })?;
-
-    Ok((runtime_id, name, finished_at))
-}
-
-fn execute_candidate(
-    connection: &mut Connection,
-    deployment_id: &str,
-    specification: &DeploymentSpecification,
-    container_id: &str,
-    commit_sha: &str,
-    public_configuration: Option<&PublicDeploymentConfiguration>,
-    progress: &mut ProgressReporter<'_>,
-) -> Result<(String, String), FailedExecution> {
-    progress.started(
-        DeploymentStep::ObserveContainer,
-        format!("container {container_id}"),
-    );
-    let observation =
-        observe_container(container_id, specification.container_port).map_err(|source| {
-            failure_needing_persistence(
-                "runtime_observation_failed",
-                source,
-                Some(container_id),
-                None,
-            )
-        })?;
-    if observation.state != ObservedRuntimeState::Running {
-        return Err(failure_needing_persistence(
-            "runtime_observation_failed",
-            RuntimeObservationFailure::NotRunning {
-                actual: observation.state,
-            },
-            Some(container_id),
-            None,
-        ));
-    }
-    let endpoint = observation.endpoint.ok_or_else(|| {
-        failure_needing_persistence(
-            "runtime_observation_failed",
-            RuntimeObservationFailure::MissingEndpoint,
-            Some(container_id),
-            None,
-        )
-    })?;
     progress.completed(
         DeploymentStep::ObserveContainer,
-        format!("state Running, endpoint {endpoint}"),
+        format!("state Running, endpoint {}", candidate.runtime.endpoint),
     );
-    progress.started(
-        DeploymentStep::RegisterCandidate,
-        format!("container {container_id}, endpoint {endpoint}"),
-    );
-    let runtime = register_candidate_runtime(
-        connection,
-        deployment_id,
-        container_id,
-        endpoint,
-        specification.container_port,
-    )
-    .map_err(|source| {
-        failure_needing_persistence(
-            "runtime_registration_failed",
-            source,
-            Some(container_id),
-            None,
-        )
-    })?;
     progress.completed(
         DeploymentStep::RegisterCandidate,
-        format!("runtime {}", runtime.id),
+        format!("runtime {}", candidate.runtime.id),
     );
-    consume_port_reservation(connection, deployment_id).map_err(|source| {
-        candidate_failure(
-            "runtime_port_persistence_failed",
-            source,
-            Some(container_id),
-            Some(&runtime.id),
-            Some(&unit_name(&specification.application_name, deployment_id)),
-            false,
-        )
-    })?;
-    advance_deployment(
-        connection,
-        deployment_id,
-        DeploymentTransition::RuntimeRunning,
-    )
-    .map_err(|source| {
-        failure_needing_persistence(
-            "deployment_transition_failed",
-            source,
-            Some(container_id),
-            Some(&runtime.id),
-        )
-    })?;
     progress.state_changed(deployment_id, DeploymentStatus::Verifying);
-    let previous_runtime =
-        load_previous_runtime(connection, &specification.application_id, &runtime.id).map_err(
-            |source| {
-                candidate_failure(
-                    "runtime_reconciliation_failed",
-                    source,
-                    Some(container_id),
-                    Some(&runtime.id),
-                    Some(&unit_name(&specification.application_name, deployment_id)),
-                    false,
-                )
-            },
-        )?;
+
+    let previous_runtime = load_previous_runtime(
+        connection,
+        &specification.application_id,
+        &candidate.runtime.id,
+    )
+    .map_err(|source| {
+        candidate_failure(
+            "runtime_reconciliation_failed",
+            source,
+            Some(&candidate.runtime.external_runtime_id),
+            Some(&candidate.runtime.id),
+            Some(&candidate.unit_name),
+            true,
+        )
+    })?;
+
     if specification.visibility == Visibility::Public {
         let Some(public_configuration) = public_configuration else {
             return Err(failure_needing_persistence(
@@ -556,15 +424,15 @@ fn execute_candidate(
                 DeployReleaseError::PublicApplication {
                     application_id: specification.application_id.clone(),
                 },
-                Some(container_id),
-                Some(&runtime.id),
+                Some(&candidate.runtime.external_runtime_id),
+                Some(&candidate.runtime.id),
             ));
         };
         let completed = execute_public_candidate(
             connection,
             specification,
-            &runtime,
-            commit_sha,
+            &candidate.runtime,
+            source_revision,
             public_configuration,
             progress,
         );
@@ -575,19 +443,20 @@ fn execute_candidate(
                 previous_runtime.as_ref(),
             );
         }
-        return completed;
+        return completed
+            .map(|(runtime_id, finished_at)| (runtime_id, candidate.container_name, finished_at));
     }
 
     progress.started(
         DeploymentStep::HealthCheckAndPromotion,
         format!(
             "runtime {}, path {}, expected status {}",
-            runtime.id, specification.health_path, specification.expected_status
+            candidate.runtime.id, specification.health_path, specification.expected_status
         ),
     );
     let promoted = promote_internal_candidate(
         connection,
-        &runtime.id,
+        &candidate.runtime.id,
         &specification.health_path,
         specification.expected_status,
     )
@@ -596,19 +465,24 @@ fn execute_candidate(
             &source,
             PromoteInternalCandidateError::CandidateUnhealthy { .. }
         ) {
-            failure_already_persisted("health_check_failed", source, container_id, &runtime.id)
+            failure_already_persisted(
+                "health_check_failed",
+                source,
+                &candidate.runtime.external_runtime_id,
+                &candidate.runtime.id,
+            )
         } else {
             failure_needing_persistence(
                 "candidate_promotion_failed",
                 source,
-                Some(container_id),
-                Some(&runtime.id),
+                Some(&candidate.runtime.external_runtime_id),
+                Some(&candidate.runtime.id),
             )
         }
     })?;
     progress.completed(
         DeploymentStep::HealthCheckAndPromotion,
-        format!("runtime {} promoted to Current", runtime.id),
+        format!("runtime {} promoted to Current", candidate.runtime.id),
     );
     progress.state_changed(deployment_id, DeploymentStatus::Succeeded);
     retire_previous_runtime(
@@ -617,7 +491,11 @@ fn execute_candidate(
         previous_runtime.as_ref(),
     );
 
-    Ok((runtime.id, promoted.finished_at))
+    Ok((
+        candidate.runtime.id,
+        candidate.container_name,
+        promoted.finished_at,
+    ))
 }
 
 fn execute_public_candidate(
@@ -1010,24 +888,3 @@ fn failure_already_persisted(
         resources: CandidateResources::with_container_and_runtime(container_id, runtime_id),
     }
 }
-
-#[derive(Debug)]
-enum RuntimeObservationFailure {
-    NotRunning { actual: ObservedRuntimeState },
-    MissingEndpoint,
-}
-
-impl fmt::Display for RuntimeObservationFailure {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NotRunning { actual } => {
-                write!(formatter, "expected runtime to be Running, got {actual:?}")
-            }
-            Self::MissingEndpoint => {
-                formatter.write_str("running runtime has no loopback endpoint")
-            }
-        }
-    }
-}
-
-impl Error for RuntimeObservationFailure {}
