@@ -33,11 +33,11 @@ ser `Git branch → commit → OCI digest → Release → deployment`.
 - [x] **C — novo schema:** manifest v3 (sem `[source]`/`[build]`),
   `deploy/<environment>/pneuma.toml`, novas migrations (nunca alterar as
   históricas).
-- [ ] **D — import Git remoto:** `app import <git-url>`, `--manifest`, checkout
+- [x] **D — import Git remoto:** `app import <git-url>`, `--manifest`, checkout
   temporário, persistir `repository_url`/`manifest_path`, idempotência.
-- [ ] **E — Git resolution:** adapter de Git remoto, `resolve_branch()`,
+- [x] **E — Git resolution:** adapter de Git remoto, `resolve_branch()`,
   `CommitSha`, erros de auth/repositório/branch.
-- [ ] **F — OCI discovery:** convenção `image:<commit>`, resolver tag do commit
+- [x] **F — OCI discovery:** convenção `image:<commit>`, resolver tag do commit
   → digest, nunca devolver tag mutável ao engine.
 - [ ] **G — deploy por branch:** `DeployByBranch`
   (`deployment_deploy_branch.rs`), `--branch`, exclusão mútua com `--image`,
