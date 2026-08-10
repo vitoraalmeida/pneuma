@@ -6,6 +6,7 @@ pub mod deployment_deploy_branch;
 pub mod deployment_deploy_oci;
 pub mod deployment_deploy_release;
 pub mod deployment_list;
+pub mod deployment_progress;
 pub mod deployment_promote_internal;
 pub mod deployment_promote_public;
 pub mod deployment_register_runtime;
