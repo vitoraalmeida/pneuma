@@ -297,14 +297,54 @@ fn load_specification(
     })
 }
 
+struct CandidateResources {
+    unit_name: Option<String>,
+    container_id: Option<String>,
+    runtime_id: Option<String>,
+    port_reserved: bool,
+}
+
+impl CandidateResources {
+    fn empty() -> Self {
+        Self {
+            unit_name: None,
+            container_id: None,
+            runtime_id: None,
+            port_reserved: false,
+        }
+    }
+
+    fn with_container(container_id: &str) -> Self {
+        Self {
+            container_id: Some(container_id.to_owned()),
+            ..Self::empty()
+        }
+    }
+
+    fn with_container_and_runtime(container_id: &str, runtime_id: &str) -> Self {
+        Self {
+            container_id: Some(container_id.to_owned()),
+            runtime_id: Some(runtime_id.to_owned()),
+            ..Self::empty()
+        }
+    }
+
+    fn with_unit(mut self, unit_name: &str) -> Self {
+        self.unit_name = Some(unit_name.to_owned());
+        self
+    }
+
+    fn with_port(mut self) -> Self {
+        self.port_reserved = true;
+        self
+    }
+}
+
 struct FailedExecution {
     code: &'static str,
     source: Box<dyn Error>,
-    container_id: Option<String>,
-    runtime_id: Option<String>,
     failure_persisted: bool,
-    unit_name: Option<String>,
-    port_reserved: bool,
+    resources: CandidateResources,
 }
 
 fn execute_deployment(
@@ -398,8 +438,7 @@ fn execute_deployment(
         progress,
     )
     .map_err(|mut failed| {
-        failed.unit_name = Some(unit);
-        failed.port_reserved = true;
+        failed.resources = failed.resources.with_unit(&unit).with_port();
         failed
     })?;
 
@@ -832,11 +871,8 @@ fn public_failure(
     FailedExecution {
         code,
         source,
-        container_id: Some(container_id.to_owned()),
-        runtime_id: Some(runtime_id.to_owned()),
         failure_persisted: false,
-        unit_name: None,
-        port_reserved: false,
+        resources: CandidateResources::with_container_and_runtime(container_id, runtime_id),
     }
 }
 
@@ -859,31 +895,33 @@ fn finish_failed_deployment(
             Err(source) => Some(source),
         }
     };
-    let cleanup_error =
-        if failed.container_id.is_some() || failed.unit_name.is_some() || failed.port_reserved {
-            progress.started(
-                DeploymentStep::CleanupCandidate,
-                format!("deployment {deployment_id}"),
-            );
-            match cleanup_failed_candidate(
-                connection,
-                deployment_id,
-                failed.unit_name.as_deref(),
-                failed.container_id.as_deref(),
-                failed.runtime_id.as_deref(),
-            ) {
-                Ok(()) => {
-                    progress.completed(
-                        DeploymentStep::CleanupCandidate,
-                        format!("deployment {deployment_id}"),
-                    );
-                    None
-                }
-                Err(source) => Some(source),
+    let cleanup_error = if failed.resources.container_id.is_some()
+        || failed.resources.unit_name.is_some()
+        || failed.resources.port_reserved
+    {
+        progress.started(
+            DeploymentStep::CleanupCandidate,
+            format!("deployment {deployment_id}"),
+        );
+        match cleanup_failed_candidate(
+            connection,
+            deployment_id,
+            failed.resources.unit_name.as_deref(),
+            failed.resources.container_id.as_deref(),
+            failed.resources.runtime_id.as_deref(),
+        ) {
+            Ok(()) => {
+                progress.completed(
+                    DeploymentStep::CleanupCandidate,
+                    format!("deployment {deployment_id}"),
+                );
+                None
             }
-        } else {
-            None
-        };
+            Err(source) => Some(source),
+        }
+    } else {
+        None
+    };
 
     if let Some(source) = cleanup_error {
         return Err(DeployReleaseError::Cleanup {
@@ -916,14 +954,16 @@ fn failure_needing_persistence(
     container_id: Option<&str>,
     runtime_id: Option<&str>,
 ) -> FailedExecution {
+    let resources = match (container_id, runtime_id) {
+        (Some(cid), Some(rid)) => CandidateResources::with_container_and_runtime(cid, rid),
+        (Some(cid), None) => CandidateResources::with_container(cid),
+        _ => CandidateResources::empty(),
+    };
     FailedExecution {
         code,
         source: Box::new(source),
-        container_id: container_id.map(str::to_owned),
-        runtime_id: runtime_id.map(str::to_owned),
         failure_persisted: false,
-        unit_name: None,
-        port_reserved: false,
+        resources,
     }
 }
 
@@ -935,14 +975,22 @@ fn candidate_failure(
     unit_name: Option<&str>,
     port_reserved: bool,
 ) -> FailedExecution {
+    let mut resources = match (container_id, runtime_id) {
+        (Some(cid), Some(rid)) => CandidateResources::with_container_and_runtime(cid, rid),
+        (Some(cid), None) => CandidateResources::with_container(cid),
+        _ => CandidateResources::empty(),
+    };
+    if let Some(unit) = unit_name {
+        resources = resources.with_unit(unit);
+    }
+    if port_reserved {
+        resources = resources.with_port();
+    }
     FailedExecution {
         code,
         source: Box::new(source),
-        container_id: container_id.map(str::to_owned),
-        runtime_id: runtime_id.map(str::to_owned),
         failure_persisted: false,
-        unit_name: unit_name.map(str::to_owned),
-        port_reserved,
+        resources,
     }
 }
 
@@ -958,11 +1006,8 @@ fn failure_already_persisted(
     FailedExecution {
         code,
         source: Box::new(source),
-        container_id: Some(container_id.to_owned()),
-        runtime_id: Some(runtime_id.to_owned()),
         failure_persisted: true,
-        unit_name: None,
-        port_reserved: false,
+        resources: CandidateResources::with_container_and_runtime(container_id, runtime_id),
     }
 }
 
