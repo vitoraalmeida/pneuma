@@ -1,6 +1,6 @@
 # Iteração atual
 
-**Status:** em andamento
+**Status:** concluída
 
 **Atualizado em:** 10 de agosto de 2026
 
@@ -42,6 +42,6 @@ ser `Git branch → commit → OCI digest → Release → deployment`.
 - [x] **G — deploy por branch:** `DeployByBranch`
   (`deployment_deploy_branch.rs`), `--branch`, exclusão mútua com `--image`,
   persistir `source_revision`.
-- [ ] **H — aplicação real:** mover manifestos do website, importar staging,
+- [x] **H — aplicação real:** mover manifestos do website, importar staging,
   testar `--branch staging`, automatizar staging no Actions, importar
   production, testar `--branch main` e rollback.
