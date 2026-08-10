@@ -3,6 +3,8 @@ use std::fmt;
 use std::io;
 use std::process::Command;
 
+use crate::adapters::git_source::CommitSha;
+
 const DIGEST_ALGORITHM: &str = "sha256:";
 const SHA256_HEX_LENGTH: usize = 64;
 
@@ -14,6 +16,11 @@ pub struct OciImageReference {
 }
 
 impl OciImageReference {
+    pub fn new(repository: &str, digest: &str) -> Result<Self, InvalidImageReference> {
+        let reference = format!("{repository}@{digest}");
+        Self::parse(&reference)
+    }
+
     pub fn parse(value: &str) -> Result<Self, InvalidImageReference> {
         let Some((repository, digest)) = value.split_once('@') else {
             return Err(InvalidImageReference {
@@ -213,6 +220,125 @@ pub fn pull_image(reference: &str) -> Result<PulledImage, PullImageError> {
     }
 
     Ok(PulledImage { reference })
+}
+
+#[derive(Debug)]
+pub enum ResolveImageDigestError {
+    Execute {
+        operation: &'static str,
+        source: io::Error,
+    },
+    Pull {
+        reference: String,
+        stdout: String,
+        stderr: String,
+    },
+    Inspect {
+        reference: String,
+        stdout: String,
+        stderr: String,
+    },
+    InvalidInspectOutput {
+        reference: String,
+        output: String,
+    },
+}
+
+impl fmt::Display for ResolveImageDigestError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Execute { operation, source } => write!(
+                formatter,
+                "failed to execute Podman while {operation}: {source}"
+            ),
+            Self::Pull {
+                reference,
+                stdout,
+                stderr,
+            } => write!(
+                formatter,
+                "failed to pull image `{reference}` with Podman: {}",
+                diagnostic(stdout, stderr)
+            ),
+            Self::Inspect {
+                reference,
+                stdout,
+                stderr,
+            } => write!(
+                formatter,
+                "failed to inspect image `{reference}` with Podman: {}",
+                diagnostic(stdout, stderr)
+            ),
+            Self::InvalidInspectOutput { reference, output } => write!(
+                formatter,
+                "Podman returned an invalid digest while inspecting image `{reference}`: {output}"
+            ),
+        }
+    }
+}
+
+impl Error for ResolveImageDigestError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Execute { source, .. } => Some(source),
+            Self::Pull { .. } | Self::Inspect { .. } | Self::InvalidInspectOutput { .. } => None,
+        }
+    }
+}
+
+pub fn resolve_image_digest(
+    repository: &str,
+    commit_sha: &CommitSha,
+) -> Result<OciImageReference, ResolveImageDigestError> {
+    let tagged = format!("{repository}:{}", commit_sha.as_str());
+
+    let pull = Command::new("podman")
+        .args(["pull", "--quiet", &tagged])
+        .output()
+        .map_err(|source| ResolveImageDigestError::Execute {
+            operation: "pulling an image by tag",
+            source,
+        })?;
+    let pull_stdout = String::from_utf8_lossy(&pull.stdout).into_owned();
+    let pull_stderr = String::from_utf8_lossy(&pull.stderr).into_owned();
+    if !pull.status.success() {
+        return Err(ResolveImageDigestError::Pull {
+            reference: tagged.clone(),
+            stdout: pull_stdout,
+            stderr: pull_stderr,
+        });
+    }
+
+    let inspect = Command::new("podman")
+        .args(["image", "inspect", "--format", "{{.Digest}}", &tagged])
+        .output()
+        .map_err(|source| ResolveImageDigestError::Execute {
+            operation: "inspecting an image",
+            source,
+        })?;
+    let inspect_stdout = String::from_utf8_lossy(&inspect.stdout).into_owned();
+    let inspect_stderr = String::from_utf8_lossy(&inspect.stderr).into_owned();
+    if !inspect.status.success() {
+        return Err(ResolveImageDigestError::Inspect {
+            reference: tagged,
+            stdout: inspect_stdout,
+            stderr: inspect_stderr,
+        });
+    }
+
+    let Some(digest) = normalize_digest(&inspect_stdout) else {
+        return Err(ResolveImageDigestError::InvalidInspectOutput {
+            reference: tagged,
+            output: inspect_stdout,
+        });
+    };
+
+    OciImageReference::new(repository, digest).map_err(|_| {
+        ResolveImageDigestError::InvalidInspectOutput {
+            reference: tagged,
+            output: digest.to_owned(),
+        }
+    })
 }
 
 fn is_repository(repository: &str) -> bool {
