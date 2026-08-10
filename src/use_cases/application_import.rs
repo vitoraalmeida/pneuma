@@ -4,6 +4,7 @@ use std::path::Path;
 
 use rusqlite::{Connection, params};
 
+use crate::adapters::git_source::is_remote_repository;
 use crate::domain::application::Application;
 use crate::domain::manifest::{Manifest, ManifestError, Visibility, load_manifest_at};
 
@@ -190,7 +191,7 @@ fn persist_specification(
         .map_err(|source| ImportError::Persistence { source })?;
 
     if let Some(repository_url) = repository_url {
-        let repository_kind = if repository_url.contains("://") {
+        let repository_kind = if is_remote_repository(repository_url) {
             "remote"
         } else {
             "local"

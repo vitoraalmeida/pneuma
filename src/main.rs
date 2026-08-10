@@ -2,10 +2,15 @@ use std::env;
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::fs;
+use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use pneuma::adapters::database::{self, DatabaseError};
+use pneuma::adapters::git_source::{
+    CloneRepositoryError, cleanup_checkout, clone_repository, is_remote_repository,
+};
 use pneuma::adapters::oci_image::{OciImageReference, pull_image};
 use pneuma::domain::application::Application;
 use pneuma::domain::manifest::Visibility;
@@ -31,7 +36,7 @@ const CADDY_MANAGED_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_CADDY_MANAGED_PATH
 const DEFAULT_CADDY_MANAGED_PATH: &str = "/etc/caddy/applications";
 const CADDYFILE_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_CADDYFILE_PATH";
 const DEFAULT_CADDYFILE_PATH: &str = "/etc/caddy/Caddyfile";
-const USAGE: &str = "Usage:\n  pneuma [--verbose] system create <name> [--description <text>]\n  pneuma [--verbose] system list\n  pneuma [--verbose] system show <name>\n  pneuma [--verbose] app import <repository-path> [--system <system-name>]\n  pneuma [--verbose] app list\n  pneuma [--verbose] app deployments <application-name>\n  pneuma [--verbose] app status <application-name>\n  pneuma [--verbose] app stop <application-name>\n  pneuma [--verbose] app start <application-name>\n  pneuma [--verbose] app deploy <application-name> --image <repository@sha256:...>\n  pneuma [--verbose] deployment rollback <application-name>\n  pneuma [--verbose] app visibility set <application-name> <public|internal>\n  pneuma database backup <path>\n  pneuma database restore <path>\n  pneuma version\n  pneuma doctor";
+const USAGE: &str = "Usage:\n  pneuma [--verbose] system create <name> [--description <text>]\n  pneuma [--verbose] system list\n  pneuma [--verbose] system show <name>\n  pneuma [--verbose] app import <repository-or-git-url> [--system <system-name>] [--manifest <manifest-path>]\n  pneuma [--verbose] app list\n  pneuma [--verbose] app deployments <application-name>\n  pneuma [--verbose] app status <application-name>\n  pneuma [--verbose] app stop <application-name>\n  pneuma [--verbose] app start <application-name>\n  pneuma [--verbose] app deploy <application-name> --image <repository@sha256:...>\n  pneuma [--verbose] deployment rollback <application-name>\n  pneuma [--verbose] app visibility set <application-name> <public|internal>\n  pneuma database backup <path>\n  pneuma database restore <path>\n  pneuma version\n  pneuma doctor";
 
 struct Invocation {
     verbose: bool,
@@ -48,8 +53,9 @@ enum Command {
         name: String,
     },
     Import {
-        repository_path: PathBuf,
+        repository: String,
         system_name: Option<String>,
+        manifest_path: Option<String>,
     },
     List,
     Deployments {
@@ -93,6 +99,12 @@ enum CliError {
     },
     Import {
         source: ImportError,
+    },
+    ImportSource {
+        source: CloneRepositoryError,
+    },
+    ImportWorkspace {
+        source: std::io::Error,
     },
     List {
         source: ListError,
@@ -139,6 +151,13 @@ impl fmt::Display for CliError {
             Self::Usage => formatter.write_str(USAGE),
             Self::Database { source } => write!(formatter, "{source}"),
             Self::Import { source } => write!(formatter, "{source}"),
+            Self::ImportSource { source } => write!(formatter, "{source}"),
+            Self::ImportWorkspace { source } => {
+                write!(
+                    formatter,
+                    "failed to prepare the import workspace: {source}"
+                )
+            }
             Self::List { source } => write!(formatter, "{source}"),
             Self::ListDeployments { source } => write!(formatter, "{source}"),
             Self::ApplicationNotFound { application_name } => {
@@ -165,6 +184,8 @@ impl Error for CliError {
             Self::Usage => None,
             Self::Database { source } => Some(source),
             Self::Import { source } => Some(source),
+            Self::ImportSource { source } => Some(source),
+            Self::ImportWorkspace { source } => Some(source),
             Self::List { source } => Some(source),
             Self::ListDeployments { source } => Some(source),
             Self::DeployOci { source } => Some(source.as_ref()),
@@ -228,23 +249,41 @@ fn parse_command(arguments: &[OsString]) -> Result<Invocation, CliError> {
             let name = name.to_str().ok_or(CliError::Usage)?.to_owned();
             Ok(Command::SystemShow { name })
         }
-        [app, import, repository_path]
+        [app, import, repository, flags @ ..]
             if app == OsStr::new("app") && import == OsStr::new("import") =>
         {
+            let mut system_name: Option<String> = None;
+            let mut manifest_path: Option<String> = None;
+            let mut index = 0;
+            while index < flags.len() {
+                match flags[index].to_str() {
+                    Some("--system") => {
+                        system_name = Some(
+                            flags
+                                .get(index + 1)
+                                .and_then(|value| value.to_str())
+                                .ok_or(CliError::Usage)?
+                                .to_owned(),
+                        );
+                        index += 2;
+                    }
+                    Some("--manifest") => {
+                        manifest_path = Some(
+                            flags
+                                .get(index + 1)
+                                .and_then(|value| value.to_str())
+                                .ok_or(CliError::Usage)?
+                                .to_owned(),
+                        );
+                        index += 2;
+                    }
+                    _ => return Err(CliError::Usage),
+                }
+            }
             Ok(Command::Import {
-                repository_path: PathBuf::from(repository_path),
-                system_name: None,
-            })
-        }
-        [app, import, repository_path, system_flag, system_name]
-            if app == OsStr::new("app")
-                && import == OsStr::new("import")
-                && system_flag == OsStr::new("--system") =>
-        {
-            let system_name = system_name.to_str().ok_or(CliError::Usage)?.to_owned();
-            Ok(Command::Import {
-                repository_path: PathBuf::from(repository_path),
-                system_name: Some(system_name),
+                repository: repository.to_str().ok_or(CliError::Usage)?.to_owned(),
+                system_name,
+                manifest_path,
             })
         }
         [app, list] if app == OsStr::new("app") && list == OsStr::new("list") => Ok(Command::List),
@@ -394,13 +433,15 @@ fn run(invocation: Invocation) -> Result<(), CliError> {
         Command::SystemList => run_system_list(&connection, verbose),
         Command::SystemShow { name } => run_system_show(&connection, verbose, &name),
         Command::Import {
-            repository_path,
+            repository,
             system_name,
+            manifest_path,
         } => run_import(
             &mut connection,
             verbose,
-            &repository_path,
+            &repository,
             system_name.as_deref(),
+            manifest_path.as_deref(),
         ),
         Command::List => run_list(&connection, verbose),
         Command::Deployments { application_name } => {
@@ -445,25 +486,51 @@ fn log_verbose(verbose: bool, message: impl std::fmt::Display) {
 fn run_import(
     connection: &mut rusqlite::Connection,
     verbose: bool,
-    repository_path: &Path,
+    repository: &str,
     system_name: Option<&str>,
+    manifest_path: Option<&str>,
 ) -> Result<(), CliError> {
-    log_verbose(
-        verbose,
-        format!("import repository: {}", repository_path.display()),
-    );
-    let application = import_application(
+    log_verbose(verbose, format!("import repository: {repository}"));
+    let (repository_path, temporary_checkout) = if is_remote_repository(repository) {
+        let workspace =
+            configured_path(WORKSPACE_PATH_ENVIRONMENT_VARIABLE, DEFAULT_WORKSPACE_PATH);
+        let temporary_root = workspace.join("imports");
+        fs::create_dir_all(&temporary_root)
+            .map_err(|source| CliError::ImportWorkspace { source })?;
+        let checkout = temporary_root.join(unique_suffix());
+        clone_repository(repository, &checkout)
+            .map_err(|source| CliError::ImportSource { source })?;
+        (checkout, true)
+    } else {
+        (PathBuf::from(repository), false)
+    };
+
+    let import_result = import_application(
         connection,
-        repository_path,
+        &repository_path,
         system_name,
-        Some(repository_path.to_str().ok_or(CliError::Usage)?),
-        Some("pneuma.toml"),
+        Some(repository),
+        manifest_path,
     )
-    .map_err(|source| CliError::Import { source })?;
+    .map_err(|source| CliError::Import { source });
+
+    if temporary_checkout {
+        let _ = cleanup_checkout(&repository_path);
+    }
+
+    let application = import_result?;
     println!("Imported {}", application.name);
     println!("Status: Registered");
     println!("Deployment: Not deployed");
     Ok(())
+}
+
+fn unique_suffix() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    format!("{}-{nanos}", std::process::id())
 }
 
 fn run_system_create(

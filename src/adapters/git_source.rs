@@ -34,6 +34,22 @@ pub enum CreateCheckoutError {
     },
 }
 
+#[derive(Debug)]
+pub enum CloneRepositoryError {
+    DestinationExists {
+        path: PathBuf,
+    },
+    Execute {
+        operation: &'static str,
+        source: io::Error,
+    },
+    Git {
+        operation: &'static str,
+        url: String,
+        message: String,
+    },
+}
+
 impl fmt::Display for ResolveCommitError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -95,6 +111,43 @@ impl Error for CreateCheckoutError {
         match self {
             Self::Execute { source, .. } => Some(source),
             Self::InvalidCommit | Self::DestinationExists { .. } | Self::Git { .. } => None,
+        }
+    }
+}
+
+impl fmt::Display for CloneRepositoryError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DestinationExists { path } => {
+                write!(
+                    formatter,
+                    "checkout destination already exists: {}",
+                    path.display()
+                )
+            }
+            Self::Execute { operation, source } => {
+                write!(
+                    formatter,
+                    "failed to execute Git while {operation}: {source}"
+                )
+            }
+            Self::Git {
+                operation,
+                url,
+                message,
+            } => write!(
+                formatter,
+                "Git failed while {operation} of `{url}`: {message}"
+            ),
+        }
+    }
+}
+
+impl Error for CloneRepositoryError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Execute { source, .. } => Some(source),
+            Self::DestinationExists { .. } | Self::Git { .. } => None,
         }
     }
 }
@@ -235,6 +288,50 @@ pub fn ensure_checkout(
         source,
     })?;
     create_checkout(repository_path, commit_sha, checkout_path)
+}
+
+pub fn is_remote_repository(repository: &str) -> bool {
+    repository.contains("://") || repository.starts_with("git@")
+}
+
+pub fn clone_repository(url: &str, destination: &Path) -> Result<(), CloneRepositoryError> {
+    if destination
+        .try_exists()
+        .map_err(|source| CloneRepositoryError::Execute {
+            operation: "inspecting the checkout destination",
+            source,
+        })?
+    {
+        return Err(CloneRepositoryError::DestinationExists {
+            path: destination.to_path_buf(),
+        });
+    }
+
+    let clone = Command::new("git")
+        .args(["clone", "--quiet", "--"])
+        .arg(url)
+        .arg(destination)
+        .output()
+        .map_err(|source| CloneRepositoryError::Execute {
+            operation: "cloning the remote repository",
+            source,
+        })?;
+    if !clone.status.success() {
+        return Err(CloneRepositoryError::Git {
+            operation: "cloning the remote repository",
+            url: url.to_owned(),
+            message: git_failure_message(&clone),
+        });
+    }
+
+    Ok(())
+}
+
+pub fn cleanup_checkout(path: &Path) -> Result<(), io::Error> {
+    if path.try_exists().map_err(io::Error::other)? {
+        fs::remove_dir_all(path)?;
+    }
+    Ok(())
 }
 
 fn is_clean_checkout_at(

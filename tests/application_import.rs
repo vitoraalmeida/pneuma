@@ -173,6 +173,29 @@ fn persists_a_local_repository_kind() {
 }
 
 #[test]
+fn classifies_ssh_git_urls_as_remote() {
+    let mut connection = database::open(Path::new(":memory:")).unwrap();
+
+    import_application(
+        &mut connection,
+        &fixture_path("valid"),
+        None,
+        Some("git@github.com:vitoraalmeida/vitoralmeida.tech.git"),
+        Some("pneuma.toml"),
+    )
+    .unwrap();
+
+    let repository_kind: String = connection
+        .query_row(
+            "SELECT repository_kind FROM application_sources",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(repository_kind, "remote");
+}
+
+#[test]
 fn persists_delivery_without_source_or_build_specs() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
 

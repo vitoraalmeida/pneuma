@@ -71,6 +71,87 @@ fn reports_manifest_errors_and_returns_failure() {
 }
 
 #[test]
+fn imports_from_a_remote_git_url_with_a_manifest_path() {
+    let database_path = temporary_database_path();
+    let workspace = temporary_workspace_path();
+    let remote = workspace.join("remote");
+    fs::create_dir_all(remote.join("deploy/staging")).unwrap();
+    fs::copy(
+        fixture_path("valid/deploy/staging/pneuma.toml"),
+        remote.join("deploy/staging/pneuma.toml"),
+    )
+    .unwrap();
+    initialize_repository(&remote);
+    let url = format!("file://{}", remote.display());
+
+    let output = run_pneuma_env(
+        &database_path,
+        Some(&workspace),
+        &[
+            OsStr::new("app"),
+            OsStr::new("import"),
+            OsStr::new(&url),
+            OsStr::new("--manifest"),
+            OsStr::new("deploy/staging/pneuma.toml"),
+        ],
+    );
+
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Imported personal-site\nStatus: Registered\nDeployment: Not deployed\n"
+    );
+    let connection = database::open(&database_path).unwrap();
+    let (repository_url, repository_kind, manifest_path): (String, String, String) = connection
+        .query_row(
+            "SELECT repository_url, repository_kind, manifest_path FROM application_sources",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(repository_url, url);
+    assert_eq!(repository_kind, "remote");
+    assert_eq!(manifest_path, "deploy/staging/pneuma.toml");
+    let _ = fs::remove_dir_all(&workspace);
+    let _ = fs::remove_file(&database_path);
+}
+
+#[test]
+fn remote_import_is_idempotent() {
+    let database_path = temporary_database_path();
+    let workspace = temporary_workspace_path();
+    let remote = workspace.join("remote");
+    fs::create_dir_all(&remote).unwrap();
+    fs::copy(
+        fixture_path("valid/pneuma.toml"),
+        remote.join("pneuma.toml"),
+    )
+    .unwrap();
+    initialize_repository(&remote);
+    let url = format!("file://{}", remote.display());
+    let arguments = &[OsStr::new("app"), OsStr::new("import"), OsStr::new(&url)];
+
+    let first = run_pneuma_env(&database_path, Some(&workspace), arguments);
+    let second = run_pneuma_env(&database_path, Some(&workspace), arguments);
+
+    assert!(first.status.success());
+    assert!(second.status.success());
+    let connection = database::open(&database_path).unwrap();
+    let count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM applications", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 1);
+    let source_count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM application_sources", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(source_count, 1);
+    let _ = fs::remove_dir_all(&workspace);
+    let _ = fs::remove_file(&database_path);
+}
+
+#[test]
 fn reports_database_open_errors_and_returns_failure() {
     let database_path = temporary_database_path()
         .join("missing")
@@ -920,6 +1001,29 @@ fn run_pneuma(database_path: &Path, arguments: &[&OsStr]) -> Output {
         .args(arguments)
         .output()
         .unwrap()
+}
+
+fn run_pneuma_env(
+    database_path: &Path,
+    workspace_path: Option<&Path>,
+    arguments: &[&OsStr],
+) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_pneuma"));
+    command
+        .env("PNEUMA_DATABASE_PATH", database_path)
+        .args(arguments);
+    if let Some(workspace_path) = workspace_path {
+        command.env("PNEUMA_WORKSPACE_PATH", workspace_path);
+    }
+    command.output().unwrap()
+}
+
+fn temporary_workspace_path() -> PathBuf {
+    env::temp_dir().join(format!(
+        "pneuma-cli-workspace-{}-{}",
+        std::process::id(),
+        unique_suffix()
+    ))
 }
 
 fn temporary_database_path() -> PathBuf {

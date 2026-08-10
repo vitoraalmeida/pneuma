@@ -5,7 +5,8 @@ use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use pneuma::adapters::git_source::{
-    CreateCheckoutError, ResolveCommitError, create_checkout, ensure_checkout, resolve_commit,
+    CloneRepositoryError, CreateCheckoutError, ResolveCommitError, cleanup_checkout,
+    clone_repository, create_checkout, ensure_checkout, is_remote_repository, resolve_commit,
 };
 
 #[test]
@@ -141,6 +142,61 @@ fn replaces_a_checkout_at_a_different_commit() {
         fs::read_to_string(destination.join("site.txt")).unwrap(),
         "second contents"
     );
+}
+
+#[test]
+fn classifies_remote_and_local_repositories() {
+    assert!(is_remote_repository(
+        "https://github.com/vitoraalmeida/vitoralmeida.tech.git"
+    ));
+    assert!(is_remote_repository(
+        "git@github.com:vitoraalmeida/vitoralmeida.tech.git"
+    ));
+    assert!(!is_remote_repository("/srv/checkouts/vitoralmeida.tech"));
+    assert!(!is_remote_repository("."));
+}
+
+#[test]
+fn clones_a_repository_by_url_and_cleans_up_the_checkout() {
+    let repository = TestRepository::new();
+    let url = format!("file://{}", repository.path.display());
+    let destination = repository.temporary_root.join("clone");
+
+    clone_repository(&url, &destination).unwrap();
+
+    assert_eq!(
+        fs::read_to_string(destination.join("site.txt")).unwrap(),
+        "initial contents"
+    );
+
+    cleanup_checkout(&destination).unwrap();
+    assert!(!destination.exists());
+}
+
+#[test]
+fn rejects_an_unreachable_repository_url() {
+    let repository = TestRepository::new();
+    let destination = repository.temporary_root.join("clone");
+    let url = format!("file://{}/missing", repository.temporary_root.display());
+
+    let error = clone_repository(&url, &destination).unwrap_err();
+
+    assert!(matches!(error, CloneRepositoryError::Git { .. }));
+    assert!(!destination.exists());
+}
+
+#[test]
+fn rejects_an_existing_clone_destination() {
+    let repository = TestRepository::new();
+    let destination = repository.temporary_root.join("existing");
+    fs::create_dir(&destination).unwrap();
+
+    let error = clone_repository("https://example.invalid/repo.git", &destination).unwrap_err();
+
+    assert!(matches!(
+        error,
+        CloneRepositoryError::DestinationExists { .. }
+    ));
 }
 
 struct TestRepository {
