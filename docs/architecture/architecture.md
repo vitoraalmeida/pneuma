@@ -12,14 +12,16 @@ Crate único organizado em três camadas:
   `system`), sem dependências externas.
 - `src/use_cases/` — casos de uso que orquestram adapters e domínio
   (`application_import`, `application_list`, `application_runtime`,
-  `deployment_create`, `deployment_deploy_oci`, `deployment_deploy_release`,
-  `deployment_list`, `deployment_promote_internal`,
+  `deployment_create`, `deployment_deploy_branch`, `deployment_deploy_oci`,
+  `deployment_deploy_release`, `deployment_list`, `deployment_promote_internal`,
   `deployment_promote_public`, `deployment_register_runtime`,
   `deployment_rollback`, `deployment_transition`, `exposure_change`,
   `release_create`, `system_create`, `system_list`, `system_show`).
   `deployment_deploy_release` orquestra o deployment inteiro (runtime, health,
   Caddy e ativação) a partir de uma Release imutável; o caminho OCI
-  (`deployment_deploy_oci`) produz a Release e delega a ele.
+  (`deployment_deploy_oci`) produz a Release e delega a ele. O caminho Git-aware
+  (`deployment_deploy_branch`) resolve branch → commit → image tag → digest e
+  delega ao `deployment_deploy_oci`.
   `deployment_transition` aplica a máquina de estados persistida.
 - `src/adapters/` — integrações com sistemas externos (`git_source`,
   `local_runtime`, `oci_image`, `port_allocator`,
@@ -29,12 +31,13 @@ Crate único organizado em três camadas:
 Sem traits, generics, macros ou async: as restrições de
 [`docs/rust-guidelines.md`](../rust-guidelines.md) valem para toda mudança.
 
-> **Direção v0.2** (ver [`roadmap.md`](../roadmap.md)): o Pneuma deixa de
-> construir aplicações. O único artifact deployável é `image@digest` descoberto
-> pelo CI (`Git branch → commit → OCI digest`), e a persistência passa a ser
-> organizada em SQLite stores por capacidade. A Fase A da iteração atual removeu
-> `deploy-source`, `deployment_deploy_source`, `local_build` e `[build]`.
-> Este documento descreve a v0.1 com as simplificações da Fase A aplicadas.
+> **v0.2 concluída** (ver [`roadmap.md`](../roadmap.md)): o Pneuma agora opera
+> no modo Git-aware. O único artifact deployável é `image@digest` descoberto
+> pelo CI (`Git branch → commit → OCI digest`). A persistência é organizada em
+> SQLite stores por capacidade. A Fase A removeu `deploy-source`,
+> `deployment_deploy_source`, `local_build` e `[build]`. A Fase H validou o
+> fluxo completo com a aplicação-piloto `vitoralmeida.tech` em staging e
+> production. Este documento descreve a arquitetura atual (v0.2).
 
 ## 2. Efeitos externos
 

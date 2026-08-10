@@ -58,32 +58,37 @@ System (novo)
 
 ### Já implementado
 
-| Capacidade | Status |
-|---|---|
-| Application entity + catálogo | ✅ |
-| SQLite + migrations (12) | ✅ |
-| Deployment persistence + state machine | ✅ |
-| RuntimeInstance persistence | ✅ |
-| Podman rootless (build, create, start, stop, inspect) | ✅ |
-| Start / stop / status | ✅ |
-| Internal health check | ✅ |
-| External health check | ✅ |
-| Safe traffic switch (falha preserva runtime saudável) | ✅ |
-| Caddy integration + public routing | ✅ |
-| Exposure materialization state | ✅ |
-| Deployment history | ✅ |
-| Local Git checkout + local OCI build | ✅ |
-| CLI (import, list, status, deploy, start, stop, visibility set, deployments, version) | ✅ |
-| Rollback (novo deployment da Release anterior, não depende do container antigo) | ✅ |
-| Visibility set (public/internal) independente do lifecycle | ✅ |
-| Doctor (13 checks: DB, migrations, workspace, Caddy dirs, Caddyfile/config, git, podman, rootless, Quadlet generator, OCI images, disk, caddy) | ✅ |
-| Version | ✅ |
-| Staging validation (`staging.vitoralmeida.tech`) | ✅ |
-| System (entidade, migration, CLI create/list/show) | ✅ |
-| Release imutável + engine DeployRelease/DeploySource | ✅ |
-| OCI adapter (pull + digest) + `app deploy --image` | ✅ |
-| `app deploy-source` (build local como caminho alternativo) | ✅ |
-| Manifest v2 com `[delivery]` + enforcement de repositório | ✅ |
+| Capacidade | Status | Notas |
+|---|---|---|
+| Application entity + catálogo | ✅ | |
+| SQLite + migrations (13) | ✅ | |
+| Deployment persistence + state machine | ✅ | |
+| RuntimeInstance persistence | ✅ | |
+| Podman rootless (create, start, stop, inspect) | ✅ | Build local removido na v0.2 |
+| Start / stop / status | ✅ | |
+| Internal health check | ✅ | |
+| External health check | ✅ | |
+| Safe traffic switch (falha preserva runtime saudável) | ✅ | |
+| Caddy integration + public routing | ✅ | |
+| Exposure materialization state | ✅ | |
+| Deployment history | ✅ | |
+| CLI (import, list, status, deploy, start, stop, visibility set, deployments, version) | ✅ | |
+| Rollback (novo deployment da Release anterior, não depende do container antigo) | ✅ | |
+| Visibility set (public/internal) independente do lifecycle | ✅ | |
+| Doctor (13 checks: DB, migrations, workspace, Caddy dirs, Caddyfile/config, git, podman, rootless, Quadlet generator, OCI images, disk, caddy) | ✅ | |
+| Version | ✅ | |
+| Staging validation (`staging.vitoralmeida.tech`) | ✅ | |
+| System (entidade, migration, CLI create/list/show) | ✅ | |
+| Release imutável + engine DeployRelease | ✅ | DeploySource removido na v0.2 |
+| OCI adapter (pull + digest) + `app deploy --image` | ✅ | |
+| Manifest v2 com `[delivery]` + enforcement de repositório | ✅ | Substituído por schema v3 na v0.2 |
+
+**Capacidades removidas na v0.2:**
+- ~~`app deploy-source`~~ (build local removido)
+- ~~`deployment_deploy_source.rs`~~ (engine de build local removido)
+- ~~`local_build`~~ (módulo de build local removido)
+- ~~`[source]` e `[build]` no manifesto~~ (removidos no schema v3)
+- ~~Import por path local~~ (apenas Git remoto na v0.2)
 
 ### Pendente — 7 entregas
 
@@ -112,7 +117,6 @@ responsabilidades claras.
 
 **Engine split:**
 
-- [x] `DeploySource` (`deployment_deploy_source.rs`): resolve Git → checkout → build → cria Release local → chama `DeployRelease`
 - [x] `DeployRelease` (`deployment_deploy_release.rs`): ensure image → create deployment → create runtime → start → verify → activate
 - [x] Remover `reconcile_existing_runtime()` do deploy; mesma Release ativa → no-op, app parada → `app start`, release anterior → rollback
 - [x] `DeploymentSpecification` simplificado: sem containerfile/context; apenas application_id, image, container_port, health_path, expected_status, visibility
@@ -121,9 +125,9 @@ responsabilidades claras.
 
 ```text
 use_cases/
-├── release_create.rs          ← cria Release (OCI ou local)
+├── release_create.rs          ← cria Release (OCI)
 ├── deployment_deploy_oci.rs   ← DeployOci: pull/verifica → Release → DeployRelease
-├── deployment_deploy_source.rs← DeploySource: git → build → Release → DeployRelease
+├── deployment_deploy_branch.rs← DeployByBranch: branch → commit → image tag → DeployOci
 ├── deployment_deploy_release.rs ← DeployRelease: orquestrador linear
 ├── deployment_transition.rs   ← máquina de estados persistida
 ├── deployment_rollback.rs     ← rollback como novo deployment
@@ -132,6 +136,8 @@ use_cases/
 └── ...
 ```
 
+**Nota:** `deployment_deploy_source.rs` foi removido na v0.2 junto com o build local.
+
 #### 3. OCI adapter
 
 - [x] Adapter OCI: `podman pull`, `podman image inspect`, validar digest corresponde ao solicitado
@@ -139,18 +145,22 @@ use_cases/
 - [x] CLI: `pneuma app deploy <app> --image <repo@sha256:...>` como caminho oficial
 - [x] Rejeitar tags mutáveis (exigir digest)
 
-#### 4. deploy-source (CLI)
+#### 4. deploy-source (CLI) — REMOVIDO NA v0.2
 
 - [x] CLI: `pneuma app deploy-source <app> <repo> --revision <rev>` (caminho alternativo)
 - [x] Engine único: `DeploySource` já criado na entrega 2; aqui apenas expor na CLI
 
-#### 5. Manifesto com `[delivery]`
+**Nota:** Este caminho foi removido na v0.2. O único artifact deployável agora é `image@digest` descoberto pelo CI.
+
+#### 5. Manifesto com `[delivery]` — EVOLUÍDO PARA SCHEMA v3 NA v0.2
 
 - [x] Seção `[delivery]` no manifesto: `type = "oci"`, `image = "ghcr.io/..."`
 - [x] `[source]` e `[build]` tornam-se opcionais (apenas para deploy-source)
 - [x] `schema_version = 2`
 - [x] Persistir `application_delivery_specs` na importação
 - [x] `app deploy --image` rejeita repositório diferente do permitido; `deploy-source` exige `[source]`/`[build]`
+
+**Nota:** Na v0.2, o schema evoluiu para v3, removendo `[source]` e `[build]`. O repository vem do import, a branch vem do deploy.
 
 #### 6. Histórico + visibility
 
@@ -168,10 +178,9 @@ use_cases/
 - [x] Docs atualizadas (roadmap, arquitetura, scope, README) refletindo OCI-first
 - [x] E2E final: CI → GHCR → pull → deploy → health → active → rollback → reboot
 
-**v0.1.0 concluída em 8 de agosto de 2026** — todos os critérios de aceite da
-seção 7 de [`product/v0.1-scope.md`](product/v0.1-scope.md) foram validados na
-VPS de produção (`srv655252`, Debian 13). A próxima versão é a v0.2 (CI/CD
-automatizado).
+**v0.1.0 concluída em 8 de agosto de 2026** — todos os critérios de aceite
+foram validados na VPS de produção (`srv655252`, Debian 13). A próxima versão
+é a v0.2 (CI/CD automatizado).
 
 ### Modelo de dados alvo (v0.1)
 
@@ -200,6 +209,8 @@ RuntimeInstance
 ---
 
 ## v0.2 — Git-aware OCI Delivery
+
+**Status:** concluída em 10 de agosto de 2026
 
 O Pneuma passa de "opera uma imagem OCI que recebo" para "encontra o artifact do
 commit de uma branch e o implanta". Pneuma deixa de construir aplicações: **CI
@@ -237,7 +248,7 @@ Princípios e mudanças estruturais:
   `ArtifactNotFound`, sem fallback para `:latest`/anterior/build local.
 - **Release correlaciona source e artifact:** `source_revision`, `image_repository`,
   `image_digest`, `image_reference`.
-- **Fases de implementação:**
+- **Fases de implementação (todas concluídas):**
 
   - A — simplificar: remover `deploy-source`, `deployment_deploy_source`,
     `local_build`, `[build]`, `application_build_specs`, import por path local,

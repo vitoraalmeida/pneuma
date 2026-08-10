@@ -13,15 +13,17 @@ Designed for personal sites and small projects that need production-grade deploy
 ## How it works
 
 ```
-pneuma.toml manifest
+pneuma.toml manifest (in Git repository)
     ↓
-CI builds a container image and pushes it to a registry
+CI builds a container image and pushes it to a registry (tagged with commit SHA)
     ↓
-pneuma app import <repository-path>
+pneuma app import <git-url> --manifest deploy/staging/pneuma.toml
     ↓
-pneuma app deploy <app> --image ghcr.io/owner/app@sha256:...
+pneuma app deploy <app> --branch <branch>
     ↓
-Pull image → Container create → Health check → Promote release
+Resolve branch → commit SHA → discover image tag → pull image
+    ↓
+Container create → Health check → Promote release
     ↓
 Caddy reverse proxy (if public)
 ```
@@ -63,17 +65,18 @@ For a complete VPS setup (Podman, Caddy, user creation, directories), use the bo
 bash scripts/bootstrap-vps.sh <pneuma-source-url> [application-repository-url]
 ```
 
-See [`docs/operations/vps-bootstrap.md`](docs/operations/vps-bootstrap.md) for the full Debian 13 guide, and `scripts/bootstrap-vps.sh` for prerequisites.
-
-For a step-by-step walkthrough from a fresh VPS to a deployed site, see [`docs/usage-guide.md`](docs/usage-guide.md).
+See `scripts/bootstrap-vps.sh` for prerequisites and usage instructions.
 
 ## Quick start
 
-1. **Write a manifest** in your application repository:
+1. **Write a manifest** in your application repository at `deploy/<environment>/pneuma.toml`:
 
 ```toml
-# pneuma.toml
+# deploy/staging/pneuma.toml
 schema_version = 3
+
+[system]
+name = "my-system"
 
 [application]
 name = "my-app"
@@ -92,13 +95,19 @@ default_visibility = "public"
 domain = "my-app.example.com"
 ```
 
-2. **Import the application**:
+2. **Import the application** from a Git repository:
 
 ```bash
-pneuma app import /path/to/my-app
+pneuma app import https://github.com/user/my-app --manifest deploy/staging/pneuma.toml
 ```
 
-3. **Deploy an immutable image**:
+3. **Deploy by branch** (Pneuma discovers the artifact from the commit):
+
+```bash
+pneuma app deploy my-app --branch staging
+```
+
+Or **deploy by specific image digest** (manual discovery):
 
 ```bash
 pneuma app deploy my-app --image ghcr.io/user/my-app@sha256:<digest>
@@ -117,9 +126,10 @@ pneuma app status my-app
 | `pneuma system create <name>` | Create a system to group applications |
 | `pneuma system list` | List all systems |
 | `pneuma system show <name>` | Show a system and its applications |
-| `pneuma app import <repository-path>` | Import an application from a repository |
+| `pneuma app import <git-url> [--manifest <path>]` | Import an application from a Git repository |
 | `pneuma app list` | List all registered applications |
-| `pneuma app deploy <app> --image <repository@sha256:...>` | Deploy an immutable OCI release |
+| `pneuma app deploy <app> --branch <branch>` | Deploy the artifact from a specific branch |
+| `pneuma app deploy <app> --image <repository@sha256:...>` | Deploy a specific OCI image by digest |
 | `pneuma app visibility set <app> <public\|internal>` | Set desired public visibility |
 | `pneuma app status <app>` | Show desired and observed runtime state |
 | `pneuma app start <app>` | Start a stopped application |
@@ -135,13 +145,17 @@ Add `--verbose` before the command to see step-by-step progress.
 
 ## Manifest
 
-The `pneuma.toml` manifest declares application configuration:
+The `pneuma.toml` manifest declares application configuration. Convention: place manifests at `deploy/<environment>/pneuma.toml` (e.g., `deploy/staging/pneuma.toml`, `deploy/production/pneuma.toml`):
 
 ```toml
+# deploy/staging/pneuma.toml
 schema_version = 3
 
+[system]
+name = "personal-website"
+
 [application]
-name = "personal-site"
+name = "vitoralmeida-tech-staging"
 
 [delivery]
 type = "oci"
@@ -154,13 +168,14 @@ expected_status = 200
 
 [exposure]
 default_visibility = "public"
-domain = "example.com"
+domain = "staging.example.com"
 ```
 
 **Fields:**
 
 - `schema_version`: manifest schema version (currently `3`)
-- `name`: application identifier (used in all commands)
+- `system.name`: system identifier to group applications
+- `application.name`: application identifier (used in all commands)
 - `delivery.type`: delivery model (`oci`); the image is produced by CI
 - `delivery.image`: OCI repository that CI pushes immutable images to
 - `container_port`: port exposed by the container
@@ -169,8 +184,7 @@ domain = "example.com"
 - `default_visibility`: `internal` or `public`
 - `domain`: required for public apps, ignored for internal
 
-The repository URL comes from the `pneuma app import` command, not from the
-manifest; the branch comes from the deploy command.
+The repository URL comes from the `pneuma app import` command, not from the manifest; the branch comes from the `pneuma app deploy --branch` command.
 
 ## Configuration
 
@@ -200,6 +214,7 @@ pneuma/
 │   │   ├── application_list.rs      # Application list
 │   │   ├── application_runtime.rs   # Lifecycle management
 │   │   ├── deployment_create.rs     # Deployment creation
+│   │   ├── deployment_deploy_branch.rs # Deploy by branch (Git-aware)
 │   │   ├── deployment_deploy_oci.rs # OCI image deployment entry point
 │   │   ├── deployment_deploy_release.rs # Deployment orchestrator
 │   │   ├── deployment_transition.rs # State machine
@@ -237,8 +252,8 @@ See `docs/rust-guidelines.md` for code conventions and `AGENTS.md` for contribut
 ## Roadmap
 
 - **v0.1** (released): OCI-first deployments — immutable image pulls, rootless Quadlet runtime, health checks, Caddy exposure, rollback, and VPS operations
-- **v0.2** (planned): automatic deployments triggered by CI
-- **v0.3** (planned): GitHub Actions integration via SSH
+- **v0.2** (released): Git-aware OCI delivery — deploy by branch, automatic artifact discovery from CI, manifest schema v3, SQLite stores for persistence
+- **v0.3** (planned): reconciliation, drift detection, and CI/CD automation
 
 See `docs/roadmap.md` for the full product vision.
 
