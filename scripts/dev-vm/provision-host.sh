@@ -109,6 +109,7 @@ chmod 0644 "$PROFILE"
 
 for line in \
     'export XDG_RUNTIME_DIR="/run/user/$(id -u)"' \
+    'export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus"' \
     'export PNEUMA_DATABASE_PATH=/var/lib/pneuma/database/pneuma.sqlite3' \
     'export PNEUMA_WORKSPACE_PATH=/var/lib/pneuma/checkouts' \
     'export PNEUMA_CADDY_MANAGED_PATH=/etc/caddy/applications' \
