@@ -1,4 +1,4 @@
-schema_version = 2
+schema_version = 3
 
 [system]
 name = "fixtures-test"
@@ -9,10 +9,6 @@ name = "healthy-http"
 [delivery]
 type = "oci"
 image = "localhost:5000/healthy-http"
-
-[source]
-repository = "local"
-branch = "main"
 
 [runtime]
 container_port = 8080

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-const SUPPORTED_SCHEMA_VERSION: u32 = 2;
+const SUPPORTED_SCHEMA_VERSION: u32 = 3;
 const MANIFEST_FILE_NAME: &str = "pneuma.toml";
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -16,7 +16,6 @@ pub struct Manifest {
     pub system: Option<System>,
     pub application: Application,
     pub delivery: Delivery,
-    pub source: Option<Source>,
     pub runtime: Runtime,
     pub exposure: Exposure,
 }
@@ -53,13 +52,6 @@ impl DeliveryType {
             Self::Oci => "oci",
         }
     }
-}
-
-#[derive(Debug, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct Source {
-    pub repository: String,
-    pub branch: String,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -156,7 +148,14 @@ impl Error for ManifestError {
 }
 
 pub fn load_manifest(repository_path: &Path) -> Result<Manifest, ManifestError> {
-    let manifest_path = repository_path.join(MANIFEST_FILE_NAME);
+    load_manifest_at(repository_path, MANIFEST_FILE_NAME)
+}
+
+pub fn load_manifest_at(
+    repository_path: &Path,
+    manifest_path: &str,
+) -> Result<Manifest, ManifestError> {
+    let manifest_path = repository_path.join(manifest_path);
     let contents = fs::read_to_string(&manifest_path).map_err(|source| ManifestError::Read {
         path: manifest_path,
         source,
@@ -212,10 +211,6 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), ManifestError> {
         );
     }
 
-    if let Some(source) = &manifest.source {
-        validate_source(source)?;
-    }
-
     if manifest.runtime.container_port == 0 {
         return invalid_field("runtime.container_port", "must be between 1 and 65535");
     }
@@ -249,21 +244,6 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), ManifestError> {
         }
         (Visibility::Internal, None) | (Visibility::Internal, Some(_)) => {}
         (Visibility::Public, Some(_)) => {}
-    }
-
-    Ok(())
-}
-
-fn validate_source(source: &Source) -> Result<(), ManifestError> {
-    if !is_trimmed_nonempty(&source.repository) {
-        return invalid_field(
-            "source.repository",
-            "must be non-empty and have no surrounding whitespace",
-        );
-    }
-
-    if !is_trimmed_nonempty(&source.branch) || source.branch.chars().any(char::is_whitespace) {
-        return invalid_field("source.branch", "must be a non-empty branch name");
     }
 
     Ok(())

@@ -12,14 +12,13 @@ fn loads_and_validates_a_repository_manifest() {
 
     let manifest = load_manifest(&repository).expect("valid fixture should load");
 
-    assert_eq!(manifest.schema_version, 2);
+    assert_eq!(manifest.schema_version, 3);
     assert_eq!(manifest.application.name, "personal-site");
     assert_eq!(manifest.delivery.delivery_type, DeliveryType::Oci);
     assert_eq!(
         manifest.delivery.image,
         "ghcr.io/vitoraalmeida/vitoralmeida.tech"
     );
-    assert_eq!(manifest.source.as_ref().unwrap().branch, "main");
     assert_eq!(manifest.runtime.container_port, 8080);
     assert_eq!(manifest.runtime.healthcheck_path, "/healthz");
     assert_eq!(manifest.exposure.default_visibility, Visibility::Public);
@@ -41,13 +40,13 @@ fn reports_a_missing_manifest_with_its_path() {
 
 #[test]
 fn rejects_an_unsupported_schema_version() {
-    let contents = VALID_MANIFEST.replace("schema_version = 2", "schema_version = 3");
+    let contents = VALID_MANIFEST.replace("schema_version = 3", "schema_version = 4");
 
-    let error = parse_manifest(&contents).expect_err("schema version 3 should fail");
+    let error = parse_manifest(&contents).expect_err("schema version 4 should fail");
 
     assert!(matches!(
         error,
-        ManifestError::UnsupportedSchemaVersion { found: 3 }
+        ManifestError::UnsupportedSchemaVersion { found: 4 }
     ));
 }
 
@@ -89,22 +88,6 @@ fn rejects_invalid_manifest_fields() {
             "image = \"ghcr.io/vitoraalmeida/vitoralmeida.tech\"",
             "image = \" ghcr.io/foo \"",
         ),
-        (
-            "source.repository",
-            "repository = \"https://github.com/vitoraalmeida/vitoralmeida.tech\"",
-            "repository = \"\"",
-        ),
-        (
-            "source.repository",
-            "repository = \"https://github.com/vitoraalmeida/vitoralmeida.tech\"",
-            "repository = \" local/repository \"",
-        ),
-        (
-            "source.branch",
-            "branch = \"main\"",
-            "branch = \"main branch\"",
-        ),
-        ("source.branch", "branch = \"main\"", "branch = \"\""),
         (
             "runtime.container_port",
             "container_port = 8080",
@@ -278,18 +261,6 @@ fn rejects_an_unknown_delivery_type() {
 
     assert!(matches!(error, ManifestError::Parse { .. }));
     assert!(error.to_string().contains("unknown variant"));
-}
-
-#[test]
-fn allows_a_manifest_without_source() {
-    let contents = VALID_MANIFEST.replace(
-        "[source]\nrepository = \"https://github.com/vitoraalmeida/vitoralmeida.tech\"\nbranch = \"main\"\n\n",
-        "",
-    );
-
-    let manifest = parse_manifest(&contents).expect("source should be optional");
-
-    assert_eq!(manifest.source, None);
 }
 
 #[test]

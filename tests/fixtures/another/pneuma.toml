@@ -1,4 +1,4 @@
-schema_version = 2
+schema_version = 3
 
 [system]
 name = "another-system"
@@ -9,10 +9,6 @@ name = "another-site"
 [delivery]
 type = "oci"
 image = "registry.example/team/service"
-
-[source]
-repository = "."
-branch = "trunk"
 
 [runtime]
 container_port = 8080
