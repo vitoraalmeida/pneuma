@@ -1,17 +1,15 @@
 use std::error::Error;
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use rusqlite::Connection;
 
-use crate::adapters::caddy_exposure::{
-    materialize_caddy_fragment, restore_materialized_caddy_fragment,
-};
-use crate::adapters::health_check_external::check_external_health;
-use crate::adapters::health_check_internal::{HealthCheckResult, check_internal_health};
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::domain::manifest::Visibility;
 use crate::domain::release::Release;
+use crate::use_cases::deployment_activate_public::{
+    PublicActivationError, PublicActivationInput, activate_public_candidate,
+};
 use crate::use_cases::deployment_create::{
     CreateDeploymentError, DeploymentStatus, DeploymentType, create_deployment,
 };
@@ -19,11 +17,6 @@ use crate::use_cases::deployment_progress::{DeploymentProgress, DeploymentStep, 
 use crate::use_cases::deployment_promote_internal::{
     PromoteInternalCandidateError, promote_internal_candidate,
 };
-use crate::use_cases::deployment_promote_public::{
-    ExposureOutcome, PromotePublicCandidateError, begin_public_exposure, promote_public_candidate,
-    record_public_exposure_failure,
-};
-use crate::use_cases::deployment_register_runtime::CandidateRuntime;
 use crate::use_cases::deployment_runtime_cleanup::{
     CandidateCleanupError, CandidateResources, cleanup_failed_candidate, load_previous_runtime,
     retire_previous_runtime,
@@ -31,9 +24,7 @@ use crate::use_cases::deployment_runtime_cleanup::{
 use crate::use_cases::deployment_start_candidate::{
     CandidateStartError, CandidateStartInput, start_candidate,
 };
-use crate::use_cases::deployment_transition::{
-    DeploymentTransition, TransitionDeploymentError, advance_deployment, fail_deployment,
-};
+use crate::use_cases::deployment_transition::{TransitionDeploymentError, fail_deployment};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct DeployedRelease {
@@ -428,14 +419,60 @@ fn execute_deployment(
                 Some(&candidate.runtime.id),
             ));
         };
-        let completed = execute_public_candidate(
+        let input = PublicActivationInput {
             connection,
-            specification,
-            &candidate.runtime,
+            runtime: &candidate.runtime,
+            application_id: &specification.application_id,
+            health_path: &specification.health_path,
+            expected_status: specification.expected_status,
             source_revision,
-            public_configuration,
-            progress,
-        );
+            managed_caddy_directory: &public_configuration.managed_caddy_directory,
+            caddyfile_path: &public_configuration.caddyfile_path,
+        };
+        let completed = activate_public_candidate(input, progress).map_err(|err| match err {
+            PublicActivationError::InternalHealth { source, resources } => FailedExecution {
+                code: "health_check_failed",
+                source,
+                failure_persisted: false,
+                resources: *resources,
+            },
+            PublicActivationError::DeploymentTransition { source, resources } => FailedExecution {
+                code: "deployment_transition_failed",
+                source: Box::new(source),
+                failure_persisted: false,
+                resources: *resources,
+            },
+            PublicActivationError::ExposurePreparation { source, resources } => FailedExecution {
+                code: "exposure_preparation_failed",
+                source,
+                failure_persisted: false,
+                resources: *resources,
+            },
+            PublicActivationError::CaddyMaterialization {
+                source, resources, ..
+            } => FailedExecution {
+                code: "caddy_materialization_failed",
+                source,
+                failure_persisted: false,
+                resources: *resources,
+            },
+            PublicActivationError::ExternalHealth {
+                source, resources, ..
+            } => FailedExecution {
+                code: "external_health_check_failed",
+                source,
+                failure_persisted: false,
+                resources: *resources,
+            },
+            PublicActivationError::PublicPromotion {
+                source, resources, ..
+            } => FailedExecution {
+                code: "candidate_promotion_failed",
+                source,
+                failure_persisted: false,
+                resources: *resources,
+            },
+        });
         if completed.is_ok() {
             retire_previous_runtime(
                 connection,
@@ -443,8 +480,13 @@ fn execute_deployment(
                 previous_runtime.as_ref(),
             );
         }
-        return completed
-            .map(|(runtime_id, finished_at)| (runtime_id, candidate.container_name, finished_at));
+        return completed.map(|output| {
+            (
+                candidate.runtime.id.clone(),
+                candidate.container_name,
+                output.finished_at,
+            )
+        });
     }
 
     progress.started(
@@ -496,262 +538,6 @@ fn execute_deployment(
         candidate.container_name,
         promoted.finished_at,
     ))
-}
-
-fn execute_public_candidate(
-    connection: &mut Connection,
-    specification: &DeploymentSpecification,
-    runtime: &CandidateRuntime,
-    commit_sha: &str,
-    public_configuration: &PublicDeploymentConfiguration,
-    progress: &mut ProgressReporter<'_>,
-) -> Result<(String, String), FailedExecution> {
-    let runtime_id = runtime.id.as_str();
-    let container_id = runtime.external_runtime_id.as_str();
-    let deployment_id = runtime.deployment_id.as_str();
-    let endpoint = runtime.endpoint;
-    progress.started(
-        DeploymentStep::InternalHealthCheck,
-        format!(
-            "runtime {runtime_id}, path {}, expected status {}",
-            specification.health_path, specification.expected_status
-        ),
-    );
-    let internal_health = check_internal_health(
-        endpoint,
-        &specification.health_path,
-        specification.expected_status,
-    )
-    .map_err(|source| {
-        failure_needing_persistence(
-            "health_check_failed",
-            source,
-            Some(container_id),
-            Some(runtime_id),
-        )
-    })?;
-    if !matches!(internal_health, HealthCheckResult::Healthy { .. }) {
-        return Err(failure_needing_persistence(
-            "health_check_failed",
-            PublicHealthFailure {
-                result: internal_health,
-            },
-            Some(container_id),
-            Some(runtime_id),
-        ));
-    }
-    progress.completed(
-        DeploymentStep::InternalHealthCheck,
-        format!("runtime {runtime_id} is healthy"),
-    );
-    advance_deployment(connection, deployment_id, DeploymentTransition::Verified).map_err(
-        |source| {
-            failure_needing_persistence(
-                "deployment_transition_failed",
-                source,
-                Some(container_id),
-                Some(runtime_id),
-            )
-        },
-    )?;
-    progress.state_changed(deployment_id, DeploymentStatus::Activating);
-
-    let exposure = begin_public_exposure(connection, runtime_id).map_err(|source| {
-        failure_needing_persistence(
-            "exposure_preparation_failed",
-            source,
-            Some(container_id),
-            Some(runtime_id),
-        )
-    })?;
-    progress.started(
-        DeploymentStep::ApplyPublicRoute,
-        format!("{} -> {endpoint}", exposure.domain),
-    );
-    let materialized = materialize_caddy_fragment(
-        &public_configuration.managed_caddy_directory,
-        &public_configuration.caddyfile_path,
-        &specification.application_id,
-        &exposure.domain,
-        endpoint,
-    )
-    .map_err(|source| {
-        let outcome = if source.recovery_failed() {
-            ExposureOutcome::Diverged
-        } else {
-            ExposureOutcome::Failed
-        };
-        public_failure(
-            connection,
-            &exposure.application_id,
-            "caddy_materialization_failed",
-            Box::new(source),
-            container_id,
-            runtime_id,
-            outcome,
-        )
-    })?;
-    progress.completed(
-        DeploymentStep::ApplyPublicRoute,
-        format!("fragment {}", materialized.path.display()),
-    );
-    progress.started(
-        DeploymentStep::ExternalHealthCheck,
-        format!("https://{}{}", exposure.domain, specification.health_path),
-    );
-    if let Err(source) = check_external_health(
-        &exposure.domain,
-        &specification.health_path,
-        specification.expected_status,
-    ) {
-        let (source, outcome) =
-            rollback_public_route(source, &materialized, &public_configuration.caddyfile_path);
-        return Err(public_failure(
-            connection,
-            &exposure.application_id,
-            "external_health_check_failed",
-            source,
-            container_id,
-            runtime_id,
-            outcome,
-        ));
-    }
-    progress.completed(
-        DeploymentStep::ExternalHealthCheck,
-        format!("{} returned expected status", exposure.domain),
-    );
-
-    progress.started(
-        DeploymentStep::PromoteCandidate,
-        format!("runtime {runtime_id}"),
-    );
-    let promoted = match promote_public_candidate(connection, runtime_id, commit_sha) {
-        Ok(promoted) => promoted,
-        Err(source) => {
-            let (source, outcome) =
-                rollback_public_route(source, &materialized, &public_configuration.caddyfile_path);
-            return Err(public_failure(
-                connection,
-                &exposure.application_id,
-                "candidate_promotion_failed",
-                source,
-                container_id,
-                runtime_id,
-                outcome,
-            ));
-        }
-    };
-    progress.completed(
-        DeploymentStep::PromoteCandidate,
-        format!("runtime {runtime_id} promoted to Current"),
-    );
-    progress.state_changed(deployment_id, DeploymentStatus::Succeeded);
-
-    Ok((runtime_id.to_owned(), promoted.finished_at))
-}
-
-#[derive(Debug)]
-struct PublicHealthFailure {
-    result: HealthCheckResult,
-}
-
-impl fmt::Display for PublicHealthFailure {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "candidate failed its internal health check: {:?}",
-            self.result
-        )
-    }
-}
-
-impl Error for PublicHealthFailure {}
-
-#[derive(Debug)]
-struct PublicRouteRollbackError {
-    original: Box<dyn Error>,
-    recovery: crate::adapters::caddy_exposure::CaddyRecoveryError,
-}
-
-impl fmt::Display for PublicRouteRollbackError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "{}; public route recovery also failed: {}",
-            self.original, self.recovery
-        )
-    }
-}
-
-impl Error for PublicRouteRollbackError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(self.original.as_ref())
-    }
-}
-
-#[derive(Debug)]
-struct ExposureFailureRecordingError {
-    original: Box<dyn Error>,
-    persistence: PromotePublicCandidateError,
-}
-
-impl fmt::Display for ExposureFailureRecordingError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "{}; exposure failure could not be recorded: {}",
-            self.original, self.persistence
-        )
-    }
-}
-
-impl Error for ExposureFailureRecordingError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(self.original.as_ref())
-    }
-}
-
-fn rollback_public_route(
-    original: impl Error + 'static,
-    materialized: &crate::adapters::caddy_exposure::MaterializedCaddyFragment,
-    caddyfile_path: &Path,
-) -> (Box<dyn Error>, ExposureOutcome) {
-    match restore_materialized_caddy_fragment(materialized, caddyfile_path) {
-        Ok(()) => (Box::new(original), ExposureOutcome::Failed),
-        Err(recovery) => (
-            Box::new(PublicRouteRollbackError {
-                original: Box::new(original),
-                recovery,
-            }),
-            ExposureOutcome::Diverged,
-        ),
-    }
-}
-
-fn public_failure(
-    connection: &Connection,
-    application_id: &str,
-    code: &'static str,
-    source: Box<dyn Error>,
-    container_id: &str,
-    runtime_id: &str,
-    outcome: ExposureOutcome,
-) -> FailedExecution {
-    let message = source.to_string();
-    let source =
-        match record_public_exposure_failure(connection, application_id, code, &message, outcome) {
-            Ok(()) => source,
-            Err(persistence) => Box::new(ExposureFailureRecordingError {
-                original: source,
-                persistence,
-            }),
-        };
-    FailedExecution {
-        code,
-        source,
-        failure_persisted: false,
-        resources: CandidateResources::with_container_and_runtime(container_id, runtime_id),
-    }
 }
 
 fn finish_failed_deployment(
