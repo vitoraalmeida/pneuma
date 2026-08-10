@@ -2,7 +2,7 @@
 
 **Status:** em andamento
 
-**Atualizado em:** 9 de agosto de 2026
+**Atualizado em:** 10 de agosto de 2026
 
 ## Iteração — v0.2 Git-aware OCI Delivery
 
@@ -30,7 +30,7 @@ ser `Git branch → commit → OCI digest → Release → deployment`.
 - [x] **B — separar persistência:** criar `SqliteApplicationStore`,
   `SqliteDeploymentStore`, `SqliteRuntimeStore`, `SqliteReleaseStore`; migrar
   create/transition/fail/promotion, runtime persistence e release/rollback.
-- [ ] **C — novo schema:** manifest v3 (sem `[source]`/`[build]`),
+- [x] **C — novo schema:** manifest v3 (sem `[source]`/`[build]`),
   `deploy/<environment>/pneuma.toml`, novas migrations (nunca alterar as
   históricas).
 - [ ] **D — import Git remoto:** `app import <git-url>`, `--manifest`, checkout
