@@ -427,6 +427,7 @@ pub fn load_runtime_endpoint_for_exposure(
         .map_err(|source| ApplicationStoreError::Persistence { source })
 }
 
+#[allow(clippy::type_complexity)]
 pub fn load_deployment_specification(
     connection: &Connection,
     application_id: &str,

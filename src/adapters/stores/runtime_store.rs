@@ -79,6 +79,7 @@ pub fn port_is_reserved(
         .map_err(|source| RuntimeStoreError::Persistence { source })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn insert_runtime(
     transaction: &Transaction<'_>,
     id: &str,
