@@ -26,6 +26,8 @@ const DELIVERY_MIGRATION: &str =
     include_str!("../../migrations/0011_application_delivery_specs.sql");
 const RUNTIME_PORT_RESERVATION_MIGRATION: &str =
     include_str!("../../migrations/0012_runtime_port_reservations.sql");
+const APPLICATION_SOURCES_V3_MIGRATION: &str =
+    include_str!("../../migrations/0013_application_sources_v3.sql");
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, INITIAL_MIGRATION),
     (2, DEPLOYMENT_MIGRATION),
@@ -39,6 +41,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (10, RUNTIME_DEPLOYMENT_APPLICATION_MIGRATION),
     (11, DELIVERY_MIGRATION),
     (12, RUNTIME_PORT_RESERVATION_MIGRATION),
+    (13, APPLICATION_SOURCES_V3_MIGRATION),
 ];
 
 #[derive(Debug)]
@@ -339,7 +342,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(migration_count, 12);
+        assert_eq!(migration_count, 13);
         assert_eq!(application_table_count, 1);
         assert_eq!(deployment_table_count, 1);
     }
@@ -355,7 +358,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(migration_count, 12);
+        assert_eq!(migration_count, 13);
     }
 
     #[test]
@@ -593,7 +596,7 @@ mod tests {
             .execute(
                 "INSERT INTO application_sources (
                     application_id,
-                    repository_location,
+                    repository_url,
                     repository_kind,
                     default_branch,
                     manifest_path,
