@@ -5,8 +5,9 @@ use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use pneuma::adapters::git_source::{
-    CloneRepositoryError, CreateCheckoutError, ResolveCommitError, cleanup_checkout,
-    clone_repository, create_checkout, ensure_checkout, is_remote_repository, resolve_commit,
+    CloneRepositoryError, CommitSha, CreateCheckoutError, ResolveBranchError, ResolveCommitError,
+    cleanup_checkout, clone_repository, create_checkout, ensure_checkout, is_remote_repository,
+    resolve_branch, resolve_commit,
 };
 
 #[test]
@@ -20,7 +21,7 @@ fn resolves_branches_tags_and_abbreviated_shas_without_changing_the_repository()
     for revision in ["main", "v1", abbreviated_commit] {
         let commit = resolve_commit(&repository.path, revision).unwrap();
 
-        assert_eq!(commit, expected_commit);
+        assert_eq!(commit.as_str(), expected_commit);
     }
 
     assert_eq!(repository.status(), status_before);
@@ -199,6 +200,91 @@ fn rejects_an_existing_clone_destination() {
     ));
 }
 
+#[test]
+fn resolves_a_branch_to_a_commit_sha() {
+    let repository = TestRepository::new();
+    let branch_commit = repository.commit_file("staging contents", "staging commit");
+    repository.create_branch("staging");
+
+    let sha = resolve_branch(&url_for(&repository), "staging").unwrap();
+
+    assert_eq!(sha.as_str(), branch_commit);
+}
+
+#[test]
+fn resolves_the_default_branch_to_a_commit_sha() {
+    let repository = TestRepository::new();
+    let expected_commit = repository.head_commit();
+
+    let sha = resolve_branch(&url_for(&repository), "main").unwrap();
+
+    assert_eq!(sha.as_str(), expected_commit);
+}
+
+#[test]
+fn resolves_an_annotated_tag_to_a_commit_sha() {
+    let repository = TestRepository::new();
+    let expected_commit = repository.head_commit();
+    repository.create_annotated_tag("v1");
+
+    let sha = resolve_branch(&url_for(&repository), "v1").unwrap();
+
+    assert_eq!(sha.as_str(), expected_commit);
+}
+
+#[test]
+fn resolves_a_lightweight_tag_to_a_commit_sha() {
+    let repository = TestRepository::new();
+    let expected_commit = repository.head_commit();
+    repository.create_lightweight_tag("v1");
+
+    let sha = resolve_branch(&url_for(&repository), "v1").unwrap();
+
+    assert_eq!(sha.as_str(), expected_commit);
+}
+
+#[test]
+fn rejects_a_missing_branch() {
+    let repository = TestRepository::new();
+
+    let error = resolve_branch(&url_for(&repository), "missing").unwrap_err();
+
+    assert!(matches!(error, ResolveBranchError::BranchNotFound { .. }));
+    assert!(error.to_string().contains("missing"));
+}
+
+#[test]
+fn rejects_a_missing_repository() {
+    let repository = TestRepository::new();
+    let url = format!("file://{}/missing", repository.temporary_root.display());
+
+    let error = resolve_branch(&url, "main").unwrap_err();
+
+    assert!(matches!(
+        error,
+        ResolveBranchError::RepositoryNotFound { .. }
+    ));
+}
+
+#[test]
+fn commit_sha_rejects_an_invalid_identifier() {
+    for invalid in ["", "abc", "G".repeat(40).as_str(), &"a".repeat(39)] {
+        assert!(
+            CommitSha::new(invalid).is_err(),
+            "expected rejection: {invalid}"
+        );
+    }
+}
+
+#[test]
+fn commit_sha_accepts_a_full_hexadecimal_sha() {
+    let sha = "a".repeat(40);
+
+    let parsed = CommitSha::new(&sha).unwrap();
+
+    assert_eq!(parsed.as_str(), sha);
+}
+
 struct TestRepository {
     temporary_root: PathBuf,
     path: PathBuf,
@@ -261,6 +347,14 @@ impl TestRepository {
         ]);
     }
 
+    fn create_lightweight_tag(&self, tag: &str) {
+        self.git(&["tag", tag]);
+    }
+
+    fn create_branch(&self, branch: &str) {
+        self.git(&["branch", branch]);
+    }
+
     fn commit_file(&self, contents: &str, message: &str) -> String {
         fs::write(self.path.join("site.txt"), contents).unwrap();
         self.git(&["add", "site.txt"]);
@@ -305,4 +399,8 @@ fn assert_git_succeeded(output: &Output) {
         "Git failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+fn url_for(repository: &TestRepository) -> String {
+    format!("file://{}", repository.path.display())
 }

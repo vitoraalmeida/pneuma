@@ -50,6 +50,50 @@ pub enum CloneRepositoryError {
     },
 }
 
+#[derive(Debug)]
+pub enum ResolveBranchError {
+    Execute {
+        source: io::Error,
+    },
+    RepositoryNotFound {
+        url: String,
+    },
+    AuthenticationFailed {
+        url: String,
+    },
+    BranchNotFound {
+        url: String,
+        branch: String,
+    },
+    InvalidCommit {
+        url: String,
+        branch: String,
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitSha(String);
+
+impl CommitSha {
+    pub fn new(sha: &str) -> Result<Self, String> {
+        if !is_commit_sha(sha) {
+            return Err("commit identifier must be exactly 40 hexadecimal characters".to_owned());
+        }
+        Ok(Self(sha.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for CommitSha {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
 impl fmt::Display for ResolveCommitError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -152,10 +196,54 @@ impl Error for CloneRepositoryError {
     }
 }
 
+impl fmt::Display for ResolveBranchError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Execute { source } => write!(formatter, "failed to execute Git: {source}"),
+            Self::RepositoryNotFound { url } => {
+                write!(
+                    formatter,
+                    "Git repository `{url}` was not found or is unreachable"
+                )
+            }
+            Self::AuthenticationFailed { url } => write!(
+                formatter,
+                "authentication failed for Git repository `{url}`"
+            ),
+            Self::BranchNotFound { url, branch } => {
+                write!(
+                    formatter,
+                    "branch or tag `{branch}` was not found in Git repository `{url}`"
+                )
+            }
+            Self::InvalidCommit {
+                url,
+                branch,
+                message,
+            } => write!(
+                formatter,
+                "Git returned an invalid commit for branch or tag `{branch}` in `{url}`: {message}"
+            ),
+        }
+    }
+}
+
+impl Error for ResolveBranchError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Execute { source } => Some(source),
+            Self::RepositoryNotFound { .. }
+            | Self::AuthenticationFailed { .. }
+            | Self::BranchNotFound { .. }
+            | Self::InvalidCommit { .. } => None,
+        }
+    }
+}
+
 pub fn resolve_commit(
     repository_path: &Path,
     revision: &str,
-) -> Result<String, ResolveCommitError> {
+) -> Result<CommitSha, ResolveCommitError> {
     // Branches and tags can move, so peel the requested revision to an immutable commit.
     // The commit suffix also rejects blobs and trees before downstream operations use it.
     let revision_expression = format!("{revision}^{{commit}}");
@@ -179,14 +267,67 @@ pub fn resolve_commit(
     let commit_sha = std::str::from_utf8(&output.stdout)
         .map(str::trim)
         .ok()
-        .filter(|sha| !sha.is_empty() && sha.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .and_then(|sha| CommitSha::new(sha).ok())
         .ok_or_else(|| ResolveCommitError::Resolve {
             repository_path: repository_path.to_path_buf(),
             revision: revision.to_owned(),
             message: "Git returned an invalid commit identifier".to_owned(),
         })?;
 
-    Ok(commit_sha.to_owned())
+    Ok(commit_sha)
+}
+
+pub fn resolve_branch(url: &str, branch: &str) -> Result<CommitSha, ResolveBranchError> {
+    for pattern in [
+        format!("refs/heads/{branch}"),
+        format!("refs/tags/{branch}^{{}}"),
+        format!("refs/tags/{branch}"),
+    ] {
+        let output = Command::new("git")
+            .args(["ls-remote", "--", url, &pattern])
+            .output()
+            .map_err(|source| ResolveBranchError::Execute { source })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("Authentication failed")
+                || stderr.contains("Permission denied")
+                || stderr.contains("could not read Username")
+            {
+                return Err(ResolveBranchError::AuthenticationFailed {
+                    url: url.to_owned(),
+                });
+            }
+            return Err(ResolveBranchError::RepositoryNotFound {
+                url: url.to_owned(),
+            });
+        }
+
+        if let Some(sha) = parse_ls_remote_sha(&output.stdout) {
+            return CommitSha::new(sha).map_err(|message| ResolveBranchError::InvalidCommit {
+                url: url.to_owned(),
+                branch: branch.to_owned(),
+                message,
+            });
+        }
+    }
+
+    Err(ResolveBranchError::BranchNotFound {
+        url: url.to_owned(),
+        branch: branch.to_owned(),
+    })
+}
+
+fn parse_ls_remote_sha(stdout: &[u8]) -> Option<&str> {
+    std::str::from_utf8(stdout)
+        .ok()?
+        .lines()
+        .find_map(|line| line.split('\t').next())
+        .filter(|sha| is_commit_sha(sha))
+}
+
+fn is_commit_sha(sha: &str) -> bool {
+    sha.len() == 40 && sha.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 pub fn create_checkout(
