@@ -39,7 +39,7 @@ ser `Git branch → commit → OCI digest → Release → deployment`.
   `CommitSha`, erros de auth/repositório/branch.
 - [x] **F — OCI discovery:** convenção `image:<commit>`, resolver tag do commit
   → digest, nunca devolver tag mutável ao engine.
-- [ ] **G — deploy por branch:** `DeployByBranch`
+- [x] **G — deploy por branch:** `DeployByBranch`
   (`deployment_deploy_branch.rs`), `--branch`, exclusão mútua com `--image`,
   persistir `source_revision`.
 - [ ] **H — aplicação real:** mover manifestos do website, importar staging,
