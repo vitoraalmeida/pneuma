@@ -25,7 +25,7 @@ fn deploys_a_verified_oci_image_and_persists_its_exact_reference() {
     let server = thread::spawn(move || respond_once(&listener));
 
     let deployed =
-        environment.run(|| deploy_oci(&mut connection, &application.id, &reference, None));
+        environment.run(|| deploy_oci(&mut connection, &application.id, &reference, None, None));
     server.join().unwrap();
 
     let release = connection
@@ -68,6 +68,7 @@ fn rejects_an_unpinned_oci_reference_before_external_work() {
         "application",
         "registry.example/service:latest",
         None,
+        None,
     )
     .unwrap_err();
 
@@ -87,7 +88,7 @@ fn rejects_a_repository_not_allowed_by_the_delivery_spec_before_pull() {
     let digest = format!("sha256:{}", "a".repeat(64));
     let reference = format!("registry.example/other/service@{digest}");
 
-    let error = deploy_oci(&mut connection, &application.id, &reference, None).unwrap_err();
+    let error = deploy_oci(&mut connection, &application.id, &reference, None, None).unwrap_err();
 
     assert!(matches!(
         error,

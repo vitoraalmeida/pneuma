@@ -263,6 +263,20 @@ pub fn load_delivery_image_repository(
         .map_err(|source| ApplicationStoreError::Persistence { source })
 }
 
+pub fn load_source_repository(
+    connection: &Connection,
+    application_id: &str,
+) -> Result<Option<(String, Option<String>)>, ApplicationStoreError> {
+    connection
+        .query_row(
+            "SELECT repository_url, default_branch FROM application_sources WHERE application_id = ?1",
+            [application_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|source| ApplicationStoreError::Persistence { source })
+}
+
 pub fn load_exposure_visibility(
     connection: &Connection,
     application_id: &str,

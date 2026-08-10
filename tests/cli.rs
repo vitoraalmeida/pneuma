@@ -928,6 +928,19 @@ fn legacy_expose_command_returns_usage() {
 }
 
 #[test]
+fn deploy_accepts_branch_and_image_mutually_exclusively() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    let digest = format!("sha256:{}", "a".repeat(64));
+    let reference = format!("{}@{digest}", environment.image_repository);
+
+    let both = environment.run_oci_deploy(&reference, 30000, None, Some("staging"));
+    assert!(!both.status.success());
+    assert!(String::from_utf8_lossy(&both.stderr).contains("Usage:"));
+    assert!(!environment.root.join("podman.log").exists());
+}
+
+#[test]
 fn visibility_set_rejects_an_unknown_visibility() {
     let database_path = temporary_database_path();
     let output = run_pneuma(
@@ -1244,14 +1257,20 @@ impl DeploymentEnvironment {
     }
 
     fn deploy_oci(&self, reference: &str, port: u16) -> Output {
-        self.run_oci_deploy(reference, port, None)
+        self.run_oci_deploy(reference, port, None, None)
     }
 
     fn deploy_oci_with_failure(&self, reference: &str, failure: OciFailure) -> Output {
-        self.run_oci_deploy(reference, 30000, Some(failure))
+        self.run_oci_deploy(reference, 30000, Some(failure), None)
     }
 
-    fn run_oci_deploy(&self, reference: &str, port: u16, failure: Option<OciFailure>) -> Output {
+    fn run_oci_deploy(
+        &self,
+        reference: &str,
+        port: u16,
+        failure: Option<OciFailure>,
+        branch: Option<&str>,
+    ) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_pneuma"));
         command
             .env("PNEUMA_DATABASE_PATH", &self.database_path)
@@ -1287,16 +1306,17 @@ impl DeploymentEnvironment {
                 );
             }
         }
-        command
-            .args([
-                "app",
-                "deploy",
-                &self.application_name,
-                "--image",
-                reference,
-            ])
-            .output()
-            .unwrap()
+        command.args([
+            "app",
+            "deploy",
+            &self.application_name,
+            "--image",
+            reference,
+        ]);
+        if let Some(branch) = branch {
+            command.args(["--branch", branch]);
+        }
+        command.output().unwrap()
     }
 }
 

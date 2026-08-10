@@ -236,6 +236,7 @@ VM (todos aceitam `[ssh-host]` opcional, default `pneuma-dev`):
 | `reset-fixtures.sh` | Para apps, remove units/containers/Caddy fragments/checkouts, recria o DB | Voltar a um estado limpo |
 | `overview.sh` | Status de apps, containers, units, Caddy e registry de uma vez | Debug rápido |
 | `e2e.sh` | Reset → rebuild → deploy → verifica health → upgrade → rollback → reboot → verifica | Bateria completa de regressão |
+| `test-branch-deploy.sh` | Cria repo Git com `main`/`staging`, taggeia imagens com o SHA de cada commit, importa por URL Git e deploya por `--branch` | Validar o fluxo Git → OCI (fase G) |
 
 Fluxo típico de desenvolvimento:
 

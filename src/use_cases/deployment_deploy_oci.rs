@@ -75,6 +75,7 @@ pub fn deploy_oci(
     connection: &mut Connection,
     application_id: &str,
     image_reference: &str,
+    source_revision: Option<&str>,
     public_configuration: Option<&PublicDeploymentConfiguration>,
 ) -> Result<DeployedRelease, DeployOciError> {
     let reference =
@@ -111,7 +112,7 @@ pub fn deploy_oci(
         image.reference.as_str(),
         image.reference.repository(),
         image.reference.digest(),
-        None,
+        source_revision,
     )
     .map_err(|source| DeployOciError::CreateRelease { source })?;
     deploy_release(
