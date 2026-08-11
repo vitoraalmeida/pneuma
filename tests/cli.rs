@@ -687,21 +687,68 @@ fn a_removed_container_guides_a_new_deployment() {
     stop_environment.deploy_current_revision();
     fs::write(stop_environment.root.join("podman-removed"), "removed").unwrap();
 
-    let stop = stop_environment.run_lifecycle("stop");
-    assert!(!stop.status.success());
-    let stop_stderr = String::from_utf8_lossy(&stop.stderr);
-    assert!(stop_stderr.contains("is missing"));
-    assert!(stop_stderr.contains("pneuma app deploy"));
+    assert_command_succeeded(&stop_environment.run_lifecycle("stop"));
 
     let connection = database::open(&stop_environment.database_path).unwrap();
-    let observed: String = connection
+    let (observed, removed_at): (String, Option<String>) = connection
         .query_row(
-            "SELECT last_observed_state FROM runtime_instances WHERE state = 'running'",
+            "SELECT last_observed_state, removed_at FROM runtime_instances WHERE removed_at IS NULL",
             [],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
-    assert_eq!(observed, "missing");
+    drop(connection);
+    assert_eq!(observed, "stopped");
+    assert!(
+        removed_at.is_none(),
+        "removed_at must remain NULL after stop with missing container"
+    );
+}
+
+#[test]
+fn stop_and_start_cycle_after_container_removal_by_quadlet() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    environment.deploy_current_revision();
+
+    fs::write(environment.root.join("podman-removed"), "removed").unwrap();
+
+    assert_command_succeeded(&environment.run_lifecycle("stop"));
+    assert_command_succeeded(&environment.run_lifecycle("stop"));
+
+    let connection = database::open(&environment.database_path).unwrap();
+    let (desired, observed, removed_at): (String, String, Option<String>) = connection
+        .query_row(
+            "SELECT a.desired_runtime_state, ri.last_observed_state, ri.removed_at
+             FROM applications a
+             JOIN runtime_instances ri ON ri.deployment_id = a.active_deployment_id
+             WHERE a.id = (SELECT id FROM applications LIMIT 1)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    drop(connection);
+    assert_eq!(desired, "stopped");
+    assert_eq!(observed, "stopped");
+    assert!(
+        removed_at.is_none(),
+        "removed_at must remain NULL after stop with missing container"
+    );
+
+    fs::remove_file(environment.root.join("podman-removed")).unwrap();
+
+    assert_command_succeeded(&environment.run_lifecycle("start"));
+    assert_command_succeeded(&environment.run_lifecycle("start"));
+
+    let connection = database::open(&environment.database_path).unwrap();
+    let (desired, observed): (String, String) = current_runtime_states(&connection);
+    drop(connection);
+    assert_eq!(
+        (desired, observed),
+        ("running".to_owned(), "running".to_owned())
+    );
+
+    assert_command_succeeded(&environment.run_lifecycle("status"));
 }
 
 #[test]
@@ -1516,6 +1563,7 @@ case "$1" in
     daemon-reload|start|stop|enable|disable)
         if [ "$1" = "start" ] && [ -n "${PNEUMA_FAKE_CONTAINER_STATE:-}" ]; then
             printf 'running\n' > "$PNEUMA_FAKE_CONTAINER_STATE"
+            rm -f "${PNEUMA_FAKE_PODMAN_REMOVED:-}"
         fi
         if [ "$1" = "stop" ] && [ -n "${PNEUMA_FAKE_CONTAINER_STATE:-}" ]; then
             printf 'stopped\n' > "$PNEUMA_FAKE_CONTAINER_STATE"

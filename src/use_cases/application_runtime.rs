@@ -212,6 +212,51 @@ fn transition_application(
     let (observation, external_runtime_id) =
         observe_current_runtime(connection, &runtime, application_name)?;
     if observation.state == ObservedRuntimeState::Missing {
+        // When the operator wants the application stopped and the container is missing
+        // (removed by the Quadlet ExecStop), deduce a stopped observation without marking
+        // the runtime as removed so subsequent stop/start/status commands can still find it.
+        if desired_runtime_state == DesiredRuntimeState::Stopped {
+            let stopped_observation = ContainerObservation {
+                state: ObservedRuntimeState::Stopped,
+                endpoint: None,
+            };
+            persist_stopped_without_removal(connection, &runtime, &stopped_observation)?;
+            return Ok(RuntimeObservation {
+                desired_runtime_state,
+                observed_runtime_state: ObservedRuntimeState::Stopped,
+                runtime_id: runtime.runtime_id,
+                container_id: external_runtime_id,
+                endpoint: None,
+            });
+        }
+        // When the operator wants the application running and the unit exists, attempt to
+        // start it and re-observe (Quadlet recreates the container under the stable name).
+        if desired_runtime_state == DesiredRuntimeState::Running {
+            let unit = unit_name(application_name, &runtime.deployment_id);
+            if unit_exists(&unit).map_err(|source| RuntimeLifecycleError::Supervision {
+                operation: "checking Quadlet unit for",
+                runtime_id: runtime.runtime_id.clone(),
+                source,
+            })? {
+                start_unit(&unit).map_err(|source| RuntimeLifecycleError::Supervision {
+                    operation,
+                    runtime_id: runtime.runtime_id.clone(),
+                    source,
+                })?;
+                let (new_observation, new_external_runtime_id) =
+                    observe_current_runtime(connection, &runtime, application_name)?;
+                if new_observation.state != ObservedRuntimeState::Missing {
+                    persist_observation(connection, &runtime, &new_observation)?;
+                    return Ok(RuntimeObservation {
+                        desired_runtime_state,
+                        observed_runtime_state: new_observation.state,
+                        runtime_id: runtime.runtime_id,
+                        container_id: new_external_runtime_id,
+                        endpoint: new_observation.endpoint,
+                    });
+                }
+            }
+        }
         persist_observation(connection, &runtime, &observation)?;
         return Err(RuntimeLifecycleError::ContainerMissing {
             application_name: application_name.to_owned(),
@@ -253,6 +298,25 @@ fn transition_application(
             }
         })?
     };
+    // When stopping via Quadlet, the ExecStop removes the container, so the observation
+    // after stop_unit is Missing. Deduce a stopped observation without marking the runtime
+    // as removed so subsequent stop/start/status commands can still find it.
+    if desired_runtime_state == DesiredRuntimeState::Stopped
+        && observation.state == ObservedRuntimeState::Missing
+    {
+        let stopped_observation = ContainerObservation {
+            state: ObservedRuntimeState::Stopped,
+            endpoint: None,
+        };
+        persist_stopped_without_removal(connection, &runtime, &stopped_observation)?;
+        return Ok(RuntimeObservation {
+            desired_runtime_state,
+            observed_runtime_state: ObservedRuntimeState::Stopped,
+            runtime_id: runtime.runtime_id,
+            container_id: external_runtime_id,
+            endpoint: None,
+        });
+    }
     persist_observation(connection, &runtime, &observation)?;
 
     Ok(RuntimeObservation {
@@ -415,6 +479,30 @@ fn persist_observation(
         )
     }
     .map_err(|source| RuntimeLifecycleError::Persistence { source })?;
+    if updated != 1 {
+        return Err(RuntimeLifecycleError::RuntimeChanged {
+            runtime_id: runtime.runtime_id.clone(),
+        });
+    }
+    Ok(())
+}
+
+fn persist_stopped_without_removal(
+    connection: &Connection,
+    runtime: &CurrentRuntime,
+    observation: &crate::adapters::local_runtime::ContainerObservation,
+) -> Result<(), RuntimeLifecycleError> {
+    let state = observed_state_database_value(&observation.state);
+    let updated = connection
+        .execute(
+            "UPDATE runtime_instances
+             SET last_observed_state = ?2,
+                 last_observed_at = CURRENT_TIMESTAMP,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?1 AND removed_at IS NULL",
+            params![&runtime.runtime_id, state],
+        )
+        .map_err(|source| RuntimeLifecycleError::Persistence { source })?;
     if updated != 1 {
         return Err(RuntimeLifecycleError::RuntimeChanged {
             runtime_id: runtime.runtime_id.clone(),

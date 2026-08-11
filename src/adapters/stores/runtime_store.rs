@@ -407,3 +407,19 @@ pub fn stop_runtime(
         .map_err(|source| RuntimeStoreError::Persistence { source })?;
     Ok(())
 }
+
+pub fn set_runtime_state(
+    connection: &Connection,
+    runtime_id: &str,
+    state: &str,
+) -> Result<(), RuntimeStoreError> {
+    connection
+        .execute(
+            "UPDATE runtime_instances
+             SET state = ?1, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?2 AND removed_at IS NULL",
+            params![state, runtime_id],
+        )
+        .map_err(|source| RuntimeStoreError::Persistence { source })?;
+    Ok(())
+}
