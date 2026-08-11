@@ -216,7 +216,33 @@ impl Error for CliError {
     }
 }
 
+const HOST_ENVIRONMENT_FILE: &str = "/etc/pneuma/environment";
+
+fn load_host_environment() {
+    let content = match fs::read_to_string(HOST_ENVIRONMENT_FILE) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((key, value)) = line.split_once('=') {
+            let key = key.trim();
+            let value = value.trim();
+            if !key.is_empty() && env::var_os(key).is_none() {
+                // SAFETY: called before any threads are spawned in main()
+                unsafe { env::set_var(key, value) };
+            }
+        }
+    }
+}
+
 fn main() -> ExitCode {
+    load_host_environment();
+
     let arguments: Vec<OsString> = env::args_os().skip(1).collect();
     let result = parse_command(&arguments).and_then(run);
 
