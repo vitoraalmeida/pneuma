@@ -1,12 +1,12 @@
 use std::env;
 use std::error::Error;
-use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use clap::{Parser, Subcommand, ValueEnum};
 use pneuma::adapters::database::{self, DatabaseError};
 use pneuma::adapters::git_source::{
     CloneRepositoryError, cleanup_checkout, clone_repository, is_remote_repository,
@@ -38,7 +38,208 @@ const CADDY_MANAGED_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_CADDY_MANAGED_PATH
 const DEFAULT_CADDY_MANAGED_PATH: &str = "/etc/caddy/applications";
 const CADDYFILE_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_CADDYFILE_PATH";
 const DEFAULT_CADDYFILE_PATH: &str = "/etc/caddy/Caddyfile";
-const USAGE: &str = "Usage:\n  pneuma [--verbose] system create <name> [--description <text>]\n  pneuma [--verbose] system list\n  pneuma [--verbose] system show <name>\n  pneuma [--verbose] app import <repository-or-git-url> [--system <system-name>] [--manifest <manifest-path>]\n  pneuma [--verbose] app list\n  pneuma [--verbose] app deployments <application-name>\n  pneuma [--verbose] app status <application-name>\n  pneuma [--verbose] app stop <application-name>\n  pneuma [--verbose] app start <application-name>\n  pneuma [--verbose] app deploy <application-name> --image <repository@sha256:...>\n  pneuma [--verbose] app deploy <application-name> --branch <branch>\n  pneuma [--verbose] deployment rollback <application-name>\n  pneuma [--verbose] app visibility set <application-name> <public|internal>\n  pneuma database backup <path>\n  pneuma database restore <path>\n  pneuma version\n  pneuma doctor";
+
+#[derive(Parser)]
+#[command(
+    name = "pneuma",
+    version,
+    about = "Single-host container deployment CLI"
+)]
+struct Cli {
+    #[arg(long, global = true)]
+    verbose: bool,
+
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Manage systems
+    System {
+        #[command(subcommand)]
+        command: SystemCommands,
+    },
+    /// Manage applications
+    App {
+        #[command(subcommand)]
+        command: AppCommands,
+    },
+    /// Manage deployments
+    Deployment {
+        #[command(subcommand)]
+        command: DeploymentCommands,
+    },
+    /// Database operations
+    Database {
+        #[command(subcommand)]
+        command: DatabaseCommands,
+    },
+    /// Print version information
+    Version,
+    /// Run diagnostic checks
+    Doctor,
+    /// CI dispatch (internal, via SSH)
+    Ci {
+        #[command(subcommand)]
+        command: CiCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum SystemCommands {
+    /// Create a new system
+    Create {
+        name: String,
+        #[arg(long)]
+        description: Option<String>,
+    },
+    /// List all systems
+    List,
+    /// Show system details
+    Show { name: String },
+}
+
+#[derive(Subcommand)]
+enum AppCommands {
+    /// Import an application
+    Import {
+        repository: String,
+        #[arg(long)]
+        system: Option<String>,
+        #[arg(long)]
+        manifest: Option<String>,
+    },
+    /// List all applications
+    List,
+    /// List deployments for an application
+    Deployments { application_name: String },
+    /// Show application status
+    Status { application_name: String },
+    /// Stop an application
+    Stop { application_name: String },
+    /// Start an application
+    Start { application_name: String },
+    /// Deploy an application
+    Deploy {
+        application_name: String,
+        #[arg(long, conflicts_with = "branch")]
+        image: Option<String>,
+        #[arg(long, conflicts_with = "image")]
+        branch: Option<String>,
+    },
+    /// Manage application visibility
+    Visibility {
+        #[command(subcommand)]
+        command: VisibilityCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum VisibilityCommands {
+    /// Set application visibility
+    Set {
+        application_name: String,
+        visibility: VisibilityArg,
+    },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum VisibilityArg {
+    Public,
+    Internal,
+}
+
+impl From<VisibilityArg> for Visibility {
+    fn from(arg: VisibilityArg) -> Self {
+        match arg {
+            VisibilityArg::Public => Visibility::Public,
+            VisibilityArg::Internal => Visibility::Internal,
+        }
+    }
+}
+
+#[derive(Subcommand)]
+enum DeploymentCommands {
+    /// Rollback to previous deployment
+    Rollback { application_name: String },
+}
+
+#[derive(Subcommand)]
+enum DatabaseCommands {
+    /// Backup database to file
+    Backup { path: PathBuf },
+    /// Restore database from file
+    Restore { path: PathBuf },
+}
+
+#[derive(Subcommand)]
+enum CiCommands {
+    /// Dispatch CI command
+    Dispatch,
+}
+
+impl From<Commands> for Command {
+    fn from(cmd: Commands) -> Self {
+        match cmd {
+            Commands::System { command } => match command {
+                SystemCommands::Create { name, description } => {
+                    Command::SystemCreate { name, description }
+                }
+                SystemCommands::List => Command::SystemList,
+                SystemCommands::Show { name } => Command::SystemShow { name },
+            },
+            Commands::App { command } => match command {
+                AppCommands::Import {
+                    repository,
+                    system,
+                    manifest,
+                } => Command::Import {
+                    repository,
+                    system_name: system,
+                    manifest_path: manifest,
+                },
+                AppCommands::List => Command::List,
+                AppCommands::Deployments { application_name } => {
+                    Command::Deployments { application_name }
+                }
+                AppCommands::Status { application_name } => Command::Status { application_name },
+                AppCommands::Stop { application_name } => Command::Stop { application_name },
+                AppCommands::Start { application_name } => Command::Start { application_name },
+                AppCommands::Deploy {
+                    application_name,
+                    image,
+                    branch,
+                } => Command::Deploy {
+                    application_name,
+                    image_reference: image,
+                    branch,
+                },
+                AppCommands::Visibility { command } => match command {
+                    VisibilityCommands::Set {
+                        application_name,
+                        visibility,
+                    } => Command::VisibilitySet {
+                        application_name,
+                        visibility: visibility.into(),
+                    },
+                },
+            },
+            Commands::Deployment { command } => match command {
+                DeploymentCommands::Rollback { application_name } => {
+                    Command::Rollback { application_name }
+                }
+            },
+            Commands::Database { command } => match command {
+                DatabaseCommands::Backup { path } => Command::DatabaseBackup { path },
+                DatabaseCommands::Restore { path } => Command::DatabaseRestore { path },
+            },
+            Commands::Version => Command::Version,
+            Commands::Doctor => Command::Doctor,
+            Commands::Ci { .. } => Command::CiDispatch,
+        }
+    }
+}
 
 struct Invocation {
     verbose: bool,
@@ -97,7 +298,6 @@ enum Command {
 
 #[derive(Debug)]
 enum CliError {
-    Usage,
     Database {
         source: DatabaseError,
     },
@@ -153,12 +353,12 @@ enum CliError {
         source: CiDispatchError,
     },
     Doctor,
+    MissingDeployOption,
 }
 
 impl fmt::Display for CliError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Usage => formatter.write_str(USAGE),
             Self::Database { source } => write!(formatter, "{source}"),
             Self::Import { source } => write!(formatter, "{source}"),
             Self::ImportSource { source } => write!(formatter, "{source}"),
@@ -186,6 +386,9 @@ impl fmt::Display for CliError {
             Self::SystemShow { source } => write!(formatter, "{source}"),
             Self::CiDispatch { source } => write!(formatter, "{source}"),
             Self::Doctor => formatter.write_str("one or more diagnostic checks failed"),
+            Self::MissingDeployOption => {
+                formatter.write_str("either --image or --branch must be specified")
+            }
         }
     }
 }
@@ -193,7 +396,6 @@ impl fmt::Display for CliError {
 impl Error for CliError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::Usage => None,
             Self::Database { source } => Some(source),
             Self::Import { source } => Some(source),
             Self::ImportSource { source } => Some(source),
@@ -211,7 +413,7 @@ impl Error for CliError {
             Self::SystemList { source } => Some(source),
             Self::SystemShow { source } => Some(source),
             Self::CiDispatch { source } => Some(source),
-            Self::Doctor => None,
+            Self::Doctor | Self::MissingDeployOption => None,
         }
     }
 }
@@ -244,8 +446,12 @@ fn main() -> ExitCode {
     load_host_environment();
     configure_runtime_environment();
 
-    let arguments: Vec<OsString> = env::args_os().skip(1).collect();
-    let result = parse_command(&arguments).and_then(run);
+    let cli = Cli::parse();
+    let invocation = Invocation {
+        verbose: cli.verbose,
+        command: cli.command.into(),
+    };
+    let result = run(invocation);
 
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -254,174 +460,6 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
-}
-
-fn parse_command(arguments: &[OsString]) -> Result<Invocation, CliError> {
-    let (verbose, arguments) = match arguments {
-        [verbose, remaining @ ..] if verbose == OsStr::new("--verbose") => (true, remaining),
-        arguments => (false, arguments),
-    };
-    let command = match arguments {
-        [system, create, name]
-            if system == OsStr::new("system") && create == OsStr::new("create") =>
-        {
-            let name = name.to_str().ok_or(CliError::Usage)?.to_owned();
-            Ok(Command::SystemCreate {
-                name,
-                description: None,
-            })
-        }
-        [system, create, name, description_flag, description]
-            if system == OsStr::new("system")
-                && create == OsStr::new("create")
-                && description_flag == OsStr::new("--description") =>
-        {
-            let name = name.to_str().ok_or(CliError::Usage)?.to_owned();
-            let description = description.to_str().ok_or(CliError::Usage)?.to_owned();
-            Ok(Command::SystemCreate {
-                name,
-                description: Some(description),
-            })
-        }
-        [system, list] if system == OsStr::new("system") && list == OsStr::new("list") => {
-            Ok(Command::SystemList)
-        }
-        [system, show, name] if system == OsStr::new("system") && show == OsStr::new("show") => {
-            let name = name.to_str().ok_or(CliError::Usage)?.to_owned();
-            Ok(Command::SystemShow { name })
-        }
-        [app, import, repository, flags @ ..]
-            if app == OsStr::new("app") && import == OsStr::new("import") =>
-        {
-            let mut system_name: Option<String> = None;
-            let mut manifest_path: Option<String> = None;
-            let mut index = 0;
-            while index < flags.len() {
-                match flags[index].to_str() {
-                    Some("--system") => {
-                        system_name = Some(
-                            flags
-                                .get(index + 1)
-                                .and_then(|value| value.to_str())
-                                .ok_or(CliError::Usage)?
-                                .to_owned(),
-                        );
-                        index += 2;
-                    }
-                    Some("--manifest") => {
-                        manifest_path = Some(
-                            flags
-                                .get(index + 1)
-                                .and_then(|value| value.to_str())
-                                .ok_or(CliError::Usage)?
-                                .to_owned(),
-                        );
-                        index += 2;
-                    }
-                    _ => return Err(CliError::Usage),
-                }
-            }
-            Ok(Command::Import {
-                repository: repository.to_str().ok_or(CliError::Usage)?.to_owned(),
-                system_name,
-                manifest_path,
-            })
-        }
-        [app, list] if app == OsStr::new("app") && list == OsStr::new("list") => Ok(Command::List),
-        [app, deployments, application_name]
-            if app == OsStr::new("app") && deployments == OsStr::new("deployments") =>
-        {
-            let application_name = application_name.to_str().ok_or(CliError::Usage)?.to_owned();
-            Ok(Command::Deployments { application_name })
-        }
-        [app, status, application_name]
-            if app == OsStr::new("app") && status == OsStr::new("status") =>
-        {
-            let application_name = application_name.to_str().ok_or(CliError::Usage)?.to_owned();
-            Ok(Command::Status { application_name })
-        }
-        [app, stop, application_name] if app == OsStr::new("app") && stop == OsStr::new("stop") => {
-            let application_name = application_name.to_str().ok_or(CliError::Usage)?.to_owned();
-            Ok(Command::Stop { application_name })
-        }
-        [app, start, application_name]
-            if app == OsStr::new("app") && start == OsStr::new("start") =>
-        {
-            let application_name = application_name.to_str().ok_or(CliError::Usage)?.to_owned();
-            Ok(Command::Start { application_name })
-        }
-        [app, deploy, application_name, deploy_option, deploy_value]
-            if app == OsStr::new("app")
-                && deploy == OsStr::new("deploy")
-                && (deploy_option == OsStr::new("--image")
-                    || deploy_option == OsStr::new("--branch")) =>
-        {
-            let application_name = application_name.to_str().ok_or(CliError::Usage)?.to_owned();
-            let deploy_value = deploy_value.to_str().ok_or(CliError::Usage)?.to_owned();
-            if deploy_option == OsStr::new("--image") {
-                Ok(Command::Deploy {
-                    application_name,
-                    image_reference: Some(deploy_value),
-                    branch: None,
-                })
-            } else {
-                Ok(Command::Deploy {
-                    application_name,
-                    image_reference: None,
-                    branch: Some(deploy_value),
-                })
-            }
-        }
-        [deployment, rollback, application_name]
-            if deployment == OsStr::new("deployment") && rollback == OsStr::new("rollback") =>
-        {
-            let application_name = application_name.to_str().ok_or(CliError::Usage)?.to_owned();
-            Ok(Command::Rollback { application_name })
-        }
-        [
-            app,
-            visibility_command,
-            set,
-            application_name,
-            visibility_value,
-        ] if app == OsStr::new("app")
-            && visibility_command == OsStr::new("visibility")
-            && set == OsStr::new("set") =>
-        {
-            let application_name = application_name.to_str().ok_or(CliError::Usage)?.to_owned();
-            let visibility_str = visibility_value.to_str().ok_or(CliError::Usage)?;
-            let visibility = match visibility_str {
-                "public" => Visibility::Public,
-                "internal" => Visibility::Internal,
-                _ => return Err(CliError::Usage),
-            };
-            Ok(Command::VisibilitySet {
-                application_name,
-                visibility,
-            })
-        }
-        [version] if version == OsStr::new("version") => Ok(Command::Version),
-        [doctor] if doctor == OsStr::new("doctor") => Ok(Command::Doctor),
-        [database, backup, path]
-            if database == OsStr::new("database") && backup == OsStr::new("backup") =>
-        {
-            Ok(Command::DatabaseBackup {
-                path: PathBuf::from(path),
-            })
-        }
-        [database, restore, path]
-            if database == OsStr::new("database") && restore == OsStr::new("restore") =>
-        {
-            Ok(Command::DatabaseRestore {
-                path: PathBuf::from(path),
-            })
-        }
-        [ci, dispatch] if ci == OsStr::new("ci") && dispatch == OsStr::new("dispatch") => {
-            Ok(Command::CiDispatch)
-        }
-        _ => Err(CliError::Usage),
-    }?;
-    Ok(Invocation { verbose, command })
 }
 
 fn run(invocation: Invocation) -> Result<(), CliError> {
@@ -520,7 +558,7 @@ fn run(invocation: Invocation) -> Result<(), CliError> {
             if let Some(branch) = branch {
                 run_deploy_branch(&mut connection, verbose, &application_name, &branch)
             } else {
-                let image_reference = image_reference.ok_or(CliError::Usage)?;
+                let image_reference = image_reference.ok_or(CliError::MissingDeployOption)?;
                 run_deploy_oci(
                     &mut connection,
                     verbose,

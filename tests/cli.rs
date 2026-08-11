@@ -194,10 +194,9 @@ fn reports_usage_for_an_unknown_command() {
         .unwrap();
 
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("[--verbose]"));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("[--verbose] app import"));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("[--verbose] app list"));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("[--verbose] app deploy"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("unrecognized subcommand"));
+    assert!(stderr.contains("Usage"));
 }
 
 #[test]
@@ -1004,8 +1003,8 @@ fn legacy_expose_command_returns_usage() {
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Usage:"));
-    assert!(stderr.contains("app visibility set"));
+    assert!(stderr.contains("unrecognized subcommand"));
+    assert!(stderr.contains("expose"));
 }
 
 #[test]
@@ -1037,7 +1036,9 @@ fn visibility_set_rejects_an_unknown_visibility() {
     let _ = fs::remove_file(&database_path);
 
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("Usage:"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("invalid value"));
+    assert!(stderr.contains("exposed"));
 }
 
 #[test]
