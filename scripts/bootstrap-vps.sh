@@ -128,32 +128,6 @@ install -d \
     -m 0700 \
     "$SSH_DIR"
 
-if [[ -n "$CI_PUBLIC_KEY_FILE" ]]; then
-    if [[ ! -f "$CI_PUBLIC_KEY_FILE" ]]; then
-        echo "CI public key file not found: $CI_PUBLIC_KEY_FILE"
-        exit 1
-    fi
-
-    CI_PUBLIC_KEY="$(cat "$CI_PUBLIC_KEY_FILE")"
-
-    if [[ ! "$CI_PUBLIC_KEY" =~ ^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp[0-9]+)\ + ]]; then
-        echo "Invalid SSH public key format in $CI_PUBLIC_KEY_FILE"
-        exit 1
-    fi
-
-    AUTHORIZED_KEYS="$SSH_DIR/authorized_keys"
-    touch "$AUTHORIZED_KEYS"
-
-    if grep -qF "$CI_PUBLIC_KEY" "$AUTHORIZED_KEYS"; then
-        echo "CI key already installed (skipping)."
-    else
-        printf 'restrict,command="/usr/local/bin/pneuma ci dispatch" %s\n' "$CI_PUBLIC_KEY" >>"$AUTHORIZED_KEYS"
-        chown "$PNEUMA_USER:$PNEUMA_USER" "$AUTHORIZED_KEYS"
-        chmod 0600 "$AUTHORIZED_KEYS"
-        echo "CI deploy key installed for the $PNEUMA_USER user (restricted + forced command)."
-    fi
-fi
-
 install -d \
     -o "$PNEUMA_USER" \
     -g "$PNEUMA_USER" \
@@ -258,7 +232,13 @@ install \
     "$PNEUMA_SOURCE_PATH/target/release/pneuma" \
     /usr/local/bin/pneuma
 
-install -d -o root -g pneuma -m 0750 /etc/pneuma
+mkdir -p /etc/pneuma
+if ! getent group pneuma >/dev/null 2>&1; then
+    groupadd pneuma
+    usermod -a -G pneuma "$PNEUMA_USER"
+fi
+chown root:pneuma /etc/pneuma
+chmod 0750 /etc/pneuma
 
 cat >/etc/pneuma/environment <<'EOF'
 # Pneuma host environment configuration
@@ -272,6 +252,32 @@ EOF
 
 chown root:pneuma /etc/pneuma/environment
 chmod 0640 /etc/pneuma/environment
+
+if [[ -n "$CI_PUBLIC_KEY_FILE" ]]; then
+    if [[ ! -f "$CI_PUBLIC_KEY_FILE" ]]; then
+        echo "CI public key file not found: $CI_PUBLIC_KEY_FILE"
+        exit 1
+    fi
+
+    CI_PUBLIC_KEY="$(cat "$CI_PUBLIC_KEY_FILE")"
+
+    if [[ ! "$CI_PUBLIC_KEY" =~ ^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp[0-9]+)\ + ]]; then
+        echo "Invalid SSH public key format in $CI_PUBLIC_KEY_FILE"
+        exit 1
+    fi
+
+    AUTHORIZED_KEYS="$SSH_DIR/authorized_keys"
+    touch "$AUTHORIZED_KEYS"
+
+    if grep -qF "$CI_PUBLIC_KEY" "$AUTHORIZED_KEYS"; then
+        echo "CI key already installed (skipping)."
+    else
+        printf 'restrict,command="/usr/local/bin/pneuma ci dispatch" %s\n' "$CI_PUBLIC_KEY" >>"$AUTHORIZED_KEYS"
+        chown "$PNEUMA_USER:$PNEUMA_USER" "$AUTHORIZED_KEYS"
+        chmod 0600 "$AUTHORIZED_KEYS"
+        echo "CI deploy key installed for the $PNEUMA_USER user (restricted + forced command)."
+    fi
+fi
 
 if [[ -f /etc/caddy/Caddyfile ]]; then
     cp -a /etc/caddy/Caddyfile \
@@ -322,6 +328,13 @@ if [[ "$ROOTLESS_OUTPUT" != "true" ]]; then
     echo "Rootless Podman is not usable by the $PNEUMA_USER user."
     echo "Expected {{.Host.Security.Rootless}} to be true; got: $ROOTLESS_OUTPUT"
     echo "Check subuid/subgid, fuse-overlayfs and linger, then rerun the script."
+    exit 1
+fi
+
+if [[ ! -x /usr/local/bin/pneuma ]]; then
+    echo
+    echo "ERROR: Pneuma binary not found at /usr/local/bin/pneuma"
+    echo "The cargo build may have failed. Check the output above."
     exit 1
 fi
 
