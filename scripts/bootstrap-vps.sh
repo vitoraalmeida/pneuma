@@ -135,6 +135,8 @@ install -d \
     /var/lib/pneuma/database \
     /var/lib/pneuma/checkouts
 
+install -d -o "$PNEUMA_USER" -g "$PNEUMA_USER" -m 0750 "$PNEUMA_HOME/.config"
+install -d -o "$PNEUMA_USER" -g "$PNEUMA_USER" -m 0750 "$PNEUMA_HOME/.config/containers"
 install -d \
     -o "$PNEUMA_USER" \
     -g "$PNEUMA_USER" \
