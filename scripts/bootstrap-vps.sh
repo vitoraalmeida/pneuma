@@ -19,33 +19,45 @@
 # - Add that key to the Git provider, then run the script again.
 #
 # GitHub Actions deploy:
-# - Pass the public key of the Actions deploy key as the third argument.
-#   The script installs it in the pneuma user's authorized_keys (restricted),
-#   so the workflow can SSH as pneuma (no root) to run `pneuma app deploy`.
+# - Pass the public key of the CI deploy key with --ci-public-key.
+#   The script installs it in the pneuma user's authorized_keys (restricted
+#   + forced command), so any repository in the account can SSH as pneuma
+#   (no root) to run `pneuma ci dispatch`.
 # - Generate the key pair on a trusted machine, not on the VPS: store the
-#   private key in the GitHub Actions secret DEPLOY_SSH_KEY and pass the public
-#   key here.
+#   private key as an account-level secret and pass the public key here.
 #
 # Usage:
-#   bash bootstrap-vps.sh <pneuma-source-url> [deploy-application-repository-url] [deploy-public-key]
+#   bash bootstrap-vps.sh <pneuma-source-url> [--ci-public-key <path>]
 #
 # Example:
 #   bash bootstrap-vps.sh \
 #     git@github.com:USER/pneuma.git \
-#     git@github.com:USER/vitoralmeida.tech.git \
-#     "$(cat ~/.ssh/github-actions-deploy.pub)"
+#     --ci-public-key ~/.ssh/pneuma-ci.pub
 #
 
 set -euo pipefail
 
 PNEUMA_SOURCE_URL="${1:-}"
-APPLICATION_SOURCE_URL="${2:-}"
-DEPLOY_PUBLIC_KEY="${3:-}"
+CI_PUBLIC_KEY_FILE=""
+
+shift || true
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --ci-public-key)
+            CI_PUBLIC_KEY_FILE="${2:-}"
+            shift 2
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Usage: $0 <pneuma-source-url> [--ci-public-key <path>]"
+            exit 1
+            ;;
+    esac
+done
 
 PNEUMA_USER="pneuma"
 PNEUMA_HOME="/home/$PNEUMA_USER"
 PNEUMA_SOURCE_PATH="$PNEUMA_HOME/pneuma"
-APPLICATION_PATH="/var/lib/pneuma/checkouts/vitoralmeida.tech"
 SSH_DIR="$PNEUMA_HOME/.ssh"
 SSH_KEY="$SSH_DIR/id_ed25519"
 
@@ -116,13 +128,30 @@ install -d \
     -m 0700 \
     "$SSH_DIR"
 
-if [[ -n "$DEPLOY_PUBLIC_KEY" ]]; then
+if [[ -n "$CI_PUBLIC_KEY_FILE" ]]; then
+    if [[ ! -f "$CI_PUBLIC_KEY_FILE" ]]; then
+        echo "CI public key file not found: $CI_PUBLIC_KEY_FILE"
+        exit 1
+    fi
+
+    CI_PUBLIC_KEY="$(cat "$CI_PUBLIC_KEY_FILE")"
+
+    if [[ ! "$CI_PUBLIC_KEY" =~ ^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp[0-9]+)\ + ]]; then
+        echo "Invalid SSH public key format in $CI_PUBLIC_KEY_FILE"
+        exit 1
+    fi
+
     AUTHORIZED_KEYS="$SSH_DIR/authorized_keys"
     touch "$AUTHORIZED_KEYS"
-    printf 'restrict %s\n' "$DEPLOY_PUBLIC_KEY" >>"$AUTHORIZED_KEYS"
-    chown "$PNEUMA_USER:$PNEUMA_USER" "$AUTHORIZED_KEYS"
-    chmod 0600 "$AUTHORIZED_KEYS"
-    echo "Deploy SSH key installed for the $PNEUMA_USER user (restricted)."
+
+    if grep -qF "$CI_PUBLIC_KEY" "$AUTHORIZED_KEYS"; then
+        echo "CI key already installed (skipping)."
+    else
+        printf 'restrict %s\n' "$CI_PUBLIC_KEY" >>"$AUTHORIZED_KEYS"
+        chown "$PNEUMA_USER:$PNEUMA_USER" "$AUTHORIZED_KEYS"
+        chmod 0600 "$AUTHORIZED_KEYS"
+        echo "CI deploy key installed for the $PNEUMA_USER user (restricted)."
+    fi
 fi
 
 install -d \
@@ -130,8 +159,7 @@ install -d \
     -g "$PNEUMA_USER" \
     -m 0750 \
     /var/lib/pneuma/database \
-    /var/lib/pneuma/checkouts \
-    "$APPLICATION_PATH"
+    /var/lib/pneuma/checkouts
 
 install -d \
     -o "$PNEUMA_USER" \
@@ -148,9 +176,7 @@ install -d \
 SSH_REPOSITORY=false
 
 if [[ "$PNEUMA_SOURCE_URL" == git@* ||
-      "$PNEUMA_SOURCE_URL" == ssh://* ||
-      "$APPLICATION_SOURCE_URL" == git@* ||
-      "$APPLICATION_SOURCE_URL" == ssh://* ]]; then
+      "$PNEUMA_SOURCE_URL" == ssh://* ]]; then
     SSH_REPOSITORY=true
 fi
 
@@ -194,13 +220,11 @@ extract_ssh_host() {
 }
 
 if [[ "$SSH_REPOSITORY" == true ]]; then
-    for host in "$(extract_ssh_host "$PNEUMA_SOURCE_URL")" "$(extract_ssh_host "$APPLICATION_SOURCE_URL")"; do
-        [[ -n "$host" ]] || continue
-        if ! grep -qF "$host" "$SSH_DIR/known_hosts" 2>/dev/null; then
-            runuser -u "$PNEUMA_USER" -- \
-                ssh-keyscan -H "$host" >>"$SSH_DIR/known_hosts"
-        fi
-    done
+    host="$(extract_ssh_host "$PNEUMA_SOURCE_URL")"
+    if [[ -n "$host" ]] && ! grep -qF "$host" "$SSH_DIR/known_hosts" 2>/dev/null; then
+        runuser -u "$PNEUMA_USER" -- \
+            ssh-keyscan -H "$host" >>"$SSH_DIR/known_hosts"
+    fi
 
     chown "$PNEUMA_USER:$PNEUMA_USER" "$SSH_DIR/known_hosts" 2>/dev/null || true
     chmod 0600 "$SSH_DIR/known_hosts" 2>/dev/null || true
@@ -265,15 +289,6 @@ do
     grep -qxF "$line" "$PROFILE" || echo "$line" >>"$PROFILE"
 done
 
-if [[ -n "$APPLICATION_SOURCE_URL" &&
-      ! -e "$APPLICATION_PATH/.git" ]]; then
-    runuser -u "$PNEUMA_USER" -- \
-        env \
-            HOME="$PNEUMA_HOME" \
-            XDG_RUNTIME_DIR="/run/user/$PNEUMA_UID" \
-        git clone "$APPLICATION_SOURCE_URL" "$APPLICATION_PATH"
-fi
-
 systemctl enable --now caddy
 
 caddy validate \
@@ -296,32 +311,29 @@ if [[ "$ROOTLESS_OUTPUT" != "true" ]]; then
 fi
 
 echo
-echo "VPS setup completed."
+echo "Pneuma host setup completed."
 echo
 echo "Open a Pneuma shell:"
 echo "  sudo -iu pneuma"
 echo
 echo "Rootless Podman is working for the pneuma user."
 echo
-echo "Import and deploy the application. The application name is the"
-echo "[application] name declared in the pneuma.toml of the checkout:"
-echo "  pneuma app import $APPLICATION_PATH"
-echo "  pneuma app list"
-echo "  pneuma app deploy <application-name> --image ghcr.io/owner/image@sha256:<digest>"
+echo "Import applications with:"
+echo "  pneuma app import <git-url> --manifest <manifest-path>"
+echo
+echo "Example:"
+echo "  pneuma app import https://github.com/owner/app --manifest deploy/staging/pneuma.toml"
 echo
 
-if [[ -n "$DEPLOY_PUBLIC_KEY" ]]; then
-    echo "Deploy SSH access for GitHub Actions is configured for the pneuma user."
+if [[ -n "$CI_PUBLIC_KEY_FILE" ]]; then
+    echo "CI deployment identity configured for the pneuma user."
     echo
-    echo "In the repository GitHub Settings -> Environments -> production:"
-    echo "  - Secrets:   DEPLOY_SSH_KEY (the private key), DEPLOY_KNOWN_HOSTS"
-    echo "  - Variables: DEPLOY_HOST, DEPLOY_PORT, DEPLOY_USER=pneuma"
+    echo "Store the private key as an account-level secret (DEPLOY_SSH_KEY)"
+    echo "so all repositories in the account can deploy."
     echo
-    echo "The workflow command must run through a login shell so the PNEUMA_*"
-    echo "and XDG_RUNTIME_DIR variables from ~/.profile are available, for example:"
-    echo '  ssh -i ~/.ssh/deploy_key pneuma@$DEPLOY_HOST \'
-    echo "    \"bash -lc 'cd \$HOME && pneuma app deploy <application> --branch <branch>'\""
+    echo "Example workflow command:"
+    echo '  ssh -i <private-key> pneuma@<host> "deploy <application> <branch>"'
     echo
-    echo "Test the key from a trusted machine before deploying:"
-    echo '  ssh -i ~/.ssh/github-actions-deploy pneuma@<host> "bash -lc '\''pneuma version'\''"'
+    echo "Test the key from a trusted machine:"
+    echo '  ssh -i <private-key> pneuma@<host> "version"'
 fi
