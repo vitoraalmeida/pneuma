@@ -2,6 +2,16 @@
 #
 # Pneuma VPS bootstrap script
 #
+# Verifies the host prerequisites and provisions a production-ready Pneuma host:
+# packages, the pneuma user (no sudo), rootless Podman, Caddy and the compiled
+# binary. After this script succeeds, the host is ready to import applications
+# and deploy them; CI can reach it via the restricted SSH key (--ci-public-key).
+#
+# The script fails fast on: Debian < 13, no internet/DNS, insufficient disk
+# space (< 3 GiB on /, < 1 GiB on /var) or memory (< 2 GiB), conflicting web
+# servers (nginx/apache), occupied ports 80/443, and (at the end) any state
+# that would break the flow.
+#
 # Prerequisites:
 # - Debian 13 (trixie) VPS — Debian 12 ships Podman 4.3.1 without the Quadlet
 #   user generator, which Pneuma requires to supervise runtimes across reboots.
@@ -71,11 +81,109 @@ if [[ -z "$PNEUMA_SOURCE_URL" ]]; then
     exit 1
 fi
 
+# ---------------------------------------------------------------------------
+# Pre-flight checks: fail fast with actionable messages before touching the
+# system, so a misconfigured VPS does not leave a half-installed host behind.
+# ---------------------------------------------------------------------------
+
+echo "==> Checking prerequisites..."
+
+DEBIAN_VERSION="$(cat /etc/debian_version)"
+if ! [[ "$DEBIAN_VERSION" =~ ^13(\.|$) ]]; then
+    echo "ERROR: this script requires Debian 13 (trixie), found '$DEBIAN_VERSION'."
+    echo "Debian 12 ships Podman 4.3.1 without the Quadlet user generator,"
+    echo "which Pneuma needs to supervise runtimes across reboots."
+    exit 1
+fi
+
+if ! timeout 5 bash -c 'echo > /dev/tcp/deb.debian.org/80' 2>/dev/null; then
+    echo "ERROR: no internet access to deb.debian.org."
+    echo "Check the network configuration and firewall, then rerun this script."
+    exit 1
+fi
+
+if ! getent hosts deb.debian.org >/dev/null 2>&1; then
+    echo "ERROR: DNS resolution failed (cannot resolve deb.debian.org)."
+    echo "Check /etc/resolv.conf, then rerun this script."
+    exit 1
+fi
+
+AVAILABLE_ROOT_KB="$(df -Pk / 2>/dev/null | awk 'NR==2 {print $4}')"
+REQUIRED_ROOT_KB=$((3 * 1024 * 1024))
+if [[ -n "$AVAILABLE_ROOT_KB" && "$AVAILABLE_ROOT_KB" -lt "$REQUIRED_ROOT_KB" ]]; then
+    echo "ERROR: insufficient disk space on / (root filesystem):"
+    echo "  available: $((AVAILABLE_ROOT_KB / 1024 / 1024)) GiB"
+    echo "  required:  3 GiB"
+    echo "The bootstrap installs packages and compiles Pneuma under /."
+    exit 1
+fi
+
+AVAILABLE_VAR_KB="$(df -Pk /var 2>/dev/null | awk 'NR==2 {print $4}')"
+REQUIRED_VAR_KB=$((1 * 1024 * 1024))
+if [[ -n "$AVAILABLE_VAR_KB" && "$AVAILABLE_VAR_KB" -lt "$REQUIRED_VAR_KB" ]]; then
+    echo "ERROR: insufficient disk space on /var:"
+    echo "  available: $((AVAILABLE_VAR_KB / 1024 / 1024)) GiB"
+    echo "  required:  1 GiB"
+    echo "Pneuma keeps its database and checkouts under /var/lib/pneuma."
+    echo "(Rootless Podman stores containers under the pneuma user's home.)"
+    exit 1
+fi
+
+AVAILABLE_MEM_KB="$(free -k | awk '/^Mem:/ {print $2}')"
+REQUIRED_MEM_KB=$((2 * 1024 * 1024))
+if [[ -n "$AVAILABLE_MEM_KB" && "$AVAILABLE_MEM_KB" -lt "$REQUIRED_MEM_KB" ]]; then
+    echo "ERROR: insufficient memory to compile Pneuma:"
+    echo "  available: $((AVAILABLE_MEM_KB / 1024 / 1024)) GiB"
+    echo "  required:  2 GiB"
+    exit 1
+fi
+
+CPU_CORES="$(nproc)"
+if [[ "$CPU_CORES" -lt 2 ]]; then
+    echo "ERROR: insufficient CPU cores: $CPU_CORES available, at least 2 are required."
+    exit 1
+fi
+
+echo "==> Checking for conflicting services..."
+for service in nginx apache2 httpd; do
+    if systemctl is-active --quiet "$service" 2>/dev/null; then
+        echo "ERROR: conflicting service '$service' is active."
+        echo "Pneuma routes public traffic through Caddy on ports 80/443."
+        echo "Stop and disable it, then rerun this script:"
+        echo "  systemctl stop $service"
+        echo "  systemctl disable $service"
+        exit 1
+    fi
+done
+
+echo "==> Checking port availability..."
+# Ports must be free before Caddy is installed, otherwise a pre-existing
+# listener (a different web server) would conflict. caddy itself binds 80/443
+# only after this check, when we enable it below.
+# /proc/net/tcp{,6} rows: local_address(hex ip:port) rem_address(hex) st(0A=LISTEN)
+port_in_use() {
+    local port="$1"
+    local hex_port
+    hex_port="$(printf '%04X' "$port")"
+    awk -v p=":$hex_port" '$4 == "0A" && $2 ~ p"$" { print }' \
+        /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep -q .
+}
+for port in 80 443; do
+    if port_in_use "$port"; then
+        echo "ERROR: port $port is already in use by another process:"
+        awk -v p=":$hex_port" '$4 == "0A" && $2 ~ p"$" { print }' \
+            /proc/net/tcp /proc/net/tcp6 2>/dev/null
+        echo "Stop the owning service, then rerun this script."
+        exit 1
+    fi
+done
+
 apt-get update
 apt-get install -y \
     build-essential \
     curl \
     git \
+    iproute2 \
     pkg-config \
     libssl-dev \
     podman \
@@ -351,6 +459,25 @@ if ! runuser -u "$PNEUMA_USER" -- \
     echo "pneuma doctor failed. Review the output above."
     exit 1
 fi
+
+echo
+echo "==> Verifying final state..."
+if ! systemctl is-active --quiet caddy; then
+    echo "ERROR: caddy service is not active."
+    echo "Review the caddy configuration and logs: journalctl -u caddy"
+    exit 1
+fi
+if ! loginctl show-user "$PNEUMA_USER" 2>/dev/null | grep -q '^Linger=yes'; then
+    echo "ERROR: linger is not enabled for the $PNEUMA_USER user."
+    echo "Re-enable it with: loginctl enable-linger $PNEUMA_USER"
+    exit 1
+fi
+if ! grep -q "^${PNEUMA_USER}:" /etc/subuid || ! grep -q "^${PNEUMA_USER}:" /etc/subgid; then
+    echo "ERROR: subuid/subgid ranges are missing for the $PNEUMA_USER user."
+    echo "Check /etc/subuid and /etc/subgid, then rerun this script."
+    exit 1
+fi
+echo "✓ Final state verified"
 
 echo
 echo "Pneuma host setup completed."
