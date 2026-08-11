@@ -343,10 +343,10 @@ fi
 echo
 echo "Running pneuma doctor..."
 if ! runuser -u "$PNEUMA_USER" -- \
-    env HOME="$PNEUMA_HOME" \
-        XDG_RUNTIME_DIR="/run/user/$PNEUMA_UID" \
-        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$PNEUMA_UID/bus" \
-    pneuma doctor; then
+    bash -c "cd '$PNEUMA_HOME' && exec env HOME='$PNEUMA_HOME' \
+        XDG_RUNTIME_DIR='/run/user/$PNEUMA_UID' \
+        DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/$PNEUMA_UID/bus' \
+        /usr/local/bin/pneuma doctor"; then
     echo
     echo "pneuma doctor failed. Review the output above."
     exit 1
