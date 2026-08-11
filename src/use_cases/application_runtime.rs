@@ -148,6 +148,24 @@ pub fn report_application_status(
     let (observation, external_runtime_id) =
         observe_current_runtime(connection, &runtime, application_name)?;
     if observation.state == ObservedRuntimeState::Missing {
+        // When the operator wants the application stopped, the Quadlet ExecStop removes
+        // the container, so a missing container is the expected stopped state. Report it
+        // as stopped without marking the runtime removed so subsequent commands still
+        // find it (mirroring transition_application).
+        if desired_runtime_state == DesiredRuntimeState::Stopped {
+            let stopped_observation = ContainerObservation {
+                state: ObservedRuntimeState::Stopped,
+                endpoint: None,
+            };
+            persist_stopped_without_removal(connection, &runtime, &stopped_observation)?;
+            return Ok(RuntimeObservation {
+                desired_runtime_state,
+                observed_runtime_state: ObservedRuntimeState::Stopped,
+                runtime_id: runtime.runtime_id,
+                container_id: external_runtime_id,
+                endpoint: None,
+            });
+        }
         persist_observation(connection, &runtime, &observation)?;
         return Err(RuntimeLifecycleError::ContainerMissing {
             application_name: application_name.to_owned(),

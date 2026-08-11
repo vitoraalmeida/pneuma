@@ -11,6 +11,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use pneuma::adapters::database;
 
+use rusqlite::OptionalExtension;
+
 #[test]
 fn imports_and_lists_an_application_idempotently() {
     let database_path = temporary_database_path();
@@ -748,6 +750,38 @@ fn stop_and_start_cycle_after_container_removal_by_quadlet() {
     );
 
     assert_command_succeeded(&environment.run_lifecycle("status"));
+}
+
+#[test]
+fn status_reports_stopped_after_stop_when_container_was_removed() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    environment.deploy_current_revision();
+
+    fs::write(environment.root.join("podman-removed"), "removed").unwrap();
+
+    assert_command_succeeded(&environment.run_lifecycle("stop"));
+
+    let status = environment.run_lifecycle("status");
+    assert_command_succeeded(&status);
+    let stdout = String::from_utf8_lossy(&status.stdout);
+    assert!(stdout.contains("Desired state: Stopped"), "{stdout}");
+    assert!(stdout.contains("Observed state: Stopped"), "{stdout}");
+
+    let connection = database::open(&environment.database_path).unwrap();
+    let removed_at: Option<String> = connection
+        .query_row(
+            "SELECT removed_at FROM runtime_instances WHERE removed_at IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .unwrap();
+    drop(connection);
+    assert!(
+        removed_at.is_none(),
+        "removed_at must remain NULL after status when stopped with missing container"
+    );
 }
 
 #[test]
