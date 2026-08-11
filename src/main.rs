@@ -977,7 +977,24 @@ fn run_version() -> Result<(), CliError> {
     Ok(())
 }
 
+fn configure_runtime_environment() {
+    let uid = unsafe { libc::getuid() };
+    let runtime_dir = format!("/run/user/{}", uid);
+    let dbus_address = format!("unix:path={}/bus", runtime_dir);
+    
+    if let Ok(home) = env::var("HOME") {
+        let quadlet_dir = format!("{}/.config/containers/systemd", home);
+        unsafe {
+            env::set_var("XDG_RUNTIME_DIR", &runtime_dir);
+            env::set_var("DBUS_SESSION_BUS_ADDRESS", &dbus_address);
+            env::set_var("PNEUMA_QUADLET_DIR", &quadlet_dir);
+        }
+    }
+}
+
 fn run_ci_dispatch(verbose: bool) -> Result<(), CliError> {
+    configure_runtime_environment();
+    
     let original_command = env::var("SSH_ORIGINAL_COMMAND").map_err(|_| CliError::CiDispatch {
         source: CiDispatchError::MissingSshOriginalCommand,
     })?;
