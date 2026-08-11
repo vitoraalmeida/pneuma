@@ -323,7 +323,7 @@ systemctl start "user@$PNEUMA_UID.service" || true
 
 ROOTLESS_OUTPUT="$(runuser -u "$PNEUMA_USER" -- \
     env HOME="$PNEUMA_HOME" XDG_RUNTIME_DIR="/run/user/$PNEUMA_UID" \
-    podman info --format '{{.Host.Security.Rootless}}' 2>&1 || true)"
+    bash -c 'cd "$HOME" && podman info --format "{{.Host.Security.Rootless}}"' 2>&1 || true)"
 
 if [[ "$ROOTLESS_OUTPUT" != "true" ]]; then
     echo
