@@ -31,7 +31,7 @@ echo "=========================================="
 
 echo
 echo "==> Verifying installed binary supports --branch..."
-BRANCH_USAGE=$(ssh "$SSH_HOST" '/usr/local/bin/pneuma app deploy 2>&1' || true)
+BRANCH_USAGE=$(ssh "$SSH_HOST" '/usr/local/bin/pneuma app deploy --help 2>&1' || true)
 if ! echo "$BRANCH_USAGE" | grep -q -- '--branch'; then
     echo "  ERROR: installed binary lacks --branch; run scripts/dev-vm/sync-binary.sh first"
     exit 1

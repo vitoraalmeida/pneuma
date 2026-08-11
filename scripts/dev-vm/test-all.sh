@@ -120,7 +120,7 @@ else
     exit 1
 fi
 
-DEPLOY_USAGE=$(ssh "$SSH_HOST" '/usr/local/bin/pneuma app deploy 2>&1' 2>/dev/null || true)
+DEPLOY_USAGE=$(ssh "$SSH_HOST" '/usr/local/bin/pneuma app deploy --help 2>&1' 2>/dev/null || true)
 if printf '%s' "$DEPLOY_USAGE" | grep -qF -- '--branch'; then
     report ok "installed binary supports --branch"
 else
