@@ -242,6 +242,7 @@ fn load_host_environment() {
 
 fn main() -> ExitCode {
     load_host_environment();
+    configure_runtime_environment();
 
     let arguments: Vec<OsString> = env::args_os().skip(1).collect();
     let result = parse_command(&arguments).and_then(run);
@@ -993,8 +994,6 @@ fn configure_runtime_environment() {
 }
 
 fn run_ci_dispatch(verbose: bool) -> Result<(), CliError> {
-    configure_runtime_environment();
-    
     let original_command = env::var("SSH_ORIGINAL_COMMAND").map_err(|_| CliError::CiDispatch {
         source: CiDispatchError::MissingSshOriginalCommand,
     })?;
