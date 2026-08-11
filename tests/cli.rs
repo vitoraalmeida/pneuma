@@ -908,6 +908,40 @@ fn visibility_set_toggles_public_and_internal() {
 }
 
 #[test]
+fn visibility_set_internal_is_idempotent_without_domain() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+
+    let internal = run_visibility_command(&environment, "internal");
+    assert_command_succeeded(&internal);
+    let stdout = String::from_utf8_lossy(&internal.stdout);
+    assert!(
+        stdout.contains(&format!(
+            "Visibility for {}: Internal",
+            environment.application_name
+        )),
+        "unexpected stdout: {stdout}"
+    );
+
+    let second = run_visibility_command(&environment, "internal");
+    assert_command_succeeded(&second);
+    let stdout = String::from_utf8_lossy(&second.stdout);
+    assert!(
+        stdout.contains(&format!(
+            "Visibility for {}: Internal",
+            environment.application_name
+        )),
+        "unexpected stdout: {stdout}"
+    );
+
+    let connection = database::open(&environment.database_path).unwrap();
+    let domain: Option<String> = connection
+        .query_row("SELECT domain FROM exposures", [], |row| row.get(0))
+        .unwrap();
+    assert!(domain.is_none(), "internal exposure must keep domain NULL");
+}
+
+#[test]
 fn legacy_expose_command_returns_usage() {
     let database_path = temporary_database_path();
     let output = run_pneuma(

@@ -160,10 +160,11 @@ pub fn change_exposure(
             .query_row(
                 "SELECT domain FROM exposures WHERE application_id = ?1",
                 [application_id],
-                |row| row.get(0),
+                |row| row.get::<_, Option<String>>(0),
             )
             .optional()
-            .map_err(|source| ExposureChangeError::Persistence { source })?;
+            .map_err(|source| ExposureChangeError::Persistence { source })?
+            .flatten();
 
         return Ok(ExposureChange {
             application_id: application_id.to_owned(),
@@ -290,10 +291,11 @@ fn make_internal(
         .query_row(
             "SELECT domain FROM exposures WHERE application_id = ?1",
             [application_id],
-            |row| row.get(0),
+            |row| row.get::<_, Option<String>>(0),
         )
         .optional()
-        .map_err(|source| ExposureChangeError::Persistence { source })?;
+        .map_err(|source| ExposureChangeError::Persistence { source })?
+        .flatten();
 
     Ok(ExposureChange {
         application_id: application_id.to_owned(),
