@@ -124,6 +124,69 @@ idempotente e `app status`. Resultado da bateria: 24 PASS / 4 FAIL.
 - Cadência de ~12s entre remoções de runtime é o ritmo normal de
   `retire_previous_runtime`; não é por si o bug.
 
+## Bug 3 — `app status` falha com "container is missing" após `app stop` (CORRIGIDO)
+
+### Sintoma
+
+Testado ao vivo na VM `pneuma-dev-base` (bootstrap + deploy + stop + status):
+`app stop` passa, mas o `app status` seguinte falha com
+
+```
+error: the container of application `healthy-http` is missing; run `pneuma app deploy` to recreate it
+```
+
+O fix do bug 2 cobriu `transition_application` (stop/start), mas não
+`report_application_status`.
+
+### Causa-raiz
+
+1. `app stop` para a unit Quadlet;
+2. o `ExecStop` remove o container;
+3. `report_application_status` (`src/use_cases/application_runtime.rs:141`)
+   observa `Missing` e sempre retorna `ContainerMissing` — sem considerar o
+   `desired_runtime_state` persistido;
+4. pior: `persist_observation` com `Missing` grava `removed_at`, o que deixa o
+   runtime inacessível para os comandos seguintes ("not deployed").
+
+### Correção
+
+- **`report_application_status`**: quando `desired_runtime_state == Stopped` e a
+  observação é `Missing` (container removido pelo ExecStop), reportar
+  `Observed state: Stopped` via `persist_stopped_without_removal` — espelhando o
+  tratamento já existente em `transition_application`. O path de erro
+  `ContainerMissing` permanece para o caso legítimo de desired `Running` (guia a
+  um novo deploy).
+- **Teste:** `status_reports_stopped_after_stop_when_container_was_removed` em
+  `tests/cli.rs` (regressão).
+
+### Scripts da bateria — verificação de `--branch` com clap
+
+Após a migração para clap (3c7eb30), a mensagem de erro de `pneuma app deploy`
+sem argumentos não lista mais `--branch` (o clap só mostra
+`<APPLICATION_NAME>`), quebrando a preflight de `test-all.sh` e
+`test-branch-deploy.sh`. Corrigido para consultar `pneuma app deploy --help`.
+
+### Verificação
+
+- `cargo fmt --check`, `clippy --all-targets --all-features -- -D warnings`,
+  `cargo test --all-features` e `cargo build --release` verdes.
+- Binary sincronizado com `scripts/dev-vm/sync-binary.sh pneuma-dev-base`.
+- Validado ao vivo na VM: ciclo deploy → stop → status → stop → start → start
+  idempotente → status, tudo correto; container removido manualmente com
+  desired Running é recriado pela unit Quadlet e reconciliado pelo status.
+- Bateria completa na VM limpa: **27 PASS / 0 FAIL / 1 SKIP** (SKIP =
+  redirect-public, exige módulo Caddy `local_certs` fora do pacote Debian).
+
+## Bootstrap VPS validado de ponta a ponta
+
+- `scripts/test-bootstrap-vps.sh pneuma-dev-base <url-publica>`: **20 PASS /
+  0 FAIL** numa VM Debian 13 limpa — packages, usuário pneuma, rootless Podman,
+  Caddy, compilação do binary e `pneuma doctor`.
+- Pré-requisito descoberto na VM: desativar o repositório `deb cdrom:` em
+  `/etc/apt/sources.list` antes de `apt-get update` (senão o bootstrap falha).
+- `sudo` não é instalado pelo bootstrap; scripts `dev-vm` o exigem
+  (`sudo chown`/`sudo reboot`) — instalado à parte na VM de teste.
+
 ## Próximos passos
 
 - [x] Implementar o plano de correção do bug 2 (transição + `set_runtime_state`).
@@ -131,3 +194,7 @@ idempotente e `app status`. Resultado da bateria: 24 PASS / 4 FAIL.
 - [x] Rodar os quatro checks do `AGENTS.md`.
 - [x] `cargo build --release` + `scripts/dev-vm/sync-binary.sh pneuma-dev`.
 - [x] Re-rodar `bash scripts/dev-vm/test-all.sh pneuma-dev` e confirmar 28 PASS / 0 FAIL.
+- [x] Corrigir `app status` pós-stop (bug 3) + teste de regressão.
+- [x] Corrigir preflight de `--branch` na bateria (clap).
+- [x] Validar bootstrap VPS completo numa VM limpa (20 PASS / 0 FAIL).
+- [x] Re-rodar a bateria completa na VM limpa e confirmar 27 PASS / 0 FAIL / 1 SKIP.
