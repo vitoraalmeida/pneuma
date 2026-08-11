@@ -982,13 +982,22 @@ fn configure_runtime_environment() {
     let uid = unsafe { libc::getuid() };
     let runtime_dir = format!("/run/user/{}", uid);
     let dbus_address = format!("unix:path={}/bus", runtime_dir);
-    
+
+    // XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS are uid-scoped: a value inherited
+    // from another user (for example /run/user/0 when launched through `runuser` as
+    // root) is never valid for this process, so they are always derived from the
+    // effective uid.
+    unsafe {
+        env::set_var("XDG_RUNTIME_DIR", &runtime_dir);
+        env::set_var("DBUS_SESSION_BUS_ADDRESS", &dbus_address);
+    }
+
     if let Ok(home) = env::var("HOME") {
         let quadlet_dir = format!("{}/.config/containers/systemd", home);
-        unsafe {
-            env::set_var("XDG_RUNTIME_DIR", &runtime_dir);
-            env::set_var("DBUS_SESSION_BUS_ADDRESS", &dbus_address);
-            env::set_var("PNEUMA_QUADLET_DIR", &quadlet_dir);
+        if env::var_os("PNEUMA_QUADLET_DIR").is_none() {
+            unsafe {
+                env::set_var("PNEUMA_QUADLET_DIR", &quadlet_dir);
+            }
         }
     }
 }
