@@ -71,7 +71,10 @@ free ports 80/443) before touching the system, provisions the `pneuma` user
 `pneuma doctor` at the end. Pass `--ci-public-key` with the public key of a CI
 deploy key to install the restricted SSH dispatcher.
 
-See `scripts/bootstrap-vps.sh` for prerequisites and usage instructions.
+See `scripts/bootstrap-vps.sh` for prerequisites and usage instructions, and follow
+[`docs/getting-started.md`](docs/getting-started.md) for the complete setup:
+generating the CI deploy key, running the bootstrap, importing and deploying an
+application, and configuring the GitHub Actions workflow.
 
 ## Quick start
 
