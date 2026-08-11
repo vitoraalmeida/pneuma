@@ -19,6 +19,7 @@ use pneuma::use_cases::application_list::{ListError, application_is_deployed, li
 use pneuma::use_cases::application_runtime::{
     RuntimeLifecycleError, report_application_status, start_application, stop_application,
 };
+use pneuma::use_cases::ci_dispatch::{CiCommand, CiDispatchError, parse_ci_command};
 use pneuma::use_cases::deployment_deploy_branch::{DeployBranchError, deploy_branch};
 use pneuma::use_cases::deployment_deploy_oci::{DeployOciError, deploy_oci};
 use pneuma::use_cases::deployment_deploy_release::PublicDeploymentConfiguration;
@@ -91,6 +92,7 @@ enum Command {
     DatabaseRestore {
         path: PathBuf,
     },
+    CiDispatch,
 }
 
 #[derive(Debug)]
@@ -147,6 +149,9 @@ enum CliError {
     SystemShow {
         source: pneuma::use_cases::system_show::ShowError,
     },
+    CiDispatch {
+        source: CiDispatchError,
+    },
     Doctor,
 }
 
@@ -179,6 +184,7 @@ impl fmt::Display for CliError {
             Self::SystemCreate { source } => write!(formatter, "{source}"),
             Self::SystemList { source } => write!(formatter, "{source}"),
             Self::SystemShow { source } => write!(formatter, "{source}"),
+            Self::CiDispatch { source } => write!(formatter, "{source}"),
             Self::Doctor => formatter.write_str("one or more diagnostic checks failed"),
         }
     }
@@ -204,6 +210,7 @@ impl Error for CliError {
             Self::SystemCreate { source } => Some(source),
             Self::SystemList { source } => Some(source),
             Self::SystemShow { source } => Some(source),
+            Self::CiDispatch { source } => Some(source),
             Self::Doctor => None,
         }
     }
@@ -382,6 +389,9 @@ fn parse_command(arguments: &[OsString]) -> Result<Invocation, CliError> {
                 path: PathBuf::from(path),
             })
         }
+        [ci, dispatch] if ci == OsStr::new("ci") && dispatch == OsStr::new("dispatch") => {
+            Ok(Command::CiDispatch)
+        }
         _ => Err(CliError::Usage),
     }?;
     Ok(Invocation { verbose, command })
@@ -433,6 +443,10 @@ fn run(invocation: Invocation) -> Result<(), CliError> {
             }
         };
         return run_doctor(&connection, verbose);
+    }
+
+    if matches!(command, Command::CiDispatch) {
+        return run_ci_dispatch(verbose);
     }
 
     let database_path = env::var_os(DATABASE_PATH_ENVIRONMENT_VARIABLE)
@@ -498,7 +512,8 @@ fn run(invocation: Invocation) -> Result<(), CliError> {
         Command::Doctor
         | Command::Version
         | Command::DatabaseBackup { .. }
-        | Command::DatabaseRestore { .. } => unreachable!(),
+        | Command::DatabaseRestore { .. }
+        | Command::CiDispatch => unreachable!(),
     }
 }
 
@@ -934,6 +949,35 @@ fn resolve_application(
 fn run_version() -> Result<(), CliError> {
     println!("pneuma {}", env!("CARGO_PKG_VERSION"));
     Ok(())
+}
+
+fn run_ci_dispatch(verbose: bool) -> Result<(), CliError> {
+    let original_command = env::var("SSH_ORIGINAL_COMMAND").map_err(|_| CliError::CiDispatch {
+        source: CiDispatchError::MissingSshOriginalCommand,
+    })?;
+
+    log_verbose(verbose, format!("CI command: {original_command}"));
+
+    let ci_command =
+        parse_ci_command(&original_command).map_err(|source| CliError::CiDispatch { source })?;
+
+    match ci_command {
+        CiCommand::Version => run_version(),
+        CiCommand::Deploy {
+            application,
+            branch,
+        } => {
+            let database_path = env::var_os(DATABASE_PATH_ENVIRONMENT_VARIABLE)
+                .filter(|path| !path.is_empty())
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(DEFAULT_DATABASE_PATH));
+
+            let mut connection =
+                database::open(&database_path).map_err(|source| CliError::Database { source })?;
+
+            run_deploy_branch(&mut connection, verbose, &application, &branch)
+        }
+    }
 }
 
 fn run_doctor(connection: &rusqlite::Connection, verbose: bool) -> Result<(), CliError> {

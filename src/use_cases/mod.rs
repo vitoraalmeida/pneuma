@@ -1,6 +1,7 @@
 pub mod application_import;
 pub mod application_list;
 pub mod application_runtime;
+pub mod ci_dispatch;
 pub mod deployment_activate_public;
 pub mod deployment_create;
 pub mod deployment_deploy_branch;
