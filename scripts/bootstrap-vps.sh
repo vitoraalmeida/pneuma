@@ -12,27 +12,35 @@
 # - TCP ports 80 and 443 are open
 # - Nginx or another service does not own ports 80/443
 #
-# See docs/operations/vps-bootstrap.md for the full guide.
-#
 # Git prerequisites:
 # - Public HTTPS repositories do not need an SSH key.
 # - Private SSH repositories require a deploy key for the pneuma user.
 # - On the first run, this script creates the key and prints the public key.
 # - Add that key to the Git provider, then run the script again.
 #
+# GitHub Actions deploy:
+# - Pass the public key of the Actions deploy key as the third argument.
+#   The script installs it in the pneuma user's authorized_keys (restricted),
+#   so the workflow can SSH as pneuma (no root) to run `pneuma app deploy`.
+# - Generate the key pair on a trusted machine, not on the VPS: store the
+#   private key in the GitHub Actions secret DEPLOY_SSH_KEY and pass the public
+#   key here.
+#
 # Usage:
-#   bash bootstrap-vps.sh <pneuma-source-url> [deploy-application-repository-url]
+#   bash bootstrap-vps.sh <pneuma-source-url> [deploy-application-repository-url] [deploy-public-key]
 #
 # Example:
 #   bash bootstrap-vps.sh \
 #     git@github.com:USER/pneuma.git \
-#     git@github.com:USER/vitoralmeida.tech.git
+#     git@github.com:USER/vitoralmeida.tech.git \
+#     "$(cat ~/.ssh/github-actions-deploy.pub)"
 #
 
 set -euo pipefail
 
 PNEUMA_SOURCE_URL="${1:-}"
 APPLICATION_SOURCE_URL="${2:-}"
+DEPLOY_PUBLIC_KEY="${3:-}"
 
 PNEUMA_USER="pneuma"
 PNEUMA_HOME="/home/$PNEUMA_USER"
@@ -107,6 +115,15 @@ install -d \
     -g "$PNEUMA_USER" \
     -m 0700 \
     "$SSH_DIR"
+
+if [[ -n "$DEPLOY_PUBLIC_KEY" ]]; then
+    AUTHORIZED_KEYS="$SSH_DIR/authorized_keys"
+    touch "$AUTHORIZED_KEYS"
+    printf 'restrict %s\n' "$DEPLOY_PUBLIC_KEY" >>"$AUTHORIZED_KEYS"
+    chown "$PNEUMA_USER:$PNEUMA_USER" "$AUTHORIZED_KEYS"
+    chmod 0600 "$AUTHORIZED_KEYS"
+    echo "Deploy SSH key installed for the $PNEUMA_USER user (restricted)."
+fi
 
 install -d \
     -o "$PNEUMA_USER" \
@@ -237,6 +254,7 @@ chmod 0644 "$PROFILE"
 
 for line in \
     'export XDG_RUNTIME_DIR="/run/user/$(id -u)"' \
+    'export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus"' \
     'export PNEUMA_DATABASE_PATH=/var/lib/pneuma/database/pneuma.sqlite3' \
     'export PNEUMA_WORKSPACE_PATH=/var/lib/pneuma/checkouts' \
     'export PNEUMA_CADDY_MANAGED_PATH=/etc/caddy/applications' \
@@ -290,3 +308,20 @@ echo "[application] name declared in the pneuma.toml of the checkout:"
 echo "  pneuma app import $APPLICATION_PATH"
 echo "  pneuma app list"
 echo "  pneuma app deploy <application-name> --image ghcr.io/owner/image@sha256:<digest>"
+echo
+
+if [[ -n "$DEPLOY_PUBLIC_KEY" ]]; then
+    echo "Deploy SSH access for GitHub Actions is configured for the pneuma user."
+    echo
+    echo "In the repository GitHub Settings -> Environments -> production:"
+    echo "  - Secrets:   DEPLOY_SSH_KEY (the private key), DEPLOY_KNOWN_HOSTS"
+    echo "  - Variables: DEPLOY_HOST, DEPLOY_PORT, DEPLOY_USER=pneuma"
+    echo
+    echo "The workflow command must run through a login shell so the PNEUMA_*"
+    echo "and XDG_RUNTIME_DIR variables from ~/.profile are available, for example:"
+    echo '  ssh -i ~/.ssh/deploy_key pneuma@$DEPLOY_HOST \'
+    echo "    \"bash -lc 'cd \$HOME && pneuma app deploy <application> --branch <branch>'\""
+    echo
+    echo "Test the key from a trusted machine before deploying:"
+    echo '  ssh -i ~/.ssh/github-actions-deploy pneuma@<host> "bash -lc '\''pneuma version'\''"'
+fi
