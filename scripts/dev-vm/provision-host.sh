@@ -85,8 +85,10 @@ loginctl enable-linger "$PNEUMA_USER"
 
 install -d -o "$PNEUMA_USER" -g "$PNEUMA_USER" -m 0750 \
     /var/lib/pneuma/database \
-    /var/lib/pneuma/checkouts \
-    "$PNEUMA_HOME/.config/containers/systemd"
+    /var/lib/pneuma/checkouts
+install -d -o "$PNEUMA_USER" -g "$PNEUMA_USER" -m 0750 "$PNEUMA_HOME/.config"
+install -d -o "$PNEUMA_USER" -g "$PNEUMA_USER" -m 0750 "$PNEUMA_HOME/.config/containers"
+install -d -o "$PNEUMA_USER" -g "$PNEUMA_USER" -m 0750 "$PNEUMA_HOME/.config/containers/systemd"
 install -d -o "$PNEUMA_USER" -g caddy -m 0750 /etc/caddy/applications
 
 if [[ -f /etc/caddy/Caddyfile ]]; then
