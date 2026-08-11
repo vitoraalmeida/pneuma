@@ -429,49 +429,57 @@ fn execute_deployment(
             managed_caddy_directory: &public_configuration.managed_caddy_directory,
             caddyfile_path: &public_configuration.caddyfile_path,
         };
-        let completed = activate_public_candidate(input, progress).map_err(|err| match err {
-            PublicActivationError::InternalHealth { source, resources } => FailedExecution {
-                code: "health_check_failed",
-                source,
-                failure_persisted: false,
-                resources: *resources,
-            },
-            PublicActivationError::DeploymentTransition { source, resources } => FailedExecution {
-                code: "deployment_transition_failed",
-                source: Box::new(source),
-                failure_persisted: false,
-                resources: *resources,
-            },
-            PublicActivationError::ExposurePreparation { source, resources } => FailedExecution {
-                code: "exposure_preparation_failed",
-                source,
-                failure_persisted: false,
-                resources: *resources,
-            },
-            PublicActivationError::CaddyMaterialization {
-                source, resources, ..
-            } => FailedExecution {
-                code: "caddy_materialization_failed",
-                source,
-                failure_persisted: false,
-                resources: *resources,
-            },
-            PublicActivationError::ExternalHealth {
-                source, resources, ..
-            } => FailedExecution {
-                code: "external_health_check_failed",
-                source,
-                failure_persisted: false,
-                resources: *resources,
-            },
-            PublicActivationError::PublicPromotion {
-                source, resources, ..
-            } => FailedExecution {
-                code: "candidate_promotion_failed",
-                source,
-                failure_persisted: false,
-                resources: *resources,
-            },
+        let completed = activate_public_candidate(input, progress).map_err(|err| {
+            let mut failed = match err {
+                PublicActivationError::InternalHealth { source, resources } => FailedExecution {
+                    code: "health_check_failed",
+                    source,
+                    failure_persisted: false,
+                    resources: *resources,
+                },
+                PublicActivationError::DeploymentTransition { source, resources } => {
+                    FailedExecution {
+                        code: "deployment_transition_failed",
+                        source: Box::new(source),
+                        failure_persisted: false,
+                        resources: *resources,
+                    }
+                }
+                PublicActivationError::ExposurePreparation { source, resources } => {
+                    FailedExecution {
+                        code: "exposure_preparation_failed",
+                        source,
+                        failure_persisted: false,
+                        resources: *resources,
+                    }
+                }
+                PublicActivationError::CaddyMaterialization {
+                    source, resources, ..
+                } => FailedExecution {
+                    code: "caddy_materialization_failed",
+                    source,
+                    failure_persisted: false,
+                    resources: *resources,
+                },
+                PublicActivationError::ExternalHealth {
+                    source, resources, ..
+                } => FailedExecution {
+                    code: "external_health_check_failed",
+                    source,
+                    failure_persisted: false,
+                    resources: *resources,
+                },
+                PublicActivationError::PublicPromotion {
+                    source, resources, ..
+                } => FailedExecution {
+                    code: "candidate_promotion_failed",
+                    source,
+                    failure_persisted: false,
+                    resources: *resources,
+                },
+            };
+            failed.resources = failed.resources.with_unit(&candidate.unit_name).with_port();
+            failed
         });
         if completed.is_ok() {
             retire_previous_runtime(
@@ -503,7 +511,7 @@ fn execute_deployment(
         specification.expected_status,
     )
     .map_err(|source| {
-        if matches!(
+        let mut failed = if matches!(
             &source,
             PromoteInternalCandidateError::CandidateUnhealthy { .. }
         ) {
@@ -520,7 +528,9 @@ fn execute_deployment(
                 Some(&candidate.runtime.external_runtime_id),
                 Some(&candidate.runtime.id),
             )
-        }
+        };
+        failed.resources = failed.resources.with_unit(&candidate.unit_name).with_port();
+        failed
     })?;
     progress.completed(
         DeploymentStep::HealthCheckAndPromotion,

@@ -189,6 +189,22 @@ fn deploy_fails_when_internal_health_check_fails() {
         port_reservation_count, 0,
         "port reservation must be released"
     );
+
+    let deployment_id: String = connection
+        .query_row(
+            "SELECT id FROM deployments ORDER BY created_at DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let unit_path = environment
+        .root
+        .join("quadlets")
+        .join(format!("pneuma-another-site-{deployment_id}.container"));
+    assert!(
+        !unit_path.exists(),
+        "unit file must be removed when the candidate fails its health check"
+    );
 }
 
 #[test]
