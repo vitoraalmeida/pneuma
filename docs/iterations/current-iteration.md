@@ -198,3 +198,15 @@ sem argumentos não lista mais `--branch` (o clap só mostra
 - [x] Corrigir preflight de `--branch` na bateria (clap).
 - [x] Validar bootstrap VPS completo numa VM limpa (20 PASS / 0 FAIL).
 - [x] Re-rodar a bateria completa na VM limpa e confirmar 27 PASS / 0 FAIL / 1 SKIP.
+- [x] Bump para v0.2.0 (Cargo.toml + CHANGELOG.md) e atualizar o binário na VPS.
+- [x] Workflow de deploy (`vitoralmeida.tech`) validado em staging via
+  `deploy <app> <branch>` com a chave CI restrita.
+
+## Release v0.2.0
+
+- Bump de versão para `0.2.0` (`Cargo.toml`/`Cargo.lock`) e criação de
+  `CHANGELOG.md` consolidando as mudanças desde a v0.1.0.
+- Binário atualizado na VPS de produção (rebuild + recompilaçl do repo clonado)
+  e verificação com `pneuma version`.
+- Workflow de deploy da aplicação-piloto (`vitoralmeida.tech`) corrigido para
+  usar o dispatcher `deploy <app> <branch>`; staging deployado com sucesso.

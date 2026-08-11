@@ -183,8 +183,8 @@ use_cases/
 - [x] E2E final: CI → GHCR → pull → deploy → health → active → rollback → reboot
 
 **v0.1.0 concluída em 8 de agosto de 2026** — todos os critérios de aceite
-foram validados na VPS de produção (`srv655252`, Debian 13). A próxima versão
-é a v0.2 (CI/CD automatizado).
+foram validados na VPS de produção (`srv655252`, Debian 13). A v0.2
+(Git-aware OCI Delivery) foi concluída em seguida — ver próxima seção.
 
 ### Modelo de dados alvo (v0.1)
 

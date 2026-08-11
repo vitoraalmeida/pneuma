@@ -62,8 +62,14 @@ sudo install -m 0755 target/release/pneuma /usr/local/bin/
 For a complete VPS setup (Podman, Caddy, user creation, directories), use the bootstrap script:
 
 ```bash
-bash scripts/bootstrap-vps.sh <pneuma-source-url> [application-repository-url]
+bash scripts/bootstrap-vps.sh <pneuma-source-url> [--ci-public-key <path>]
 ```
+
+The script verifies prerequisites (Debian 13, internet/DNS, disk space, memory,
+free ports 80/443) before touching the system, provisions the `pneuma` user
+(no sudo), rootless Podman, Caddy and the compiled binary, and runs
+`pneuma doctor` at the end. Pass `--ci-public-key` with the public key of a CI
+deploy key to install the restricted SSH dispatcher.
 
 See `scripts/bootstrap-vps.sh` for prerequisites and usage instructions.
 
@@ -138,6 +144,7 @@ pneuma app status my-app
 | `pneuma deployment rollback <app>` | Roll back to the previous release |
 | `pneuma database backup <path>` | Create a consistent SQLite backup |
 | `pneuma database restore <path>` | Validate and restore a SQLite backup |
+| `pneuma ci dispatch` | CI dispatcher via SSH forced command (internal) |
 | `pneuma version` | Print version |
 | `pneuma doctor` | Verify host prerequisites |
 
@@ -196,13 +203,15 @@ All runtime paths come from environment variables:
 | `PNEUMA_WORKSPACE_PATH` | `/var/lib/pneuma/checkouts` | Git checkout directory |
 | `PNEUMA_CADDY_MANAGED_PATH` | `/etc/caddy/applications` | Caddy fragment directory |
 | `PNEUMA_CADDYFILE_PATH` | `/etc/caddy/Caddyfile` | Main Caddyfile location |
+| `PNEUMA_RUNTIME_PORT_RANGE` | `30000-39999` | Host loopback port range for runtimes |
+| `PNEUMA_QUADLET_DIR` | `$HOME/.config/containers/systemd` | Quadlet unit directory |
 
 ## Project structure
 
 ```
 pneuma/
 ├── src/
-│   ├── main.rs                      # CLI entry point
+│   ├── main.rs                      # CLI entry point (clap derive)
 │   ├── lib.rs                       # Module declarations
 │   ├── domain/                      # Pure domain types
 │   │   ├── application.rs           # Application model
@@ -210,29 +219,37 @@ pneuma/
 │   │   ├── release.rs               # Release model
 │   │   └── system.rs                # System model
 │   ├── use_cases/                   # Business logic
-│   │   ├── application_import.rs    # Application import
+│   │   ├── application_import.rs    # Application import (Git remote)
 │   │   ├── application_list.rs      # Application list
 │   │   ├── application_runtime.rs   # Lifecycle management
+│   │   ├── ci_dispatch.rs           # SSH restricted dispatcher
 │   │   ├── deployment_create.rs     # Deployment creation
 │   │   ├── deployment_deploy_branch.rs # Deploy by branch (Git-aware)
 │   │   ├── deployment_deploy_oci.rs # OCI image deployment entry point
 │   │   ├── deployment_deploy_release.rs # Deployment orchestrator
+│   │   ├── deployment_list.rs       # Deployment history
 │   │   ├── deployment_transition.rs # State machine
+│   │   ├── release_create.rs        # Release creation
 │   │   └── ...                      # Other use cases
 │   └── adapters/                    # External integrations
-│       ├── git_source.rs            # Git adapter
+│       ├── git_source.rs            # Git adapter (remote resolution)
 │       ├── local_runtime.rs         # Container lifecycle
-│       ├── oci_image.rs             # OCI image pull
+│       ├── oci_image.rs             # OCI image pull + digest discovery
 │       ├── caddy_exposure.rs        # Caddy integration
 │       ├── health_check_internal.rs # Internal health checks
 │       ├── health_check_external.rs # External health checks
 │       ├── systemd_quadlet.rs       # Quadlet unit management
 │       ├── port_allocator.rs        # Runtime port allocation
+│       ├── stores/                  # SQLite capability stores
 │       └── database.rs              # SQLite and migrations
 ├── migrations/                      # Versioned SQL migrations
 ├── scripts/                         # Operational scripts
-│   └── bootstrap-vps.sh             # VPS setup script
+│   ├── bootstrap-vps.sh             # VPS setup script
+│   ├── test-bootstrap-vps.sh        # VPS bootstrap test
+│   ├── verify-vps.sh                # VPS post-setup verification
+│   └── dev-vm/                      # Development VM scripts and fixtures
 ├── tests/                           # Integration tests
+├── CHANGELOG.md                     # Version history
 └── docs/                            # Architecture and guidelines
 ```
 

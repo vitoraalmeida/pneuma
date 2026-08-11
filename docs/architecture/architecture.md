@@ -6,19 +6,20 @@
 
 Crate único organizado em três camadas:
 
-- `src/main.rs` — CLI fina com parsing manual de argumentos (sem clap); compõe
+- `src/main.rs` — CLI fina com parsing de argumentos via clap derive; compõe
   configuração e chama os casos de uso; não contém lógica de domínio.
 - `src/domain/` — tipos de domínio puros (`application`, `manifest`, `release`,
   `system`), sem dependências externas.
 - `src/use_cases/` — casos de uso que orquestram adapters e domínio
   (`application_import`, `application_list`, `application_runtime`,
-  `deployment_activate_public`, `deployment_create`, `deployment_deploy_branch`,
-  `deployment_deploy_oci`, `deployment_deploy_release`, `deployment_list`,
-  `deployment_progress`, `deployment_promote_internal`,
-  `deployment_promote_public`, `deployment_register_runtime`,
-  `deployment_rollback`, `deployment_runtime_cleanup`,
-  `deployment_start_candidate`, `deployment_transition`, `exposure_change`,
-  `release_create`, `system_create`, `system_list`, `system_show`).
+  `ci_dispatch`, `deployment_activate_public`, `deployment_create`,
+  `deployment_deploy_branch`, `deployment_deploy_oci`,
+  `deployment_deploy_release`, `deployment_list`, `deployment_progress`,
+  `deployment_promote_internal`, `deployment_promote_public`,
+  `deployment_register_runtime`, `deployment_rollback`,
+  `deployment_runtime_cleanup`, `deployment_start_candidate`,
+  `deployment_transition`, `exposure_change`, `release_create`, `system_create`,
+  `system_list`, `system_show`).
   `deployment_deploy_release` orquestra o deployment inteiro (runtime, health,
   Caddy e ativação) a partir de uma Release imutável; as responsabilidades
   auxiliares foram extraídas em módulos coesos (`deployment_progress` para
@@ -29,10 +30,12 @@ Crate único organizado em três camadas:
   (`deployment_deploy_branch`) resolve branch → commit → image tag → digest e
   delega ao `deployment_deploy_oci`.
   `deployment_transition` aplica a máquina de estados persistida.
+  `ci_dispatch` é o dispatcher SSH restrito (forced command) que aceita apenas
+  `deploy <app> <branch>` e `version`.
 - `src/adapters/` — integrações com sistemas externos (`git_source`,
   `local_runtime`, `oci_image`, `port_allocator`,
   `systemd_quadlet`, `caddy_exposure`, `health_check_external`,
-  `health_check_internal`, `database`).
+  `health_check_internal`, `stores`, `database`).
 
 Sem traits, generics, macros ou async: as restrições de
 [`docs/rust-guidelines.md`](../rust-guidelines.md) valem para toda mudança.
@@ -89,6 +92,10 @@ Todos os paths vêm de variáveis de ambiente (`PNEUMA_DATABASE_PATH`,
 `PNEUMA_RUNTIME_PORT_RANGE`, `PNEUMA_QUADLET_DIR`), com defaults em
 `/var/lib/pneuma`, `/etc/caddy`, `30000-39999` e
 `$HOME/.config/containers/systemd`.
+
+O ambiente do Pneuma é desacoplado do login shell: o bootstrap grava as
+variáveis em `/etc/pneuma/environment` (lido pelo binário) e no `~/.profile`
+do usuário `pneuma`.
 
 ## 4. Runtime
 

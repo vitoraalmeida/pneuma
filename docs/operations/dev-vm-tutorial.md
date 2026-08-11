@@ -157,12 +157,19 @@ Containerfile.
 
 ### 6.1. Copiar e importar
 
-Copie as fixtures para o checkout na VM (owner `pneuma:pneuma`) e registre-as:
+Copie as fixtures para o checkout na VM (owner `pneuma:pneuma`) e registre-as
+por **Git remoto** (a v0.2 removeu o import por path local): para fixtures
+locais, crie um repositório Git acessível pela MV e importe pela URL.
 
 ```bash
 scp -r scripts/dev-vm/fixtures pneuma-dev:/var/lib/pneuma/checkouts/
 ssh pneuma-dev 'chown -R pneuma:pneuma /var/lib/pneuma/checkouts/fixtures'
-ssh pneuma-dev 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma app import /var/lib/pneuma/checkouts/fixtures/healthy-http"'
+# Dentro da VM, torne o diretório das fixtures um repositório Git remoto:
+ssh pneuma-dev 'su - pneuma -c "
+  cd /var/lib/pneuma/checkouts/fixtures/healthy-http &&
+  git init -q && git add . && git -c user.email=dev@local -c user.name=dev commit -qm initial && 
+  git clone --bare . /var/lib/pneuma/checkouts/healthy-http.git"'
+ssh pneuma-dev 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma app import file:///var/lib/pneuma/checkouts/healthy-http.git --manifest pneuma.toml"'
 ```
 
 > **Atenção:** `app import` usa `ON CONFLICT(name) DO NOTHING`; um re-import após
