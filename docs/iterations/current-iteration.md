@@ -45,3 +45,19 @@ ser `Git branch → commit → OCI digest → Release → deployment`.
 - [x] **H — aplicação real:** mover manifestos do website, importar staging,
   testar `--branch staging`, automatizar staging no Actions, importar
   production, testar `--branch main` e rollback.
+
+## Refatoração pós-v0.2 (10 de agosto de 2026)
+
+Após a conclusão da v0.2, o `deployment_deploy_release.rs` (1259 linhas) foi
+refatorado em módulos coesos para melhorar a manutenibilidade:
+
+- `deployment_progress.rs` — reporting de progresso
+- `deployment_runtime_cleanup.rs` — cleanup de candidates e runtimes antigos
+- `deployment_start_candidate.rs` — criação do runtime candidato
+- `deployment_activate_public.rs` — ativação pública (health + Caddy)
+
+O orquestrador principal (`deployment_deploy_release.rs`) reduziu de 1259 para
+676 linhas, expressando claramente o algoritmo de deployment no nível de
+aplicação. A refatoração incluiu testes de caracterização, a correção de uma
+regressão no cleanup de candidatas que falham o health check e a validação na
+VM local (`scripts/dev-vm/e2e.sh`).

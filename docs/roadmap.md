@@ -129,6 +129,10 @@ use_cases/
 ├── deployment_deploy_oci.rs   ← DeployOci: pull/verifica → Release → DeployRelease
 ├── deployment_deploy_branch.rs← DeployByBranch: branch → commit → image tag → DeployOci
 ├── deployment_deploy_release.rs ← DeployRelease: orquestrador linear
+├── deployment_start_candidate.rs ← criação do runtime candidato
+├── deployment_activate_public.rs ← ativação pública (health + Caddy)
+├── deployment_runtime_cleanup.rs ← cleanup de candidates e runtimes antigos
+├── deployment_progress.rs        ← reporting de progresso
 ├── deployment_transition.rs   ← máquina de estados persistida
 ├── deployment_rollback.rs     ← rollback como novo deployment
 ├── application_runtime.rs     ← lifecycle start/stop/status

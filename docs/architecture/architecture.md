@@ -12,13 +12,19 @@ Crate único organizado em três camadas:
   `system`), sem dependências externas.
 - `src/use_cases/` — casos de uso que orquestram adapters e domínio
   (`application_import`, `application_list`, `application_runtime`,
-  `deployment_create`, `deployment_deploy_branch`, `deployment_deploy_oci`,
-  `deployment_deploy_release`, `deployment_list`, `deployment_promote_internal`,
+  `deployment_activate_public`, `deployment_create`, `deployment_deploy_branch`,
+  `deployment_deploy_oci`, `deployment_deploy_release`, `deployment_list`,
+  `deployment_progress`, `deployment_promote_internal`,
   `deployment_promote_public`, `deployment_register_runtime`,
-  `deployment_rollback`, `deployment_transition`, `exposure_change`,
+  `deployment_rollback`, `deployment_runtime_cleanup`,
+  `deployment_start_candidate`, `deployment_transition`, `exposure_change`,
   `release_create`, `system_create`, `system_list`, `system_show`).
   `deployment_deploy_release` orquestra o deployment inteiro (runtime, health,
-  Caddy e ativação) a partir de uma Release imutável; o caminho OCI
+  Caddy e ativação) a partir de uma Release imutável; as responsabilidades
+  auxiliares foram extraídas em módulos coesos (`deployment_progress` para
+  reporting, `deployment_runtime_cleanup` para remoção de candidates e runtimes
+  antigos, `deployment_start_candidate` para criação do runtime candidato e
+  `deployment_activate_public` para a ativação pública). O caminho OCI
   (`deployment_deploy_oci`) produz a Release e delega a ele. O caminho Git-aware
   (`deployment_deploy_branch`) resolve branch → commit → image tag → digest e
   delega ao `deployment_deploy_oci`.
