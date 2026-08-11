@@ -147,10 +147,10 @@ if [[ -n "$CI_PUBLIC_KEY_FILE" ]]; then
     if grep -qF "$CI_PUBLIC_KEY" "$AUTHORIZED_KEYS"; then
         echo "CI key already installed (skipping)."
     else
-        printf 'restrict %s\n' "$CI_PUBLIC_KEY" >>"$AUTHORIZED_KEYS"
+        printf 'restrict,command="/usr/local/bin/pneuma ci dispatch" %s\n' "$CI_PUBLIC_KEY" >>"$AUTHORIZED_KEYS"
         chown "$PNEUMA_USER:$PNEUMA_USER" "$AUTHORIZED_KEYS"
         chmod 0600 "$AUTHORIZED_KEYS"
-        echo "CI deploy key installed for the $PNEUMA_USER user (restricted)."
+        echo "CI deploy key installed for the $PNEUMA_USER user (restricted + forced command)."
     fi
 fi
 
@@ -258,6 +258,21 @@ install \
     "$PNEUMA_SOURCE_PATH/target/release/pneuma" \
     /usr/local/bin/pneuma
 
+install -d -o root -g pneuma -m 0750 /etc/pneuma
+
+cat >/etc/pneuma/environment <<'EOF'
+# Pneuma host environment configuration
+# Loaded by pneuma binary at startup
+PNEUMA_DATABASE_PATH=/var/lib/pneuma/database/pneuma.sqlite3
+PNEUMA_WORKSPACE_PATH=/var/lib/pneuma/checkouts
+PNEUMA_CADDY_MANAGED_PATH=/etc/caddy/applications
+PNEUMA_CADDYFILE_PATH=/etc/caddy/Caddyfile
+PNEUMA_RUNTIME_PORT_RANGE=30000-39999
+EOF
+
+chown root:pneuma /etc/pneuma/environment
+chmod 0640 /etc/pneuma/environment
+
 if [[ -f /etc/caddy/Caddyfile ]]; then
     cp -a /etc/caddy/Caddyfile \
         "/etc/caddy/Caddyfile.backup.$(date +%Y%m%d%H%M%S)"
@@ -307,6 +322,18 @@ if [[ "$ROOTLESS_OUTPUT" != "true" ]]; then
     echo "Rootless Podman is not usable by the $PNEUMA_USER user."
     echo "Expected {{.Host.Security.Rootless}} to be true; got: $ROOTLESS_OUTPUT"
     echo "Check subuid/subgid, fuse-overlayfs and linger, then rerun the script."
+    exit 1
+fi
+
+echo
+echo "Running pneuma doctor..."
+if ! runuser -u "$PNEUMA_USER" -- \
+    env HOME="$PNEUMA_HOME" \
+        XDG_RUNTIME_DIR="/run/user/$PNEUMA_UID" \
+        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$PNEUMA_UID/bus" \
+    pneuma doctor; then
+    echo
+    echo "pneuma doctor failed. Review the output above."
     exit 1
 fi
 
