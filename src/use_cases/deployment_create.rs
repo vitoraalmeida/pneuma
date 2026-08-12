@@ -1,12 +1,12 @@
 use std::error::Error;
 use std::fmt;
 
-use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior};
+use rusqlite::{Connection, TransactionBehavior};
 
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
 use crate::adapters::stores::release_store::{self, ReleaseStoreError};
-use crate::domain::deployment::{Deployment, DeploymentStatus, DeploymentType};
+use crate::domain::deployment::{Deployment, DeploymentType};
 
 #[derive(Debug)]
 pub enum CreateDeploymentError {
@@ -14,6 +14,9 @@ pub enum CreateDeploymentError {
     ApplicationNotFound { application_id: String },
     ActiveDeployment { application_id: String },
     AlreadyActive { release_id: String },
+    ApplicationStore { source: ApplicationStoreError },
+    ReleaseStore { source: ReleaseStoreError },
+    DeploymentStore { source: DeploymentStoreError },
     Persistence { source: rusqlite::Error },
 }
 
@@ -34,6 +37,15 @@ impl fmt::Display for CreateDeploymentError {
                 formatter,
                 "release `{release_id}` is already the active deployment"
             ),
+            Self::ApplicationStore { source } => {
+                write!(formatter, "failed to create deployment: {source}")
+            }
+            Self::ReleaseStore { source } => {
+                write!(formatter, "failed to create deployment: {source}")
+            }
+            Self::DeploymentStore { source } => {
+                write!(formatter, "failed to create deployment: {source}")
+            }
             Self::Persistence { source } => {
                 write!(formatter, "failed to create deployment: {source}")
             }
@@ -44,51 +56,14 @@ impl fmt::Display for CreateDeploymentError {
 impl Error for CreateDeploymentError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::ApplicationStore { source } => Some(source),
+            Self::ReleaseStore { source } => Some(source),
+            Self::DeploymentStore { source } => Some(source),
             Self::Persistence { source } => Some(source),
             Self::ReleaseNotFound { .. }
             | Self::ApplicationNotFound { .. }
             | Self::ActiveDeployment { .. }
             | Self::AlreadyActive { .. } => None,
-        }
-    }
-}
-
-impl From<ApplicationStoreError> for CreateDeploymentError {
-    fn from(error: ApplicationStoreError) -> Self {
-        match error {
-            ApplicationStoreError::NotFound { application_id } => {
-                Self::ApplicationNotFound { application_id }
-            }
-            ApplicationStoreError::SystemNotFound { .. } => Self::ApplicationNotFound {
-                application_id: "unknown".to_owned(),
-            },
-            ApplicationStoreError::Persistence { source } => Self::Persistence { source },
-        }
-    }
-}
-
-impl From<ReleaseStoreError> for CreateDeploymentError {
-    fn from(error: ReleaseStoreError) -> Self {
-        match error {
-            ReleaseStoreError::NotFound { release_id } => Self::ReleaseNotFound { release_id },
-            ReleaseStoreError::ApplicationNotFound { application_id } => {
-                Self::ApplicationNotFound { application_id }
-            }
-            ReleaseStoreError::Persistence { source } => Self::Persistence { source },
-        }
-    }
-}
-
-impl From<DeploymentStoreError> for CreateDeploymentError {
-    fn from(error: DeploymentStoreError) -> Self {
-        match error {
-            DeploymentStoreError::NotFound { deployment_id } => Self::ReleaseNotFound {
-                release_id: deployment_id,
-            },
-            DeploymentStoreError::InvalidStatus { .. } => Self::Persistence {
-                source: rusqlite::Error::QueryReturnedNoRows,
-            },
-            DeploymentStoreError::Persistence { source } => Self::Persistence { source },
         }
     }
 }
@@ -119,142 +94,54 @@ pub fn create_deployment_with_source_revision(
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|source| CreateDeploymentError::Persistence { source })?;
 
-    let app_exists = application_store::application_exists(&transaction, application_id)?;
-    if !app_exists {
+    let application_exists = application_store::application_exists(&transaction, application_id)
+        .map_err(|source| CreateDeploymentError::ApplicationStore { source })?;
+    if !application_exists {
         return Err(CreateDeploymentError::ApplicationNotFound {
             application_id: application_id.to_owned(),
         });
     }
-
-    let rel_exists = release_store::release_exists(&transaction, release_id, application_id)?;
-    if !rel_exists {
+    let release_exists = release_store::release_exists(&transaction, release_id, application_id)
+        .map_err(|source| CreateDeploymentError::ReleaseStore { source })?;
+    if !release_exists {
         return Err(CreateDeploymentError::ReleaseNotFound {
             release_id: release_id.to_owned(),
         });
     }
+    let has_nonterminal =
+        deployment_store::has_nonterminal_deployment(&transaction, application_id)
+            .map_err(|source| CreateDeploymentError::DeploymentStore { source })?;
+    if has_nonterminal {
+        return Err(CreateDeploymentError::ActiveDeployment {
+            application_id: application_id.to_owned(),
+        });
+    }
+    let active_release_id =
+        deployment_store::load_active_runtime_release_id(&transaction, application_id)
+            .map_err(|source| CreateDeploymentError::DeploymentStore { source })?;
+    if active_release_id.as_deref() == Some(release_id) && deployment_type == DeploymentType::Deploy
+    {
+        return Err(CreateDeploymentError::AlreadyActive {
+            release_id: release_id.to_owned(),
+        });
+    }
 
-    check_no_active_deployment(&transaction, application_id)?;
-    check_not_already_active(&transaction, application_id, release_id, deployment_type)?;
-
-    let deployment_id = deployment_store::generate_id(&transaction)?;
-    insert_deployment(
+    let deployment_id = deployment_store::generate_id(&transaction)
+        .map_err(|source| CreateDeploymentError::DeploymentStore { source })?;
+    deployment_store::insert_pending_deployment(
         &transaction,
         &deployment_id,
         application_id,
         release_id,
         deployment_type,
         source_revision,
-    )?;
-    let deployment = load_deployment(&transaction, &deployment_id)?;
+    )
+    .map_err(|source| CreateDeploymentError::DeploymentStore { source })?;
+    let deployment = deployment_store::load_deployment(&transaction, &deployment_id)
+        .map_err(|source| CreateDeploymentError::DeploymentStore { source })?;
 
     transaction
         .commit()
         .map_err(|source| CreateDeploymentError::Persistence { source })?;
-
     Ok(deployment)
-}
-
-fn check_no_active_deployment(
-    transaction: &Transaction<'_>,
-    application_id: &str,
-) -> Result<(), CreateDeploymentError> {
-    let exists: bool = transaction
-        .query_row(
-            "SELECT EXISTS(
-                SELECT 1 FROM deployments
-                WHERE application_id = ?1
-                  AND status NOT IN ('succeeded', 'failed')
-             )",
-            [application_id],
-            |row| row.get(0),
-        )
-        .map_err(|source| CreateDeploymentError::Persistence { source })?;
-    if exists {
-        return Err(CreateDeploymentError::ActiveDeployment {
-            application_id: application_id.to_owned(),
-        });
-    }
-    Ok(())
-}
-
-fn check_not_already_active(
-    transaction: &Transaction<'_>,
-    application_id: &str,
-    release_id: &str,
-    deployment_type: DeploymentType,
-) -> Result<(), CreateDeploymentError> {
-    let current_release_id: Option<String> = transaction
-        .query_row(
-            "SELECT d.release_id FROM deployments d
-             JOIN applications a ON a.active_deployment_id = d.id
-             WHERE a.id = ?1
-               AND EXISTS (
-                   SELECT 1 FROM runtime_instances ri
-                   WHERE ri.deployment_id = d.id
-                     AND ri.state IN ('running', 'stopped')
-                     AND ri.removed_at IS NULL
-               )",
-            [application_id],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|source| CreateDeploymentError::Persistence { source })?;
-    if current_release_id.as_deref() == Some(release_id)
-        && deployment_type == DeploymentType::Deploy
-    {
-        return Err(CreateDeploymentError::AlreadyActive {
-            release_id: release_id.to_owned(),
-        });
-    }
-    Ok(())
-}
-
-fn insert_deployment(
-    transaction: &Transaction<'_>,
-    deployment_id: &str,
-    application_id: &str,
-    release_id: &str,
-    deployment_type: DeploymentType,
-    source_revision: Option<&str>,
-) -> Result<(), CreateDeploymentError> {
-    transaction
-        .execute(
-            "INSERT INTO deployments (
-                id, application_id, release_id, type, status, source_revision
-             ) VALUES (?1, ?2, ?3, ?4, 'pending', ?5)",
-            rusqlite::params![
-                deployment_id,
-                application_id,
-                release_id,
-                deployment_type.database_value(),
-                source_revision
-            ],
-        )
-        .map_err(|source| CreateDeploymentError::Persistence { source })?;
-    Ok(())
-}
-
-fn load_deployment(
-    transaction: &Transaction<'_>,
-    deployment_id: &str,
-) -> Result<Deployment, CreateDeploymentError> {
-    transaction
-        .query_row(
-            "SELECT id, application_id, release_id, type, source_revision, requested_at
-             FROM deployments WHERE id = ?1",
-            [deployment_id],
-            |row| {
-                Ok(Deployment {
-                    id: row.get(0)?,
-                    application_id: row.get(1)?,
-                    release_id: row.get(2)?,
-                    deployment_type: DeploymentType::from_database(&row.get::<_, String>(3)?)
-                        .unwrap_or(DeploymentType::Deploy),
-                    status: DeploymentStatus::Pending,
-                    source_revision: row.get(4)?,
-                    requested_at: row.get(5)?,
-                })
-            },
-        )
-        .map_err(|source| CreateDeploymentError::Persistence { source })
 }

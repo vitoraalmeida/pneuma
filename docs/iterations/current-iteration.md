@@ -67,7 +67,11 @@ semântica de reconciliation antes de implementar `pneuma reconcile`.
       CAS antes de Caddy; conclusões/falhas são recuperáveis com diagnóstico,
       e materialização ou remoção compensam o fragmento quando a persistência
       posterior falha.
-- [ ] Finalizar extração de persistência de `deployment_create`.
+- [x] Finalizar extração de persistência de `deployment_create`.
+      Resultado: `deployment_store` encapsula consultas, insert e leitura
+      validada de Deployment sob `Immediate`; `deployment_create.rs` mantém
+      regras/commit sem SQL inline e testes cobrem runtime ativo/removido,
+      rollback e Release ausente.
 - [ ] Provar lock Immediate e reserva lógica cross-process de deployment.
 - [ ] Definir catálogo de cenários E2E de reconciliation da v0.3.
 - [ ] Executar regressão final de código, migration e VM.

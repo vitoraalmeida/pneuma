@@ -39,6 +39,10 @@ pub enum TransitionDeploymentError {
         deployment_id: String,
         status: String,
     },
+    InvalidPersistedType {
+        deployment_id: String,
+        deployment_type: String,
+    },
     InvalidFailure,
     Persistence {
         source: rusqlite::Error,
@@ -73,6 +77,13 @@ impl fmt::Display for TransitionDeploymentError {
                 formatter,
                 "deployment `{deployment_id}` has invalid persisted state `{status}`"
             ),
+            Self::InvalidPersistedType {
+                deployment_id,
+                deployment_type,
+            } => write!(
+                formatter,
+                "deployment `{deployment_id}` has invalid persisted type `{deployment_type}`"
+            ),
             Self::InvalidFailure => formatter
                 .write_str("deployment failure code and message must be trimmed and non-empty"),
             Self::Persistence { source } => {
@@ -90,6 +101,7 @@ impl Error for TransitionDeploymentError {
             | Self::Conflict { .. }
             | Self::CannotFail { .. }
             | Self::InvalidPersistedStatus { .. }
+            | Self::InvalidPersistedType { .. }
             | Self::InvalidFailure => None,
         }
     }
@@ -107,6 +119,13 @@ impl From<DeploymentStoreError> for TransitionDeploymentError {
             } => Self::InvalidPersistedStatus {
                 deployment_id,
                 status,
+            },
+            DeploymentStoreError::InvalidType {
+                deployment_id,
+                deployment_type,
+            } => Self::InvalidPersistedType {
+                deployment_id,
+                deployment_type,
             },
             DeploymentStoreError::Persistence { source } => Self::Persistence { source },
         }

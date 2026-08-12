@@ -43,6 +43,9 @@ pub enum RegisterCandidateRuntimeError {
     Store {
         source: RuntimeStoreError,
     },
+    DeploymentStore {
+        source: DeploymentStoreError,
+    },
     Persistence {
         source: rusqlite::Error,
     },
@@ -83,6 +86,9 @@ impl fmt::Display for RegisterCandidateRuntimeError {
             Self::Store { source } => {
                 write!(formatter, "failed to register candidate runtime: {source}")
             }
+            Self::DeploymentStore { source } => {
+                write!(formatter, "failed to register candidate runtime: {source}")
+            }
             Self::Persistence { source } => {
                 write!(formatter, "failed to register candidate runtime: {source}")
             }
@@ -94,6 +100,7 @@ impl Error for RegisterCandidateRuntimeError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Store { source } => Some(source),
+            Self::DeploymentStore { source } => Some(source),
             Self::Persistence { source } => Some(source),
             Self::InvalidExternalRuntimeId
             | Self::InvalidEndpoint { .. }
@@ -119,6 +126,7 @@ impl From<DeploymentStoreError> for RegisterCandidateRuntimeError {
                 deployment_id,
                 actual: status,
             },
+            DeploymentStoreError::InvalidType { .. } => Self::DeploymentStore { source: error },
             DeploymentStoreError::Persistence { source } => Self::Persistence { source },
         }
     }
