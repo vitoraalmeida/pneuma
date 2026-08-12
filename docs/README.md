@@ -15,6 +15,7 @@ altera; um **registro** descreve algo executado e não muda.
 | [`iterations/current-iteration.md`](iterations/current-iteration.md) | Iteração em andamento (o único acompanhamento de trabalho) |
 | [`design/pre-v0.3-consolidation.md`](design/pre-v0.3-consolidation.md) | Design aprovado da consolidação pós-v0.2 / pré-v0.3 |
 | [`design/reconciliation.md`](design/reconciliation.md) | Semântica aprovada de reconciliation para a v0.3 |
+| [`design/reconciliation-e2e.md`](design/reconciliation-e2e.md) | Catálogo E2E futuro de reconciliation para a v0.3 |
 | [`roadmap.md`](roadmap.md) | Roadmap consolidado v0.1 → v0.7; contrato de evolução do projeto |
 
 ## Registros operacionais

@@ -76,7 +76,10 @@ semântica de reconciliation antes de implementar `pneuma reconcile`.
       Resultado: duas conexões provam aquisição antecipada de writer lock com
       `DatabaseBusy`; dois processos CLI provam que deployment não-terminal
       retorna `ActiveDeployment` durante efeitos externos, sem lock ou índice.
-- [ ] Definir catálogo de cenários E2E de reconciliation da v0.3.
+- [x] Definir catálogo de cenários E2E de reconciliation da v0.3.
+      Resultado: catálogo indexado cobre drift de runtime/exposure, recovery de
+      deployments interrompidos e concorrência; automação VM permanece adiada
+      até `pneuma reconcile` existir.
 - [ ] Executar regressão final de código, migration e VM.
 
 ## Critérios de aceite
