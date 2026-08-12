@@ -87,6 +87,13 @@ ssh root@<ip> 'bash scripts/bootstrap-vps.sh git@github.com:USER/pneuma.git --ci
 ssh root@<ip> 'bash bootstrap-vps.sh git@github.com:USER/pneuma.git --ci-public-key /dev/stdin' < ~/.ssh/pneuma-ci.pub
 ```
 
+As invariantes de host aplicadas pelo bootstrap (pacotes de runtime, usuário e
+grupo `pneuma`, subids, linger, diretórios, ambiente canônico, Caddy e Podman
+rootless) vivem numa biblioteca comum, `scripts/lib/provision-host.sh`,
+compartilhada com o provisionamento da VM de desenvolvimento. A biblioteca não
+muda o comportamento exclusivo do bootstrap: clonar a fonte, compilar e
+instalar o binário e instalar a chave CI continuam no `bootstrap-vps.sh`.
+
 ### 3.1. Fixar a versão do Pneuma com `--ref`
 
 Para instalações reproduzíveis, o bootstrap aceita `--ref` com **apenas** SHA

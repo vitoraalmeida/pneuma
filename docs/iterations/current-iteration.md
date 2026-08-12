@@ -36,7 +36,10 @@ capazes de provar as garantias operacionais necessárias antes de reconciliation
     remoto para conteúdo; acceptance limpo Debian 13 por SHA `2bdc512` passou
     com 82 PASS/0 FAIL, e assertion remota forçada produziu 1 FAIL e saída não
     zero; fixture/deploy funcional segue em `dev-vm/test-all.sh`.
-- [ ] Compartilhar invariantes de provisionamento entre VPS e VM.
+- [x] Compartilhar invariantes de provisionamento entre VPS e VM.
+    Resultado: `scripts/lib/provision-host.sh` centraliza as invariantes de
+    runtime; checks estáticos/ShellCheck e quatro gates verdes, provisionamento
+    VM descartável validado e acceptance bootstrap por SHA com 82 PASS/0 FAIL.
 - [ ] Impor invariantes de conta e IDs subordinados.
 - [ ] Tornar configuração Caddy atômica e idempotente.
 - [ ] Provar bootstrap e rerun em host Debian 13 limpo.

@@ -34,6 +34,9 @@
 #   scripts/test-bootstrap-vps.sh my-vps \
 #     https://github.com/user/pneuma.git --ref 0123456789abcdef0123456789abcdef01234567
 #
+# The script copies scripts/bootstrap-vps.sh and scripts/lib/provision-host.sh
+# to the VM; bootstrap-vps.sh sources the library by self-derived path.
+#
 
 set -euo pipefail
 
@@ -221,6 +224,7 @@ fi
 echo
 echo "==> Phase 2: Bootstrap execution..."
 scp "$SCRIPT_DIR/bootstrap-vps.sh" "$SSH_HOST":/tmp/ >/dev/null
+scp -r "$SCRIPT_DIR/lib" "$SSH_HOST":/tmp/ >/dev/null
 if ssh "$SSH_HOST" 'bash /tmp/bootstrap-vps.sh '"$SOURCE_URL$REF_ARGS" >"$LOG_DIR/bootstrap.log" 2>&1; then
     report ok "bootstrap-vps.sh completed"
 else

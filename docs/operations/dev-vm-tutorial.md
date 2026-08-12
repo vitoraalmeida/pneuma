@@ -66,27 +66,36 @@ ssh pneuma-dev 'hostname'
 
 ## 3. Provisionar o host
 
-Com a chave de provisionamento já instalada, envie o script e execute como
-root na VM:
+Com a chave de provisionamento já instalada, envie o script e a biblioteca
+comum e execute como root na VM. O layout no `/tmp` deve preservar a estrutura
+do repositório (`provision-host.sh` em `dev-vm/`, biblioteca em `lib/`), porque
+o script calcula o caminho da biblioteca a partir do próprio caminho:
 
 ```bash
-scp scripts/dev-vm/provision-host.sh pneuma-dev:/tmp/
-ssh pneuma-dev 'sudo bash /tmp/provision-host.sh'
+scp scripts/dev-vm/provision-host.sh pneuma-dev:/tmp/dev-vm/
+scp -r scripts/lib pneuma-dev:/tmp/
+ssh pneuma-dev 'sudo bash /tmp/dev-vm/provision-host.sh'
 ```
 
-O script assume uma VM Debian básica e:
+A VM e a VPS aplicam **as mesmas invariantes de host**, implementadas uma única
+vez em `scripts/lib/provision-host.sh` e usadas também por
+`scripts/bootstrap-vps.sh`. O script assume uma VM Debian básica e:
 
-1. instala Podman, `uidmap`, `fuse-overlayfs`, Caddy, Git, `sqlite3` e `curl`;
+1. instala o conjunto de runtime (Podman, `uidmap`, `fuse-overlayfs`, Caddy,
+   Git e `curl`) e, como conveniência exclusiva da VM, `sqlite3`;
 2. verifica o gerador Quadlet (`podman-user-generator` >= 4.4);
 3. cria o usuário `pneuma` com `subuid/subgid` e linger;
 4. cria os diretórios persistentes do Pneuma com as permissões da VPS;
 5. configura o Caddyfile para importar apenas `/etc/caddy/applications/*.caddy`;
-6. grava as variáveis `PNEUMA_*` no `~/.profile` do `pneuma`;
+6. grava o ambiente canônico em `/etc/pneuma/environment` e as variáveis
+   `PNEUMA_*`/rootless no `~/.profile` do `pneuma`;
 7. valida `caddy validate` e inicia o serviço;
 8. confirma Podman rootless com `podman info`.
 
-O script **não** instala a chave SSH nem o binário: o acesso de provisionamento
-é pré-existente e a instalação do Pneuma é um passo separado (seção 4).
+Ao contrário do bootstrap de produção, o provisionamento da VM **não** clona o
+repositório, não compila nem instala o binário, não instala a chave CI nem roda
+`pneuma doctor`: o acesso de provisionamento é pré-existente e a instalação do
+Pneuma é um passo separado (seção 4).
 
 ## 4. Instalar o binário Pneuma na VM
 

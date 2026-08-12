@@ -62,6 +62,10 @@ PNEUMA_SOURCE_URL=""
 PNEUMA_REF=""
 CI_PUBLIC_KEY_FILE=""
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+# shellcheck source=lib/provision-host.sh
+source "$SCRIPT_DIR/lib/provision-host.sh"
+
 usage() {
     cat >&2 <<EOF
 Usage: $0 <pneuma-source-url> [--ci-public-key <path>] [--ref <ref>]
@@ -290,57 +294,24 @@ for port in 80 443; do
     fi
 done
 
-apt-get update
+provision_runtime_packages
+
+# Compiler toolchain is production-only: the bootstrap compiles Pneuma from
+# source, while the development VM installs a prebuilt binary.
 apt-get install -y \
     build-essential \
-    curl \
-    git \
     iproute2 \
     pkg-config \
-    libssl-dev \
-    podman \
-    uidmap \
-    fuse-overlayfs \
-    caddy
+    libssl-dev
 
-QUADLET_GENERATOR=""
-for candidate in \
-    /usr/lib/systemd/user-generators/podman-user-generator \
-    /lib/systemd/user-generators/podman-user-generator; do
-    if [[ -x "$candidate" ]]; then
-        QUADLET_GENERATOR="$candidate"
-        break
-    fi
-done
+require_quadlet_generator
 
-if [[ -z "$QUADLET_GENERATOR" ]]; then
-    echo
-    echo "Podman Quadlet user generator not found (podman-user-generator)."
-    echo "Pneuma supervises runtimes with Quadlet units, which require"
-    echo "Podman >= 4.4. Debian 12 ships Podman 4.3.1 without it."
-    echo "Use Debian 13 (trixie) or newer, then rerun this script."
-    exit 1
-fi
-
-if ! id "$PNEUMA_USER" >/dev/null 2>&1; then
-    useradd \
-        --create-home \
-        --shell /bin/bash \
-        "$PNEUMA_USER"
-fi
+provision_pneuma_user
 
 PNEUMA_UID="$(id -u "$PNEUMA_USER")"
 
-if ! grep -q "^${PNEUMA_USER}:" /etc/subuid; then
-    usermod --add-subuids 100000-165535 "$PNEUMA_USER"
-fi
-
-if ! grep -q "^${PNEUMA_USER}:" /etc/subgid; then
-    usermod --add-subgids 100000-165535 "$PNEUMA_USER"
-fi
-
-passwd -l "$PNEUMA_USER" || true
-loginctl enable-linger "$PNEUMA_USER"
+provision_subordinate_ids
+provision_linger
 
 install -d \
     -o "$PNEUMA_USER" \
@@ -348,26 +319,7 @@ install -d \
     -m 0700 \
     "$SSH_DIR"
 
-install -d \
-    -o "$PNEUMA_USER" \
-    -g "$PNEUMA_USER" \
-    -m 0750 \
-    /var/lib/pneuma/database \
-    /var/lib/pneuma/checkouts
-
-install -d -o "$PNEUMA_USER" -g "$PNEUMA_USER" -m 0750 "$PNEUMA_HOME/.config"
-install -d -o "$PNEUMA_USER" -g "$PNEUMA_USER" -m 0750 "$PNEUMA_HOME/.config/containers"
-install -d \
-    -o "$PNEUMA_USER" \
-    -g "$PNEUMA_USER" \
-    -m 0750 \
-    "$PNEUMA_HOME/.config/containers/systemd"
-
-install -d \
-    -o "$PNEUMA_USER" \
-    -g caddy \
-    -m 0750 \
-    /etc/caddy/applications
+provision_host_directories
 
 SSH_REPOSITORY=false
 
@@ -516,26 +468,7 @@ install \
     "$PNEUMA_SOURCE_PATH/target/release/pneuma" \
     /usr/local/bin/pneuma
 
-mkdir -p /etc/pneuma
-if ! getent group pneuma >/dev/null 2>&1; then
-    groupadd pneuma
-    usermod -a -G pneuma "$PNEUMA_USER"
-fi
-chown root:pneuma /etc/pneuma
-chmod 0750 /etc/pneuma
-
-cat >/etc/pneuma/environment <<'EOF'
-# Pneuma host environment configuration
-# Loaded by pneuma binary at startup
-PNEUMA_DATABASE_PATH=/var/lib/pneuma/database/pneuma.sqlite3
-PNEUMA_WORKSPACE_PATH=/var/lib/pneuma/checkouts
-PNEUMA_CADDY_MANAGED_PATH=/etc/caddy/applications
-PNEUMA_CADDYFILE_PATH=/etc/caddy/Caddyfile
-PNEUMA_RUNTIME_PORT_RANGE=30000-39999
-EOF
-
-chown root:pneuma /etc/pneuma/environment
-chmod 0640 /etc/pneuma/environment
+provision_host_environment
 
 if [[ -n "$CI_PUBLIC_KEY_FILE" ]]; then
     if [[ ! -f "$CI_PUBLIC_KEY_FILE" ]]; then
@@ -563,57 +496,11 @@ if [[ -n "$CI_PUBLIC_KEY_FILE" ]]; then
     fi
 fi
 
-if [[ -f /etc/caddy/Caddyfile ]]; then
-    cp -a /etc/caddy/Caddyfile \
-        "/etc/caddy/Caddyfile.backup.$(date +%Y%m%d%H%M%S)"
-fi
+provision_caddy_baseline
 
-cat >/etc/caddy/Caddyfile <<'EOF'
-import /etc/caddy/applications/*.caddy
-EOF
+start_pneuma_user_manager
 
-chown root:caddy /etc/caddy/Caddyfile
-chmod 0644 /etc/caddy/Caddyfile
-
-PROFILE="$PNEUMA_HOME/.profile"
-
-touch "$PROFILE"
-chown "$PNEUMA_USER:$PNEUMA_USER" "$PROFILE"
-chmod 0644 "$PROFILE"
-
-for line in \
-    'export XDG_RUNTIME_DIR="/run/user/$(id -u)"' \
-    'export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus"' \
-    'export PNEUMA_DATABASE_PATH=/var/lib/pneuma/database/pneuma.sqlite3' \
-    'export PNEUMA_WORKSPACE_PATH=/var/lib/pneuma/checkouts' \
-    'export PNEUMA_CADDY_MANAGED_PATH=/etc/caddy/applications' \
-    'export PNEUMA_CADDYFILE_PATH=/etc/caddy/Caddyfile' \
-    'export PNEUMA_RUNTIME_PORT_RANGE=30000-39999' \
-    'export PNEUMA_QUADLET_DIR=$HOME/.config/containers/systemd'
-do
-    grep -qxF "$line" "$PROFILE" || echo "$line" >>"$PROFILE"
-done
-
-systemctl enable --now caddy
-
-caddy validate \
-    --config /etc/caddy/Caddyfile \
-    --adapter caddyfile
-
-systemctl restart caddy
-systemctl start "user@$PNEUMA_UID.service" || true
-
-ROOTLESS_OUTPUT="$(runuser -u "$PNEUMA_USER" -- \
-    env HOME="$PNEUMA_HOME" XDG_RUNTIME_DIR="/run/user/$PNEUMA_UID" \
-    bash -c 'cd "$HOME" && podman info --format "{{.Host.Security.Rootless}}" 2>/dev/null' || true)"
-
-if [[ "$ROOTLESS_OUTPUT" != "true" ]]; then
-    echo
-    echo "Rootless Podman is not usable by the $PNEUMA_USER user."
-    echo "Expected {{.Host.Security.Rootless}} to be true; got: $ROOTLESS_OUTPUT"
-    echo "Check subuid/subgid, fuse-overlayfs and linger, then rerun the script."
-    exit 1
-fi
+verify_rootless_podman
 
 if [[ ! -x /usr/local/bin/pneuma ]]; then
     echo
