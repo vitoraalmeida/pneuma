@@ -22,9 +22,6 @@ set -euo pipefail
 SSH_HOST="${1:-pneuma-dev}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FIXTURE_SRC="$SCRIPT_DIR/fixtures/healthy-http"
-REGISTRY="localhost:5000"
-REPOS_ROOT="/var/lib/pneuma/repos"
-REPO_URL="file://$REPOS_ROOT/healthy-http.git"
 
 echo "=========================================="
 echo "Pneuma Branch Deploy E2E — $SSH_HOST"
@@ -34,8 +31,8 @@ echo
 echo "==> Verifying installed binary supports --branch..."
 BRANCH_USAGE=$(ssh "$SSH_HOST" '/usr/local/bin/pneuma app deploy --help 2>&1' || true)
 if ! echo "$BRANCH_USAGE" | grep -q -- '--branch'; then
-    echo "  ERROR: installed binary lacks --branch; run scripts/dev-vm/sync-binary.sh first"
-    exit 1
+	echo "  ERROR: installed binary lacks --branch; run scripts/dev-vm/sync-binary.sh first"
+	exit 1
 fi
 echo "  OK"
 
@@ -53,7 +50,8 @@ ssh "$SSH_HOST" 'chown -R pneuma:pneuma /var/lib/pneuma/checkouts/fixtures'
 
 echo
 echo "==> Step 3: Create Git repository and tagged images on the VM..."
-SHA_OUT=$(ssh "$SSH_HOST" 'runuser -u pneuma -- bash -l -s' <<'REMOTE'
+SHA_OUT=$(
+	ssh "$SSH_HOST" 'runuser -u pneuma -- bash -l -s' <<'REMOTE'
 set -euo pipefail
 cd "$HOME"
 REPOS_ROOT="/var/lib/pneuma/repos"

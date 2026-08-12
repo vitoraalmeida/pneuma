@@ -29,17 +29,17 @@ ssh "$SSH_HOST" 'chown -R pneuma:pneuma /var/lib/pneuma/checkouts/fixtures'
 
 echo "==> Building and pushing fixtures..."
 for fixture in "$FIXTURES_DIR"/*/; do
-    name=$(basename "$fixture")
-    echo "  -> $name"
-    ssh "$SSH_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && podman build -q -t $REGISTRY/$name:latest /var/lib/pneuma/checkouts/fixtures/$name 2>/dev/null && podman push --tls-verify=false $REGISTRY/$name:latest 2>/dev/null'"
+	name=$(basename "$fixture")
+	echo "  -> $name"
+	ssh "$SSH_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && podman build -q -t $REGISTRY/$name:latest /var/lib/pneuma/checkouts/fixtures/$name 2>/dev/null && podman push --tls-verify=false $REGISTRY/$name:latest 2>/dev/null'"
 done
 
 echo
 echo "==> Fixture digests:"
 for fixture in "$FIXTURES_DIR"/*/; do
-    name=$(basename "$fixture")
-    digest=$(ssh "$SSH_HOST" "curl -s -H 'Accept: application/vnd.oci.image.manifest.v1+json' http://$REGISTRY/v2/$name/manifests/latest -D - -o /dev/null 2>/dev/null | grep -i docker-content-digest | awk '{print \$2}' | tr -d '\r'")
-    echo "  $name: $digest"
+	name=$(basename "$fixture")
+	digest=$(ssh "$SSH_HOST" "curl -s -H 'Accept: application/vnd.oci.image.manifest.v1+json' http://$REGISTRY/v2/$name/manifests/latest -D - -o /dev/null 2>/dev/null | grep -i docker-content-digest | awk '{print \$2}' | tr -d '\r'")
+	echo "  $name: $digest"
 done
 
 echo

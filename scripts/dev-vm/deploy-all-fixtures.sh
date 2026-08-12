@@ -23,9 +23,10 @@ ssh "$SSH_HOST" 'mkdir -p /var/lib/pneuma/repos && chown pneuma:pneuma /var/lib/
 
 echo "==> Importing fixtures..."
 for fixture in "$FIXTURES_DIR"/*/; do
-    name=$(basename "$fixture")
-    echo "  -> Importing $name"
-    output=$(ssh "$SSH_HOST" "runuser -u pneuma -- bash -l -s \"$name\"" <<'REMOTE'
+	name=$(basename "$fixture")
+	echo "  -> Importing $name"
+	output=$(
+		ssh "$SSH_HOST" "runuser -u pneuma -- bash -l -s \"$name\"" <<'REMOTE'
 set -euo pipefail
 name="$1"
 SRC="/var/lib/pneuma/checkouts/fixtures/$name"
@@ -50,17 +51,17 @@ git --git-dir="$REPO" symbolic-ref HEAD refs/heads/main
 cd "$HOME"
 pneuma app import "file://$REPO"
 REMOTE
-    )
-    echo "$output" | grep -v level=warning || true
+	)
+	echo "$output" | grep -v level=warning || true
 done
 
 echo
 echo "==> Deploying fixtures..."
 for fixture in "$FIXTURES_DIR"/*/; do
-    name=$(basename "$fixture")
-    digest=$(ssh "$SSH_HOST" "curl -s -H 'Accept: application/vnd.oci.image.manifest.v1+json' http://$REGISTRY/v2/$name/manifests/latest -D - -o /dev/null 2>/dev/null | grep -i docker-content-digest | awk '{print \$2}' | tr -d '\r'")
-    echo "  -> Deploying $name ($digest)"
-    ssh "$SSH_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && pneuma app deploy $name --image $REGISTRY/$name@$digest 2>&1'" 2>&1 | grep -v level=warning || true
+	name=$(basename "$fixture")
+	digest=$(ssh "$SSH_HOST" "curl -s -H 'Accept: application/vnd.oci.image.manifest.v1+json' http://$REGISTRY/v2/$name/manifests/latest -D - -o /dev/null 2>/dev/null | grep -i docker-content-digest | awk '{print \$2}' | tr -d '\r'")
+	echo "  -> Deploying $name ($digest)"
+	ssh "$SSH_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && pneuma app deploy $name --image $REGISTRY/$name@$digest 2>&1'" 2>&1 | grep -v level=warning || true
 done
 
 echo

@@ -22,7 +22,7 @@ FIXTURE_SRC="$SCRIPT_DIR/fixtures/healthy-http"
 TMP_V2="$(mktemp -d)"
 
 cleanup() {
-    rm -rf "$TMP_V2"
+	rm -rf "$TMP_V2"
 }
 trap cleanup EXIT
 
@@ -48,7 +48,7 @@ ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma app status h
 
 echo
 echo "==> Step 5: Upgrade healthy-http to v2..."
-sed 's/healthy-http v1.0/healthy-http v2.0/' "$FIXTURE_SRC/server.py" > "$TMP_V2/server.py"
+sed 's/healthy-http v1.0/healthy-http v2.0/' "$FIXTURE_SRC/server.py" >"$TMP_V2/server.py"
 scp -q "$TMP_V2/server.py" "$SSH_HOST":/var/lib/pneuma/checkouts/fixtures/healthy-http/server.py
 ssh "$SSH_HOST" 'chown pneuma:pneuma /var/lib/pneuma/checkouts/fixtures/healthy-http/server.py'
 ssh "$SSH_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && podman build -q -t $REGISTRY/healthy-http:latest /var/lib/pneuma/checkouts/fixtures/healthy-http 2>/dev/null && podman push --tls-verify=false $REGISTRY/healthy-http:latest 2>/dev/null'"
@@ -56,15 +56,15 @@ DIGEST=$(ssh "$SSH_HOST" "curl -s -H 'Accept: application/vnd.oci.image.manifest
 DEPLOY_OUT=$(ssh "$SSH_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && pneuma app deploy healthy-http --image $REGISTRY/healthy-http@$DIGEST 2>&1'")
 echo "$DEPLOY_OUT" | grep -v level=warning || true
 if ! echo "$DEPLOY_OUT" | grep -q "Succeeded"; then
-    echo "  ERROR: upgrade deploy did not succeed"
-    exit 1
+	echo "  ERROR: upgrade deploy did not succeed"
+	exit 1
 fi
 NEW_PORT=$(ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && podman ps --format \"{{.Ports}}\" --filter name=pneuma-healthy-http | cut -d: -f2 | cut -d- -f1"')
 echo "  healthy-http on host port: $NEW_PORT"
 BODY=$(ssh "$SSH_HOST" "curl -s http://127.0.0.1:$NEW_PORT/")
 if [[ "$BODY" != "healthy-http v2.0" ]]; then
-    echo "  ERROR: expected 'healthy-http v2.0', got: $BODY"
-    exit 1
+	echo "  ERROR: expected 'healthy-http v2.0', got: $BODY"
+	exit 1
 fi
 echo "  OK: $BODY"
 
@@ -77,14 +77,14 @@ DIGEST=$(ssh "$SSH_HOST" "curl -s -H 'Accept: application/vnd.oci.image.manifest
 DEPLOY_OUT=$(ssh "$SSH_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && pneuma app deploy healthy-http --image $REGISTRY/healthy-http@$DIGEST 2>&1'")
 echo "$DEPLOY_OUT" | grep -v level=warning || true
 if ! echo "$DEPLOY_OUT" | grep -q "Succeeded"; then
-    echo "  ERROR: rollback deploy did not succeed"
-    exit 1
+	echo "  ERROR: rollback deploy did not succeed"
+	exit 1
 fi
 NEW_PORT=$(ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && podman ps --format \"{{.Ports}}\" --filter name=pneuma-healthy-http | cut -d: -f2 | cut -d- -f1"')
 BODY=$(ssh "$SSH_HOST" "curl -s http://127.0.0.1:$NEW_PORT/")
 if [[ "$BODY" != "healthy-http v1.0" ]]; then
-    echo "  ERROR: expected 'healthy-http v1.0', got: $BODY"
-    exit 1
+	echo "  ERROR: expected 'healthy-http v1.0', got: $BODY"
+	exit 1
 fi
 echo "  OK: $BODY"
 
@@ -93,10 +93,10 @@ echo "==> Step 7: Reboot VM..."
 ssh "$SSH_HOST" 'reboot' 2>&1 || true
 echo "  Waiting for VM to come back..."
 for _ in $(seq 1 60); do
-    if ssh -o ConnectTimeout=3 -o BatchMode=yes "$SSH_HOST" 'uptime' 2>/dev/null; then
-        break
-    fi
-    sleep 5
+	if ssh -o ConnectTimeout=3 -o BatchMode=yes "$SSH_HOST" 'uptime' 2>/dev/null; then
+		break
+	fi
+	sleep 5
 done
 sleep 15
 

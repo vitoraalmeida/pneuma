@@ -60,7 +60,11 @@ capazes de provar as garantias operacionais necessárias antes de reconciliation
     FAIL. Validou range livre após `dev:100000:65536`, conta, linger,
     diretórios, ambiente, Caddy, Podman rootless, binário, chave CI e doctor;
     clone descartável foi destruída.
-- [ ] Adicionar lint shell version-pinned ao CI.
+- [x] Adicionar lint shell version-pinned ao CI.
+    Resultado: job `shell` instala ShellCheck 0.10.0 e shfmt 3.10.0 fixados e
+    executa `bash -n`, ShellCheck e shfmt em todos os scripts rastreados; scripts
+    foram formatados e variáveis não usadas removidas. Checks shell e quatro
+    gates Rust verdes.
 - [ ] Provar candidate falho preservando release ativa e rollback real.
 - [ ] Provar reboot e recuperação por boot ID.
 - [ ] Tornar HTTPS local e fronteiras SSH CI obrigatórios no E2E.

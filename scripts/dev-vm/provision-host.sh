@@ -50,8 +50,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 source "$SCRIPT_DIR/../lib/provision-host.sh"
 
 if [[ "$(id -u)" -ne 0 ]]; then
-    echo "Run this script as root."
-    exit 1
+	echo "Run this script as root."
+	exit 1
 fi
 
 # Shared host invariants, exactly as the production bootstrap applies them.

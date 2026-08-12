@@ -14,42 +14,42 @@ pass=0
 fail=0
 
 assert_valid() {
-    local name="$1" contents="$2"
-    local file="$TEMP_DIR/$name"
-    printf '%s\n' "$contents" >"$file"
-    if validate_subordinate_id_file "$file"; then
-        pass=$((pass + 1))
-        printf 'PASS  %s\n' "$name"
-    else
-        fail=$((fail + 1))
-        printf 'FAIL  %s\n' "$name"
-    fi
+	local name="$1" contents="$2"
+	local file="$TEMP_DIR/$name"
+	printf '%s\n' "$contents" >"$file"
+	if validate_subordinate_id_file "$file"; then
+		pass=$((pass + 1))
+		printf 'PASS  %s\n' "$name"
+	else
+		fail=$((fail + 1))
+		printf 'FAIL  %s\n' "$name"
+	fi
 }
 
 assert_invalid() {
-    local name="$1" contents="$2"
-    local file="$TEMP_DIR/$name"
-    printf '%s\n' "$contents" >"$file"
-    if validate_subordinate_id_file "$file" >/dev/null 2>&1; then
-        fail=$((fail + 1))
-        printf 'FAIL  %s\n' "$name"
-    else
-        pass=$((pass + 1))
-        printf 'PASS  %s\n' "$name"
-    fi
+	local name="$1" contents="$2"
+	local file="$TEMP_DIR/$name"
+	printf '%s\n' "$contents" >"$file"
+	if validate_subordinate_id_file "$file" >/dev/null 2>&1; then
+		fail=$((fail + 1))
+		printf 'FAIL  %s\n' "$name"
+	else
+		pass=$((pass + 1))
+		printf 'PASS  %s\n' "$name"
+	fi
 }
 
 assert_start() {
-    local name="$1" contents="$2" expected="$3"
-    local file="$TEMP_DIR/$name" actual
-    printf '%s\n' "$contents" >"$file"
-    if actual="$(subordinate_id_start "$file")" && [[ "$actual" == "$expected" ]]; then
-        pass=$((pass + 1))
-        printf 'PASS  %s\n' "$name"
-    else
-        fail=$((fail + 1))
-        printf 'FAIL  %s\n' "$name"
-    fi
+	local name="$1" contents="$2" expected="$3"
+	local file="$TEMP_DIR/$name" actual
+	printf '%s\n' "$contents" >"$file"
+	if actual="$(subordinate_id_start "$file")" && [[ "$actual" == "$expected" ]]; then
+		pass=$((pass + 1))
+		printf 'PASS  %s\n' "$name"
+	else
+		fail=$((fail + 1))
+		printf 'FAIL  %s\n' "$name"
+	fi
 }
 
 assert_valid alternate-range 'other:1:99999

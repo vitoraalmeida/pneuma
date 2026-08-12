@@ -20,13 +20,13 @@ set -euo pipefail
 SSH_HOST="${1:-}"
 
 if [[ -n "$SSH_HOST" ]]; then
-    ssh "$SSH_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && bash -s'" < "$0"
-    exit $?
+	ssh "$SSH_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && bash -s'" <"$0"
+	exit $?
 fi
 
 if [[ -f "$HOME/.profile" ]]; then
-    # shellcheck source=/dev/null
-    source "$HOME/.profile"
+	# shellcheck source=/dev/null
+	source "$HOME/.profile"
 fi
 
 pneuma version

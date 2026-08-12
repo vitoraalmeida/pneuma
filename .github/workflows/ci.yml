@@ -5,6 +5,22 @@ on:
   pull_request:
 
 jobs:
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ShellCheck 0.10.0
+        run: |
+          curl -fsSLO https://github.com/koalaman/shellcheck/releases/download/v0.10.0/shellcheck-v0.10.0.linux.x86_64.tar.xz
+          tar -xJf shellcheck-v0.10.0.linux.x86_64.tar.xz
+          sudo install -m 0755 shellcheck-v0.10.0/shellcheck /usr/local/bin/shellcheck
+      - name: Install shfmt 3.10.0
+        run: |
+          curl -fsSLo shfmt https://github.com/mvdan/sh/releases/download/v3.10.0/shfmt_v3.10.0_linux_amd64
+          sudo install -m 0755 shfmt /usr/local/bin/shfmt
+      - run: bash -n $(git ls-files '*.sh')
+      - run: shellcheck -S warning $(git ls-files '*.sh')
+      - run: shfmt -d $(git ls-files '*.sh')
   rust:
     runs-on: ubuntu-latest
     steps:
