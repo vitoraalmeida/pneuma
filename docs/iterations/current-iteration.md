@@ -28,7 +28,10 @@ semântica de reconciliation antes de implementar `pneuma reconcile`.
       CI/CD já entregue documentado como concluído, import público por URL Git nos
       docs e scripts (deploy-all-fixtures.sh via `file://`, verify-vps.sh) e referência
       quebrada a `docs/operations/e2e-testing.md` removida.
-- [ ] Definir semântica, invariantes e fontes de verdade de reconciliation.
+- [x] Definir semântica, invariantes e fontes de verdade de reconciliation.
+      Resultado: design indexado define autoridades, invariantes, matrizes de
+      runtime/exposure, recovery conservador de deployments interrompidos,
+      concorrência e non-goals sem implementar `pneuma reconcile`.
 - [ ] Aplicar o contrato de importação exclusivamente por URL Git.
 - [ ] Consolidar os tipos de domínio de Deployment e Runtime.
 - [ ] Migrar `source_revision` para Deployment com cobertura fresh/upgrade.
