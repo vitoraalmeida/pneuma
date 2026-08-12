@@ -2,15 +2,19 @@ use std::error::Error;
 use std::fmt;
 use std::path::Path;
 
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
+use rusqlite::{Connection, TransactionBehavior};
 
 use crate::adapters::caddy_exposure::{
-    CaddyRecoveryError, MaterializeCaddyFragmentError, materialize_caddy_fragment,
-    remove_caddy_fragment, restore_materialized_caddy_fragment,
+    CaddyRecoveryError, MaterializeCaddyFragmentError, canonical_fragment_contents,
+    materialize_caddy_fragment, remove_caddy_fragment, restore_materialized_caddy_fragment,
+    restore_removed_caddy_fragment,
 };
 use crate::adapters::health_check_external::{ExternalHealthCheckError, check_external_health};
 use crate::adapters::local_runtime::{
     ContainerObservation, ObserveContainerError, ObservedRuntimeState, observe_container,
+};
+use crate::adapters::stores::application_store::{
+    self, ApplicationStoreError, ExposureStoreError, StoredExposure,
 };
 use crate::domain::manifest::Visibility;
 
@@ -32,8 +36,14 @@ pub enum ExposureChangeError {
     DomainRequired {
         application_id: String,
     },
-    InvalidDomain {
-        domain: String,
+    ExposureChanged {
+        application_id: String,
+    },
+    InvalidVisibility {
+        visibility: String,
+    },
+    Store {
+        source: ApplicationStoreError,
     },
     ObserveFailed {
         source: ObserveContainerError,
@@ -41,7 +51,6 @@ pub enum ExposureChangeError {
     RuntimeNotRunning {
         state: ObservedRuntimeState,
     },
-    MissingEndpoint,
     MaterializeFailed {
         source: MaterializeCaddyFragmentError,
     },
@@ -68,23 +77,26 @@ impl fmt::Display for ExposureChangeError {
                     "application `{application_id}` has no active runtime to expose"
                 )
             }
-            Self::DomainRequired { application_id } => {
+            Self::DomainRequired { application_id } => write!(
+                formatter,
+                "application `{application_id}` requires a domain for public exposure"
+            ),
+            Self::ExposureChanged { application_id } => write!(
+                formatter,
+                "exposure of application `{application_id}` changed while it was being materialized"
+            ),
+            Self::InvalidVisibility { visibility } => {
                 write!(
                     formatter,
-                    "application `{application_id}` requires a domain for public exposure"
+                    "application has invalid persisted visibility `{visibility}`"
                 )
             }
-            Self::InvalidDomain { domain } => {
-                write!(formatter, "domain `{domain}` is not valid")
-            }
+            Self::Store { source } => write!(formatter, "failed to change exposure: {source}"),
             Self::ObserveFailed { source } => {
                 write!(formatter, "failed to observe runtime: {source}")
             }
             Self::RuntimeNotRunning { state } => {
                 write!(formatter, "runtime is not running (state: {state:?})")
-            }
-            Self::MissingEndpoint => {
-                write!(formatter, "runtime has no endpoint available")
             }
             Self::MaterializeFailed { source } => {
                 write!(formatter, "failed to materialize Caddy fragment: {source}")
@@ -105,20 +117,20 @@ impl fmt::Display for ExposureChangeError {
 impl Error for ExposureChangeError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::Store { source } => Some(source),
             Self::ObserveFailed { source } => Some(source),
             Self::MaterializeFailed { source } => Some(source),
             Self::RemoveFragmentFailed { source } => Some(source),
             Self::ExternalHealthFailed { source } => Some(source),
             Self::Persistence { source } => Some(source),
-            _ => None,
+            Self::ApplicationNotFound { .. }
+            | Self::NoActiveRuntime { .. }
+            | Self::DomainRequired { .. }
+            | Self::ExposureChanged { .. }
+            | Self::InvalidVisibility { .. }
+            | Self::RuntimeNotRunning { .. } => None,
         }
     }
-}
-
-struct ActiveRuntime {
-    container_name: String,
-    container_port: u16,
-    domain: Option<String>,
 }
 
 pub fn change_exposure(
@@ -128,128 +140,232 @@ pub fn change_exposure(
     managed_directory: &Path,
     caddyfile_path: &Path,
 ) -> Result<ExposureChange, ExposureChangeError> {
-    let application_exists = connection
-        .query_row(
-            "SELECT COUNT(*) FROM applications WHERE id = ?1",
-            [application_id],
-            |row| row.get::<_, i64>(0),
-        )
-        .map_err(|source| ExposureChangeError::Persistence { source })?;
-
-    if application_exists == 0 {
-        return Err(ExposureChangeError::ApplicationNotFound {
-            application_id: application_id.to_owned(),
-        });
-    }
-
-    let current_visibility = connection
-        .query_row(
-            "SELECT desired_visibility FROM exposures WHERE application_id = ?1",
-            [application_id],
-            |row| {
-                let visibility_text: String = row.get(0)?;
-                Ok(Visibility::from_database(&visibility_text).unwrap_or(Visibility::Internal))
-            },
-        )
-        .optional()
-        .map_err(|source| ExposureChangeError::Persistence { source })?
-        .unwrap_or(Visibility::Internal);
-
-    if current_visibility == visibility {
-        let domain = connection
-            .query_row(
-                "SELECT domain FROM exposures WHERE application_id = ?1",
-                [application_id],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .optional()
-            .map_err(|source| ExposureChangeError::Persistence { source })?
-            .flatten();
-
+    let exposure = match application_store::load_stored_exposure(connection, application_id) {
+        Ok(Some(exposure)) => exposure,
+        Ok(None) => {
+            return Err(ExposureChangeError::ApplicationNotFound {
+                application_id: application_id.to_owned(),
+            });
+        }
+        Err(ExposureStoreError::InvalidVisibility { visibility, .. }) => {
+            return Err(ExposureChangeError::InvalidVisibility { visibility });
+        }
+        Err(ExposureStoreError::Persistence { source }) => {
+            return Err(ExposureChangeError::Persistence { source });
+        }
+    };
+    if exposure.visibility == visibility {
         return Ok(ExposureChange {
             application_id: application_id.to_owned(),
             visibility,
-            domain,
+            domain: exposure.domain,
+        });
+    }
+    if visibility == Visibility::Public && exposure.domain.is_none() {
+        return Err(ExposureChangeError::DomainRequired {
+            application_id: application_id.to_owned(),
         });
     }
 
+    begin_change(connection, application_id, exposure.visibility, visibility)?;
     match visibility {
         Visibility::Public => make_public(
             connection,
             application_id,
+            exposure,
             managed_directory,
             caddyfile_path,
         ),
         Visibility::Internal => make_internal(
             connection,
             application_id,
+            exposure.domain,
             managed_directory,
             caddyfile_path,
         ),
     }
 }
 
+fn begin_change(
+    connection: &mut Connection,
+    application_id: &str,
+    current_visibility: Visibility,
+    desired_visibility: Visibility,
+) -> Result<(), ExposureChangeError> {
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|source| ExposureChangeError::Persistence { source })?;
+    let updated = application_store::begin_exposure_change(
+        &transaction,
+        application_id,
+        current_visibility,
+        desired_visibility,
+    )
+    .map_err(|source| ExposureChangeError::Store { source })?;
+    if !updated {
+        return Err(ExposureChangeError::ExposureChanged {
+            application_id: application_id.to_owned(),
+        });
+    }
+    transaction
+        .commit()
+        .map_err(|source| ExposureChangeError::Persistence { source })
+}
+
 fn make_public(
     connection: &mut Connection,
     application_id: &str,
+    exposure: StoredExposure,
     managed_directory: &Path,
     caddyfile_path: &Path,
 ) -> Result<ExposureChange, ExposureChangeError> {
-    let runtime = find_active_runtime(connection, application_id)?;
-
-    let domain = runtime
-        .domain
-        .ok_or_else(|| ExposureChangeError::DomainRequired {
-            application_id: application_id.to_owned(),
-        })?;
-
-    let observation = observe_container(&runtime.container_name, runtime.container_port)
-        .map_err(|source| ExposureChangeError::ObserveFailed { source })?;
-
+    let domain = match exposure.domain {
+        Some(domain) => domain,
+        None => {
+            return fail_public(
+                connection,
+                application_id,
+                "domain_required",
+                "public exposure requires a domain",
+                false,
+                ExposureChangeError::DomainRequired {
+                    application_id: application_id.to_owned(),
+                },
+            );
+        }
+    };
+    let Some((runtime_id, container_name, container_port)) =
+        application_store::load_active_runtime_for_exposure(connection, application_id)
+            .map_err(|source| ExposureChangeError::Store { source })?
+    else {
+        return fail_public(
+            connection,
+            application_id,
+            "runtime_missing",
+            "public exposure requires an active runtime",
+            false,
+            ExposureChangeError::NoActiveRuntime {
+                application_id: application_id.to_owned(),
+            },
+        );
+    };
+    let observation = match observe_container(&container_name, container_port) {
+        Ok(observation) => observation,
+        Err(source) => {
+            let message = source.to_string();
+            return fail_public(
+                connection,
+                application_id,
+                "runtime_observation_failed",
+                &message,
+                false,
+                ExposureChangeError::ObserveFailed { source },
+            );
+        }
+    };
     let endpoint = match observation {
         ContainerObservation {
             state: ObservedRuntimeState::Running,
             endpoint: Some(endpoint),
         } => endpoint,
         ContainerObservation { state, .. } => {
-            return Err(ExposureChangeError::RuntimeNotRunning { state });
+            return fail_public(
+                connection,
+                application_id,
+                "runtime_not_running",
+                &format!("runtime state is {state:?}"),
+                false,
+                ExposureChangeError::RuntimeNotRunning { state },
+            );
         }
     };
-
-    let materialized = materialize_caddy_fragment(
+    let materialized = match materialize_caddy_fragment(
         managed_directory,
         caddyfile_path,
         application_id,
         &domain,
         endpoint,
-    )
-    .map_err(|source| ExposureChangeError::MaterializeFailed { source })?;
-
-    let health_result = check_external_health(&domain, "/", 200);
-    if let Err(source) = health_result {
-        let _ = restore_materialized_caddy_fragment(&materialized, caddyfile_path);
-        return Err(ExposureChangeError::ExternalHealthFailed { source });
+    ) {
+        Ok(materialized) => materialized,
+        Err(source) => {
+            let diverged = source.recovery_failed();
+            let message = source.to_string();
+            return fail_public(
+                connection,
+                application_id,
+                "caddy_materialization_failed",
+                &message,
+                diverged,
+                ExposureChangeError::MaterializeFailed { source },
+            );
+        }
+    };
+    if let Err(source) = check_external_health(&domain, "/", 200) {
+        let recovery_failed =
+            restore_materialized_caddy_fragment(&materialized, caddyfile_path).is_err();
+        let message = source.to_string();
+        return fail_public(
+            connection,
+            application_id,
+            "external_health_check_failed",
+            &message,
+            recovery_failed,
+            ExposureChangeError::ExternalHealthFailed { source },
+        );
     }
-
+    let configuration_version = canonical_fragment_contents(&domain, endpoint);
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|source| ExposureChangeError::Persistence { source })?;
-
-    transaction
-        .execute(
-            "UPDATE exposures
-             SET desired_visibility = 'public',
-                 domain = ?1,
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE application_id = ?2",
-            rusqlite::params![domain, application_id],
-        )
-        .map_err(|source| ExposureChangeError::Persistence { source })?;
-
-    transaction
-        .commit()
-        .map_err(|source| ExposureChangeError::Persistence { source })?;
-
+    let completion = application_store::complete_public_exposure_change(
+        &transaction,
+        application_id,
+        &runtime_id,
+        &configuration_version,
+    );
+    let completed = match completion {
+        Ok(completed) => completed,
+        Err(source) => {
+            drop(transaction);
+            let recovery_failed =
+                restore_materialized_caddy_fragment(&materialized, caddyfile_path).is_err();
+            return fail_public(
+                connection,
+                application_id,
+                "exposure_persistence_failed",
+                "failed to persist a materialized public exposure",
+                recovery_failed,
+                ExposureChangeError::Store { source },
+            );
+        }
+    };
+    if !completed {
+        drop(transaction);
+        let recovery_failed =
+            restore_materialized_caddy_fragment(&materialized, caddyfile_path).is_err();
+        return fail_public(
+            connection,
+            application_id,
+            "exposure_changed",
+            "exposure changed while Caddy was being materialized",
+            recovery_failed,
+            ExposureChangeError::ExposureChanged {
+                application_id: application_id.to_owned(),
+            },
+        );
+    }
+    if let Err(source) = transaction.commit() {
+        let recovery_failed =
+            restore_materialized_caddy_fragment(&materialized, caddyfile_path).is_err();
+        return fail_public(
+            connection,
+            application_id,
+            "exposure_persistence_failed",
+            "failed to commit a materialized public exposure",
+            recovery_failed,
+            ExposureChangeError::Persistence { source },
+        );
+    }
     Ok(ExposureChange {
         application_id: application_id.to_owned(),
         visibility: Visibility::Public,
@@ -260,43 +376,70 @@ fn make_public(
 fn make_internal(
     connection: &mut Connection,
     application_id: &str,
+    domain: Option<String>,
     managed_directory: &Path,
     caddyfile_path: &Path,
 ) -> Result<ExposureChange, ExposureChangeError> {
-    let fragment_path = managed_directory.join(format!("{application_id}.caddy"));
-    if fragment_path.exists() {
-        remove_caddy_fragment(managed_directory, application_id, caddyfile_path)
-            .map_err(|source| ExposureChangeError::RemoveFragmentFailed { source })?;
-    }
-
+    let removed = match remove_caddy_fragment(managed_directory, application_id, caddyfile_path) {
+        Ok(removed) => removed,
+        Err(source) => {
+            let message = source.to_string();
+            let diverged = source.recovery_failed();
+            return fail_internal(
+                connection,
+                application_id,
+                "caddy_removal_failed",
+                &message,
+                diverged,
+                ExposureChangeError::RemoveFragmentFailed { source },
+            );
+        }
+    };
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|source| ExposureChangeError::Persistence { source })?;
-
-    transaction
-        .execute(
-            "UPDATE exposures
-             SET desired_visibility = 'internal',
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE application_id = ?1",
-            [application_id],
-        )
-        .map_err(|source| ExposureChangeError::Persistence { source })?;
-
-    transaction
-        .commit()
-        .map_err(|source| ExposureChangeError::Persistence { source })?;
-
-    let domain = connection
-        .query_row(
-            "SELECT domain FROM exposures WHERE application_id = ?1",
-            [application_id],
-            |row| row.get::<_, Option<String>>(0),
-        )
-        .optional()
-        .map_err(|source| ExposureChangeError::Persistence { source })?
-        .flatten();
-
+    let completion =
+        application_store::complete_internal_exposure_change(&transaction, application_id);
+    let completed = match completion {
+        Ok(completed) => completed,
+        Err(source) => {
+            drop(transaction);
+            let recovery_failed = restore_removed_caddy_fragment(&removed, caddyfile_path).is_err();
+            return fail_internal(
+                connection,
+                application_id,
+                "exposure_persistence_failed",
+                "failed to persist a removed internal exposure",
+                recovery_failed,
+                ExposureChangeError::Store { source },
+            );
+        }
+    };
+    if !completed {
+        drop(transaction);
+        let recovery_failed = restore_removed_caddy_fragment(&removed, caddyfile_path).is_err();
+        return fail_internal(
+            connection,
+            application_id,
+            "exposure_changed",
+            "exposure changed while Caddy was being removed",
+            recovery_failed,
+            ExposureChangeError::ExposureChanged {
+                application_id: application_id.to_owned(),
+            },
+        );
+    }
+    if let Err(source) = transaction.commit() {
+        let recovery_failed = restore_removed_caddy_fragment(&removed, caddyfile_path).is_err();
+        return fail_internal(
+            connection,
+            application_id,
+            "exposure_persistence_failed",
+            "failed to commit a removed internal exposure",
+            recovery_failed,
+            ExposureChangeError::Persistence { source },
+        );
+    }
     Ok(ExposureChange {
         application_id: application_id.to_owned(),
         visibility: Visibility::Internal,
@@ -304,31 +447,71 @@ fn make_internal(
     })
 }
 
-fn find_active_runtime(
-    connection: &Connection,
+fn fail_public<T>(
+    connection: &mut Connection,
     application_id: &str,
-) -> Result<ActiveRuntime, ExposureChangeError> {
-    connection
-        .query_row(
-            "SELECT ri.external_runtime_id, ri.container_port, e.domain
-              FROM runtime_instances ri
-              JOIN applications a ON a.active_deployment_id = ri.deployment_id
-              JOIN exposures e ON e.application_id = ri.application_id
-              WHERE a.id = ?1
-                AND ri.state = 'running'
-                AND ri.removed_at IS NULL",
-            [application_id],
-            |row| {
-                Ok(ActiveRuntime {
-                    container_name: row.get(0)?,
-                    container_port: row.get(1)?,
-                    domain: row.get(2)?,
-                })
-            },
-        )
-        .optional()
-        .map_err(|source| ExposureChangeError::Persistence { source })?
-        .ok_or_else(|| ExposureChangeError::NoActiveRuntime {
+    code: &str,
+    message: &str,
+    diverged: bool,
+    error: ExposureChangeError,
+) -> Result<T, ExposureChangeError> {
+    record_failure(
+        connection,
+        application_id,
+        Visibility::Public,
+        code,
+        message,
+        diverged,
+    )?;
+    Err(error)
+}
+
+fn fail_internal<T>(
+    connection: &mut Connection,
+    application_id: &str,
+    code: &str,
+    message: &str,
+    diverged: bool,
+    error: ExposureChangeError,
+) -> Result<T, ExposureChangeError> {
+    record_failure(
+        connection,
+        application_id,
+        Visibility::Internal,
+        code,
+        message,
+        diverged,
+    )?;
+    Err(error)
+}
+
+fn record_failure(
+    connection: &mut Connection,
+    application_id: &str,
+    visibility: Visibility,
+    code: &str,
+    message: &str,
+    diverged: bool,
+) -> Result<(), ExposureChangeError> {
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|source| ExposureChangeError::Persistence { source })?;
+    let state = if diverged { "diverged" } else { "failed" };
+    let updated = application_store::record_exposure_change_failure(
+        &transaction,
+        application_id,
+        visibility,
+        state,
+        code,
+        message,
+    )
+    .map_err(|source| ExposureChangeError::Store { source })?;
+    if !updated {
+        return Err(ExposureChangeError::ExposureChanged {
             application_id: application_id.to_owned(),
-        })
+        });
+    }
+    transaction
+        .commit()
+        .map_err(|source| ExposureChangeError::Persistence { source })
 }

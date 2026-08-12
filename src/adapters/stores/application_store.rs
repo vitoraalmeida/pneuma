@@ -38,6 +38,48 @@ impl Error for ApplicationStoreError {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub struct StoredExposure {
+    pub visibility: Visibility,
+    pub domain: Option<String>,
+    pub materialization_state: String,
+}
+
+#[derive(Debug)]
+pub enum ExposureStoreError {
+    InvalidVisibility {
+        application_id: String,
+        visibility: String,
+    },
+    Persistence {
+        source: rusqlite::Error,
+    },
+}
+
+impl fmt::Display for ExposureStoreError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidVisibility {
+                application_id,
+                visibility,
+            } => write!(
+                formatter,
+                "application `{application_id}` has invalid persisted visibility `{visibility}`"
+            ),
+            Self::Persistence { source } => write!(formatter, "exposure store error: {source}"),
+        }
+    }
+}
+
+impl Error for ExposureStoreError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::InvalidVisibility { .. } => None,
+            Self::Persistence { source } => Some(source),
+        }
+    }
+}
+
 pub fn generate_id(connection: &Connection) -> Result<String, ApplicationStoreError> {
     connection
         .query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))
@@ -284,109 +326,72 @@ pub fn load_source_repository(
         .map_err(|source| ApplicationStoreError::Persistence { source })
 }
 
-pub fn load_exposure_visibility(
+pub fn load_stored_exposure(
     connection: &Connection,
     application_id: &str,
-) -> Result<String, ApplicationStoreError> {
-    connection
+) -> Result<Option<StoredExposure>, ExposureStoreError> {
+    let exposure = connection
         .query_row(
-            "SELECT desired_visibility FROM exposures WHERE application_id = ?1",
+            "SELECT desired_visibility, domain, materialization_state
+             FROM exposures WHERE application_id = ?1",
             [application_id],
-            |row| row.get(0),
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
         )
         .optional()
-        .map_err(|source| ApplicationStoreError::Persistence { source })?
-        .ok_or_else(|| ApplicationStoreError::NotFound {
+        .map_err(|source| ExposureStoreError::Persistence { source })?;
+    let Some((visibility, domain, materialization_state)) = exposure else {
+        return Ok(None);
+    };
+    let visibility = Visibility::from_database(&visibility).ok_or_else(|| {
+        ExposureStoreError::InvalidVisibility {
             application_id: application_id.to_owned(),
-        })
+            visibility,
+        }
+    })?;
+    Ok(Some(StoredExposure {
+        visibility,
+        domain,
+        materialization_state,
+    }))
 }
 
-pub fn load_exposure_domain(
-    connection: &Connection,
-    application_id: &str,
-) -> Result<Option<String>, ApplicationStoreError> {
-    connection
-        .query_row(
-            "SELECT domain FROM exposures WHERE application_id = ?1",
-            [application_id],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|source| ApplicationStoreError::Persistence { source })
-}
-
-pub fn update_exposure_public(
-    connection: &Connection,
-    application_id: &str,
-    domain: &str,
-) -> Result<(), ApplicationStoreError> {
-    connection
-        .execute(
-            "UPDATE exposures
-             SET desired_visibility = 'public',
-                 domain = ?1,
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE application_id = ?2",
-            params![domain, application_id],
-        )
-        .map_err(|source| ApplicationStoreError::Persistence { source })?;
-    Ok(())
-}
-
-pub fn update_exposure_internal(
-    connection: &Connection,
-    application_id: &str,
-) -> Result<(), ApplicationStoreError> {
-    connection
-        .execute(
-            "UPDATE exposures
-             SET desired_visibility = 'internal', updated_at = CURRENT_TIMESTAMP
-             WHERE application_id = ?1",
-            [application_id],
-        )
-        .map_err(|source| ApplicationStoreError::Persistence { source })?;
-    Ok(())
-}
-
-pub fn begin_public_exposure(
+pub fn begin_exposure_change(
     transaction: &Transaction<'_>,
     application_id: &str,
+    expected_visibility: Visibility,
+    desired_visibility: Visibility,
 ) -> Result<bool, ApplicationStoreError> {
+    let materialization_state = match desired_visibility {
+        Visibility::Public => "applying",
+        Visibility::Internal => "removing",
+    };
     let updated = transaction
         .execute(
             "UPDATE exposures
-             SET materialization_state = 'applying',
-                 last_materialized_at = CURRENT_TIMESTAMP,
+             SET desired_visibility = ?1,
+                 materialization_state = ?2,
+                 last_error_code = NULL,
+                 last_error_message = NULL,
                  updated_at = CURRENT_TIMESTAMP
-             WHERE application_id = ?1 AND desired_visibility = 'public'",
-            [application_id],
+             WHERE application_id = ?3 AND desired_visibility = ?4",
+            params![
+                desired_visibility.database_value(),
+                materialization_state,
+                application_id,
+                expected_visibility.database_value()
+            ],
         )
         .map_err(|source| ApplicationStoreError::Persistence { source })?;
     Ok(updated == 1)
 }
 
-pub fn record_exposure_failure(
-    transaction: &Transaction<'_>,
-    application_id: &str,
-    state: &str,
-    code: &str,
-    message: &str,
-) -> Result<(), ApplicationStoreError> {
-    transaction
-        .execute(
-            "UPDATE exposures
-             SET materialization_state = ?1,
-                 last_error_code = ?2,
-                 last_error_message = ?3,
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE application_id = ?4 AND desired_visibility = 'public'",
-            params![state, code, message, application_id],
-        )
-        .map_err(|source| ApplicationStoreError::Persistence { source })?;
-    Ok(())
-}
-
-pub fn complete_public_exposure(
+pub fn complete_public_exposure_change(
     transaction: &Transaction<'_>,
     application_id: &str,
     runtime_id: &str,
@@ -411,35 +416,66 @@ pub fn complete_public_exposure(
     Ok(updated == 1)
 }
 
-pub fn load_exposure_for_runtime(
-    connection: &Connection,
-    runtime_id: &str,
-) -> Result<Option<(String, String, String, String)>, ApplicationStoreError> {
-    connection
-        .query_row(
-            "SELECT e.application_id, e.desired_visibility, e.domain, e.materialization_state
-             FROM exposures e
-             JOIN runtime_instances ri ON ri.deployment_id = (
-                 SELECT active_deployment_id FROM applications WHERE id = e.application_id
-             )
-             WHERE ri.id = ?1",
-            [runtime_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+pub fn complete_internal_exposure_change(
+    transaction: &Transaction<'_>,
+    application_id: &str,
+) -> Result<bool, ApplicationStoreError> {
+    let updated = transaction
+        .execute(
+            "UPDATE exposures
+             SET active_runtime_id = NULL,
+                 materialization_state = 'not_materialized',
+                 configuration_version = NULL,
+                 last_error_code = NULL,
+                 last_error_message = NULL,
+                 last_materialized_at = CURRENT_TIMESTAMP,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE application_id = ?1
+               AND desired_visibility = 'internal'
+               AND materialization_state = 'removing'",
+            [application_id],
         )
-        .optional()
-        .map_err(|source| ApplicationStoreError::Persistence { source })
+        .map_err(|source| ApplicationStoreError::Persistence { source })?;
+    Ok(updated == 1)
 }
 
-pub fn load_runtime_endpoint_for_exposure(
+pub fn record_exposure_change_failure(
+    transaction: &Transaction<'_>,
+    application_id: &str,
+    visibility: Visibility,
+    state: &str,
+    code: &str,
+    message: &str,
+) -> Result<bool, ApplicationStoreError> {
+    let updated = transaction
+        .execute(
+            "UPDATE exposures
+             SET materialization_state = ?1,
+                 last_error_code = ?2,
+                 last_error_message = ?3,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE application_id = ?4 AND desired_visibility = ?5",
+            params![
+                state,
+                code,
+                message,
+                application_id,
+                visibility.database_value()
+            ],
+        )
+        .map_err(|source| ApplicationStoreError::Persistence { source })?;
+    Ok(updated == 1)
+}
+
+pub fn load_active_runtime_for_exposure(
     connection: &Connection,
     application_id: &str,
-) -> Result<Option<(String, u16, Option<String>)>, ApplicationStoreError> {
+) -> Result<Option<(String, String, u16)>, ApplicationStoreError> {
     connection
         .query_row(
-            "SELECT ri.external_runtime_id, ri.container_port, e.domain
+            "SELECT ri.id, ri.external_runtime_id, ri.container_port
              FROM runtime_instances ri
              JOIN applications a ON a.active_deployment_id = ri.deployment_id
-             JOIN exposures e ON e.application_id = a.id
              WHERE a.id = ?1 AND ri.state = 'running' AND ri.removed_at IS NULL",
             [application_id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),

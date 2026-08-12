@@ -22,6 +22,13 @@ pub struct MaterializedCaddyFragment {
     temporary_path: PathBuf,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub struct RemovedCaddyFragment {
+    path: PathBuf,
+    previous_fragment: Option<Vec<u8>>,
+    temporary_path: PathBuf,
+}
+
 #[derive(Debug)]
 pub enum CaddyCommandError {
     Execute { source: io::Error },
@@ -30,8 +37,17 @@ pub enum CaddyCommandError {
 
 #[derive(Debug)]
 pub enum CaddyRecoveryError {
-    RestoreFragment { path: PathBuf, source: io::Error },
-    Reload { failure: CaddyCommandError },
+    RestoreFragment {
+        path: PathBuf,
+        source: io::Error,
+    },
+    Reload {
+        failure: CaddyCommandError,
+    },
+    ReloadRecovery {
+        failure: CaddyCommandError,
+        recovery: Box<CaddyRecoveryError>,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -121,6 +137,10 @@ impl fmt::Display for CaddyRecoveryError {
                     "failed to reload the restored configuration: {failure}"
                 )
             }
+            Self::ReloadRecovery { failure, recovery } => write!(
+                formatter,
+                "failed to reload Caddy after removal: {failure}; recovery also failed: {recovery}"
+            ),
         }
     }
 }
@@ -130,6 +150,7 @@ impl Error for CaddyRecoveryError {
         match self {
             Self::RestoreFragment { source, .. } => Some(source),
             Self::Reload { failure } => Some(failure),
+            Self::ReloadRecovery { failure, .. } => Some(failure),
         }
     }
 }
@@ -331,13 +352,55 @@ pub fn remove_caddy_fragment(
     managed_directory: &Path,
     application_id: &str,
     caddyfile_path: &Path,
-) -> Result<(), CaddyRecoveryError> {
+) -> Result<RemovedCaddyFragment, CaddyRecoveryError> {
     let fragment_path = managed_directory.join(format!("{application_id}.caddy"));
     let temporary_path = managed_directory.join(format!(".{application_id}.caddy.tmp"));
+    let previous_fragment =
+        read_previous_fragment(&fragment_path).map_err(|error| match error {
+            MaterializeCaddyFragmentError::Filesystem { path, source, .. } => {
+                CaddyRecoveryError::RestoreFragment { path, source }
+            }
+            _ => unreachable!(),
+        })?;
     restore_fragment(&fragment_path, &temporary_path, &None)?;
-    caddy_command("reload", caddyfile_path)
-        .map_err(|failure| CaddyRecoveryError::Reload { failure })?;
-    Ok(())
+    if let Err(failure) = caddy_command("reload", caddyfile_path) {
+        let recovery = recover_previous_configuration(
+            &fragment_path,
+            &temporary_path,
+            &previous_fragment,
+            caddyfile_path,
+        );
+        return match recovery {
+            Ok(()) => Err(CaddyRecoveryError::Reload { failure }),
+            Err(recovery) => Err(CaddyRecoveryError::ReloadRecovery {
+                failure,
+                recovery: Box::new(recovery),
+            }),
+        };
+    }
+    Ok(RemovedCaddyFragment {
+        path: fragment_path,
+        previous_fragment,
+        temporary_path,
+    })
+}
+
+pub fn restore_removed_caddy_fragment(
+    removed: &RemovedCaddyFragment,
+    caddyfile_path: &Path,
+) -> Result<(), CaddyRecoveryError> {
+    recover_previous_configuration(
+        &removed.path,
+        &removed.temporary_path,
+        &removed.previous_fragment,
+        caddyfile_path,
+    )
+}
+
+impl CaddyRecoveryError {
+    pub fn recovery_failed(&self) -> bool {
+        matches!(self, Self::ReloadRecovery { .. })
+    }
 }
 
 fn validate_input(

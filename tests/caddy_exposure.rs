@@ -9,7 +9,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use pneuma::adapters::caddy_exposure::{
     CaddyCommandError, CaddyFilesystemAction, MaterializeCaddyFragmentError,
-    canonical_fragment_contents, materialize_caddy_fragment, restore_materialized_caddy_fragment,
+    canonical_fragment_contents, materialize_caddy_fragment, remove_caddy_fragment,
+    restore_materialized_caddy_fragment,
 };
 
 const CHILD_CASE: &str = "PNEUMA_CADDY_TEST_CASE";
@@ -125,6 +126,20 @@ fn removes_a_new_fragment_when_its_first_reload_fails() {
 
     assert!(!environment.fragment_path().exists());
     assert!(!environment.temporary_path().exists());
+}
+
+#[test]
+fn restores_the_fragment_when_removal_reload_fails() {
+    let environment = CaddyTestEnvironment::new();
+    environment.write_previous("known good route\n");
+
+    environment.run_removal_child("reload-failure");
+
+    assert_eq!(environment.active_fragment(), "known good route\n");
+    let commands = environment.caddy_commands();
+    assert_eq!(commands.len(), 2);
+    assert!(commands[0].starts_with("reload "));
+    assert!(commands[1].starts_with("reload "));
 }
 
 #[test]
@@ -301,6 +316,26 @@ fn caddy_child_process() {
     }
 }
 
+#[test]
+fn caddy_removal_child_process() {
+    let Some(case) = env::var_os(CHILD_CASE) else {
+        return;
+    };
+    let case = case.to_str().unwrap();
+    if case != "removal-reload-failure" {
+        return;
+    }
+    let managed_directory = PathBuf::from(env::var_os(MANAGED_DIRECTORY).unwrap());
+    let caddyfile_path = PathBuf::from(env::var_os(CADDYFILE_PATH).unwrap());
+
+    let error =
+        remove_caddy_fragment(&managed_directory, APPLICATION_ID, &caddyfile_path).unwrap_err();
+    assert!(matches!(
+        error,
+        pneuma::adapters::caddy_exposure::CaddyRecoveryError::Reload { .. }
+    ));
+}
+
 struct CaddyTestEnvironment {
     root: PathBuf,
     managed_directory: PathBuf,
@@ -367,6 +402,24 @@ impl CaddyTestEnvironment {
         let output = Command::new(env::current_exe().unwrap())
             .args(["--exact", "caddy_child_process", "--nocapture"])
             .env(CHILD_CASE, case)
+            .env(MANAGED_DIRECTORY, &self.managed_directory)
+            .env(CADDYFILE_PATH, &self.caddyfile_path)
+            .env(CADDY_LOG, &self.caddy_log)
+            .env("PNEUMA_FAKE_CADDY_CASE", case)
+            .env(
+                "PNEUMA_FAKE_CADDY_RELOAD_COUNT",
+                self.root.join("reload-count"),
+            )
+            .env("PATH", executable_path(&self.fake_bin))
+            .output()
+            .unwrap();
+        assert_command_succeeded(&output);
+    }
+
+    fn run_removal_child(&self, case: &str) {
+        let output = Command::new(env::current_exe().unwrap())
+            .args(["--exact", "caddy_removal_child_process", "--nocapture"])
+            .env(CHILD_CASE, "removal-reload-failure")
             .env(MANAGED_DIRECTORY, &self.managed_directory)
             .env(CADDYFILE_PATH, &self.caddyfile_path)
             .env(CADDY_LOG, &self.caddy_log)

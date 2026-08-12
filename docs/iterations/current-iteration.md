@@ -62,7 +62,11 @@ semântica de reconciliation antes de implementar `pneuma reconcile`.
       CAS a `external_runtime_id` e desired state; observações atualizam
       timestamp/endpoint sem tombar `Missing`, APIs mortas foram removidas e
       lifecycle continua recuperando a RuntimeInstance pela unidade Quadlet.
-- [ ] Persistir desired visibility antes de materializar Caddy.
+- [x] Persistir desired visibility antes de materializar Caddy.
+      Resultado: visibility e estado `applying`/`removing` são persistidos por
+      CAS antes de Caddy; conclusões/falhas são recuperáveis com diagnóstico,
+      e materialização ou remoção compensam o fragmento quando a persistência
+      posterior falha.
 - [ ] Finalizar extração de persistência de `deployment_create`.
 - [ ] Provar lock Immediate e reserva lógica cross-process de deployment.
 - [ ] Definir catálogo de cenários E2E de reconciliation da v0.3.

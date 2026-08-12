@@ -150,12 +150,18 @@ um erro gera warning sem reverter a promoção já concluída.
 Aplicações públicas são publicadas por fragmentos `<application-id>.caddy` no
 diretório gerenciado, importado pelo `Caddyfile` principal:
 
-1. gerar o fragmento em arquivo temporário na mesma filesystem;
-2. `caddy validate` contra o `Caddyfile` completo;
-3. rename atômico e `caddy reload`;
-4. health check externo;
-5. falha externa restaura o fragmento anterior e recarrega; se a recuperação
+1. persistir `desired_visibility` e `materialization_state=applying` antes de
+   materializar a rota;
+2. gerar o fragmento em arquivo temporário na mesma filesystem;
+3. `caddy validate` contra o `Caddyfile` completo;
+4. rename atômico, `caddy reload` e health check externo;
+5. finalizar `active` somente após todos os efeitos confirmados; uma falha
+   restaura o fragmento anterior e recarrega; se a recuperação
    falhar, a exposição fica `diverged` para inspeção manual.
+
+Para tornar uma aplicação interna, o Pneuma persiste `Internal/removing` antes
+de remover a rota. Após remover e recarregar, finaliza `not_materialized`; se a
+persistência posterior falhar, registra `diverged` porque a rota já foi alterada.
 
 `exposures.configuration_version` guarda o conteúdo canônico do fragmento
 (`domain` e endpoint loopback), não a Release nem o Deployment.
