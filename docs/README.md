@@ -13,7 +13,7 @@ altera; um **registro** descreve algo executado e não muda.
 | [`operations/dev-vm-tutorial.md`](operations/dev-vm-tutorial.md) | Tutorial da VM de desenvolvimento (Debian 13): criação, provisionamento, deploy e E2E |
 | [`architecture/architecture.md`](architecture/architecture.md) | Arquitetura implementada: estrutura, runtime Quadlet, exposição, persistência e máquina de estados |
 | [`iterations/current-iteration.md`](iterations/current-iteration.md) | Iteração em andamento (o único acompanhamento de trabalho) |
-| [`design/pre-v0.3-consolidation.md`](design/pre-v0.3-consolidation.md) | Plano executável da consolidação pós-v0.2 / pré-v0.3 (retomável) |
+| [`design/pre-v0.3-consolidation.md`](design/pre-v0.3-consolidation.md) | Design aprovado da consolidação pós-v0.2 / pré-v0.3 |
 | [`roadmap.md`](roadmap.md) | Roadmap consolidado v0.1 → v0.5; contrato de evolução do projeto |
 
 ## Registros operacionais
