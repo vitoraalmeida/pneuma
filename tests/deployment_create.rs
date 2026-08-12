@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use pneuma::adapters::database;
 use pneuma::domain::deployment::{DeploymentStatus, DeploymentType};
@@ -7,6 +8,35 @@ use pneuma::use_cases::deployment_create::{
     CreateDeploymentError, create_deployment, create_deployment_with_source_revision,
 };
 use pneuma::use_cases::release_create::create_release;
+use rusqlite::{ErrorCode, TransactionBehavior};
+
+#[test]
+fn immediate_transaction_acquires_the_writer_lock_before_reading() {
+    let database_path = temporary_database_path();
+    let mut first = database::open(&database_path).unwrap();
+    let mut second = database::open(&database_path).unwrap();
+    second.busy_timeout(std::time::Duration::ZERO).unwrap();
+
+    let transaction = first
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .unwrap();
+    let error = create_deployment(
+        &mut second,
+        "missing",
+        "missing-release",
+        DeploymentType::Deploy,
+    )
+    .unwrap_err();
+    drop(transaction);
+    let _ = std::fs::remove_file(&database_path);
+
+    assert!(matches!(
+        error,
+        CreateDeploymentError::Persistence {
+            source: rusqlite::Error::SqliteFailure(error, _)
+        } if error.code == ErrorCode::DatabaseBusy
+    ));
+}
 
 #[test]
 fn persists_a_pending_deployment_atomically() {
@@ -372,4 +402,15 @@ fn fixture_path(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
         .join(name)
+}
+
+fn temporary_database_path() -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "pneuma-deployment-create-{}-{}.sqlite3",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ))
 }
