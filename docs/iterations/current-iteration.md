@@ -72,7 +72,10 @@ semântica de reconciliation antes de implementar `pneuma reconcile`.
       validada de Deployment sob `Immediate`; `deployment_create.rs` mantém
       regras/commit sem SQL inline e testes cobrem runtime ativo/removido,
       rollback e Release ausente.
-- [ ] Provar lock Immediate e reserva lógica cross-process de deployment.
+- [x] Provar lock Immediate e reserva lógica cross-process de deployment.
+      Resultado: duas conexões provam aquisição antecipada de writer lock com
+      `DatabaseBusy`; dois processos CLI provam que deployment não-terminal
+      retorna `ActiveDeployment` durante efeitos externos, sem lock ou índice.
 - [ ] Definir catálogo de cenários E2E de reconciliation da v0.3.
 - [ ] Executar regressão final de código, migration e VM.
 

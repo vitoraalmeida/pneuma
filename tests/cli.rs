@@ -5,7 +5,7 @@ use std::io::{Read, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Child, Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -1364,6 +1364,49 @@ fn visibility_set_rejects_an_unknown_visibility() {
 }
 
 #[test]
+fn a_second_deploy_is_rejected_while_the_first_is_starting() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    let marker = environment.root.join("systemctl-started");
+    let release = environment.root.join("systemctl-release");
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    let first = environment.spawn_gated_deploy(port, &marker, &release);
+    wait_for_file(&marker, Duration::from_secs(2));
+
+    let second = environment.deploy(port, false);
+    assert!(!second.status.success());
+    let stderr = String::from_utf8_lossy(&second.stderr);
+    assert!(
+        stderr.contains("already has an active deployment"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("database is locked"), "{stderr}");
+    assert!(!stderr.contains("UNIQUE constraint"), "{stderr}");
+
+    let server = thread::spawn(move || respond_once(&listener, 200));
+    fs::write(&release, "release").unwrap();
+    let first_output = wait_for_child(first, Duration::from_secs(5));
+    server.join().unwrap();
+    assert_command_succeeded(&first_output);
+
+    let connection = database::open(&environment.database_path).unwrap();
+    let deployment_count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM deployments", [], |row| row.get(0))
+        .unwrap();
+    let runtime_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM runtime_instances WHERE state = 'running' AND removed_at IS NULL",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(deployment_count, 1);
+    assert_eq!(runtime_count, 1);
+}
+
+#[test]
 fn deployments_source_is_dash_for_oci_releases() {
     let environment = DeploymentEnvironment::new();
     assert_command_succeeded(&environment.import());
@@ -1633,6 +1676,16 @@ impl DeploymentEnvironment {
         server.join().unwrap();
     }
 
+    fn spawn_gated_deploy(&self, port: u16, marker: &Path, release: &Path) -> Child {
+        let mut command = self.deploy_command(port);
+        command
+            .env("PNEUMA_FAKE_SYSTEMCTL_START_MARKER", marker)
+            .env("PNEUMA_FAKE_SYSTEMCTL_START_RELEASE", release)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        command.spawn().unwrap()
+    }
+
     fn run_lifecycle(&self, subcommand: &str) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_pneuma"));
         command
@@ -1676,6 +1729,17 @@ impl DeploymentEnvironment {
         verbose: bool,
         external_status: u16,
     ) -> Output {
+        let mut command = self.deploy_command(port);
+        command.env("PNEUMA_FAKE_CURL_STATUS", external_status.to_string());
+        if verbose {
+            command.arg("--verbose");
+        }
+        command.output().unwrap()
+    }
+
+    fn deploy_command(&self, port: u16) -> Command {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let reference = format!("{}@{digest}", self.image_repository);
         let mut command = Command::new(env!("CARGO_BIN_EXE_pneuma"));
         command
             .env("PNEUMA_DATABASE_PATH", &self.database_path)
@@ -1689,26 +1753,16 @@ impl DeploymentEnvironment {
             .env("PNEUMA_FAKE_PODMAN_COUNT", self.root.join("podman-count"))
             .env("PNEUMA_FAKE_PODMAN_LOG", self.root.join("podman.log"))
             .env("PNEUMA_FAKE_CURL_LOG", self.root.join("curl.log"))
-            .env("PNEUMA_FAKE_CURL_STATUS", external_status.to_string())
-            .env(
-                "PNEUMA_FAKE_PODMAN_DIGEST",
-                format!("sha256:{}", "a".repeat(64)),
-            );
-        if verbose {
-            command.arg("--verbose");
-        }
-        let digest = format!("sha256:{}", "a".repeat(64));
-        let reference = format!("{}@{digest}", self.image_repository);
-        command
+            .env("PNEUMA_FAKE_CURL_STATUS", "200")
+            .env("PNEUMA_FAKE_PODMAN_DIGEST", digest)
             .args([
                 "app",
                 "deploy",
                 &self.application_name,
                 "--image",
                 &reference,
-            ])
-            .output()
-            .unwrap()
+            ]);
+        command
     }
 
     fn deploy_oci(&self, reference: &str, port: u16) -> Output {
@@ -1939,6 +1993,12 @@ case "$1" in
             printf 'start failed\n' >&2
             exit 1
         fi
+        if [ "$1" = "start" ] && [ -n "${PNEUMA_FAKE_SYSTEMCTL_START_MARKER:-}" ]; then
+            : > "$PNEUMA_FAKE_SYSTEMCTL_START_MARKER"
+            while [ ! -f "${PNEUMA_FAKE_SYSTEMCTL_START_RELEASE:-}" ]; do
+                sleep 0.01
+            done
+        fi
         if [ "$1" = "start" ] && [ -n "${PNEUMA_FAKE_CONTAINER_STATE:-}" ]; then
             printf 'running\n' > "$PNEUMA_FAKE_CONTAINER_STATE"
             rm -f "${PNEUMA_FAKE_PODMAN_REMOVED:-}"
@@ -2008,6 +2068,37 @@ fn respond_once(listener: &TcpListener, status: u16) {
             }
             Err(error) => panic!("health server failed to accept a request: {error}"),
         }
+    }
+}
+
+fn wait_for_file(path: &Path, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    while !path.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {}",
+            path.display()
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn wait_for_child(mut child: Child, timeout: Duration) -> Output {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if child.try_wait().unwrap().is_some() {
+            return child.wait_with_output().unwrap();
+        }
+        if Instant::now() >= deadline {
+            child.kill().unwrap();
+            let output = child.wait_with_output().unwrap();
+            panic!(
+                "deploy child timed out\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        thread::sleep(Duration::from_millis(10));
     }
 }
 
