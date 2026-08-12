@@ -40,6 +40,9 @@ pub enum RegisterCandidateRuntimeError {
     EndpointConflict {
         endpoint: SocketAddr,
     },
+    Store {
+        source: RuntimeStoreError,
+    },
     Persistence {
         source: rusqlite::Error,
     },
@@ -77,6 +80,9 @@ impl fmt::Display for RegisterCandidateRuntimeError {
             Self::EndpointConflict { endpoint } => {
                 write!(formatter, "runtime endpoint `{endpoint}` is already active")
             }
+            Self::Store { source } => {
+                write!(formatter, "failed to register candidate runtime: {source}")
+            }
             Self::Persistence { source } => {
                 write!(formatter, "failed to register candidate runtime: {source}")
             }
@@ -87,6 +93,7 @@ impl fmt::Display for RegisterCandidateRuntimeError {
 impl Error for RegisterCandidateRuntimeError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::Store { source } => Some(source),
             Self::Persistence { source } => Some(source),
             Self::InvalidExternalRuntimeId
             | Self::InvalidEndpoint { .. }
@@ -120,16 +127,8 @@ impl From<DeploymentStoreError> for RegisterCandidateRuntimeError {
 impl From<RuntimeStoreError> for RegisterCandidateRuntimeError {
     fn from(error: RuntimeStoreError) -> Self {
         match error {
-            RuntimeStoreError::NotFound { runtime_id } => Self::ExternalRuntimeConflict {
-                external_runtime_id: runtime_id,
-            },
-            RuntimeStoreError::InvalidState { .. } => Self::Persistence {
-                source: rusqlite::Error::QueryReturnedNoRows,
-            },
-            RuntimeStoreError::PortAlreadyReserved { port } => Self::EndpointConflict {
-                endpoint: SocketAddr::from((Ipv4Addr::LOCALHOST, port)),
-            },
             RuntimeStoreError::Persistence { source } => Self::Persistence { source },
+            RuntimeStoreError::InvalidDesiredState { .. } => Self::Store { source: error },
         }
     }
 }

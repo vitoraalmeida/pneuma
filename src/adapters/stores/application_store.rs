@@ -238,39 +238,6 @@ pub fn application_exists(
         .map_err(|source| ApplicationStoreError::Persistence { source })
 }
 
-pub fn load_desired_runtime_state(
-    connection: &Connection,
-    application_id: &str,
-) -> Result<String, ApplicationStoreError> {
-    connection
-        .query_row(
-            "SELECT desired_runtime_state FROM applications WHERE id = ?1",
-            [application_id],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|source| ApplicationStoreError::Persistence { source })?
-        .ok_or_else(|| ApplicationStoreError::NotFound {
-            application_id: application_id.to_owned(),
-        })
-}
-
-pub fn update_desired_runtime_state(
-    connection: &Connection,
-    application_id: &str,
-    state: &str,
-) -> Result<(), ApplicationStoreError> {
-    connection
-        .execute(
-            "UPDATE applications
-             SET desired_runtime_state = ?1, updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?2",
-            params![state, application_id],
-        )
-        .map_err(|source| ApplicationStoreError::Persistence { source })?;
-    Ok(())
-}
-
 pub fn activate_deployment(
     transaction: &Transaction<'_>,
     application_id: &str,

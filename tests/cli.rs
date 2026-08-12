@@ -7,7 +7,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use pneuma::adapters::database;
 
@@ -753,6 +753,49 @@ fn lifecycle_commands_report_an_unknown_application() {
 }
 
 #[test]
+fn lifecycle_ignores_a_runtime_from_a_non_succeeded_deployment() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    environment.deploy_current_revision();
+
+    let connection = database::open(&environment.database_path).unwrap();
+    connection
+        .execute("UPDATE deployments SET status = 'failed'", [])
+        .unwrap();
+    drop(connection);
+
+    let status = environment.run_lifecycle("status");
+    assert!(!status.status.success());
+    assert!(
+        String::from_utf8_lossy(&status.stderr).contains("is not deployed"),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+}
+
+#[test]
+fn failed_start_keeps_the_requested_desired_state() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    environment.deploy_current_revision();
+    assert_command_succeeded(&environment.run_lifecycle("stop"));
+    fs::write(environment.root.join("systemctl-start-failure"), "fail").unwrap();
+
+    let start = environment.run_lifecycle("start");
+    assert!(!start.status.success());
+
+    let connection = database::open(&environment.database_path).unwrap();
+    let desired_state: String = connection
+        .query_row(
+            "SELECT desired_runtime_state FROM applications",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(desired_state, "running");
+}
+
+#[test]
 fn a_removed_container_guides_a_new_deployment() {
     let status_environment = DeploymentEnvironment::new();
     assert_command_succeeded(&status_environment.import());
@@ -867,7 +910,7 @@ fn status_reports_stopped_after_stop_when_container_was_removed() {
 }
 
 #[test]
-fn redeploys_a_verified_oci_image_after_its_container_is_removed() {
+fn starts_a_verified_oci_image_after_its_container_is_removed() {
     let environment = DeploymentEnvironment::new();
     assert_command_succeeded(&environment.import());
     let digest = format!("sha256:{}", "a".repeat(64));
@@ -884,13 +927,12 @@ fn redeploys_a_verified_oci_image_after_its_container_is_removed() {
     assert!(!status.status.success());
     assert!(String::from_utf8_lossy(&status.stderr).contains("is missing"));
 
-    let second_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-    let second_port = second_listener.local_addr().unwrap().port();
-    let second_server = thread::spawn(move || respond_once(&second_listener, 200));
-    let output = environment.deploy_oci(&reference, second_port);
-    second_server.join().unwrap();
-
-    assert_command_succeeded(&output);
+    assert_command_succeeded(&environment.run_lifecycle("start"));
+    let connection = database::open(&environment.database_path).unwrap();
+    let deployment_count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM deployments", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(deployment_count, 1);
 }
 
 #[test]
@@ -930,6 +972,73 @@ fn status_reconciles_a_container_recreated_under_the_stable_name() {
         )
         .unwrap();
     assert_eq!(reconciled, replacement);
+}
+
+#[test]
+fn status_reports_runtime_changed_when_external_id_cas_is_lost() {
+    let mut environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    environment.deploy_current_revision();
+
+    let connection = database::open(&environment.database_path).unwrap();
+    let recorded: String = connection
+        .query_row(
+            "SELECT external_runtime_id FROM runtime_instances",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    connection
+        .execute_batch(
+            "CREATE TRIGGER reject_external_runtime_id_reconciliation
+             BEFORE UPDATE OF external_runtime_id ON runtime_instances
+             BEGIN
+                 SELECT RAISE(IGNORE);
+             END",
+        )
+        .unwrap();
+    drop(connection);
+
+    environment.stale_container_id = Some(recorded);
+    environment.replacement_container_id = Some("c".repeat(64));
+    let status = environment.run_lifecycle("status");
+
+    assert!(!status.status.success());
+    assert!(
+        String::from_utf8_lossy(&status.stderr).contains("changed while it was being controlled"),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+}
+
+#[test]
+fn status_updates_the_running_runtime_endpoint_and_observation_timestamp() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    environment.deploy_current_revision();
+
+    let connection = database::open(&environment.database_path).unwrap();
+    connection
+        .execute(
+            "UPDATE runtime_instances
+             SET host_port = 30001, last_observed_at = '2000-01-01 00:00:00'",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+
+    assert_command_succeeded(&environment.run_lifecycle("status"));
+
+    let connection = database::open(&environment.database_path).unwrap();
+    let (host_port, observed_at): (u16, String) = connection
+        .query_row(
+            "SELECT host_port, last_observed_at FROM runtime_instances",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(host_port, 30000);
+    assert_ne!(observed_at, "2000-01-01 00:00:00");
 }
 
 #[test]
@@ -1414,6 +1523,10 @@ impl DeploymentEnvironment {
             .env(
                 "PNEUMA_FAKE_PODMAN_REMOVED",
                 self.root.join("podman-removed"),
+            )
+            .env(
+                "PNEUMA_FAKE_SYSTEMCTL_START_FAILURE",
+                self.root.join("systemctl-start-failure"),
             );
         if let Some(stale) = &self.stale_container_id {
             command.env("PNEUMA_FAKE_PODMAN_STALE_ID", stale);
@@ -1692,6 +1805,10 @@ if [ "$1" = "--user" ]; then
 fi
 case "$1" in
     daemon-reload|start|stop|enable|disable)
+        if [ "$1" = "start" ] && [ -f "${PNEUMA_FAKE_SYSTEMCTL_START_FAILURE:-}" ]; then
+            printf 'start failed\n' >&2
+            exit 1
+        fi
         if [ "$1" = "start" ] && [ -n "${PNEUMA_FAKE_CONTAINER_STATE:-}" ]; then
             printf 'running\n' > "$PNEUMA_FAKE_CONTAINER_STATE"
             rm -f "${PNEUMA_FAKE_PODMAN_REMOVED:-}"
@@ -1739,10 +1856,29 @@ fn executable_path(fake_bin: &Path) -> OsString {
 }
 
 fn respond_once(listener: &TcpListener, status: u16) {
-    let (mut stream, _) = listener.accept().unwrap();
-    read_request(&mut stream);
-    let response = format!("HTTP/1.1 {status} Test\r\nContent-Length: 0\r\n\r\n");
-    stream.write_all(response.as_bytes()).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        match listener.accept() {
+            Ok((mut stream, _)) => {
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                read_request(&mut stream);
+                let response = format!("HTTP/1.1 {status} Test\r\nContent-Length: 0\r\n\r\n");
+                stream.write_all(response.as_bytes()).unwrap();
+                return;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    panic!("health server timed out waiting for a request");
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("health server failed to accept a request: {error}"),
+        }
+    }
 }
 
 fn read_request(stream: &mut TcpStream) {

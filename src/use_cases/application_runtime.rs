@@ -2,12 +2,13 @@ use std::error::Error;
 use std::fmt;
 use std::net::SocketAddr;
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::Connection;
 
 use crate::adapters::local_runtime::{
     ContainerCommandOutput, ContainerObservation, ControlContainerError, ObserveContainerError,
     ObservedRuntimeState, observe_container, resolve_container_id, start_container, stop_container,
 };
+use crate::adapters::stores::runtime_store::{self, CurrentSuccessfulRuntime, RuntimeStoreError};
 use crate::adapters::systemd_quadlet::{
     QuadletError, container_name, start as start_unit, stop as stop_unit, unit_exists, unit_name,
 };
@@ -35,6 +36,9 @@ pub enum RuntimeLifecycleError {
     },
     InvalidDesiredState {
         state: String,
+    },
+    Store {
+        source: RuntimeStoreError,
     },
     Observe {
         runtime_id: String,
@@ -64,7 +68,7 @@ impl fmt::Display for RuntimeLifecycleError {
             ),
             Self::ContainerMissing { application_name } => write!(
                 formatter,
-                "the container of application `{application_name}` is missing; run `pneuma app deploy` to recreate it"
+                "the container of application `{application_name}` is missing; run `pneuma app start` to recover it or `pneuma app deploy` to recreate it"
             ),
             Self::RuntimeChanged { runtime_id } => write!(
                 formatter,
@@ -74,6 +78,9 @@ impl fmt::Display for RuntimeLifecycleError {
                 formatter,
                 "application has invalid persisted desired state `{state}`"
             ),
+            Self::Store { source } => {
+                write!(formatter, "failed to control application runtime: {source}")
+            }
             Self::Observe { runtime_id, source } => write!(
                 formatter,
                 "failed to observe runtime `{runtime_id}`: {source}"
@@ -107,6 +114,7 @@ impl Error for RuntimeLifecycleError {
             Self::Observe { source, .. } => Some(source),
             Self::Control { source, .. } => Some(source.as_ref()),
             Self::Supervision { source, .. } => Some(source),
+            Self::Store { source } => Some(source),
             Self::Persistence { source } => Some(source),
             Self::NotDeployed { .. }
             | Self::ContainerMissing { .. }
@@ -135,7 +143,7 @@ pub fn report_application_status(
                 state: ObservedRuntimeState::Stopped,
                 endpoint: None,
             };
-            persist_stopped_without_removal(connection, &runtime, &stopped_observation)?;
+            persist_observation(connection, &runtime, &stopped_observation)?;
             return Ok(RuntimeObservation {
                 desired_runtime_state,
                 observed_runtime_state: ObservedRuntimeState::Stopped,
@@ -216,7 +224,7 @@ fn transition_application(
                 state: ObservedRuntimeState::Stopped,
                 endpoint: None,
             };
-            persist_stopped_without_removal(connection, &runtime, &stopped_observation)?;
+            persist_observation(connection, &runtime, &stopped_observation)?;
             return Ok(RuntimeObservation {
                 desired_runtime_state,
                 observed_runtime_state: ObservedRuntimeState::Stopped,
@@ -304,7 +312,7 @@ fn transition_application(
             state: ObservedRuntimeState::Stopped,
             endpoint: None,
         };
-        persist_stopped_without_removal(connection, &runtime, &stopped_observation)?;
+        persist_observation(connection, &runtime, &stopped_observation)?;
         return Ok(RuntimeObservation {
             desired_runtime_state,
             observed_runtime_state: ObservedRuntimeState::Stopped,
@@ -330,7 +338,7 @@ fn transition_application(
 // before concluding the runtime is gone.
 fn observe_current_runtime(
     connection: &Connection,
-    runtime: &CurrentRuntime,
+    runtime: &CurrentSuccessfulRuntime,
     application_name: &str,
 ) -> Result<(ContainerObservation, String), RuntimeLifecycleError> {
     let observation = observe_container(&runtime.external_runtime_id, runtime.container_port)
@@ -346,14 +354,18 @@ fn observe_current_runtime(
             Ok(id) => id,
             Err(_) => return Ok((observation, runtime.external_runtime_id.clone())),
         };
-    connection
-        .execute(
-            "UPDATE runtime_instances
-             SET external_runtime_id = ?1, updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?2 AND removed_at IS NULL",
-            params![&resolved, &runtime.runtime_id],
-        )
-        .map_err(|source| RuntimeLifecycleError::Persistence { source })?;
+    let reconciled = runtime_store::reconcile_external_runtime_id(
+        connection,
+        &runtime.runtime_id,
+        &runtime.external_runtime_id,
+        &resolved,
+    )
+    .map_err(|source| RuntimeLifecycleError::Store { source })?;
+    if !reconciled {
+        return Err(RuntimeLifecycleError::RuntimeChanged {
+            runtime_id: runtime.runtime_id.clone(),
+        });
+    }
     let observation = observe_container(&resolved, runtime.container_port).map_err(|source| {
         RuntimeLifecycleError::Observe {
             runtime_id: runtime.runtime_id.clone(),
@@ -363,45 +375,13 @@ fn observe_current_runtime(
     Ok((observation, resolved))
 }
 
-struct CurrentRuntime {
-    runtime_id: String,
-    external_runtime_id: String,
-    container_port: u16,
-    deployment_id: String,
-}
-
 fn load_current_runtime(
     connection: &Connection,
     application_id: &str,
     application_name: &str,
-) -> Result<CurrentRuntime, RuntimeLifecycleError> {
-    connection
-        .query_row(
-            "SELECT
-                runtime_instances.id,
-                runtime_instances.external_runtime_id,
-                runtime_instances.container_port,
-                runtime_instances.deployment_id
-             FROM runtime_instances
-              JOIN applications
-                ON applications.active_deployment_id = runtime_instances.deployment_id
-              JOIN deployments ON deployments.id = runtime_instances.deployment_id
-              WHERE applications.id = ?1
-                AND runtime_instances.state IN ('running', 'stopped')
-                AND runtime_instances.removed_at IS NULL
-                AND deployments.status = 'succeeded'",
-            [application_id],
-            |row| {
-                Ok(CurrentRuntime {
-                    runtime_id: row.get(0)?,
-                    external_runtime_id: row.get(1)?,
-                    container_port: row.get(2)?,
-                    deployment_id: row.get(3)?,
-                })
-            },
-        )
-        .optional()
-        .map_err(|source| RuntimeLifecycleError::Persistence { source })?
+) -> Result<CurrentSuccessfulRuntime, RuntimeLifecycleError> {
+    runtime_store::load_current_successful_runtime(connection, application_id)
+        .map_err(|source| RuntimeLifecycleError::Store { source })?
         .ok_or_else(|| RuntimeLifecycleError::NotDeployed {
             application_name: application_name.to_owned(),
         })
@@ -411,15 +391,13 @@ fn load_desired_state(
     connection: &Connection,
     application_id: &str,
 ) -> Result<DesiredRuntimeState, RuntimeLifecycleError> {
-    let value = connection
-        .query_row(
-            "SELECT desired_runtime_state FROM applications WHERE id = ?1",
-            [application_id],
-            |row| row.get::<_, String>(0),
-        )
-        .map_err(|source| RuntimeLifecycleError::Persistence { source })?;
-    DesiredRuntimeState::from_database(&value)
-        .ok_or_else(|| RuntimeLifecycleError::InvalidDesiredState { state: value })
+    match runtime_store::load_desired_runtime_state(connection, application_id) {
+        Ok(state) => Ok(state),
+        Err(RuntimeStoreError::InvalidDesiredState { state, .. }) => {
+            Err(RuntimeLifecycleError::InvalidDesiredState { state })
+        }
+        Err(source) => Err(RuntimeLifecycleError::Store { source }),
+    }
 }
 
 fn set_desired_state(
@@ -427,95 +405,33 @@ fn set_desired_state(
     application_id: &str,
     desired_runtime_state: DesiredRuntimeState,
 ) -> Result<(), RuntimeLifecycleError> {
-    connection
-        .execute(
-            "UPDATE applications
-             SET desired_runtime_state = ?1, updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?2",
-            params![desired_runtime_state.database_value(), application_id],
-        )
-        .map_err(|source| RuntimeLifecycleError::Persistence { source })?;
+    let expected = load_desired_state(connection, application_id)?;
+    let updated = runtime_store::compare_and_set_desired_runtime_state(
+        connection,
+        application_id,
+        expected,
+        desired_runtime_state,
+    )
+    .map_err(|source| RuntimeLifecycleError::Store { source })?;
+    if !updated {
+        return Err(RuntimeLifecycleError::RuntimeChanged {
+            runtime_id: application_id.to_owned(),
+        });
+    }
     Ok(())
 }
 
 fn persist_observation(
     connection: &Connection,
-    runtime: &CurrentRuntime,
+    runtime: &CurrentSuccessfulRuntime,
     observation: &crate::adapters::local_runtime::ContainerObservation,
 ) -> Result<(), RuntimeLifecycleError> {
-    let state = observed_state_database_value(&observation.state);
-    let updated = if observation.state == ObservedRuntimeState::Missing {
-        connection.execute(
-            "UPDATE runtime_instances
-             SET last_observed_state = 'missing',
-                 last_observed_at = CURRENT_TIMESTAMP,
-                 removed_at = CURRENT_TIMESTAMP,
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?1 AND removed_at IS NULL",
-            [&runtime.runtime_id],
-        )
-    } else if let Some(endpoint) = observation.endpoint {
-        connection.execute(
-            "UPDATE runtime_instances
-             SET last_observed_state = ?2,
-                 host_port = ?3,
-                 last_observed_at = CURRENT_TIMESTAMP,
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?1 AND removed_at IS NULL",
-            params![&runtime.runtime_id, state, endpoint.port()],
-        )
-    } else {
-        connection.execute(
-            "UPDATE runtime_instances
-             SET last_observed_state = ?2,
-                 last_observed_at = CURRENT_TIMESTAMP,
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?1 AND removed_at IS NULL",
-            params![&runtime.runtime_id, state],
-        )
-    }
-    .map_err(|source| RuntimeLifecycleError::Persistence { source })?;
-    if updated != 1 {
+    let updated = runtime_store::persist_observation(connection, &runtime.runtime_id, observation)
+        .map_err(|source| RuntimeLifecycleError::Store { source })?;
+    if !updated {
         return Err(RuntimeLifecycleError::RuntimeChanged {
             runtime_id: runtime.runtime_id.clone(),
         });
     }
     Ok(())
-}
-
-fn persist_stopped_without_removal(
-    connection: &Connection,
-    runtime: &CurrentRuntime,
-    observation: &crate::adapters::local_runtime::ContainerObservation,
-) -> Result<(), RuntimeLifecycleError> {
-    let state = observed_state_database_value(&observation.state);
-    let updated = connection
-        .execute(
-            "UPDATE runtime_instances
-             SET last_observed_state = ?2,
-                 last_observed_at = CURRENT_TIMESTAMP,
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?1 AND removed_at IS NULL",
-            params![&runtime.runtime_id, state],
-        )
-        .map_err(|source| RuntimeLifecycleError::Persistence { source })?;
-    if updated != 1 {
-        return Err(RuntimeLifecycleError::RuntimeChanged {
-            runtime_id: runtime.runtime_id.clone(),
-        });
-    }
-    Ok(())
-}
-
-fn observed_state_database_value(state: &ObservedRuntimeState) -> &'static str {
-    match state {
-        ObservedRuntimeState::Missing => "missing",
-        ObservedRuntimeState::Created => "created",
-        ObservedRuntimeState::Starting => "starting",
-        ObservedRuntimeState::Running => "running",
-        ObservedRuntimeState::Stopping => "stopping",
-        ObservedRuntimeState::Stopped => "stopped",
-        ObservedRuntimeState::Failed => "failed",
-        ObservedRuntimeState::Unknown { .. } => "unknown",
-    }
 }

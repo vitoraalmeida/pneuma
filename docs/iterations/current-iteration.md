@@ -57,7 +57,11 @@ semântica de reconciliation antes de implementar `pneuma reconcile`.
       `load_application_for_import` com `active_deployment_id` real e recebe
       `DeliveryType`/`Visibility` tipados; reimport é create-only, atômico e o
       CLI reporta o estado real de Applications já deployadas.
-- [ ] Extrair persistência de `application_runtime` para stores.
+- [x] Extrair persistência de `application_runtime` para stores.
+      Resultado: `runtime_store` carrega runtime/desired state tipados e aplica
+      CAS a `external_runtime_id` e desired state; observações atualizam
+      timestamp/endpoint sem tombar `Missing`, APIs mortas foram removidas e
+      lifecycle continua recuperando a RuntimeInstance pela unidade Quadlet.
 - [ ] Persistir desired visibility antes de materializar Caddy.
 - [ ] Finalizar extração de persistência de `deployment_create`.
 - [ ] Provar lock Immediate e reserva lógica cross-process de deployment.

@@ -133,12 +133,13 @@ um erro gera warning sem reverter a promoção já concluída.
   `running`, persistindo a intenção junto da ativação;
 - `app status` observa o container do deployment ativo (`active_deployment_id`)
   no Podman e registra a observação: `last_observed_state`, `last_observed_at`
-  e, quando em execução, `host_port`; se o container estiver ausente, persiste
-  `missing`/`removed_at` e orienta um novo deployment;
+  e, quando em execução, `host_port`; se o container estiver ausente, registra
+  `missing` sem `removed_at`, preservando a RuntimeInstance para recuperação;
 - `app stop` e `app start` persistem o estado desejado antes do efeito externo,
   controlam a unidade Quadlet e persistem a observação resultante (saga local);
   um runtime legado sem arquivo Quadlet usa `podman start`/`podman stop` até ser
-  redeployado;
+  redeployado; `app start` recupera um container ausente pela unidade Quadlet
+  quando ela ainda existe;
 - parar uma aplicação já parada e iniciar uma já em execução são sucessos
   idempotentes;
 - aplicação registrada mas nunca implantada, e nome desconhecido, falham antes
