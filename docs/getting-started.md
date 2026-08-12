@@ -87,7 +87,27 @@ ssh root@<ip> 'bash scripts/bootstrap-vps.sh git@github.com:USER/pneuma.git --ci
 ssh root@<ip> 'bash bootstrap-vps.sh git@github.com:USER/pneuma.git --ci-public-key /dev/stdin' < ~/.ssh/pneuma-ci.pub
 ```
 
-### 3.1. Confirmação
+### 3.1. Fixar a versão do Pneuma com `--ref`
+
+Para instalações reproduzíveis, o bootstrap aceita `--ref` com **apenas** SHA
+completo de commit (`[0-9a-f]{40}`) ou tag Git existente; branch e SHA abreviado
+são rejeitados antes de qualquer mudança no host:
+
+```bash
+bash bootstrap-vps.sh \
+  git@github.com:USER/pneuma.git \
+  --ci-public-key ~/.ssh/pneuma-ci.pub \
+  --ref v0.3.0
+```
+
+Cada execução (inclusive reruns) resolve o `--ref`, faz checkout detached
+**forçado** do commit resolvido e compila exatamente esse commit;
+configurações de APT, usuário, subids e Caddy permanecem idempotentes. No rerun,
+o próprio Caddy gerenciado e ativo pode ocupar as portas 80/443; qualquer outro
+processo nessas portas continua bloqueante. Sem `--ref`, o script compila o
+branch default do repositório, como antes.
+
+### 3.2. Confirmação
 
 Como `pneuma` (login direto com a chave de provisionamento ou `sudo -iu
 pneuma`):

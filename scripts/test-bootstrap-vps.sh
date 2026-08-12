@@ -9,9 +9,12 @@
 # idempotent re-runs.
 #
 # Phases:
+#   0. Argument validation (local, no host change)
 #   1. Preflight checks
 #   2. Bootstrap execution
 #   3. Post-bootstrap validation
+#   3b. Immutable --ref evidence (when --ref is passed)
+#   3c. Immutable --ref rejections (branch, missing tag, unresolvable SHA)
 #   4. Pneuma functionality
 #   5. CI deploy key + restricted SSH dispatcher
 #   6. Application import + deploy pushed through the CI dispatcher
@@ -23,20 +26,28 @@
 # - Public Git repository URL with Pneuma source
 #
 # Usage:
-#   scripts/test-bootstrap-vps.sh <ssh-host> <pneuma-source-url>
+#   scripts/test-bootstrap-vps.sh <ssh-host> <pneuma-source-url> [--ref <ref>]
 #
 # Example:
 #   scripts/test-bootstrap-vps.sh my-vps https://github.com/user/pneuma.git
+#   scripts/test-bootstrap-vps.sh my-vps \
+#     https://github.com/user/pneuma.git --ref 0123456789abcdef0123456789abcdef01234567
 #
 
 set -euo pipefail
 
 SSH_HOST="${1:-}"
 SOURCE_URL="${2:-}"
+REF="${3:-}"
 
 if [[ -z "$SSH_HOST" || -z "$SOURCE_URL" ]]; then
-    echo "Usage: $0 <ssh-host> <pneuma-source-url>"
+    echo "Usage: $0 <ssh-host> <pneuma-source-url> [--ref <ref>]"
     exit 1
+fi
+
+REF_ARGS=""
+if [[ -n "$REF" ]]; then
+    REF_ARGS=" --ref $REF"
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -78,9 +89,50 @@ check() {
     fi
 }
 
+# Run bootstrap-vps.sh locally with arguments that must be rejected before any
+# host change, and assert the failure message. Also supports expected success.
+assert_bootstrap() {
+    local expected_rc="$1" expected_msg="$2"; shift 2
+    local output rc
+    set +e
+    output=$(bash "$SCRIPT_DIR/bootstrap-vps.sh" "$@" 2>&1)
+    rc=$?
+    set -e
+    if [[ $rc -ne "$expected_rc" ]]; then
+        report fail "unexpected exit code $rc (expected $expected_rc) for: $*"
+        printf '        output: %s\n' "$(printf '%s' "$output" | head -c 300)"
+        return
+    fi
+    if [[ -n "$expected_msg" ]] && ! printf '%s' "$output" | grep -qF -- "$expected_msg"; then
+        report fail "missing expected message '$expected_msg' for: $*"
+        printf '        output: %s\n' "$(printf '%s' "$output" | head -c 300)"
+        return
+    fi
+    report ok "$*"
+}
+
 echo "=========================================="
 echo "Bootstrap VPS Test — $SSH_HOST"
 echo "=========================================="
+
+# Phase 0: Argument validation (fails before any host change)
+# Only arg-parsing rejections run locally as non-root. Git-resolution rejections
+# (branch, missing tag, unresolvable SHA) run on the VM in Phase 3b.
+echo
+echo "==> Phase 0: Argument validation..."
+assert_bootstrap 1 "Missing Pneuma source repository URL"
+assert_bootstrap 1 "Unknown option: --bogus" \
+    --bogus "$SOURCE_URL"
+assert_bootstrap 1 "--ci-public-key requires a value" \
+    "$SOURCE_URL" --ci-public-key
+assert_bootstrap 1 "CI public key file not found" \
+    "$SOURCE_URL" --ci-public-key /nonexistent/key.pub
+assert_bootstrap 1 "--ref requires a value" \
+    "$SOURCE_URL" --ref
+assert_bootstrap 1 "--ref must not be an abbreviated SHA" \
+    "$SOURCE_URL" --ref abcdef1
+assert_bootstrap 1 "invalid --ref value" \
+    "$SOURCE_URL" --ref v1..v2
 
 # Phase 1: Preflight
 echo
@@ -110,7 +162,7 @@ fi
 echo
 echo "==> Phase 2: Bootstrap execution..."
 scp "$SCRIPT_DIR/bootstrap-vps.sh" "$SSH_HOST":/tmp/ >/dev/null
-if ssh "$SSH_HOST" 'bash /tmp/bootstrap-vps.sh '"$SOURCE_URL" >"$LOG_DIR/bootstrap.log" 2>&1; then
+if ssh "$SSH_HOST" 'bash /tmp/bootstrap-vps.sh '"$SOURCE_URL$REF_ARGS" >"$LOG_DIR/bootstrap.log" 2>&1; then
     report ok "bootstrap-vps.sh completed"
 else
     report fail "bootstrap-vps.sh failed (see $LOG_DIR/bootstrap.log)"
@@ -133,6 +185,55 @@ check "exists" "caddy applications dir exists" "test -d /etc/caddy/applications 
 check "PNEUMA_DATABASE_PATH" "environment file created" "cat /etc/pneuma/environment"
 check "pneuma" "quadlet directory created" "ls -la /home/pneuma/.config/containers/systemd"
 
+# Phase 3b: Immutable --ref evidence (only when a ref was requested)
+check_vm_sha() {
+    local expected="$1" actual
+    actual=$(ssh "$SSH_HOST" "cd /home/pneuma/pneuma && git rev-parse HEAD 2>/dev/null" 2>/dev/null || true)
+    [[ "$actual" == "$expected" ]]
+}
+if [[ -n "$REF" ]]; then
+    echo
+    echo "==> Phase 3b: Immutable --ref evidence..."
+    RESOLVED_SHA="$(grep '^    SHA: ' "$LOG_DIR/bootstrap.log" | head -1 | awk '{print $2}')"
+    if [[ -z "$RESOLVED_SHA" ]]; then
+        report fail "bootstrap log records no resolved SHA (see $LOG_DIR/bootstrap.log)"
+    else
+        report ok "bootstrap log records resolved SHA $RESOLVED_SHA"
+        if check_vm_sha "$RESOLVED_SHA"; then
+            report ok "source checkout detached at $RESOLVED_SHA"
+        else
+            report fail "source checkout not pinned at $RESOLVED_SHA"
+        fi
+    fi
+fi
+
+# Phase 3c: Immutable --ref rejections (resolved after clone on the VM)
+echo
+echo "==> Phase 3c: Immutable --ref rejections..."
+remote_rejected_with() {
+    local expected_msg="$1" args="$2" log
+    log="$LOG_DIR/bootstrap-reject-$(date +%H%M%S).log"
+    if ssh "$SSH_HOST" 'bash /tmp/bootstrap-vps.sh '"$args" >"$log" 2>&1; then
+        report fail "unexpected success: $args"
+        return
+    fi
+    if grep -qF -- "$expected_msg" "$log"; then
+        report ok "rejected: $args"
+    else
+        report fail "expected '$expected_msg' not in $log"
+        printf '        output: %s\n' "$(sed -n '1,6p' "$log" | head -c 300)"
+    fi
+}
+DEFAULT_BRANCH="$(ssh "$SSH_HOST" \
+    'git -C /home/pneuma/pneuma symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed "s#refs/remotes/origin/##"' 2>/dev/null || true)"
+DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
+remote_rejected_with "--ref names a branch, not a tag: '$DEFAULT_BRANCH'" \
+    "$SOURCE_URL --ref $DEFAULT_BRANCH"
+remote_rejected_with "Git tag not found" \
+    "$SOURCE_URL --ref no-such-pneuma-tag"
+remote_rejected_with "--ref SHA does not resolve to a commit" \
+    "$SOURCE_URL --ref 0123456789abcdef0123456789abcdef01234567"
+
 # Phase 4: Pneuma functionality
 echo
 echo "==> Phase 4: Pneuma functionality..."
@@ -152,7 +253,7 @@ else
 fi
 scp -q "$CI_KEY_PUB" "$SSH_HOST":/tmp/pneuma-ci-test.pub
 
-if ssh "$SSH_HOST" 'bash /tmp/bootstrap-vps.sh '"$SOURCE_URL --ci-public-key /tmp/pneuma-ci-test.pub" >"$LOG_DIR/bootstrap-ci.log" 2>&1; then
+if ssh "$SSH_HOST" 'bash /tmp/bootstrap-vps.sh '"$SOURCE_URL --ci-public-key /tmp/pneuma-ci-test.pub$REF_ARGS" >"$LOG_DIR/bootstrap-ci.log" 2>&1; then
     report ok "bootstrap re-run with --ci-public-key completed"
 else
     report fail "bootstrap re-run failed (see $LOG_DIR/bootstrap-ci.log)"
@@ -271,7 +372,7 @@ fi
 # Phase 7: Bootstrap idempotency (installed state survives a re-run)
 echo
 echo "==> Phase 7: Bootstrap idempotency..."
-if ssh "$SSH_HOST" 'bash /tmp/bootstrap-vps.sh '"$SOURCE_URL --ci-public-key /tmp/pneuma-ci-test.pub" >"$LOG_DIR/bootstrap-idempotent.log" 2>&1; then
+if ssh "$SSH_HOST" 'bash /tmp/bootstrap-vps.sh '"$SOURCE_URL --ci-public-key /tmp/pneuma-ci-test.pub$REF_ARGS" >"$LOG_DIR/bootstrap-idempotent.log" 2>&1; then
     report ok "bootstrap re-run after deploy completed"
 else
     report fail "bootstrap re-run failed (see $LOG_DIR/bootstrap-idempotent.log)"
@@ -281,6 +382,13 @@ if grep -q "CI key already installed" "$LOG_DIR/bootstrap-idempotent.log"; then
     report ok "CI key idempotent (skip install on re-run)"
 else
     report fail "CI key not skipped on re-run (see $LOG_DIR/bootstrap-idempotent.log)"
+fi
+if [[ -n "$REF" && -n "${RESOLVED_SHA:-}" ]]; then
+    if check_vm_sha "$RESOLVED_SHA"; then
+        report ok "rerun reinstalls the same pinned commit ($RESOLVED_SHA)"
+    else
+        report fail "rerun moved the source checkout off $RESOLVED_SHA"
+    fi
 fi
 
 check "pneuma" "pneuma user survives re-run" "id pneuma"

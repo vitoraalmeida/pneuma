@@ -24,7 +24,12 @@ capazes de provar as garantias operacionais necessárias antes de reconciliation
 ## Checkpoints
 
 - [x] Abrir a iteração e registrar o design aprovado.
-- [ ] Tornar preflight rerun-safe e fixar fonte com `--ref` imutável.
+- [x] Tornar preflight rerun-safe e fixar fonte com `--ref` imutável.
+    Resultado: parsing explícito de `--ci-public-key`/`--ref` rejeita valores
+    ausentes, opções desconhecidas, branch, SHA abreviado e refs inválidas;
+    `--ref` aceita tag ou SHA completo e força checkout detached do commit
+    resolvido em todo rerun; listener de 80/443 aceita Caddy ativo no rerun e
+    bloqueia qualquer outro dono. Gates verdes e lint shell sem warnings.
 - [ ] Corrigir assertions remotas do acceptance test de bootstrap.
 - [ ] Compartilhar invariantes de provisionamento entre VPS e VM.
 - [ ] Impor invariantes de conta e IDs subordinados.

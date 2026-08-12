@@ -37,33 +37,106 @@
 #   private key as an account-level secret and pass the public key here.
 #
 # Usage:
-#   bash bootstrap-vps.sh <pneuma-source-url> [--ci-public-key <path>]
+#   bash bootstrap-vps.sh <pneuma-source-url> \
+#     [--ci-public-key <path>] [--ref <ref>]
+#
+# --ref pins the source to a full commit SHA ([0-9a-f]{40}) or an existing Git
+# tag. Branches and abbreviated SHAs are rejected. Every run (including re-runs)
+# forces a detached checkout of the resolved commit before building. Without
+# --ref, the remote default branch is built, as before.
 #
 # Example:
 #   bash bootstrap-vps.sh \
 #     git@github.com:USER/pneuma.git \
-#     --ci-public-key ~/.ssh/pneuma-ci.pub
+#     --ci-public-key ~/.ssh/pneuma-ci.pub \
+#     --ref v0.3.0
+#
+#   bash bootstrap-vps.sh \
+#     https://github.com/USER/pneuma.git \
+#     --ref 0123456789abcdef0123456789abcdef01234567
 #
 
 set -euo pipefail
 
-PNEUMA_SOURCE_URL="${1:-}"
+PNEUMA_SOURCE_URL=""
+PNEUMA_REF=""
 CI_PUBLIC_KEY_FILE=""
 
-shift || true
+usage() {
+    cat >&2 <<EOF
+Usage: $0 <pneuma-source-url> [--ci-public-key <path>] [--ref <ref>]
+
+  --ci-public-key <path>  Path to the CI deploy public key (installed with a
+                          restricted, forced command for 'pneuma ci dispatch').
+  --ref <ref>             Pin the source to a full commit SHA ([0-9a-f]{40}) or
+                          an existing Git tag. Branches and abbreviated SHAs
+                          are rejected; every run reinstalls the same commit.
+EOF
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --ci-public-key)
-            CI_PUBLIC_KEY_FILE="${2:-}"
+            if [[ $# -lt 2 || -z "$2" ]]; then
+                echo "ERROR: --ci-public-key requires a value." >&2
+                usage
+                exit 1
+            fi
+            CI_PUBLIC_KEY_FILE="$2"
             shift 2
             ;;
-        *)
-            echo "Unknown option: $1"
-            echo "Usage: $0 <pneuma-source-url> [--ci-public-key <path>]"
+        --ref)
+            if [[ $# -lt 2 || -z "$2" ]]; then
+                echo "ERROR: --ref requires a value." >&2
+                usage
+                exit 1
+            fi
+            PNEUMA_REF="$2"
+            shift 2
+            ;;
+        --help | -h)
+            usage
+            exit 0
+            ;;
+        -*)
+            echo "ERROR: Unknown option: $1" >&2
+            usage
             exit 1
+            ;;
+        *)
+            if [[ -n "$PNEUMA_SOURCE_URL" ]]; then
+                echo "ERROR: Unexpected argument: $1" >&2
+                usage
+                exit 1
+            fi
+            PNEUMA_SOURCE_URL="$1"
+            shift
             ;;
     esac
 done
+
+if [[ -z "$PNEUMA_SOURCE_URL" ]]; then
+    echo "ERROR: Missing Pneuma source repository URL." >&2
+    usage
+    exit 1
+fi
+
+if [[ -n "$CI_PUBLIC_KEY_FILE" && ! -f "$CI_PUBLIC_KEY_FILE" ]]; then
+    echo "ERROR: CI public key file not found: $CI_PUBLIC_KEY_FILE" >&2
+    exit 1
+fi
+
+if [[ -n "$PNEUMA_REF" && ! "$PNEUMA_REF" =~ ^[0-9a-f]{40}$ ]]; then
+    if [[ "$PNEUMA_REF" =~ ^[0-9a-f]+$ ]]; then
+        echo "ERROR: --ref must not be an abbreviated SHA: '$PNEUMA_REF'." >&2
+        echo "Use a full 40-character SHA or a Git tag name." >&2
+        exit 1
+    fi
+    if [[ "$PNEUMA_REF" == *..* || "$PNEUMA_REF" == -* ]]; then
+        echo "ERROR: invalid --ref value: '$PNEUMA_REF'." >&2
+        exit 1
+    fi
+fi
 
 PNEUMA_USER="pneuma"
 PNEUMA_HOME="/home/$PNEUMA_USER"
@@ -72,12 +145,7 @@ SSH_DIR="$PNEUMA_HOME/.ssh"
 SSH_KEY="$SSH_DIR/id_ed25519"
 
 if [[ "$(id -u)" -ne 0 ]]; then
-    echo "Run this script as root."
-    exit 1
-fi
-
-if [[ -z "$PNEUMA_SOURCE_URL" ]]; then
-    echo "Missing Pneuma source repository URL."
+    echo "ERROR: Run this script as root." >&2
     exit 1
 fi
 
@@ -157,23 +225,67 @@ for service in nginx apache2 httpd; do
 done
 
 echo "==> Checking port availability..."
-# Ports must be free before Caddy is installed, otherwise a pre-existing
-# listener (a different web server) would conflict. caddy itself binds 80/443
-# only after this check, when we enable it below.
-# /proc/net/tcp{,6} rows: local_address(hex ip:port) rem_address(hex) st(0A=LISTEN)
-port_in_use() {
+# Ports must be free before Caddy is installed. On re-runs the already-managed
+# Caddy legitimately listens on 80/443 and is accepted; any other owner is
+# blocked. /proc/net/tcp{,6} rows: local_address(hex ip:port) st(0A=LISTEN) inode.
+listening_inodes() {
     local port="$1"
     local hex_port
     hex_port="$(printf '%04X' "$port")"
-    awk -v p=":$hex_port" '$4 == "0A" && $2 ~ p"$" { print }' \
-        /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep -q .
+    awk -v p=":$hex_port" '$4 == "0A" && $2 ~ p"$" { print $12 }' \
+        /proc/net/tcp /proc/net/tcp6 2>/dev/null
 }
+
+listener_owners() {
+    local inode="$1" pid fd name
+    for pid in /proc/[0-9]*; do
+        pid="${pid#/proc/}"
+        for fd in /proc/"$pid"/fd/*; do
+            if [[ "$(readlink "$fd" 2>/dev/null)" == "socket:[$inode]" ]]; then
+                name="$(basename "$(readlink "/proc/$pid/exe" 2>/dev/null)" 2>/dev/null)"
+                printf '%s\n' "$name"
+                break
+            fi
+        done
+    done
+}
+
 for port in 80 443; do
-    if port_in_use "$port"; then
-        echo "ERROR: port $port is already in use by another process:"
-        awk -v p=":$hex_port" '$4 == "0A" && $2 ~ p"$" { print }' \
-            /proc/net/tcp /proc/net/tcp6 2>/dev/null
+    inodes="$(listening_inodes "$port")"
+    if [[ -z "$inodes" ]]; then
+        continue
+    fi
+
+    owners=""
+    while read -r inode; do
+        if [[ -z "$inode" ]]; then
+            continue
+        fi
+        owners+="$(listener_owners "$inode")"
+    done <<<"$inodes"
+
+    # shellcheck disable=SC2086 # process names carry no glob chars; intentional word split
+    owners_unique="$(printf '%s\n' $owners | sort -u)"
+
+    all_caddy=true
+    while read -r owner; do
+        if [[ -z "$owner" ]]; then
+            continue
+        fi
+        if [[ "$owner" != caddy ]]; then
+            all_caddy=false
+        fi
+    done <<<"$owners_unique"
+
+    if [[ -n "$owners_unique" ]] && [[ "$all_caddy" == true ]] \
+        && systemctl is-active --quiet caddy 2>/dev/null; then
+        echo "    port $port is owned by the active managed Caddy (accepted on re-run)."
+    else
+        echo "ERROR: port $port is already in use by:"
+        # shellcheck disable=SC2086 # intentional word split on a controlled set
+        printf '%s\n' $owners_unique | sed 's/^/    /'
         echo "Stop the owning service, then rerun this script."
+        echo "On a re-run only the active managed Caddy may own ports 80/443."
         exit 1
     fi
 done
@@ -321,6 +433,68 @@ if [[ ! -d "$PNEUMA_SOURCE_PATH/.git" ]]; then
             XDG_RUNTIME_DIR="/run/user/$PNEUMA_UID" \
         git clone "$PNEUMA_SOURCE_URL" "$PNEUMA_SOURCE_PATH"
 fi
+
+RESOLVED_SHA=""
+if [[ -n "$PNEUMA_REF" ]]; then
+    if ! runuser -u "$PNEUMA_USER" -- \
+        env HOME="$PNEUMA_HOME" GIT_TERMINAL_PROMPT=0 \
+        git -C "$PNEUMA_SOURCE_PATH" fetch --prune --tags --force \
+        origin '+refs/heads/*:refs/remotes/origin/*' >/dev/null 2>&1; then
+        echo "ERROR: failed to fetch the Pneuma source repository." >&2
+        exit 1
+    fi
+
+    if [[ "$PNEUMA_REF" =~ ^[0-9a-f]{40}$ ]]; then
+        if ! runuser -u "$PNEUMA_USER" -- \
+            env HOME="$PNEUMA_HOME" \
+            git -C "$PNEUMA_SOURCE_PATH" rev-parse --verify --quiet \
+            "$PNEUMA_REF^{commit}" >/dev/null 2>&1; then
+            runuser -u "$PNEUMA_USER" -- \
+                env HOME="$PNEUMA_HOME" GIT_TERMINAL_PROMPT=0 \
+                git -C "$PNEUMA_SOURCE_PATH" fetch --prune origin "$PNEUMA_REF" \
+                >/dev/null 2>&1 || true
+        fi
+        if ! RESOLVED_SHA="$(runuser -u "$PNEUMA_USER" -- \
+            env HOME="$PNEUMA_HOME" \
+            git -C "$PNEUMA_SOURCE_PATH" rev-parse --verify --quiet \
+            "$PNEUMA_REF^{commit}")"; then
+            echo "ERROR: --ref SHA does not resolve to a commit: $PNEUMA_REF" >&2
+            exit 1
+        fi
+    else
+        if ! runuser -u "$PNEUMA_USER" -- \
+            env HOME="$PNEUMA_HOME" \
+            git -C "$PNEUMA_SOURCE_PATH" rev-parse --verify --quiet \
+            "refs/tags/$PNEUMA_REF^{commit}" >/dev/null 2>&1; then
+            if runuser -u "$PNEUMA_USER" -- \
+                env HOME="$PNEUMA_HOME" \
+                git -C "$PNEUMA_SOURCE_PATH" rev-parse --verify --quiet \
+                "refs/remotes/origin/$PNEUMA_REF" >/dev/null 2>&1; then
+                echo "ERROR: --ref names a branch, not a tag: '$PNEUMA_REF'." >&2
+            else
+                echo "ERROR: Git tag not found: '$PNEUMA_REF'." >&2
+            fi
+            exit 1
+        fi
+        RESOLVED_SHA="$(runuser -u "$PNEUMA_USER" -- \
+            env HOME="$PNEUMA_HOME" \
+            git -C "$PNEUMA_SOURCE_PATH" rev-parse --verify \
+            "refs/tags/$PNEUMA_REF^{commit}")"
+    fi
+
+    runuser -u "$PNEUMA_USER" -- \
+        env HOME="$PNEUMA_HOME" \
+        git -C "$PNEUMA_SOURCE_PATH" checkout --force --detach "$RESOLVED_SHA"
+else
+    RESOLVED_SHA="$(runuser -u "$PNEUMA_USER" -- \
+        env HOME="$PNEUMA_HOME" \
+        git -C "$PNEUMA_SOURCE_PATH" rev-parse HEAD)"
+fi
+
+echo "==> Building Pneuma from:"
+echo "    source URL: $PNEUMA_SOURCE_URL"
+echo "    ref:        ${PNEUMA_REF:-remote default branch}"
+echo "    SHA:        $RESOLVED_SHA"
 
 if ! command -v rustup >/dev/null 2>&1; then
     runuser -u "$PNEUMA_USER" -- \
