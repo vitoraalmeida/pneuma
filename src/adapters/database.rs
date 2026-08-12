@@ -28,6 +28,8 @@ const RUNTIME_PORT_RESERVATION_MIGRATION: &str =
     include_str!("../../migrations/0012_runtime_port_reservations.sql");
 const APPLICATION_SOURCES_V3_MIGRATION: &str =
     include_str!("../../migrations/0013_application_sources_v3.sql");
+const DEPLOYMENT_SOURCE_REVISION_MIGRATION: &str =
+    include_str!("../../migrations/0014_deployment_source_revision.sql");
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, INITIAL_MIGRATION),
     (2, DEPLOYMENT_MIGRATION),
@@ -42,6 +44,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (11, DELIVERY_MIGRATION),
     (12, RUNTIME_PORT_RESERVATION_MIGRATION),
     (13, APPLICATION_SOURCES_V3_MIGRATION),
+    (14, DEPLOYMENT_SOURCE_REVISION_MIGRATION),
 ];
 
 #[derive(Debug)]
@@ -341,10 +344,21 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
+        let deployment_source_revision_column: bool = connection
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM pragma_table_info('deployments')
+                    WHERE name = 'source_revision'
+                 )",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
 
-        assert_eq!(migration_count, 13);
+        assert_eq!(migration_count, 14);
         assert_eq!(application_table_count, 1);
         assert_eq!(deployment_table_count, 1);
+        assert!(deployment_source_revision_column);
     }
 
     #[test]
@@ -358,7 +372,58 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(migration_count, 13);
+        assert_eq!(migration_count, 14);
+    }
+
+    #[test]
+    fn upgrades_release_provenance_to_historical_deployments() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "PRAGMA foreign_keys = ON;
+                 CREATE TABLE schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                 );",
+            )
+            .unwrap();
+        for (version, migration) in MIGRATIONS.iter().take(13) {
+            connection.execute_batch(migration).unwrap();
+            connection
+                .execute(
+                    "INSERT INTO schema_migrations (version) VALUES (?1)",
+                    [version],
+                )
+                .unwrap();
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO applications (
+                    id, name, desired_runtime_state, spec_version, created_at, updated_at
+                 ) VALUES ('app-id', 'app', 'stopped', 1, 'now', 'now');
+                 INSERT INTO releases (
+                    id, application_id, image_repository, image_digest, image_reference,
+                    source_revision, created_at
+                 ) VALUES (
+                    'release-id', 'app-id', 'registry.example/app', 'sha256:artifact',
+                    'registry.example/app@sha256:artifact', 'commit-sha', 'now'
+                 );
+                 INSERT INTO deployments (
+                    id, application_id, release_id, type, status, requested_at
+                 ) VALUES ('deployment-id', 'app-id', 'release-id', 'deploy', 'succeeded', 'now');",
+            )
+            .unwrap();
+
+        migrate(&mut connection).unwrap();
+
+        let source_revision: Option<String> = connection
+            .query_row(
+                "SELECT source_revision FROM deployments WHERE id = 'deployment-id'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(source_revision.as_deref(), Some("commit-sha"));
     }
 
     #[test]

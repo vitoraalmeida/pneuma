@@ -42,7 +42,6 @@ pub struct Release {
     pub image_reference: String,
     pub image_repository: String,
     pub image_digest: String,
-    pub source_revision: Option<String>,
     pub created_at: String,
 }
 
@@ -86,7 +85,6 @@ pub fn insert_release(
     image_reference: &str,
     image_repository: &str,
     image_digest: &str,
-    source_revision: Option<&str>,
 ) -> Result<(), ReleaseStoreError> {
     transaction
         .execute(
@@ -96,17 +94,15 @@ pub fn insert_release(
                 image_reference,
                 image_repository,
                 image_digest,
-                source_revision,
                 created_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, CURRENT_TIMESTAMP)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP)
             ON CONFLICT(application_id, image_digest) DO NOTHING",
             params![
                 id,
                 application_id,
                 image_reference,
                 image_repository,
-                image_digest,
-                source_revision
+                image_digest
             ],
         )
         .map_err(|source| ReleaseStoreError::Persistence { source })?;
@@ -121,7 +117,7 @@ pub fn load_release_by_digest(
     connection
         .query_row(
             "SELECT id, application_id, image_reference, image_repository,
-                    image_digest, source_revision, created_at
+                    image_digest, created_at
              FROM releases
              WHERE application_id = ?1 AND image_digest = ?2",
             params![application_id, image_digest],
@@ -132,8 +128,7 @@ pub fn load_release_by_digest(
                     image_reference: row.get(2)?,
                     image_repository: row.get(3)?,
                     image_digest: row.get(4)?,
-                    source_revision: row.get(5)?,
-                    created_at: row.get(6)?,
+                    created_at: row.get(5)?,
                 })
             },
         )

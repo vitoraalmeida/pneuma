@@ -163,7 +163,6 @@ fn records_a_structured_failure_and_allows_a_later_attempt() {
         &format!("localhost/test:{}", "b".repeat(40)),
         "localhost/test",
         &"b".repeat(40),
-        None,
     )
     .unwrap();
     create_deployment(
@@ -243,7 +242,6 @@ fn pending_deployment() -> (rusqlite::Connection, String, String) {
         &format!("localhost/test:{}", "a".repeat(40)),
         "localhost/test",
         &"a".repeat(40),
-        None,
     )
     .unwrap();
     let deployment = create_deployment(

@@ -56,7 +56,7 @@ pub fn list_deployments(
 ) -> Result<Vec<DeploymentSummary>, ListDeploymentsError> {
     let mut statement = connection
         .prepare(
-            "SELECT d.id, r.id, r.image_reference, r.image_digest, r.source_revision, d.type, d.status, d.requested_at, d.finished_at
+            "SELECT d.id, r.id, r.image_reference, r.image_digest, d.source_revision, d.type, d.status, d.requested_at, d.finished_at
              FROM deployments d
              JOIN releases r ON r.id = d.release_id
              WHERE d.application_id = ?1

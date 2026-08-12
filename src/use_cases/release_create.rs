@@ -69,7 +69,6 @@ pub fn create_release(
     image_reference: &str,
     image_repository: &str,
     image_digest: &str,
-    source_revision: Option<&str>,
 ) -> Result<Release, CreateReleaseError> {
     let transaction = connection
         .transaction()
@@ -91,7 +90,6 @@ pub fn create_release(
         image_reference,
         image_repository,
         image_digest,
-        source_revision,
     )?;
 
     let store_release =
@@ -107,7 +105,6 @@ pub fn create_release(
         image_reference: store_release.image_reference,
         image_repository: store_release.image_repository,
         image_digest: store_release.image_digest,
-        source_revision: store_release.source_revision,
         created_at: store_release.created_at,
     })
 }

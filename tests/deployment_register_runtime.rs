@@ -55,7 +55,6 @@ fn requires_a_starting_deployment() {
         &format!("localhost/test:{}", "a".repeat(40)),
         "localhost/test",
         &"a".repeat(40),
-        None,
     )
     .unwrap();
     let deployment = create_deployment(
@@ -272,7 +271,6 @@ fn add_starting_deployment(
         &format!("localhost/test:{commit_sha}"),
         "localhost/test",
         &commit_sha,
-        None,
     )
     .unwrap();
     let deployment = create_deployment(

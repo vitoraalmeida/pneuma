@@ -68,7 +68,7 @@ pub fn rollback_deployment(
             application_id: application_id.to_owned(),
         });
     }
-    let release = previous_release(connection, application_id)?;
+    let (release, source_revision) = previous_release(connection, application_id)?;
     if OciImageReference::parse(&release.image_reference).is_ok() {
         pull_image(&release.image_reference)
             .map_err(|source| RollbackError::PullImage { source })?;
@@ -78,6 +78,7 @@ pub fn rollback_deployment(
         application_id,
         &release,
         DeploymentType::Rollback,
+        source_revision.as_deref(),
         public_configuration,
     )
     .map_err(|source| RollbackError::DeployRelease { source })
@@ -86,11 +87,11 @@ pub fn rollback_deployment(
 fn previous_release(
     connection: &Connection,
     application_id: &str,
-) -> Result<Release, RollbackError> {
+) -> Result<(Release, Option<String>), RollbackError> {
     connection
         .query_row(
             "SELECT r.id, r.application_id, r.image_reference, r.image_repository,
-                    r.image_digest, r.source_revision, r.created_at
+                    r.image_digest, d.source_revision, r.created_at
              FROM deployments d
              JOIN releases r ON r.id = d.release_id
              LEFT JOIN applications a ON a.active_deployment_id = d.id
@@ -101,15 +102,17 @@ fn previous_release(
              LIMIT 1",
             [application_id],
             |row| {
-                Ok(Release {
-                    id: row.get(0)?,
-                    application_id: row.get(1)?,
-                    image_reference: row.get(2)?,
-                    image_repository: row.get(3)?,
-                    image_digest: row.get(4)?,
-                    source_revision: row.get(5)?,
-                    created_at: row.get(6)?,
-                })
+                Ok((
+                    Release {
+                        id: row.get(0)?,
+                        application_id: row.get(1)?,
+                        image_reference: row.get(2)?,
+                        image_repository: row.get(3)?,
+                        image_digest: row.get(4)?,
+                        created_at: row.get(6)?,
+                    },
+                    row.get(5)?,
+                ))
             },
         )
         .optional()
@@ -117,4 +120,43 @@ fn previous_release(
         .ok_or_else(|| RollbackError::NoPreviousDeployment {
             application_id: application_id.to_owned(),
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use crate::adapters::database;
+
+    use super::previous_release;
+
+    #[test]
+    fn selects_provenance_from_the_historical_deployment() {
+        let connection = database::open(Path::new(":memory:")).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO applications (
+                    id, name, desired_runtime_state, spec_version, created_at, updated_at
+                 ) VALUES ('app-id', 'app', 'stopped', 1, 'now', 'now');
+                 INSERT INTO releases (
+                    id, application_id, image_repository, image_digest, image_reference, created_at
+                 ) VALUES (
+                    'release-id', 'app-id', 'registry.example/app', 'sha256:artifact',
+                    'registry.example/app@sha256:artifact', 'now'
+                 );
+                 INSERT INTO deployments (
+                    id, application_id, release_id, type, status, source_revision,
+                    requested_at, finished_at
+                 ) VALUES (
+                    'deployment-id', 'app-id', 'release-id', 'deploy', 'succeeded',
+                    'historical-commit', 'now', 'now'
+                 );",
+            )
+            .unwrap();
+
+        let (release, source_revision) = previous_release(&connection, "app-id").unwrap();
+
+        assert_eq!(release.id, "release-id");
+        assert_eq!(source_revision.as_deref(), Some("historical-commit"));
+    }
 }

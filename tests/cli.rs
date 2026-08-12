@@ -379,7 +379,9 @@ fn deploys_a_verified_oci_image_and_persists_its_release() {
     let connection = database::open(&environment.database_path).unwrap();
     let release: (String, String, String, Option<String>) = connection
         .query_row(
-            "SELECT image_reference, image_repository, image_digest, source_revision FROM releases",
+            "SELECT r.image_reference, r.image_repository, r.image_digest, d.source_revision
+             FROM releases r
+             JOIN deployments d ON d.release_id = r.id",
             [],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )

@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 use pneuma::adapters::database;
 use pneuma::domain::deployment::{DeploymentStatus, DeploymentType};
 use pneuma::use_cases::application_import::import_application;
-use pneuma::use_cases::deployment_create::{CreateDeploymentError, create_deployment};
+use pneuma::use_cases::deployment_create::{
+    CreateDeploymentError, create_deployment, create_deployment_with_source_revision,
+};
 use pneuma::use_cases::release_create::create_release;
 
 #[test]
@@ -17,7 +19,6 @@ fn persists_a_pending_deployment_atomically() {
         &format!("localhost/test:{}", "a".repeat(40)),
         "localhost/test",
         &"a".repeat(40),
-        Some(&"a".repeat(40)),
     )
     .unwrap();
 
@@ -46,7 +47,6 @@ fn rejects_a_second_active_deployment_for_the_application() {
         &format!("localhost/test:{}", "a".repeat(40)),
         "localhost/test",
         &"a".repeat(40),
-        None,
     )
     .unwrap();
     let second_release = create_release(
@@ -55,7 +55,6 @@ fn rejects_a_second_active_deployment_for_the_application() {
         &format!("localhost/test:{}", "b".repeat(40)),
         "localhost/test",
         &"b".repeat(40),
-        None,
     )
     .unwrap();
     create_deployment(
@@ -96,7 +95,6 @@ fn reuses_a_release_for_a_later_deployment_attempt() {
         &format!("localhost/test:{}", "a".repeat(40)),
         "localhost/test",
         &"a".repeat(40),
-        None,
     )
     .unwrap();
     let first_deployment = create_deployment(
@@ -135,6 +133,51 @@ fn reuses_a_release_for_a_later_deployment_attempt() {
 }
 
 #[test]
+fn preserves_provenance_for_each_attempt_using_the_same_release() {
+    let mut connection = database::open(Path::new(":memory:")).unwrap();
+    let application =
+        import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
+    let release = create_release(
+        &mut connection,
+        &application.id,
+        &format!("localhost/test:{}", "a".repeat(40)),
+        "localhost/test",
+        &"a".repeat(40),
+    )
+    .unwrap();
+
+    let first = create_deployment_with_source_revision(
+        &mut connection,
+        &application.id,
+        &release.id,
+        DeploymentType::Deploy,
+        Some("first-commit"),
+    )
+    .unwrap();
+    connection
+        .execute(
+            "UPDATE deployments SET status = 'failed' WHERE id = ?1",
+            [&first.id],
+        )
+        .unwrap();
+    let second = create_deployment_with_source_revision(
+        &mut connection,
+        &application.id,
+        &release.id,
+        DeploymentType::Deploy,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(first.source_revision.as_deref(), Some("first-commit"));
+    assert_eq!(second.source_revision, None);
+    let release_source_revision: Option<String> = connection
+        .query_row("SELECT source_revision FROM releases", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(release_source_revision, None);
+}
+
+#[test]
 fn rejects_a_missing_release_and_missing_application() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
 
@@ -166,7 +209,6 @@ fn database_rejects_a_release_from_another_application() {
         &format!("localhost/test:{}", "a".repeat(40)),
         "localhost/test",
         &"a".repeat(40),
-        None,
     )
     .unwrap();
     let deployment = create_deployment(

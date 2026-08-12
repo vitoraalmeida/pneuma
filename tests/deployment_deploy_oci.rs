@@ -30,7 +30,9 @@ fn deploys_a_verified_oci_image_and_persists_its_exact_reference() {
 
     let release = connection
         .query_row(
-            "SELECT id, image_reference, image_repository, image_digest, source_revision FROM releases",
+            "SELECT r.id, r.image_reference, r.image_repository, r.image_digest, d.source_revision
+             FROM releases r
+             JOIN deployments d ON d.release_id = r.id",
             [],
             |row| {
                 Ok((

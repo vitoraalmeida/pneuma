@@ -99,6 +99,22 @@ pub fn create_deployment(
     release_id: &str,
     deployment_type: DeploymentType,
 ) -> Result<Deployment, CreateDeploymentError> {
+    create_deployment_with_source_revision(
+        connection,
+        application_id,
+        release_id,
+        deployment_type,
+        None,
+    )
+}
+
+pub fn create_deployment_with_source_revision(
+    connection: &mut Connection,
+    application_id: &str,
+    release_id: &str,
+    deployment_type: DeploymentType,
+    source_revision: Option<&str>,
+) -> Result<Deployment, CreateDeploymentError> {
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|source| CreateDeploymentError::Persistence { source })?;
@@ -127,6 +143,7 @@ pub fn create_deployment(
         application_id,
         release_id,
         deployment_type,
+        source_revision,
     )?;
     let deployment = load_deployment(&transaction, &deployment_id)?;
 
@@ -198,17 +215,19 @@ fn insert_deployment(
     application_id: &str,
     release_id: &str,
     deployment_type: DeploymentType,
+    source_revision: Option<&str>,
 ) -> Result<(), CreateDeploymentError> {
     transaction
         .execute(
             "INSERT INTO deployments (
-                id, application_id, release_id, type, status
-             ) VALUES (?1, ?2, ?3, ?4, 'pending')",
+                id, application_id, release_id, type, status, source_revision
+             ) VALUES (?1, ?2, ?3, ?4, 'pending', ?5)",
             rusqlite::params![
                 deployment_id,
                 application_id,
                 release_id,
-                deployment_type.database_value()
+                deployment_type.database_value(),
+                source_revision
             ],
         )
         .map_err(|source| CreateDeploymentError::Persistence { source })?;
@@ -221,7 +240,7 @@ fn load_deployment(
 ) -> Result<Deployment, CreateDeploymentError> {
     transaction
         .query_row(
-            "SELECT id, application_id, release_id, type, requested_at
+            "SELECT id, application_id, release_id, type, source_revision, requested_at
              FROM deployments WHERE id = ?1",
             [deployment_id],
             |row| {
@@ -232,7 +251,8 @@ fn load_deployment(
                     deployment_type: DeploymentType::from_database(&row.get::<_, String>(3)?)
                         .unwrap_or(DeploymentType::Deploy),
                     status: DeploymentStatus::Pending,
-                    requested_at: row.get(4)?,
+                    source_revision: row.get(4)?,
+                    requested_at: row.get(5)?,
                 })
             },
         )

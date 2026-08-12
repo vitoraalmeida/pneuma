@@ -112,7 +112,6 @@ pub fn deploy_oci(
         image.reference.as_str(),
         image.reference.repository(),
         image.reference.digest(),
-        source_revision,
     )
     .map_err(|source| DeployOciError::CreateRelease { source })?;
     deploy_release(
@@ -120,6 +119,7 @@ pub fn deploy_oci(
         application_id,
         &release,
         DeploymentType::Deploy,
+        source_revision,
         public_configuration,
     )
     .map_err(|source| DeployOciError::DeployRelease { source })

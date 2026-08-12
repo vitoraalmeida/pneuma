@@ -29,7 +29,6 @@ fn returns_deployments_ordered_newest_first() {
         &format!("localhost/test:{}", "a".repeat(40)),
         "localhost/test",
         &"a".repeat(40),
-        Some(&"a".repeat(40)),
     )
     .unwrap();
     let second_release = create_release(
@@ -38,7 +37,6 @@ fn returns_deployments_ordered_newest_first() {
         &format!("localhost/test:{}", "b".repeat(40)),
         "localhost/test",
         &"b".repeat(40),
-        Some(&"b".repeat(40)),
     )
     .unwrap();
     let first_deployment = create_deployment(
@@ -105,7 +103,6 @@ fn returns_only_deployments_for_the_given_application() {
         &format!("localhost/test:{}", "a".repeat(40)),
         "localhost/test",
         &"a".repeat(40),
-        None,
     )
     .unwrap();
     let second_release = create_release(
@@ -114,7 +111,6 @@ fn returns_only_deployments_for_the_given_application() {
         &format!("localhost/test:{}", "b".repeat(40)),
         "localhost/test",
         &"b".repeat(40),
-        None,
     )
     .unwrap();
     create_deployment(

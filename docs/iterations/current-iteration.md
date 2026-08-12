@@ -40,7 +40,10 @@ semântica de reconciliation antes de implementar `pneuma reconcile`.
       Resultado: Deployment, DeploymentType, DeploymentStatus, RuntimeState e
       DesiredRuntimeState vivem em módulos de domínio; ObservedRuntimeState
       permanece no adapter, sem alterar schema, transições ou saída CLI.
-- [ ] Migrar `source_revision` para Deployment com cobertura fresh/upgrade.
+- [x] Migrar `source_revision` para Deployment com cobertura fresh/upgrade.
+      Resultado: migration 0014 faz backfill histórico; Release novo é
+      artifact-only e cada Deployment persiste provenance própria, inclusive
+      deploy por branch, OCI do mesmo digest e rollback.
 - [ ] Unificar Release artifact-only e renomear `DeploymentResult`.
 - [ ] Materializar image digest como identidade de runtime e versão de rota.
 - [ ] Extrair persistência de `application_import` para store.

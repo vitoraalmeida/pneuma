@@ -42,7 +42,9 @@ fn deploys_a_branch_and_persists_source_revision() {
     );
     let (source_revision, image_reference): (Option<String>, String) = connection
         .query_row(
-            "SELECT source_revision, image_reference FROM releases",
+            "SELECT d.source_revision, r.image_reference
+             FROM deployments d
+             JOIN releases r ON r.id = d.release_id",
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )

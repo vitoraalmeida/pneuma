@@ -163,7 +163,6 @@ fn add_verifying_candidate(
         &format!("localhost/test:{commit_sha}"),
         "localhost/test",
         &commit_sha,
-        Some("test-revision"),
     )
     .unwrap();
     let deployment = create_deployment(

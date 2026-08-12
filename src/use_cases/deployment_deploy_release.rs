@@ -11,7 +11,9 @@ use crate::domain::release::Release;
 use crate::use_cases::deployment_activate_public::{
     PublicActivationError, PublicActivationInput, activate_public_candidate,
 };
-use crate::use_cases::deployment_create::{CreateDeploymentError, create_deployment};
+use crate::use_cases::deployment_create::{
+    CreateDeploymentError, create_deployment_with_source_revision,
+};
 use crate::use_cases::deployment_progress::{DeploymentProgress, DeploymentStep, ProgressReporter};
 use crate::use_cases::deployment_promote_internal::{
     PromoteInternalCandidateError, promote_internal_candidate,
@@ -135,6 +137,7 @@ pub fn deploy_release(
     application_id: &str,
     release: &Release,
     deployment_type: DeploymentType,
+    source_revision: Option<&str>,
     public_configuration: Option<&PublicDeploymentConfiguration>,
 ) -> Result<DeployedRelease, DeployReleaseError> {
     let mut progress = ProgressReporter::disabled();
@@ -143,6 +146,7 @@ pub fn deploy_release(
         application_id,
         release,
         deployment_type,
+        source_revision,
         public_configuration,
         &mut progress,
     )
@@ -153,6 +157,7 @@ pub fn deploy_release_with_progress(
     application_id: &str,
     release: &Release,
     deployment_type: DeploymentType,
+    source_revision: Option<&str>,
     public_configuration: Option<&PublicDeploymentConfiguration>,
     progress: &mut dyn FnMut(DeploymentProgress),
 ) -> Result<DeployedRelease, DeployReleaseError> {
@@ -162,6 +167,7 @@ pub fn deploy_release_with_progress(
         application_id,
         release,
         deployment_type,
+        source_revision,
         public_configuration,
         &mut progress,
     )
@@ -172,6 +178,7 @@ fn deploy_release_reporting(
     application_id: &str,
     release: &Release,
     deployment_type: DeploymentType,
+    source_revision: Option<&str>,
     public_configuration: Option<&PublicDeploymentConfiguration>,
     progress: &mut ProgressReporter<'_>,
 ) -> Result<DeployedRelease, DeployReleaseError> {
@@ -198,15 +205,21 @@ fn deploy_release_reporting(
         DeploymentStep::CreateDeployment,
         format!("release {}", release.id),
     );
-    let deployment = create_deployment(connection, application_id, &release.id, deployment_type)
-        .map_err(|source| DeployReleaseError::CreateDeployment { source })?;
+    let deployment = create_deployment_with_source_revision(
+        connection,
+        application_id,
+        &release.id,
+        deployment_type,
+        source_revision,
+    )
+    .map_err(|source| DeployReleaseError::CreateDeployment { source })?;
     progress.completed(
         DeploymentStep::CreateDeployment,
         format!("deployment {}", deployment.id),
     );
     progress.state_changed(&deployment.id, DeploymentStatus::Pending);
 
-    let runtime_identity = release.source_revision.as_deref().unwrap_or(&release.id);
+    let runtime_identity = deployment.source_revision.as_deref().unwrap_or(&release.id);
     let execution = execute_deployment(
         connection,
         &deployment.id,
@@ -222,7 +235,7 @@ fn deploy_release_reporting(
             runtime_id,
             container_name,
             image_reference: release.image_reference.clone(),
-            source_revision: release.source_revision.clone(),
+            source_revision: deployment.source_revision,
             finished_at,
         }),
         Err(failed) => finish_failed_deployment(connection, &deployment.id, failed, progress),

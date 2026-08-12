@@ -5,6 +5,7 @@ pub struct Deployment {
     pub release_id: String,
     pub deployment_type: DeploymentType,
     pub status: DeploymentStatus,
+    pub source_revision: Option<String>,
     pub requested_at: String,
 }
 
