@@ -1,4 +1,4 @@
-# Roadmap consolidado do Pneuma — v0.1 a v0.5
+# Roadmap consolidado do Pneuma — v0.1 a v0.7
 
 **Status:** documento vivo — contrato de evolução do projeto
 **Aplicação-piloto:** `vitoralmeida.tech`
@@ -281,44 +281,39 @@ pelo Pneuma, descoberta manual de digest ou edição manual de Caddy.
 
 ---
 
-## v0.3 — Reconciliation, automation & CI/CD
+## v0.3 — Reconciliation & Deployment Reliability
 
 Com Git/source/artifact bem definidos, o Pneuma evolui de command-driven para
-declarativo (estado desejado vs observado) e o CI/CD automatiza o deploy.
-
-### Reconciliação e automação
+declarativo (estado desejado vs observado). O `pneuma reconcile` observa o
+estado materializado (Podman/systemd, Caddy) e converge para o estado desejado
+persistido no SQLite, sem alterar a intenção e sem criar Release/Deployment.
 
 - [ ] Desired vs observed state
 - [ ] Drift detection e automatic recovery
 - [ ] Deployment recovery
 - [ ] Melhor convergência de restart/reboot
-- [ ] Registry watcher (deploy quando o artifact da branch fica disponível)
-- [ ] Automatic deploy policies
 - [ ] Melhorias de candidate/activation
-
-### CI/CD automatizado
-
-Merge na main termina com nova versão implantada e verificada.
-
-- [ ] GitHub Actions: workflow de validação (PR: format, lint, test, build)
-- [ ] GitHub Actions: build + push GHCR, publicado como `image:<commit-sha>`
-- [ ] GitHub Actions: stage de deploy (SSH → `pneuma app deploy --branch`)
-- [ ] Pipeline completo: merge → CI → SSH → deploy → health → active
-- [ ] CLI não interativa (`--non-interactive`, output estruturado, exit codes)
 - [ ] Exclusão mútua de deployment (um por aplicação por vez)
-- [ ] Chave de idempotência (`--idempotency-key`)
-- [ ] Rollback automático em falha de health check
-- [ ] Auditoria completa (workflow, run ID, timestamps, requested_by)
-- [ ] Política de retenção de imagens
-- [ ] Usuário SSH dedicado (`pneuma-deployer`, forced command)
+- [ ] CLI não interativa (`--non-interactive`, output estruturado, exit codes)
 
-Segurança do deploy automático: GitHub Actions → SSH key exclusiva → usuário
-`pneuma` (sem senha, sem sudo). Inicialmente chave dedicada normal; depois
-`authorized_keys` com forced command restrito à aplicação de staging.
+Já entregues fora da v0.3 (não são trabalho futuro):
+
+- GitHub Actions de validação (format, lint, test, build) e build/push GHCR
+  publicado como `image:<commit-sha>` — pipeline de CI ativo.
+- Deploy SSH via dispatcher restrito: GitHub Actions → chave exclusiva →
+  usuário `pneuma` (sem senha, sem sudo), `authorized_keys` com forced command
+  (`pneuma ci dispatch`) limitado a `deploy <app> <branch>` e `version`.
+
+Fora de escopo sem necessidade demonstrada: registry watcher (deploy quando o
+artifact da branch fica disponível) e automatic deploy policies. Sem auditoria
+completa, `--idempotency-key` genérica, retenção de imagens ou rollback
+automático posterior à promoção nesta etapa — a falha do candidate antes da
+promoção já preserva a versão ativa; decisão de reverter automaticamente uma
+versão já promovida fica para uma política explícita futura.
 
 ---
 
-## v0.4 — Application topology
+## v0.4 — Application Topology & Internal Networking
 
 Adicionar relacionamento entre Applications: o Pneuma passa a entender como as
 aplicações se relacionam, não apenas como cada uma roda isoladamente.
@@ -332,22 +327,30 @@ aplicações se relacionam, não apenas como cada uma roda isoladamente.
 
 ---
 
-## v0.5 — Network security, identity and secure S2S
+## v0.5 — Network Policy Enforcement
 
-Segurança e identidade de workload; as relações declaradas na v0.4 alimentam as
-políticas.
+As relações declaradas na v0.4 alimentam políticas de conectividade aplicadas
+no host.
 
 ### Network enforcement
 
 - [ ] `pneuma-netd` (nftables, default deny, conectividade explícita)
 
-### Workload identity
+---
+
+## v0.6 — Workload Identity & Secure S2S
+
+Identidade por workload; a comunicação entre aplicações passa a ser
+autenticada e autorizada.
 
 - [ ] SPIFFE + SPIRE (cada `RuntimeInstance` recebe identidade própria)
+- [ ] `pneuma-proxy` por `RuntimeInstance` (mTLS, authn, authz, telemetria)
 
-### `pneuma-proxy`
+---
 
-- [ ] Um proxy por `RuntimeInstance` (mTLS, authn, authz, telemetria)
+## v0.7 — Artifact Security & Secrets
+
+Segurança do ciclo de artefato e segredos de aplicação.
 
 ### Artifact security
 
@@ -359,14 +362,14 @@ políticas.
 
 ---
 
-## Fora do escopo (congelado além da v0.5)
+## Fora do escopo (congelado além da v0.7)
 
 TUI, API HTTP, webhooks, observabilidade centralizada, múltiplos hosts,
 scheduler, agentes remotos, reconciliação distribuída, comunicação declarativa
-entre apps, dependencies, service discovery além do básico da v0.4,
-pneuma-netd, nftables, network policies, SPIFFE/SPIRE, workload identity,
-pneuma-proxy, mTLS, secrets, SBOM, signature enforcement, admission policies,
-managed builds como feature oficial, canary, rollout gradual, autoscaling,
-Kubernetes, RBAC, multiusuário.
+entre apps, dependencies, service discovery além do básico da v0.4, managed
+builds como feature oficial, canary, rollout gradual, autoscaling, Kubernetes,
+RBAC, multiusuário.
 
-Cada item é descongelado na versão que o introduz explicitamente.
+Os itens de rede, identidade, S2S e segurança de artifact saem do congelamento
+nas versões que os introduzem (v0.5 a v0.7); todo o restante é descongelado
+explicitamente em uma versão futura.

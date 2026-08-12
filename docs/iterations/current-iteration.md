@@ -23,7 +23,11 @@ semântica de reconciliation antes de implementar `pneuma reconcile`.
 ## Checkpoints
 
 - [x] Abrir a iteração e registrar o design aprovado.
-- [ ] Redefinir roadmap e sincronizar documentação pública pós-v0.2.
+- [x] Redefinir roadmap e sincronizar documentação pública pós-v0.2.
+      Resultado: roadmap reescrito para v0.1→v0.7 (v0.3 = reconciliation/reliability),
+      CI/CD já entregue documentado como concluído, import público por URL Git nos
+      docs e scripts (deploy-all-fixtures.sh via `file://`, verify-vps.sh) e referência
+      quebrada a `docs/operations/e2e-testing.md` removida.
 - [ ] Definir semântica, invariantes e fontes de verdade de reconciliation.
 - [ ] Aplicar o contrato de importação exclusivamente por URL Git.
 - [ ] Consolidar os tipos de domínio de Deployment e Runtime.

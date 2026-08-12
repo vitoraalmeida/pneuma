@@ -172,6 +172,10 @@ ssh pneuma-dev 'su - pneuma -c "
 ssh pneuma-dev 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma app import file:///var/lib/pneuma/checkouts/healthy-http.git --manifest pneuma.toml"'
 ```
 
+O script `deploy-all-fixtures.sh` automatiza esse processo para todas as
+fixtures: cria um repositório Git local por fixture em
+`/var/lib/pneuma/repos/<fixture>.git` e importa via `file://`.
+
 > **Atenção:** `app import` usa `ON CONFLICT(name) DO NOTHING`; um re-import após
 > alterar `pneuma.toml` **não** atualiza a entrega registrada. Para trocar o
 > repositório/entrega de uma fixture já registrada, atualize o banco:
@@ -239,7 +243,7 @@ VM (todos aceitam `[ssh-host]` opcional, default `pneuma-dev`):
 |---|---|---|
 | `sync-binary.sh` | `cargo build --release` + scp + install + `pneuma doctor` | Após alterar código Rust |
 | `rebuild-fixtures.sh` | Copia fixtures, build + push no registry local, mostra digests | Após editar fixtures/`server.py` |
-| `deploy-all-fixtures.sh` | Import + deploy de todas as fixtures por digest | Após reset ou mudança de fixtures |
+| `deploy-all-fixtures.sh` | Cria repos Git locais, importa cada fixture por `file://` e deploya por digest | Após reset ou mudança de fixtures |
 | `reset-fixtures.sh` | Para apps, remove units/containers/Caddy fragments/checkouts, recria o DB | Voltar a um estado limpo |
 | `overview.sh` | Status de apps, containers, units, Caddy e registry de uma vez | Debug rápido |
 | `e2e.sh` | Reset → rebuild → deploy → verifica health → upgrade → rollback → reboot → verifica | Bateria completa de regressão |
@@ -328,9 +332,10 @@ A bateria `scripts/dev-vm/e2e.sh` já cobre o ciclo principal (import, deploy po
 digest, upgrade, rollback e reboot). Upgrade/rollback e reboot foram validados
 na VM: o Quadlet (via `[Install] WantedBy=default.target`) restaura as
 aplicações no boot com linger habilitado, sem `systemctl enable` explícito.
-Com a v0.2 (Git-aware), o `e2e.sh` evoluirá para validar `app import <git-url>`
-e `app deploy --branch`. A VPS passa a ser usada apenas para smoke final de
-integração pública (DNS e TLS reais).
+Com a v0.2 concluída, o fluxo Git → OCI é coberto por `test-branch-deploy.sh`
+(repo Git com `main`/`staging`, import por URL `file://` e deploy por `--branch`)
+e o `e2e.sh` importa as fixtures por repositórios Git locais. A VPS é usada
+apenas para smoke final de integração pública (DNS e TLS reais).
 
 ## Referências
 

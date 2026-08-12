@@ -24,7 +24,7 @@
 # Defaults: ssh-host = pneuma-dev, ci-key = ~/.ssh/pneuma-ci-test
 #
 # The reboot inside e2e.sh requires root over SSH; run this script from a host
-# with the VM provisioning key configured (docs/operations/e2e-testing.md).
+# with the VM provisioning key configured (~/.ssh/pneuma-dev).
 
 set -euo pipefail
 
@@ -133,7 +133,7 @@ fi
 if [[ -f "$CI_KEY" ]]; then
     report ok "CI key present ($CI_KEY)"
 else
-    report fail "CI key missing ($CI_KEY); see docs/operations/e2e-testing.md"
+    report fail "CI key missing ($CI_KEY)"
 fi
 
 echo

@@ -104,7 +104,10 @@ default_visibility = "public"
 domain = "my-app.example.com"
 ```
 
-2. **Import the application** from a Git repository:
+2. **Import the application** from a Git repository (`app import` accepts Git
+   URLs only; local paths are rejected and `file://` is reserved for local test
+   repositories). Pneuma clones the repository temporarily to read the manifest,
+   then removes the checkout:
 
 ```bash
 pneuma app import https://github.com/user/my-app --manifest deploy/staging/pneuma.toml
@@ -194,7 +197,7 @@ domain = "staging.example.com"
 - `default_visibility`: `internal` or `public`
 - `domain`: required for public apps, ignored for internal
 
-The repository URL comes from the `pneuma app import` command, not from the manifest; the branch comes from the `pneuma app deploy --branch` command.
+The repository URL comes from the `pneuma app import` command, not from the manifest; the branch comes from the `pneuma app deploy --branch` command. `app import` clones the repository only temporarily (read manifest, persist, remove) and rejects local paths; `file://` URLs are accepted for local test repositories.
 
 ## Configuration
 
@@ -273,7 +276,7 @@ See `docs/rust-guidelines.md` for code conventions and `AGENTS.md` for contribut
 
 - **v0.1** (released): OCI-first deployments — immutable image pulls, rootless Quadlet runtime, health checks, Caddy exposure, rollback, and VPS operations
 - **v0.2** (released): Git-aware OCI delivery — deploy by branch, automatic artifact discovery from CI, manifest schema v3, SQLite stores for persistence
-- **v0.3** (planned): reconciliation, drift detection, and CI/CD automation
+- **v0.3** (planned): reconciliation and deployment reliability — desired vs observed state, drift detection and recovery, deployment recovery, non-interactive CLI
 
 See `docs/roadmap.md` for the full product vision.
 

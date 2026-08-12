@@ -69,6 +69,11 @@ A especificação da aplicação é persistida na importação do `pneuma.toml`
 `application_delivery_specs` sempre guarda o repositório OCI permitido
 (`[delivery] image`), usado para validar o `app deploy --image`.
 
+`pneuma app import` aceita somente URLs Git (paths locais são rejeitados;
+`file://` serve para repositórios de teste locais). A importação clona o
+repositório temporariamente, lê o `pneuma.toml`, persiste a aplicação e remove o
+checkout; não faz deployment.
+
 Regras observadas:
 
 - transações curtas, nunca abertas durante Git, build, Podman, Caddy ou HTTP;

@@ -122,9 +122,12 @@ sudo -iu pneuma
 pneuma app import https://github.com/owner/my-app --manifest deploy/staging/pneuma.toml
 ```
 
-O Pneuma clona o repositório e registra a aplicação com a entrega declarada
-(imagem OCI, porta, healthcheck, visibilidade). O `--manifest` é o caminho do
-`pneuma.toml` **dentro do repositório**.
+O Pneuma clona o repositório **somente temporariamente** (lê o `pneuma.toml`,
+persiste a aplicação e remove o checkout) e registra a aplicação com a entrega
+declarada (imagem OCI, porta, healthcheck, visibilidade). O `--manifest` é o
+caminho do `pneuma.toml` **dentro do repositório**. `app import` aceita apenas
+URLs Git; paths locais são rejeitados e `file://` é reservado a repositórios de
+teste locais.
 
 ### 4.2. Deploy por branch (recomendado com CI)
 

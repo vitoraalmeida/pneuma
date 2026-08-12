@@ -2,8 +2,9 @@
 #
 # Deploy all fixtures on the development VM
 #
-# Imports each fixture from the VM checkout and deploys it by digest from the
-# local registry, then prints the final application status.
+# Imports each fixture from a local Git repository (built from the fixture
+# source copied to the VM) and deploys it by digest from the local registry,
+# then prints the final application status.
 #
 # Usage:
 #   scripts/dev-vm/deploy-all-fixtures.sh [ssh-host]
@@ -16,11 +17,40 @@ SSH_HOST="${1:-pneuma-dev}"
 FIXTURES_DIR="scripts/dev-vm/fixtures"
 REGISTRY="localhost:5000"
 
+echo "==> Preparing Git repositories for fixtures..."
+ssh "$SSH_HOST" 'sudo mkdir -p /var/lib/pneuma/repos && sudo chown pneuma:pneuma /var/lib/pneuma/repos'
+
 echo "==> Importing fixtures..."
 for fixture in "$FIXTURES_DIR"/*/; do
     name=$(basename "$fixture")
     echo "  -> Importing $name"
-    ssh "$SSH_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && pneuma app import /var/lib/pneuma/checkouts/fixtures/$name 2>&1'" 2>&1 | grep -v level=warning || true
+    output=$(ssh "$SSH_HOST" "runuser -u pneuma -- bash -l -s \"$name\"" <<'REMOTE'
+set -euo pipefail
+name="$1"
+SRC="/var/lib/pneuma/checkouts/fixtures/$name"
+REPOS_ROOT="/var/lib/pneuma/repos"
+WORK="$REPOS_ROOT/$name-work"
+REPO="$REPOS_ROOT/$name.git"
+
+rm -rf "$WORK" "$REPO"
+mkdir -p "$REPOS_ROOT"
+
+git init --quiet --initial-branch=main "$WORK"
+cd "$WORK"
+git config user.name "Pneuma Fixtures"
+git config user.email "pneuma@example.invalid"
+cp "$SRC"/* .
+git add -A
+git commit --quiet -m "$name fixture"
+git init --quiet --bare "$REPO"
+git push --quiet "$REPO" main
+git --git-dir="$REPO" symbolic-ref HEAD refs/heads/main
+
+cd "$HOME"
+pneuma app import "file://$REPO"
+REMOTE
+    )
+    echo "$output" | grep -v level=warning || true
 done
 
 echo

@@ -151,7 +151,7 @@ if [[ "$APPLICATION_PRESENT" == false ]]; then
     echo
     echo "Skipping runtime checks: the application must first be imported and"
     echo "deployed. Run the GHCR flow once, for example:"
-    echo "  pneuma app import /var/lib/pneuma/checkouts/vitoralmeida.tech"
+    echo "  pneuma app import https://github.com/owner/my-app --manifest deploy/staging/pneuma.toml"
     echo "  pneuma app deploy $PNEUMA_USER_APP --image ghcr.io/owner/image@sha256:<digest>"
     echo
 else
