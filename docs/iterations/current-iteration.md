@@ -36,7 +36,10 @@ semântica de reconciliation antes de implementar `pneuma reconcile`.
       Resultado: CLI rejeita paths antes de efeitos, clona toda URL aceita em
       checkout temporário (inclusive limpeza após falha de clone) e os testes
       binários importam repositórios temporários via `file://`.
-- [ ] Consolidar os tipos de domínio de Deployment e Runtime.
+- [x] Consolidar os tipos de domínio de Deployment e Runtime.
+      Resultado: Deployment, DeploymentType, DeploymentStatus, RuntimeState e
+      DesiredRuntimeState vivem em módulos de domínio; ObservedRuntimeState
+      permanece no adapter, sem alterar schema, transições ou saída CLI.
 - [ ] Migrar `source_revision` para Deployment com cobertura fresh/upgrade.
 - [ ] Unificar Release artifact-only e renomear `DeploymentResult`.
 - [ ] Materializar image digest como identidade de runtime e versão de rota.

@@ -1,10 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use pneuma::adapters::database;
+use pneuma::domain::deployment::{DeploymentStatus, DeploymentType};
 use pneuma::use_cases::application_import::import_application;
-use pneuma::use_cases::deployment_create::{
-    CreateDeploymentError, DeploymentStatus, DeploymentType, create_deployment,
-};
+use pneuma::use_cases::deployment_create::{CreateDeploymentError, create_deployment};
 use pneuma::use_cases::release_create::create_release;
 
 #[test]

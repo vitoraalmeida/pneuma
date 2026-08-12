@@ -4,7 +4,7 @@ use std::fmt;
 use rusqlite::{Connection, OptionalExtension};
 
 use crate::adapters::oci_image::{OciImageReference, PullImageError, pull_image};
-use crate::use_cases::deployment_create::DeploymentType;
+use crate::domain::deployment::DeploymentType;
 use crate::use_cases::deployment_deploy_release::{
     DeployReleaseError, DeployedRelease, PublicDeploymentConfiguration, deploy_release,
 };

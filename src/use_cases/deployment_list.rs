@@ -3,7 +3,7 @@ use std::fmt;
 
 use rusqlite::Connection;
 
-use crate::use_cases::deployment_create::{DeploymentStatus, DeploymentType};
+use crate::domain::deployment::{DeploymentStatus, DeploymentType};
 
 #[derive(Debug)]
 pub struct DeploymentSummary {

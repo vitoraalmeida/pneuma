@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::use_cases::deployment_create::DeploymentStatus;
+use crate::domain::deployment::DeploymentStatus;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeploymentStep {

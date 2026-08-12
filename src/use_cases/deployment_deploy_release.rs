@@ -5,14 +5,13 @@ use std::path::PathBuf;
 use rusqlite::Connection;
 
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
+use crate::domain::deployment::{DeploymentStatus, DeploymentType};
 use crate::domain::manifest::Visibility;
 use crate::domain::release::Release;
 use crate::use_cases::deployment_activate_public::{
     PublicActivationError, PublicActivationInput, activate_public_candidate,
 };
-use crate::use_cases::deployment_create::{
-    CreateDeploymentError, DeploymentStatus, DeploymentType, create_deployment,
-};
+use crate::use_cases::deployment_create::{CreateDeploymentError, create_deployment};
 use crate::use_cases::deployment_progress::{DeploymentProgress, DeploymentStep, ProgressReporter};
 use crate::use_cases::deployment_promote_internal::{
     PromoteInternalCandidateError, promote_internal_candidate,

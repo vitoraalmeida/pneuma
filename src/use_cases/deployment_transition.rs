@@ -4,7 +4,7 @@ use std::fmt;
 use rusqlite::{Connection, TransactionBehavior};
 
 use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
-use crate::use_cases::deployment_create::DeploymentStatus;
+use crate::domain::deployment::DeploymentStatus;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeploymentTransition {

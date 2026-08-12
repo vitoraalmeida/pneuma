@@ -118,7 +118,7 @@ pub(crate) fn activate_public_candidate(
 
     progress.state_changed(
         deployment_id,
-        crate::use_cases::deployment_create::DeploymentStatus::Activating,
+        crate::domain::deployment::DeploymentStatus::Activating,
     );
 
     let exposure = begin_public_exposure(connection, runtime_id).map_err(|source| {
@@ -246,7 +246,7 @@ pub(crate) fn activate_public_candidate(
 
     progress.state_changed(
         deployment_id,
-        crate::use_cases::deployment_create::DeploymentStatus::Succeeded,
+        crate::domain::deployment::DeploymentStatus::Succeeded,
     );
 
     Ok(PublicActivationOutput {

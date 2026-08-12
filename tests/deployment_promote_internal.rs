@@ -4,8 +4,9 @@ use std::path::{Path, PathBuf};
 use std::thread;
 
 use pneuma::adapters::database;
+use pneuma::domain::deployment::DeploymentType;
 use pneuma::use_cases::application_import::import_application;
-use pneuma::use_cases::deployment_create::{DeploymentType, create_deployment};
+use pneuma::use_cases::deployment_create::create_deployment;
 use pneuma::use_cases::deployment_promote_internal::{
     PromoteInternalCandidateError, promote_internal_candidate,
 };

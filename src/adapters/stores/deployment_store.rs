@@ -3,7 +3,7 @@ use std::fmt;
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
-use crate::use_cases::deployment_create::DeploymentStatus;
+use crate::domain::deployment::DeploymentStatus;
 
 #[derive(Debug)]
 pub enum DeploymentStoreError {

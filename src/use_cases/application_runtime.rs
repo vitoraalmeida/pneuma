@@ -11,29 +11,7 @@ use crate::adapters::local_runtime::{
 use crate::adapters::systemd_quadlet::{
     QuadletError, container_name, start as start_unit, stop as stop_unit, unit_exists, unit_name,
 };
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DesiredRuntimeState {
-    Running,
-    Stopped,
-}
-
-impl DesiredRuntimeState {
-    fn from_database(value: &str) -> Option<Self> {
-        match value {
-            "running" => Some(Self::Running),
-            "stopped" => Some(Self::Stopped),
-            _ => None,
-        }
-    }
-
-    fn to_database_value(self) -> &'static str {
-        match self {
-            Self::Running => "running",
-            Self::Stopped => "stopped",
-        }
-    }
-}
+use crate::domain::runtime::DesiredRuntimeState;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct RuntimeObservation {
@@ -454,7 +432,7 @@ fn set_desired_state(
             "UPDATE applications
              SET desired_runtime_state = ?1, updated_at = CURRENT_TIMESTAMP
              WHERE id = ?2",
-            params![desired_runtime_state.to_database_value(), application_id],
+            params![desired_runtime_state.database_value(), application_id],
         )
         .map_err(|source| RuntimeLifecycleError::Persistence { source })?;
     Ok(())
