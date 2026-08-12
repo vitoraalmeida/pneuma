@@ -728,12 +728,16 @@ fn run_deployments(
         println!("No deployments for {}", application.name);
     } else {
         println!("Deployments for {}:", application.name);
-        println!("DEPLOYMENT\tRELEASE\tSOURCE\tSTATUS");
+        println!("DEPLOYMENT\tTYPE\tRELEASE\tSOURCE\tSTATUS");
         for deployment in deployments {
             let source = deployment.source_revision.as_deref().unwrap_or("-");
             println!(
-                "{}\t{}\t{}\t{:?}",
-                deployment.id, deployment.image_digest, source, deployment.status
+                "{}\t{:?}\t{}\t{}\t{:?}",
+                deployment.id,
+                deployment.deployment_type,
+                deployment.image_digest,
+                source,
+                deployment.status
             );
         }
     }

@@ -65,7 +65,12 @@ capazes de provar as garantias operacionais necessárias antes de reconciliation
     executa `bash -n`, ShellCheck e shfmt em todos os scripts rastreados; scripts
     foram formatados e variáveis não usadas removidas. Checks shell e quatro
     gates Rust verdes.
-- [ ] Provar candidate falho preservando release ativa e rollback real.
+- [x] Provar candidate falho preservando release ativa e rollback real.
+    Resultado: E2E publica candidate unhealthy no repositório permitido de
+    `healthy-http`, exige deployment `Deploy/Failed`, runtime Running e body v1;
+    depois promove v2 e chama `pneuma deployment rollback healthy-http`, exigindo
+    body v1 e histórico `Rollback/Succeeded`. Clone Debian 13 descartável passou
+    o ciclo completo e foi destruída.
 - [ ] Provar reboot e recuperação por boot ID.
 - [ ] Tornar HTTPS local e fronteiras SSH CI obrigatórios no E2E.
 - [ ] Provar restore semântico, sincronizar docs e executar regressão final.

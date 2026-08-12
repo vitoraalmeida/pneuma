@@ -139,7 +139,7 @@ fi
 echo
 echo "==> Phase 1: fixture cycle (e2e.sh)..."
 if "$SCRIPT_DIR/e2e.sh" "$SSH_HOST" >"$LOG_DIR/e2e.log" 2>&1; then
-	report ok "e2e.sh completed (reset, rebuild, deploy, upgrade, rollback, reboot, recovery)"
+	report ok "e2e.sh completed (reset, failed candidate, upgrade, real rollback, reboot)"
 else
 	report fail "e2e.sh failed (see $LOG_DIR/e2e.log)"
 	echo
