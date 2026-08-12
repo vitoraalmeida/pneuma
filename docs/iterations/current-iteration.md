@@ -71,7 +71,11 @@ capazes de provar as garantias operacionais necessárias antes de reconciliation
     depois promove v2 e chama `pneuma deployment rollback healthy-http`, exigindo
     body v1 e histórico `Rollback/Succeeded`. Clone Debian 13 descartável passou
     o ciclo completo e foi destruída.
-- [ ] Provar reboot e recuperação por boot ID.
+- [x] Provar reboot e recuperação por boot ID.
+    Resultado: E2E exige queda e retorno do SSH dentro de timeout e boot ID novo;
+    depois confirma `user@<uid>.service`, Quadlet, container, `app status`
+    Running e body v1. Clone Debian 13 descartável passou o ciclo e foi
+    destruída.
 - [ ] Tornar HTTPS local e fronteiras SSH CI obrigatórios no E2E.
 - [ ] Provar restore semântico, sincronizar docs e executar regressão final.
 

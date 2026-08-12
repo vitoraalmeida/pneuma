@@ -118,19 +118,70 @@ echo "  OK: rollback deployment recorded"
 
 echo
 echo "==> Step 8: Reboot VM..."
-ssh "$SSH_HOST" 'reboot' 2>&1 || true
-echo "  Waiting for VM to come back..."
+BOOT_ID_BEFORE=$(ssh "$SSH_HOST" 'cat /proc/sys/kernel/random/boot_id')
+ssh "$SSH_HOST" 'reboot' >/dev/null 2>&1 || true
+
+echo "  Waiting for SSH to disconnect..."
+DISCONNECTED=false
+for _ in $(seq 1 30); do
+	if ! ssh -o ConnectTimeout=3 -o BatchMode=yes "$SSH_HOST" 'true' >/dev/null 2>&1; then
+		DISCONNECTED=true
+		break
+	fi
+	sleep 2
+done
+if [[ "$DISCONNECTED" != true ]]; then
+	echo "  ERROR: SSH never disconnected after reboot request"
+	exit 1
+fi
+
+echo "  Waiting for SSH recovery..."
+RECOVERED=false
 for _ in $(seq 1 60); do
-	if ssh -o ConnectTimeout=3 -o BatchMode=yes "$SSH_HOST" 'uptime' 2>/dev/null; then
+	if ssh -o ConnectTimeout=3 -o BatchMode=yes "$SSH_HOST" 'uptime' >/dev/null 2>&1; then
+		RECOVERED=true
 		break
 	fi
 	sleep 5
 done
-sleep 15
+if [[ "$RECOVERED" != true ]]; then
+	echo "  ERROR: SSH did not recover within 300 seconds after reboot"
+	exit 1
+fi
+
+BOOT_ID_AFTER=$(ssh "$SSH_HOST" 'cat /proc/sys/kernel/random/boot_id')
+if [[ "$BOOT_ID_AFTER" == "$BOOT_ID_BEFORE" ]]; then
+	echo "  ERROR: boot ID did not change after reboot"
+	exit 1
+fi
+echo "  OK: boot ID changed from $BOOT_ID_BEFORE to $BOOT_ID_AFTER"
 
 echo
 echo "==> Step 9: Verify apps after reboot..."
-ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma app status healthy-http && pneuma app status redirect-public"' 2>&1 | grep -v level=warning || true
+PNEUMA_UID=$(ssh "$SSH_HOST" 'id -u pneuma')
+if ! ssh "$SSH_HOST" "systemctl is-active --quiet user@$PNEUMA_UID.service"; then
+	echo "  ERROR: pneuma user manager is not active after reboot"
+	exit 1
+fi
+if ! ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && systemctl --user list-units --type=service --state=active '\''pneuma-healthy-http-*.service'\'' --no-legend | grep -q ."'; then
+	echo "  ERROR: healthy-http Quadlet service is not active after reboot"
+	exit 1
+fi
+if ! ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && podman ps --format '\''{{.Names}}'\'' --filter '\''name=^pneuma-healthy-http-'\'' | grep -q ."'; then
+	echo "  ERROR: healthy-http container is not active after reboot"
+	exit 1
+fi
+if ! ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma app status healthy-http"' | grep -q "Observed state: Running"; then
+	echo "  ERROR: healthy-http is not Running after reboot"
+	exit 1
+fi
+PORT=$(ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && podman ps --format \"{{.Ports}}\" --filter name=pneuma-healthy-http | cut -d: -f2 | cut -d- -f1"')
+BODY=$(ssh "$SSH_HOST" "curl -fsS http://127.0.0.1:$PORT/")
+if [[ "$BODY" != "healthy-http v1.0" ]]; then
+	echo "  ERROR: expected healthy-http v1.0 after reboot, got: $BODY"
+	exit 1
+fi
+echo "  OK: user manager, Quadlet, container, status, and $BODY recovered"
 
 echo
 echo "=========================================="
