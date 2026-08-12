@@ -630,7 +630,11 @@ fn run_import(
     let application = import_result?;
     println!("Imported {}", application.name);
     println!("Status: Registered");
-    println!("Deployment: Not deployed");
+    if let Some(deployment_id) = &application.active_deployment_id {
+        println!("Deployment: {deployment_id}");
+    } else {
+        println!("Deployment: Not deployed");
+    }
     Ok(())
 }
 

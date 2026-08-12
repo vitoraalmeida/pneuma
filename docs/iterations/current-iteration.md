@@ -52,7 +52,11 @@ semântica de reconciliation antes de implementar `pneuma reconcile`.
       Resultado: novas unidades usam `io.pneuma.image-digest`; a versão da rota
       é o fragmento Caddy canônico (domain + endpoint), e materializações v0.2
       legadas permanecem operáveis até redeploy.
-- [ ] Extrair persistência de `application_import` para store.
+- [x] Extrair persistência de `application_import` para store.
+      Resultado: SQL inline removido de `application_import.rs`; store ganha
+      `load_application_for_import` com `active_deployment_id` real e recebe
+      `DeliveryType`/`Visibility` tipados; reimport é create-only, atômico e o
+      CLI reporta o estado real de Applications já deployadas.
 - [ ] Extrair persistência de `application_runtime` para stores.
 - [ ] Persistir desired visibility antes de materializar Caddy.
 - [ ] Finalizar extração de persistência de `deployment_create`.

@@ -293,6 +293,36 @@ fn deploys_an_internal_application_and_prints_its_identity() {
 }
 
 #[test]
+fn reimport_reports_the_real_state_of_a_deployed_application() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || respond_once(&listener, 200));
+    let deploy = environment.deploy(port, false);
+    server.join().unwrap();
+    assert_command_succeeded(&deploy);
+    let deployment_id = String::from_utf8(deploy.stdout)
+        .unwrap()
+        .lines()
+        .find_map(|line| line.strip_prefix("Deployment: "))
+        .unwrap()
+        .to_owned();
+
+    let reimport = environment.import();
+    assert_command_succeeded(&reimport);
+    let stdout = String::from_utf8(reimport.stdout).unwrap();
+    assert!(
+        stdout.contains(&format!("Deployment: {deployment_id}")),
+        "unexpected stdout: {stdout}"
+    );
+    assert!(
+        !stdout.contains("Not deployed"),
+        "unexpected stdout: {stdout}"
+    );
+}
+
+#[test]
 fn deploy_writes_a_boot_enabled_quadlet_unit() {
     let environment = DeploymentEnvironment::new();
     assert_command_succeeded(&environment.import());

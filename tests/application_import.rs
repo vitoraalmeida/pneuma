@@ -254,6 +254,215 @@ fn cli_system_overrides_manifest() {
     assert_eq!(system_name, "cli-system");
 }
 
+#[test]
+fn reimporting_a_remote_oci_import_keeps_a_single_spec_row() {
+    let mut connection = database::open(Path::new(":memory:")).unwrap();
+    let repository = fixture_path("oci-only");
+    let repository_url = "https://git.example.com/team/service";
+
+    let first = import_application(
+        &mut connection,
+        &repository,
+        None,
+        Some(repository_url),
+        None,
+    )
+    .unwrap();
+    let second = import_application(
+        &mut connection,
+        &repository,
+        None,
+        Some(repository_url),
+        None,
+    )
+    .unwrap();
+
+    let row_counts = connection
+        .query_row(
+            "SELECT
+                (SELECT COUNT(*) FROM applications),
+                (SELECT COUNT(*) FROM application_delivery_specs),
+                (SELECT COUNT(*) FROM application_sources)",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(row_counts, (1, 1, 1));
+    assert_eq!(first, second);
+}
+
+#[test]
+fn reimport_preserves_the_active_deployment_of_a_deployed_application() {
+    let mut connection = database::open(Path::new(":memory:")).unwrap();
+    let repository = fixture_path("valid");
+    let repository_url = "https://github.com/vitoraalmeida/vitoralmeida.tech";
+
+    import_application(
+        &mut connection,
+        &repository,
+        None,
+        Some(repository_url),
+        None,
+    )
+    .unwrap();
+
+    let application_id: String = connection
+        .query_row("SELECT id FROM applications", [], |row| row.get(0))
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO releases (id, application_id, image_repository, image_digest, created_at)
+             VALUES ('release-1', ?1, 'ghcr.io/vitoraalmeida/vitoralmeida.tech',
+                     'sha256:deadbeef', CURRENT_TIMESTAMP)",
+            [&application_id],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO deployments (id, application_id, release_id, type, status,
+                                      created_at, updated_at)
+             VALUES ('deployment-1', ?1, 'release-1', 'deploy', 'succeeded',
+                     CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            [&application_id],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE applications SET active_deployment_id = 'deployment-1' WHERE id = ?1",
+            [&application_id],
+        )
+        .unwrap();
+
+    let reimported = import_application(
+        &mut connection,
+        &repository,
+        None,
+        Some(repository_url),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(reimported.id, application_id);
+    assert_eq!(
+        reimported.active_deployment_id.as_deref(),
+        Some("deployment-1")
+    );
+    let (source_url, source_count): (Option<String>, i64) = connection
+        .query_row(
+            "SELECT
+                (SELECT repository_url FROM application_sources),
+                (SELECT COUNT(*) FROM application_sources)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(source_url.as_deref(), Some(repository_url));
+    assert_eq!(source_count, 1);
+}
+
+#[test]
+fn a_mid_aggregate_persistence_failure_rolls_back_everything() {
+    let mut connection = database::open(Path::new(":memory:")).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TRIGGER fail_runtime_spec_insert
+             BEFORE INSERT ON application_runtime_specs
+             BEGIN
+                 SELECT RAISE(ABORT, 'intentional failure');
+             END",
+        )
+        .unwrap();
+
+    let error = import_application(
+        &mut connection,
+        &fixture_path("valid"),
+        None,
+        Some("https://github.com/vitoraalmeida/vitoralmeida.tech"),
+        None,
+    )
+    .unwrap_err();
+
+    assert!(matches!(error, ImportError::Persistence { .. }));
+    let row_counts = connection
+        .query_row(
+            "SELECT
+                (SELECT COUNT(*) FROM systems),
+                (SELECT COUNT(*) FROM applications),
+                (SELECT COUNT(*) FROM application_delivery_specs),
+                (SELECT COUNT(*) FROM application_sources),
+                (SELECT COUNT(*) FROM application_runtime_specs),
+                (SELECT COUNT(*) FROM health_check_specs),
+                (SELECT COUNT(*) FROM exposures)",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, i64>(6)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(row_counts, (0, 0, 0, 0, 0, 0, 0));
+}
+
+#[test]
+fn reimport_is_create_only_when_arguments_diverge() {
+    let mut connection = database::open(Path::new(":memory:")).unwrap();
+    let repository = fixture_path("valid");
+    let original_url = "https://github.com/vitoraalmeida/vitoralmeida.tech";
+
+    let original = import_application(
+        &mut connection,
+        &repository,
+        Some("system-a"),
+        Some(original_url),
+        None,
+    )
+    .unwrap();
+
+    let divergent = import_application(
+        &mut connection,
+        &repository,
+        Some("system-b"),
+        Some("https://git.example.com/different/repository"),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(divergent.id, original.id);
+    assert_eq!(divergent.system_id, original.system_id);
+    assert_eq!(divergent.repository.as_deref(), Some(original_url));
+
+    let (system_count, system_name): (i64, String) = connection
+        .query_row(
+            "SELECT
+                (SELECT COUNT(*) FROM systems),
+                (SELECT name FROM systems)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(system_count, 1);
+    assert_eq!(system_name, "system-a");
+    let source_count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM application_sources", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(source_count, 1);
+}
+
 fn fixture_path(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")

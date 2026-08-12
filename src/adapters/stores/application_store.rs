@@ -3,6 +3,9 @@ use std::fmt;
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
+use crate::domain::application::Application;
+use crate::domain::manifest::{DeliveryType, Visibility};
+
 #[derive(Debug)]
 pub enum ApplicationStoreError {
     NotFound { application_id: String },
@@ -90,10 +93,43 @@ pub fn insert_application(
     Ok(inserted == 1)
 }
 
+pub fn load_application_for_import(
+    transaction: &Transaction<'_>,
+    name: &str,
+) -> Result<Option<Application>, ApplicationStoreError> {
+    transaction
+        .query_row(
+            "SELECT
+                a.id,
+                a.system_id,
+                a.name,
+                s.repository_url,
+                s.default_branch,
+                a.active_deployment_id
+             FROM applications AS a
+             LEFT JOIN application_sources AS s
+                ON s.application_id = a.id
+             WHERE a.name = ?1",
+            [name],
+            |row| {
+                Ok(Application {
+                    id: row.get(0)?,
+                    system_id: row.get(1)?,
+                    name: row.get(2)?,
+                    repository: row.get(3)?,
+                    default_branch: row.get(4)?,
+                    active_deployment_id: row.get(5)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|source| ApplicationStoreError::Persistence { source })
+}
+
 pub fn insert_delivery_spec(
     transaction: &Transaction<'_>,
     application_id: &str,
-    delivery_type: &str,
+    delivery_type: DeliveryType,
     image_repository: &str,
 ) -> Result<(), ApplicationStoreError> {
     transaction
@@ -102,7 +138,11 @@ pub fn insert_delivery_spec(
                 application_id, delivery_type, image_repository,
                 created_at, updated_at
             ) VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-            params![application_id, delivery_type, image_repository],
+            params![
+                application_id,
+                delivery_type.database_value(),
+                image_repository
+            ],
         )
         .map_err(|source| ApplicationStoreError::Persistence { source })?;
     Ok(())
@@ -170,7 +210,7 @@ pub fn insert_health_check_spec(
 pub fn insert_exposure(
     transaction: &Transaction<'_>,
     application_id: &str,
-    visibility: &str,
+    visibility: Visibility,
     domain: Option<&str>,
 ) -> Result<(), ApplicationStoreError> {
     transaction
@@ -179,7 +219,7 @@ pub fn insert_exposure(
                 application_id, desired_visibility, domain,
                 created_at, updated_at
             ) VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-            params![application_id, visibility, domain],
+            params![application_id, visibility.database_value(), domain],
         )
         .map_err(|source| ApplicationStoreError::Persistence { source })?;
     Ok(())
