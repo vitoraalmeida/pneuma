@@ -80,7 +80,17 @@ semântica de reconciliation antes de implementar `pneuma reconcile`.
       Resultado: catálogo indexado cobre drift de runtime/exposure, recovery de
       deployments interrompidos e concorrência; automação VM permanece adiada
       até `pneuma reconcile` existir.
-- [ ] Executar regressão final de código, migration e VM.
+- [ ] Preparar VM Debian 13 reproduzível e executar regressão final de código,
+      migration e VM.
+      Plano: a partir de clone descartável de `pneuma-dev-base`, gerar localmente
+      `~/.ssh/pneuma-ci-test`; usar bootstrap nativo na VM a partir da URL pública
+      do repositório, fixado em `b6887a4`, para instalar o binário e somente a
+      chave pública CI restrita; validar bootstrap e rerun; criar o snapshot
+      `pneuma-ready` apenas depois da aceitação; executar `test-all.sh` em clone
+      descartável de `pneuma-ready`, com a chave privada local, e registrar a
+      contagem real PASS/FAIL/SKIP. O bootstrap da VM pode usar autenticação root
+      por senha somente no wrapper local, via `PNEUMA_VM_ROOT_PASSWORD`; nenhum
+      segredo entra em script, argumento, log ou VM.
 
 ## Critérios de aceite
 
@@ -112,3 +122,23 @@ Nenhum.
 
 Pendente: quatro gates no commit final de código, banco novo e upgrade da
 migration, e regressão em VM Debian 13 conforme os critérios de aceite.
+
+## Próxima iteração proposta
+
+Após encerrar esta iteração, abrir design aprovado e tracker separado para
+fortalecer bootstrap e E2E conforme
+`~/Downloads/pneuma-bootstrap-vm-e2e-hardening-plan.md`. O escopo proposto é:
+
+- extrair invariantes compartilhados de provisionamento entre bootstrap VPS e VM;
+- tornar preflight, usuário, subuid/subgid, Caddy e ambiente idempotentes e
+  verificáveis;
+- adicionar `--ref`, configuração Caddy atômica e testes de bootstrap limpo com
+  segunda execução;
+- tornar E2E rigoroso para candidate falho, rollback real, reboot, HTTPS público,
+  segurança do dispatcher CI e semântica de backup/restore;
+- incluir lint e testes de scripts shell no CI e atualizar documentação
+  operacional.
+
+Esse escopo não está autorizado neste checkpoint, exceto pelas mudanças mínimas
+necessárias para criar uma VM Debian 13 `pneuma-ready` e executar a regressão
+final acima.
