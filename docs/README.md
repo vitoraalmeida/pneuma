@@ -14,6 +14,7 @@ altera; um **registro** descreve algo executado e não muda.
 | [`architecture/architecture.md`](architecture/architecture.md) | Arquitetura implementada: estrutura, runtime Quadlet, exposição, persistência e máquina de estados |
 | [`iterations/current-iteration.md`](iterations/current-iteration.md) | Iteração em andamento (o único acompanhamento de trabalho) |
 | [`design/pre-v0.3-consolidation.md`](design/pre-v0.3-consolidation.md) | Design aprovado da consolidação pós-v0.2 / pré-v0.3 |
+| [`design/bootstrap-e2e-hardening.md`](design/bootstrap-e2e-hardening.md) | Design aprovado para hardening de bootstrap, VM e E2E antes de reconciliation |
 | [`design/reconciliation.md`](design/reconciliation.md) | Semântica aprovada de reconciliation para a v0.3 |
 | [`design/reconciliation-e2e.md`](design/reconciliation-e2e.md) | Catálogo E2E futuro de reconciliation para a v0.3 |
 | [`roadmap.md`](roadmap.md) | Roadmap consolidado v0.1 → v0.7; contrato de evolução do projeto |
