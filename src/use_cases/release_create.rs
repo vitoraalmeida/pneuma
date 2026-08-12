@@ -92,19 +92,12 @@ pub fn create_release(
         image_digest,
     )?;
 
-    let store_release =
+    let release =
         release_store::load_release_by_digest(&transaction, application_id, image_digest)?;
 
     transaction
         .commit()
         .map_err(|source| CreateReleaseError::Persistence { source })?;
 
-    Ok(Release {
-        id: store_release.id,
-        application_id: store_release.application_id,
-        image_reference: store_release.image_reference,
-        image_repository: store_release.image_repository,
-        image_digest: store_release.image_digest,
-        created_at: store_release.created_at,
-    })
+    Ok(release)
 }

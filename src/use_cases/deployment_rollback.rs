@@ -7,7 +7,7 @@ use crate::adapters::oci_image::{OciImageReference, PullImageError, pull_image};
 use crate::domain::deployment::DeploymentType;
 use crate::domain::release::Release;
 use crate::use_cases::deployment_deploy_release::{
-    DeployReleaseError, DeployedRelease, PublicDeploymentConfiguration, deploy_release,
+    DeployReleaseError, DeploymentResult, PublicDeploymentConfiguration, deploy_release,
 };
 
 #[derive(Debug)]
@@ -55,7 +55,7 @@ pub fn rollback_deployment(
     connection: &mut Connection,
     application_id: &str,
     public_configuration: Option<&PublicDeploymentConfiguration>,
-) -> Result<DeployedRelease, RollbackError> {
+) -> Result<DeploymentResult, RollbackError> {
     let exists = connection
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM applications WHERE id = ?1)",

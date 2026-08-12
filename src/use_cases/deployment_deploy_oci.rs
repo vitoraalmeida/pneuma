@@ -6,7 +6,7 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::adapters::oci_image::{OciImageReference, PullImageError, pull_image};
 use crate::domain::deployment::DeploymentType;
 use crate::use_cases::deployment_deploy_release::{
-    DeployReleaseError, DeployedRelease, PublicDeploymentConfiguration, deploy_release,
+    DeployReleaseError, DeploymentResult, PublicDeploymentConfiguration, deploy_release,
 };
 use crate::use_cases::release_create::{CreateReleaseError, create_release};
 
@@ -77,7 +77,7 @@ pub fn deploy_oci(
     image_reference: &str,
     source_revision: Option<&str>,
     public_configuration: Option<&PublicDeploymentConfiguration>,
-) -> Result<DeployedRelease, DeployOciError> {
+) -> Result<DeploymentResult, DeployOciError> {
     let reference =
         OciImageReference::parse(image_reference).map_err(|source| DeployOciError::PullImage {
             source: PullImageError::InvalidReference { source },

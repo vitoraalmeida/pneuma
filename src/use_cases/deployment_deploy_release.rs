@@ -28,7 +28,7 @@ use crate::use_cases::deployment_start_candidate::{
 use crate::use_cases::deployment_transition::{TransitionDeploymentError, fail_deployment};
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct DeployedRelease {
+pub struct DeploymentResult {
     pub deployment_id: String,
     pub runtime_id: String,
     pub container_name: String,
@@ -139,7 +139,7 @@ pub fn deploy_release(
     deployment_type: DeploymentType,
     source_revision: Option<&str>,
     public_configuration: Option<&PublicDeploymentConfiguration>,
-) -> Result<DeployedRelease, DeployReleaseError> {
+) -> Result<DeploymentResult, DeployReleaseError> {
     let mut progress = ProgressReporter::disabled();
     deploy_release_reporting(
         connection,
@@ -160,7 +160,7 @@ pub fn deploy_release_with_progress(
     source_revision: Option<&str>,
     public_configuration: Option<&PublicDeploymentConfiguration>,
     progress: &mut dyn FnMut(DeploymentProgress),
-) -> Result<DeployedRelease, DeployReleaseError> {
+) -> Result<DeploymentResult, DeployReleaseError> {
     let mut progress = ProgressReporter::enabled(progress);
     deploy_release_reporting(
         connection,
@@ -181,7 +181,7 @@ fn deploy_release_reporting(
     source_revision: Option<&str>,
     public_configuration: Option<&PublicDeploymentConfiguration>,
     progress: &mut ProgressReporter<'_>,
-) -> Result<DeployedRelease, DeployReleaseError> {
+) -> Result<DeploymentResult, DeployReleaseError> {
     progress.started(
         DeploymentStep::LoadSpecification,
         format!("application {application_id}"),
@@ -230,7 +230,7 @@ fn deploy_release_reporting(
         progress,
     );
     match execution {
-        Ok((runtime_id, container_name, finished_at)) => Ok(DeployedRelease {
+        Ok((runtime_id, container_name, finished_at)) => Ok(DeploymentResult {
             deployment_id: deployment.id,
             runtime_id,
             container_name,
@@ -567,7 +567,7 @@ fn finish_failed_deployment(
     deployment_id: &str,
     failed: FailedExecution,
     progress: &mut ProgressReporter<'_>,
-) -> Result<DeployedRelease, DeployReleaseError> {
+) -> Result<DeploymentResult, DeployReleaseError> {
     let failure = failed.source.to_string();
     let record_error = if failed.failure_persisted {
         progress.failure_persisted(deployment_id, failed.code);

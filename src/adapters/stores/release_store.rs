@@ -3,6 +3,8 @@ use std::fmt;
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
+use crate::domain::release::Release;
+
 #[derive(Debug)]
 pub enum ReleaseStoreError {
     NotFound { release_id: String },
@@ -33,16 +35,6 @@ impl Error for ReleaseStoreError {
             Self::NotFound { .. } | Self::ApplicationNotFound { .. } => None,
         }
     }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct Release {
-    pub id: String,
-    pub application_id: String,
-    pub image_reference: String,
-    pub image_repository: String,
-    pub image_digest: String,
-    pub created_at: String,
 }
 
 pub fn application_exists(

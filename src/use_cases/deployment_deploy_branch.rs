@@ -7,7 +7,9 @@ use crate::adapters::git_source::{CommitSha, ResolveBranchError, resolve_branch}
 use crate::adapters::oci_image::{ResolveImageDigestError, resolve_image_digest};
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::use_cases::deployment_deploy_oci::{DeployOciError, deploy_oci};
-use crate::use_cases::deployment_deploy_release::{DeployedRelease, PublicDeploymentConfiguration};
+use crate::use_cases::deployment_deploy_release::{
+    DeploymentResult, PublicDeploymentConfiguration,
+};
 
 #[derive(Debug)]
 pub enum DeployBranchError {
@@ -68,7 +70,7 @@ pub fn deploy_branch(
     application_id: &str,
     branch: Option<&str>,
     public_configuration: Option<&PublicDeploymentConfiguration>,
-) -> Result<DeployedRelease, DeployBranchError> {
+) -> Result<DeploymentResult, DeployBranchError> {
     let (repository_url, default_branch) =
         application_store::load_source_repository(connection, application_id)
             .map_err(|source| DeployBranchError::SourceConfiguration { source })?

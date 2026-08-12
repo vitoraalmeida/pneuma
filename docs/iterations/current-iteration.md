@@ -44,7 +44,10 @@ semântica de reconciliation antes de implementar `pneuma reconcile`.
       Resultado: migration 0014 faz backfill histórico; Release novo é
       artifact-only e cada Deployment persiste provenance própria, inclusive
       deploy por branch, OCI do mesmo digest e rollback.
-- [ ] Unificar Release artifact-only e renomear `DeploymentResult`.
+- [x] Unificar Release artifact-only e renomear `DeploymentResult`.
+      Resultado: store retorna o único Release de domínio e o resultado dos
+      caminhos de deploy chama-se DeploymentResult, preservando campos e saída
+      CLI existentes.
 - [ ] Materializar image digest como identidade de runtime e versão de rota.
 - [ ] Extrair persistência de `application_import` para store.
 - [ ] Extrair persistência de `application_runtime` para stores.
