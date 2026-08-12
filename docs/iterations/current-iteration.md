@@ -47,7 +47,12 @@ capazes de provar as garantias operacionais necessárias antes de reconciliation
     diretórios recuperam modos no rerun. Fixture 8 PASS/0 FAIL, ShellCheck e
     quatro gates Rust verdes; clone Debian 13 descartável validou rejeição antes
     de pacote, range alternativo, conta, linger e correção de modos.
-- [ ] Tornar configuração Caddy atômica e idempotente.
+- [x] Tornar configuração Caddy atômica e idempotente.
+    Resultado: candidate no filesystem de destino é validado antes da troca por
+    rename, rerun idêntico não cria backup nem recarrega Caddy, e falha preserva
+    o arquivo ativo. Preflight aceita listener Caddy apenas com Caddyfile válido;
+    ShellCheck e quatro gates Rust verdes, clone Debian 13 descartável validou
+    primeira instalação, rerun, backup por mudança e candidate inválido.
 - [ ] Provar bootstrap e rerun em host Debian 13 limpo.
 - [ ] Adicionar lint shell version-pinned ao CI.
 - [ ] Provar candidate falho preservando release ativa e rollback real.

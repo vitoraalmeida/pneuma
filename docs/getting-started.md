@@ -111,8 +111,11 @@ Cada execução (inclusive reruns) resolve o `--ref`, faz checkout detached
 **forçado** do commit resolvido e compila exatamente esse commit;
 configurações de APT, usuário, subids e Caddy permanecem idempotentes. No rerun,
 o próprio Caddy gerenciado e ativo pode ocupar as portas 80/443; qualquer outro
-processo nessas portas continua bloqueante. Sem `--ref`, o script compila o
-branch default do repositório, como antes.
+processo nessas portas continua bloqueante. O baseline do Caddy é gerado como
+candidate no mesmo diretório, validado antes da troca atômica e recebe backup
+somente quando o conteúdo muda; um rerun sem mudanças não cria backup nem
+recarrega o serviço. Sem `--ref`, o script compila o branch default do
+repositório, como antes.
 
 ### 3.2. Confirmação
 

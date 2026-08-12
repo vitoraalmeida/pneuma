@@ -434,6 +434,7 @@ ci_assert_rejected "unknown command: podman" \
 # Phase 6: Final bootstrap idempotency (singular state survives a re-run)
 echo
 echo "==> Phase 6: Bootstrap idempotency..."
+CADDY_BACKUP_COUNT="$(ssh "$SSH_HOST" "find /etc/caddy -maxdepth 1 -name 'Caddyfile.backup.*' -type f | wc -l")"
 if ssh "$SSH_HOST" 'bash /tmp/bootstrap-vps.sh '"$SOURCE_URL --ci-public-key /tmp/pneuma-ci-test.pub$REF_ARGS" >"$LOG_DIR/bootstrap-idempotent.log" 2>&1; then
     report ok "final bootstrap re-run after deploy completed"
 else
@@ -455,6 +456,10 @@ fi
 
 remote_assert "pneuma" "pneuma user survives re-run" "id pneuma"
 remote_assert "active" "caddy still active" "systemctl is-active caddy"
+remote_assert "$CADDY_BACKUP_COUNT" "unchanged Caddyfile creates no backup on re-run" \
+    "count=\$(find /etc/caddy -maxdepth 1 -name 'Caddyfile.backup.*' -type f | wc -l); printf '%s\\n' \"\$count\"; test \"\$count\" -eq '$CADDY_BACKUP_COUNT'"
+remote_assert "" "invalid Caddy candidate preserves active configuration" \
+    "before=\$(sha256sum /etc/caddy/Caddyfile); printf 'invalid {\\n' >/etc/caddy/applications/pneuma-invalid-test.caddy; source /tmp/lib/provision-host.sh; if provision_caddy_baseline; then rm -f /etc/caddy/applications/pneuma-invalid-test.caddy; exit 1; fi; rm -f /etc/caddy/applications/pneuma-invalid-test.caddy; test \"\$before\" = \"\$(sha256sum /etc/caddy/Caddyfile)\"; systemctl is-active --quiet caddy"
 
 remote_assert "1" "single CI key after re-run" \
     "count=\$(grep -cF '$CI_PUBLIC' /home/pneuma/.ssh/authorized_keys); printf '%s\\n' \"\$count\"; test \"\$count\" -eq 1"

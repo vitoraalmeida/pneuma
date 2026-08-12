@@ -282,14 +282,16 @@ for port in 80 443; do
     done <<<"$owners_unique"
 
     if [[ -n "$owners_unique" ]] && [[ "$all_caddy" == true ]] \
-        && systemctl is-active --quiet caddy 2>/dev/null; then
+        && systemctl is-active --quiet caddy 2>/dev/null \
+        && caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile \
+            >/dev/null 2>&1; then
         echo "    port $port is owned by the active managed Caddy (accepted on re-run)."
     else
         echo "ERROR: port $port is already in use by:"
         # shellcheck disable=SC2086 # intentional word split on a controlled set
         printf '%s\n' $owners_unique | sed 's/^/    /'
         echo "Stop the owning service, then rerun this script."
-        echo "On a re-run only the active managed Caddy may own ports 80/443."
+        echo "On a re-run only active Caddy with a valid managed Caddyfile may own ports 80/443."
         exit 1
     fi
 done

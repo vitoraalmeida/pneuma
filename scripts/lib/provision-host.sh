@@ -278,30 +278,53 @@ EOF
     done
 }
 
-# Ensures the baseline Caddyfile imports only Pneuma-managed fragments, keeps
-# Caddy owned/readable correctly, and starts the service after validation.
-# Backup semantics are preserved verbatim; atomic content-sensitive replacement
-# is out of scope for this library.
+# Ensures the baseline Caddyfile imports only Pneuma-managed fragments. The
+# candidate is validated before replacing the active configuration; unchanged
+# content does not create a backup or reload an already active service.
 provision_caddy_baseline() {
-    if [[ -f /etc/caddy/Caddyfile ]]; then
-        cp -a /etc/caddy/Caddyfile \
-            "/etc/caddy/Caddyfile.backup.$(date +%Y%m%d%H%M%S)"
-    fi
+    local caddyfile=/etc/caddy/Caddyfile candidate backup=""
+    candidate="$(mktemp /etc/caddy/.pneuma-caddyfile.XXXXXX)"
 
-    cat >/etc/caddy/Caddyfile <<'EOF'
+    cat >"$candidate" <<'EOF'
 import /etc/caddy/applications/*.caddy
 EOF
 
-    chown root:caddy /etc/caddy/Caddyfile
-    chmod 0644 /etc/caddy/Caddyfile
+    chown root:caddy "$candidate"
+    chmod 0644 "$candidate"
 
-    systemctl enable --now caddy
+    if ! caddy validate --config "$candidate" --adapter caddyfile; then
+        rm -f "$candidate"
+        echo "ERROR: generated Caddyfile candidate is invalid; active configuration was preserved." >&2
+        return 1
+    fi
 
-    caddy validate \
-        --config /etc/caddy/Caddyfile \
-        --adapter caddyfile
+    if [[ -f "$caddyfile" ]] && cmp -s "$candidate" "$caddyfile"; then
+        rm -f "$candidate"
+        systemctl enable --now caddy
+        return
+    fi
 
-    systemctl restart caddy
+    if [[ -f "$caddyfile" ]]; then
+        backup="$caddyfile.backup.$(date +%Y%m%d%H%M%S)"
+        cp -a "$caddyfile" "$backup"
+    fi
+    mv "$candidate" "$caddyfile"
+
+    if systemctl is-active --quiet caddy; then
+        if systemctl reload caddy; then
+            return
+        fi
+    elif systemctl enable --now caddy; then
+        return
+    fi
+
+    if [[ -n "$backup" ]]; then
+        cp -a "$backup" "$candidate"
+        mv "$candidate" "$caddyfile"
+        systemctl reload caddy || true
+    fi
+    echo "ERROR: Caddy could not load the new configuration; the previous file was restored." >&2
+    return 1
 }
 
 # Starts the pneuma user manager so the rootless runtime can be exercised.
