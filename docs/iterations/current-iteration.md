@@ -43,10 +43,11 @@ capazes de provar as garantias operacionais necessárias antes de reconciliation
 - [x] Impor invariantes de conta e IDs subordinados.
     Resultado: preflight somente leitura rejeita conta insegura e ranges
     malformados, duplicados, sobrepostos ou insuficientes antes de mutações;
-    subids/subgids alternativos seguros são preservados, linger é confirmado e
-    diretórios recuperam modos no rerun. Fixture 8 PASS/0 FAIL, ShellCheck e
-    quatro gates Rust verdes; clone Debian 13 descartável validou rejeição antes
-    de pacote, range alternativo, conta, linger e correção de modos.
+    subids/subgids alternativos seguros são preservados e ausência seleciona o
+    primeiro range livre de 65.536 IDs a partir de 100000, sem mudar outro
+    usuário; linger é confirmado e diretórios recuperam modos no rerun. Fixture
+    9 PASS/0 FAIL, ShellCheck e quatro gates Rust verdes; clone Debian 13
+    descartável validou o fallback após range `dev` conflitante e idempotência.
 - [x] Tornar configuração Caddy atômica e idempotente.
     Resultado: candidate no filesystem de destino é validado antes da troca por
     rename, rerun idêntico não cria backup nem recarrega Caddy, e falha preserva

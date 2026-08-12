@@ -43,12 +43,12 @@ PNEUMA_HOME="${PNEUMA_HOME:-/home/$PNEUMA_USER}"
 PNEUMA_SUBUID_FILE="${PNEUMA_SUBUID_FILE:-/etc/subuid}"
 PNEUMA_SUBGID_FILE="${PNEUMA_SUBGID_FILE:-/etc/subgid}"
 
-# Validates one subordinate-ID file without changing it. Every non-comment
-# record must be a bounded positive decimal allocation so overlap checks cannot
-# mistake malformed host state for a safe missing range.
-validate_subordinate_id_file() {
+# Prints the reusable pneuma allocation start or the first available 65536-ID
+# range at or above 100000. Every non-comment record is validated so malformed
+# host state cannot be mistaken for a safe gap.
+subordinate_id_start() {
     local file="$1" line owner start_text count_text extra start count end
-    local pneuma_start="" pneuma_count="" candidate_start candidate_count
+    local pneuma_start="" pneuma_count="" candidate_start candidate_count candidate_end
     local -a owners=() starts=() counts=() ends=()
 
     if [[ ! -f "$file" ]]; then
@@ -90,7 +90,7 @@ validate_subordinate_id_file() {
     if [[ -n "$pneuma_start" ]]; then
         candidate_start="$pneuma_start"
         candidate_count="$pneuma_count"
-        if [[ "$candidate_count" -lt 65536 ]]; then
+        if [[ "$pneuma_count" -lt 65536 ]]; then
             echo "ERROR: $PNEUMA_USER allocation in $file has fewer than 65536 IDs." >&2
             return 1
         fi
@@ -98,16 +98,35 @@ validate_subordinate_id_file() {
         candidate_start=100000
         candidate_count=65536
     fi
-    end=$((candidate_start + candidate_count))
 
-    local index
-    for index in "${!owners[@]}"; do
-        [[ "${owners[$index]}" == "$PNEUMA_USER" ]] && continue
-        if [[ "$candidate_start" -lt "${ends[$index]}" && "${starts[$index]}" -lt "$end" ]]; then
+    while :; do
+        if [[ "$candidate_start" -gt 9223372036854710271 ]]; then
+            echo "ERROR: no safe subordinate-ID range remains in $file." >&2
+            return 1
+        fi
+        candidate_end=$((candidate_start + candidate_count))
+        local index overlaps=false
+        for index in "${!owners[@]}"; do
+            [[ "${owners[$index]}" == "$PNEUMA_USER" ]] && continue
+            if [[ "$candidate_start" -lt "${ends[$index]}" && "${starts[$index]}" -lt "$candidate_end" ]]; then
+                overlaps=true
+                break
+            fi
+        done
+        if [[ "$overlaps" == false ]]; then
+            printf '%s\n' "$candidate_start"
+            return
+        fi
+        if [[ -n "$pneuma_start" ]]; then
             echo "ERROR: $PNEUMA_USER allocation overlaps ${owners[$index]} in $file." >&2
             return 1
         fi
+        candidate_start=$((candidate_start + 65536))
     done
+}
+
+validate_subordinate_id_file() {
+    subordinate_id_start "$1" >/dev/null
 }
 
 # Rejects incompatible existing account state and unsafe subordinate-ID files.
@@ -183,14 +202,17 @@ provision_pneuma_user() {
     fi
 }
 
-# Adds only absent, prevalidated canonical ranges, then validates the resulting
-# files again so an unexpected usermod result is never accepted.
+# Adds only absent, prevalidated ranges, then validates the resulting files
+# again so an unexpected usermod result is never accepted.
 provision_subordinate_ids() {
+    local start
     if ! grep -q "^${PNEUMA_USER}:" "$PNEUMA_SUBUID_FILE"; then
-        usermod --add-subuids 100000-165535 "$PNEUMA_USER"
+        start="$(subordinate_id_start "$PNEUMA_SUBUID_FILE")"
+        usermod --add-subuids "$start-$((start + 65535))" "$PNEUMA_USER"
     fi
     if ! grep -q "^${PNEUMA_USER}:" "$PNEUMA_SUBGID_FILE"; then
-        usermod --add-subgids 100000-165535 "$PNEUMA_USER"
+        start="$(subordinate_id_start "$PNEUMA_SUBGID_FILE")"
+        usermod --add-subgids "$start-$((start + 65535))" "$PNEUMA_USER"
     fi
     validate_subordinate_id_file "$PNEUMA_SUBUID_FILE"
     validate_subordinate_id_file "$PNEUMA_SUBGID_FILE"
