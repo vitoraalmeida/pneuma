@@ -1,6 +1,6 @@
 # Iteração atual
 
-**Status:** em andamento
+**Status:** concluída em 12 de agosto de 2026
 
 **Base:** `99fd151` (`docs: revise pre-v0.3 consolidation decisions`)
 
@@ -99,25 +99,25 @@ semântica de reconciliation antes de implementar `pneuma reconcile`.
 
 ## Critérios de aceite
 
-- [ ] O roadmap, a arquitetura, o README e a documentação operacional refletem
+- [x] O roadmap, a arquitetura, o README e a documentação operacional refletem
   o comportamento entregue.
-- [ ] A CLI aceita somente URLs Git; testes e scripts públicos usam esse
+- [x] A CLI aceita somente URLs Git; testes e scripts públicos usam esse
   contrato.
-- [ ] Release é artifact-only e cada Deployment preserva `source_revision`.
-- [ ] A migration de provenance passa em banco novo e upgrade histórico.
-- [ ] Novas unidades materializam image digest; materializações v0.2 legadas são
+- [x] Release é artifact-only e cada Deployment preserva `source_revision`.
+- [x] A migration de provenance passa em banco novo e upgrade histórico.
+- [x] Novas unidades materializam image digest; materializações v0.2 legadas são
   compatíveis até redeploy.
-- [ ] `configuration_version` identifica a rota Caddy materializada.
-- [ ] `RuntimeState` e `DesiredRuntimeState` pertencem ao domínio; observação
+- [x] `configuration_version` identifica a rota Caddy materializada.
+- [x] `RuntimeState` e `DesiredRuntimeState` pertencem ao domínio; observação
   Podman permanece no adapter.
-- [ ] `application_import`, `application_runtime`, `exposure_change` e
+- [x] `application_import`, `application_runtime`, `exposure_change` e
   `deployment_create` não contêm SQL inline.
-- [ ] Updates críticos usam CAS/row count e erros de store não inventam IDs.
-- [ ] Desired visibility é persistida antes de Caddy e falhas ficam recuperáveis.
-- [ ] Os testes provam lock Immediate e rejeição cross-process por
+- [x] Updates críticos usam CAS/row count e erros de store não inventam IDs.
+- [x] Desired visibility é persistida antes de Caddy e falhas ficam recuperáveis.
+- [x] Os testes provam lock Immediate e rejeição cross-process por
   `ActiveDeployment`.
-- [ ] Designs de reconciliation e seus cenários E2E estão indexados.
-- [ ] Os quatro gates, migration coverage e regressão VM exigida estão verdes.
+- [x] Designs de reconciliation e seus cenários E2E estão indexados.
+- [x] Os quatro gates, migration coverage e regressão VM exigida estão verdes.
 
 ## Bloqueadores
 
