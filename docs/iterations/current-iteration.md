@@ -54,7 +54,12 @@ capazes de provar as garantias operacionais necessárias antes de reconciliation
     o arquivo ativo. Preflight aceita listener Caddy apenas com Caddyfile válido;
     ShellCheck e quatro gates Rust verdes, clone Debian 13 descartável validou
     primeira instalação, rerun, backup por mudança e candidate inválido.
-- [ ] Provar bootstrap e rerun em host Debian 13 limpo.
+- [x] Provar bootstrap e rerun em host Debian 13 limpo.
+    Resultado: clone nova de `pneuma-dev-base` executou bootstrap e dois reruns
+    pelo SHA imutável `11b10111f59a6fea09524fc4bd78f1109e830cd3`, com 87 PASS/0
+    FAIL. Validou range livre após `dev:100000:65536`, conta, linger,
+    diretórios, ambiente, Caddy, Podman rootless, binário, chave CI e doctor;
+    clone descartável foi destruída.
 - [ ] Adicionar lint shell version-pinned ao CI.
 - [ ] Provar candidate falho preservando release ativa e rollback real.
 - [ ] Provar reboot e recuperação por boot ID.
