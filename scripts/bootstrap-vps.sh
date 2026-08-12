@@ -294,6 +294,8 @@ for port in 80 443; do
     fi
 done
 
+validate_pneuma_account_and_subordinate_ids
+
 provision_runtime_packages
 
 # Compiler toolchain is production-only: the bootstrap compiles Pneuma from

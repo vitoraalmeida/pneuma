@@ -40,7 +40,13 @@ capazes de provar as garantias operacionais necessárias antes de reconciliation
     Resultado: `scripts/lib/provision-host.sh` centraliza as invariantes de
     runtime; checks estáticos/ShellCheck e quatro gates verdes, provisionamento
     VM descartável validado e acceptance bootstrap por SHA com 82 PASS/0 FAIL.
-- [ ] Impor invariantes de conta e IDs subordinados.
+- [x] Impor invariantes de conta e IDs subordinados.
+    Resultado: preflight somente leitura rejeita conta insegura e ranges
+    malformados, duplicados, sobrepostos ou insuficientes antes de mutações;
+    subids/subgids alternativos seguros são preservados, linger é confirmado e
+    diretórios recuperam modos no rerun. Fixture 8 PASS/0 FAIL, ShellCheck e
+    quatro gates Rust verdes; clone Debian 13 descartável validou rejeição antes
+    de pacote, range alternativo, conta, linger e correção de modos.
 - [ ] Tornar configuração Caddy atômica e idempotente.
 - [ ] Provar bootstrap e rerun em host Debian 13 limpo.
 - [ ] Adicionar lint shell version-pinned ao CI.

@@ -55,6 +55,7 @@ if [[ "$(id -u)" -ne 0 ]]; then
 fi
 
 # Shared host invariants, exactly as the production bootstrap applies them.
+validate_pneuma_account_and_subordinate_ids
 provision_runtime_packages
 
 # sqlite3 is a VM operator convenience, not a runtime invariant; the runtime

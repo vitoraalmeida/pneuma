@@ -223,6 +223,16 @@ helpers puros, `docs/iterations/current-iteration.md`.
 - Não assumir que a presença de uma linha por nome é suficiente para considerar
   subids corretos.
 
+**Política de ranges fixada:** cada `/etc/subuid` e `/etc/subgid` deve conter
+exatamente uma alocação `pneuma:start:count` decimal, com `start > 0` e
+`count >= 65536`. O intervalo semiaberto não pode sobrepor uma alocação de
+outro usuário no mesmo arquivo; offsets distintos para subuid e subgid são
+válidos. Na ausência da entrada, criar somente o range canônico
+`100000:65536`, depois de provar que ele não conflita. Entrada malformada,
+duplicada, sobreposta ou menor deve falhar antes de `usermod`; ranges adjacentes
+são válidos. A validação compartilhada é somente leitura e ocorre em ambos os
+chamadores antes de pacotes, conta, subids, diretórios, Caddy, fonte ou binário.
+
 **Verificação focal:** banco de casos com host limpo, rerun, usuário com shell
 errado, usuário no grupo sudo, faixa já válida, faixa conflitante e diretório com
 modo incorreto. Casos destrutivos usam VM descartável ou fixtures de arquivos,
