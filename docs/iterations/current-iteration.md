@@ -30,7 +30,12 @@ capazes de provar as garantias operacionais necessárias antes de reconciliation
     `--ref` aceita tag ou SHA completo e força checkout detached do commit
     resolvido em todo rerun; listener de 80/443 aceita Caddy ativo no rerun e
     bloqueia qualquer outro dono. Gates verdes e lint shell sem warnings.
-- [ ] Corrigir assertions remotas do acceptance test de bootstrap.
+- [x] Corrigir assertions remotas do acceptance test de bootstrap.
+    Resultado: `remote_assert`/`remote_assert_rejected`/`ci_assert_*` capturam
+    stdout/stderr em logs, preservam o exit status do `ssh` e exigem sucesso
+    remoto para conteúdo; acceptance limpo Debian 13 por SHA `2bdc512` passou
+    com 82 PASS/0 FAIL, e assertion remota forçada produziu 1 FAIL e saída não
+    zero; fixture/deploy funcional segue em `dev-vm/test-all.sh`.
 - [ ] Compartilhar invariantes de provisionamento entre VPS e VM.
 - [ ] Impor invariantes de conta e IDs subordinados.
 - [ ] Tornar configuração Caddy atômica e idempotente.

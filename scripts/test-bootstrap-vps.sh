@@ -5,24 +5,25 @@
 # Validates that the VPS bootstrap script correctly sets up a production-ready
 # Pneuma host from a clean Debian 13 base. Covers package installation, user
 # creation, rootless Podman, Caddy configuration, binary compilation, the
-# restricted CI deploy key, a real deploy through the CI dispatcher, and
-# idempotent re-runs.
+# restricted CI deploy key and immutable re-runs. Functional E2E (fixtures,
+# deploy by digest/branch, rollback, reboot) lives in scripts/dev-vm/test-all.sh;
+# this script validates a clean host, bootstrap, rerun and the basic CI
+# dispatcher only.
 #
 # Phases:
 #   0. Argument validation (local, no host change)
 #   1. Preflight checks
 #   2. Bootstrap execution
-#   3. Post-bootstrap validation
+#   3. Post-bootstrap host invariants
 #   3b. Immutable --ref evidence (when --ref is passed)
 #   3c. Immutable --ref rejections (branch, missing tag, unresolvable SHA)
 #   4. Pneuma functionality
-#   5. CI deploy key + restricted SSH dispatcher
-#   6. Application import + deploy pushed through the CI dispatcher
-#   7. Bootstrap idempotency (installed state survives a re-run)
+#   5. CI deploy key rerun + restricted SSH dispatcher
+#   6. Final bootstrap idempotency (singular state survives a re-run)
 #
 # Prerequisites:
 # - Clean Debian 13 (trixie) VM with SSH root access
-# - Internet access on the VM (also needed for the fixture registry)
+# - Internet access on the VM
 # - Public Git repository URL with Pneuma source
 #
 # Usage:
@@ -38,12 +39,23 @@ set -euo pipefail
 
 SSH_HOST="${1:-}"
 SOURCE_URL="${2:-}"
-REF="${3:-}"
+REF=""
 
 if [[ -z "$SSH_HOST" || -z "$SOURCE_URL" ]]; then
     echo "Usage: $0 <ssh-host> <pneuma-source-url> [--ref <ref>]"
     exit 1
 fi
+
+if [[ $# -gt 2 ]]; then
+    if [[ $# -eq 4 && "$3" == "--ref" && -n "$4" ]]; then
+        REF="$4"
+    else
+        echo "Usage: $0 <ssh-host> <pneuma-source-url> [--ref <ref>]"
+        exit 1
+    fi
+fi
+
+CI_SSH_HOST="${SSH_HOST#*@}"
 
 REF_ARGS=""
 if [[ -n "$REF" ]]; then
@@ -53,6 +65,7 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="${TMPDIR:-/tmp}/pneuma-test-bootstrap"
 mkdir -p "$LOG_DIR"
+REMOTE_RUN_INDEX=0
 
 CI_KEY="$LOG_DIR/ci-test-key"
 CI_KEY_PUB="$CI_KEY.pub"
@@ -74,19 +87,55 @@ report() {
     esac
 }
 
-check() {
+# Runs a remote command, captures stdout+stderr to a log file, preserves the
+# ssh exit status without `|| true` masking. Failure is reported and mirrored
+# in the FAIL counter; the caller never sees a false PASS.
+remote_assert() {
     local expected="$1" description="$2" command="$3"
-    local output rc
-    output=$(ssh "$SSH_HOST" "$command" 2>&1)
+    local log rc
+    REMOTE_RUN_INDEX=$((REMOTE_RUN_INDEX + 1))
+    log="$LOG_DIR/remote-$REMOTE_RUN_INDEX.log"
+    set +e
+    ssh "$SSH_HOST" "$command" >"$log" 2>&1
     rc=$?
-    if [[ -z "$expected" && $rc -eq 0 ]]; then
-        report ok "$description"
-    elif [[ -n "$expected" ]] && printf '%s' "$output" | grep -qF -- "$expected"; then
-        report ok "$description"
-    else
-        report fail "$description"
-        printf '        output: %s\n' "$(printf '%s' "$output" | head -c 200)"
+    set -e
+    if [[ "$rc" -ne 0 ]]; then
+        report fail "$description (remote exit $rc)"
+        printf '        output: %s\n' "$(head -c 200 "$log")"
+        return 0
     fi
+    if [[ -n "$expected" ]] && ! grep -qF -- "$expected" "$log"; then
+        report fail "$description (missing '$expected')"
+        printf '        output: %s\n' "$(head -c 200 "$log")"
+        return 0
+    fi
+    report ok "$description"
+    return 0
+}
+
+# Asserts a remote command is REJECTED: ssh must fail and (when an expected text
+# is given) the failure output must contain it. Used for the "refuses" cases,
+# never for success assertions.
+remote_assert_rejected() {
+    local expected="$1" description="$2" command="$3"
+    local log rc
+    REMOTE_RUN_INDEX=$((REMOTE_RUN_INDEX + 1))
+    log="$LOG_DIR/remote-$REMOTE_RUN_INDEX.log"
+    set +e
+    ssh "$SSH_HOST" "$command" >"$log" 2>&1
+    rc=$?
+    set -e
+    if [[ "$rc" -eq 0 ]]; then
+        report fail "$description (remote command unexpectedly succeeded)"
+        return 0
+    fi
+    if [[ -n "$expected" ]] && ! grep -qF -- "$expected" "$log"; then
+        report fail "$description (missing rejection '$expected')"
+        printf '        output: %s\n' "$(head -c 200 "$log")"
+        return 0
+    fi
+    report ok "$description"
+    return 0
 }
 
 # Run bootstrap-vps.sh locally with arguments that must be rejected before any
@@ -144,7 +193,17 @@ else
     exit 1
 fi
 
-check "13" "Debian 13 base" "cat /etc/debian_version"
+remote_assert "13" "Debian 13 base" "cat /etc/debian_version"
+
+if [[ "${PNEUMA_BOOTSTRAP_TEST_FORCE_FALSE_ASSERTION:-}" == "1" ]]; then
+    remote_assert "not-present" "forced false remote assertion" "true"
+    echo
+    echo "============================================================"
+    echo "$PASS_COUNT check(s) passed, $FAIL_COUNT failed."
+    echo "Logs: $LOG_DIR"
+    echo "============================================================"
+    exit 1
+fi
 
 if ssh "$SSH_HOST" 'id pneuma 2>/dev/null' >/dev/null 2>&1; then
     report fail "pneuma user already exists (VM not clean)"
@@ -172,23 +231,69 @@ fi
 # Phase 3: Post-bootstrap validation
 echo
 echo "==> Phase 3: Post-bootstrap validation..."
-check "pneuma" "pneuma user created" "id pneuma"
-check "pneuma" "pneuma group created" "getent group pneuma"
-check "/usr/local/bin/pneuma" "binary installed" "ls -la /usr/local/bin/pneuma"
-check "podman" "podman installed" "which podman"
-check "caddy" "caddy installed" "which caddy"
-check "true" "rootless podman works" "su - pneuma -c 'podman info --format {{.Host.Security.Rootless}}'"
-check "active" "caddy service active" "systemctl is-active caddy"
-check "exists" "database directory exists" "test -d /var/lib/pneuma/database && echo exists"
-check "exists" "checkouts directory exists" "test -d /var/lib/pneuma/checkouts && echo exists"
-check "exists" "caddy applications dir exists" "test -d /etc/caddy/applications && echo exists"
-check "PNEUMA_DATABASE_PATH" "environment file created" "cat /etc/pneuma/environment"
-check "pneuma" "quadlet directory created" "ls -la /home/pneuma/.config/containers/systemd"
+remote_assert "pneuma" "pneuma user created" "id pneuma"
+remote_assert "pneuma" "pneuma group created" "getent group pneuma"
+remote_assert "/usr/local/bin/pneuma" "binary installed" "ls -la /usr/local/bin/pneuma"
+remote_assert "podman" "podman installed" "which podman"
+remote_assert "caddy" "caddy installed" "which caddy"
+remote_assert "true" "rootless podman works" "runuser -u pneuma -- env HOME=/home/pneuma XDG_RUNTIME_DIR=/run/user/\$(id -u pneuma) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/\$(id -u pneuma)/bus bash -c 'cd /home/pneuma && podman info --format \"{{.Host.Security.Rootless}}\"'"
+remote_assert "active" "caddy service active" "systemctl is-active caddy"
+
+# Explicit user invariants: UID/home/shell, locked password, no sudo group.
+remote_assert "" "pneuma has a numeric UID" "id -u pneuma | grep -Eq '^[0-9]+$'"
+remote_assert "/home/pneuma" "pneuma home is /home/pneuma" "getent passwd pneuma | cut -d: -f6"
+remote_assert "/bin/bash" "pneuma shell is /bin/bash" "getent passwd pneuma | cut -d: -f7"
+remote_assert "L" "pneuma password is locked" "passwd -S pneuma | awk '{print \$2}'"
+remote_assert "" "pneuma is not in the sudo group" "! id -Gn pneuma | grep -qw sudo"
+remote_assert "pneuma:" "subuids range for pneuma" "grep '^pneuma:' /etc/subuid"
+remote_assert "pneuma:" "subgids range for pneuma" "grep '^pneuma:' /etc/subgid"
+if ! SUBUID_ENTRY="$(ssh "$SSH_HOST" "grep '^pneuma:' /etc/subuid")"; then
+    report fail "could not record subuid range for rerun comparison"
+    SUBUID_ENTRY=""
+fi
+if ! SUBGID_ENTRY="$(ssh "$SSH_HOST" "grep '^pneuma:' /etc/subgid")"; then
+    report fail "could not record subgid range for rerun comparison"
+    SUBGID_ENTRY=""
+fi
+
+remote_assert "yes" "linger enabled for pneuma" "loginctl show-user pneuma -p Linger --value"
+
+# Directory ownership and modes.
+remote_assert "pneuma pneuma" ".ssh owner:group" "stat -c '%U %G' /home/pneuma/.ssh"
+remote_assert "700" ".ssh mode 0700" "stat -c '%a' /home/pneuma/.ssh"
+remote_assert "pneuma pneuma" "database dir owner:group" "stat -c '%U %G' /var/lib/pneuma/database"
+remote_assert "750" "database dir mode 0750" "stat -c '%a' /var/lib/pneuma/database"
+remote_assert "pneuma pneuma" "checkouts dir owner:group" "stat -c '%U %G' /var/lib/pneuma/checkouts"
+remote_assert "750" "checkouts dir mode 0750" "stat -c '%a' /var/lib/pneuma/checkouts"
+remote_assert "pneuma caddy" "caddy applications dir owner:group" "stat -c '%U %G' /etc/caddy/applications"
+remote_assert "750" "caddy applications dir mode 0750" "stat -c '%a' /etc/caddy/applications"
+remote_assert "root pneuma" "/etc/pneuma owner:group" "stat -c '%U %G' /etc/pneuma"
+remote_assert "750" "/etc/pneuma mode 0750" "stat -c '%a' /etc/pneuma"
+remote_assert "root pneuma" "environment file owner:group" "stat -c '%U %G' /etc/pneuma/environment"
+remote_assert "640" "environment file mode 0640" "stat -c '%a' /etc/pneuma/environment"
+remote_assert "root root" "binary owner:group" "stat -c '%U %G' /usr/local/bin/pneuma"
+remote_assert "755" "binary mode 0755" "stat -c '%a' /usr/local/bin/pneuma"
+remote_assert "root caddy" "Caddyfile owner:group" "stat -c '%U %G' /etc/caddy/Caddyfile"
+remote_assert "644" "Caddyfile mode 0644" "stat -c '%a' /etc/caddy/Caddyfile"
+
+# Canonical environment: /etc/pneuma/environment is the source of truth.
+remote_assert "PNEUMA_DATABASE_PATH=/var/lib/pneuma/database/pneuma.sqlite3" "environment database path" "cat /etc/pneuma/environment"
+remote_assert "PNEUMA_WORKSPACE_PATH=/var/lib/pneuma/checkouts" "environment workspace path" "cat /etc/pneuma/environment"
+remote_assert "PNEUMA_CADDY_MANAGED_PATH=/etc/caddy/applications" "environment caddy managed path" "cat /etc/pneuma/environment"
+remote_assert "PNEUMA_CADDYFILE_PATH=/etc/caddy/Caddyfile" "environment caddyfile path" "cat /etc/pneuma/environment"
+remote_assert "PNEUMA_RUNTIME_PORT_RANGE=30000-39999" "environment runtime port range" "cat /etc/pneuma/environment"
+
+# Caddy valid and Quadlet generator present.
+remote_assert "Valid configuration" "caddy validates its Caddyfile" "caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile"
+remote_assert "" "quadlet generator discovered" "test -x /usr/lib/systemd/user-generators/podman-user-generator || test -x /lib/systemd/user-generators/podman-user-generator"
+remote_assert "pneuma" "quadlet directory created" "ls -la /home/pneuma/.config/containers/systemd"
 
 # Phase 3b: Immutable --ref evidence (only when a ref was requested)
 check_vm_sha() {
     local expected="$1" actual
-    actual=$(ssh "$SSH_HOST" "cd /home/pneuma/pneuma && git rev-parse HEAD 2>/dev/null" 2>/dev/null || true)
+    if ! actual=$(ssh "$SSH_HOST" "runuser -u pneuma -- git -C /home/pneuma/pneuma rev-parse HEAD" 2>/dev/null); then
+        return 1
+    fi
     [[ "$actual" == "$expected" ]]
 }
 if [[ -n "$REF" ]]; then
@@ -210,38 +315,29 @@ fi
 # Phase 3c: Immutable --ref rejections (resolved after clone on the VM)
 echo
 echo "==> Phase 3c: Immutable --ref rejections..."
-remote_rejected_with() {
-    local expected_msg="$1" args="$2" log
-    log="$LOG_DIR/bootstrap-reject-$(date +%H%M%S).log"
-    if ssh "$SSH_HOST" 'bash /tmp/bootstrap-vps.sh '"$args" >"$log" 2>&1; then
-        report fail "unexpected success: $args"
-        return
-    fi
-    if grep -qF -- "$expected_msg" "$log"; then
-        report ok "rejected: $args"
-    else
-        report fail "expected '$expected_msg' not in $log"
-        printf '        output: %s\n' "$(sed -n '1,6p' "$log" | head -c 300)"
-    fi
-}
-DEFAULT_BRANCH="$(ssh "$SSH_HOST" \
-    'git -C /home/pneuma/pneuma symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed "s#refs/remotes/origin/##"' 2>/dev/null || true)"
+if ! DEFAULT_BRANCH="$(ssh "$SSH_HOST" \
+    'git -C /home/pneuma/pneuma symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed "s#refs/remotes/origin/##"' 2>/dev/null)"; then
+    DEFAULT_BRANCH=""
+fi
 DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
-remote_rejected_with "--ref names a branch, not a tag: '$DEFAULT_BRANCH'" \
-    "$SOURCE_URL --ref $DEFAULT_BRANCH"
-remote_rejected_with "Git tag not found" \
-    "$SOURCE_URL --ref no-such-pneuma-tag"
-remote_rejected_with "--ref SHA does not resolve to a commit" \
-    "$SOURCE_URL --ref 0123456789abcdef0123456789abcdef01234567"
+remote_assert_rejected "--ref names a branch, not a tag: '$DEFAULT_BRANCH'" \
+    "branch passed to --ref is rejected" \
+    "bash /tmp/bootstrap-vps.sh $SOURCE_URL --ref $DEFAULT_BRANCH"
+remote_assert_rejected "Git tag not found" \
+    "missing tag passed to --ref is rejected" \
+    "bash /tmp/bootstrap-vps.sh $SOURCE_URL --ref no-such-pneuma-tag"
+remote_assert_rejected "--ref SHA does not resolve to a commit" \
+    "unresolvable SHA passed to --ref is rejected" \
+    "bash /tmp/bootstrap-vps.sh $SOURCE_URL --ref 0123456789abcdef0123456789abcdef01234567"
 
 # Phase 4: Pneuma functionality
 echo
 echo "==> Phase 4: Pneuma functionality..."
-check "Database connection: OK" "pneuma doctor passes" "su - pneuma -c '/usr/local/bin/pneuma doctor'"
-check "pneuma" "pneuma version works" "su - pneuma -c '/usr/local/bin/pneuma version'"
-check "" "pneuma app list works" "su - pneuma -c '/usr/local/bin/pneuma app list'"
+remote_assert "Database connection: OK" "pneuma doctor passes" "runuser -u pneuma -- env HOME=/home/pneuma XDG_RUNTIME_DIR=/run/user/\$(id -u pneuma) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/\$(id -u pneuma)/bus bash -c 'cd /home/pneuma && /usr/local/bin/pneuma doctor'"
+remote_assert "pneuma" "pneuma version works" "runuser -u pneuma -- env HOME=/home/pneuma /usr/local/bin/pneuma version"
+remote_assert "" "pneuma app list works" "runuser -u pneuma -- env HOME=/home/pneuma XDG_RUNTIME_DIR=/run/user/\$(id -u pneuma) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/\$(id -u pneuma)/bus /usr/local/bin/pneuma app list"
 
-# Phase 5: CI deploy key + restricted SSH dispatcher
+# Phase 5: CI deploy key rerun + restricted SSH dispatcher
 echo
 echo "==> Phase 5: CI deploy key + restricted SSH dispatcher..."
 
@@ -260,122 +356,81 @@ else
     exit 1
 fi
 
-check 'restrict,command="/usr/local/bin/pneuma ci dispatch"' \
+remote_assert 'restrict,command="/usr/local/bin/pneuma ci dispatch"' \
     "CI key installed with restricted + forced command" \
     "cat /home/pneuma/.ssh/authorized_keys"
 
-if VERSION_OUT=$(ssh -i "$CI_KEY" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-    "pneuma@$SSH_HOST" "version" 2>&1); then
-    report ok "CI dispatcher responds to version"
-else
-    report fail "CI dispatcher version failed: $VERSION_OUT"
-fi
+CI_PUBLIC="$(grep -v '^#' "$CI_KEY_PUB")"
+remote_assert "1" "CI key appears exactly once in authorized_keys" \
+    "count=\$(grep -cF '$CI_PUBLIC' /home/pneuma/.ssh/authorized_keys); printf '%s\\n' \"\$count\"; test \"\$count\" -eq 1"
 
-if ssh -i "$CI_KEY" -o BatchMode=yes "pneuma@$SSH_HOST" "id" 2>/dev/null; then
-    report fail "CI dispatcher allowed an arbitrary command (id)"
-else
-    report ok "CI dispatcher rejects arbitrary commands"
-fi
+ci_assert_ok() {
+    local expected="$1" description="$2" command="$3"
+    local log rc
+    REMOTE_RUN_INDEX=$((REMOTE_RUN_INDEX + 1))
+    log="$LOG_DIR/ci-$REMOTE_RUN_INDEX.log"
+    set +e
+    ssh -i "$CI_KEY" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+        "pneuma@$CI_SSH_HOST" "$command" >"$log" 2>&1
+    rc=$?
+    set -e
+    if [[ "$rc" -ne 0 ]]; then
+        report fail "$description (remote exit $rc)"
+        printf '        output: %s\n' "$(head -c 200 "$log")"
+        return 0
+    fi
+    if [[ -n "$expected" ]] && ! grep -qF -- "$expected" "$log"; then
+        report fail "$description (missing '$expected')"
+        printf '        output: %s\n' "$(head -c 200 "$log")"
+        return 0
+    fi
+    report ok "$description"
+    return 0
+}
 
-# Phase 6: Application import + deploy through the CI dispatcher
+ci_assert_rejected() {
+    local expected="$1" description="$2" command="$3"
+    local log rc
+    REMOTE_RUN_INDEX=$((REMOTE_RUN_INDEX + 1))
+    log="$LOG_DIR/ci-$REMOTE_RUN_INDEX.log"
+    set +e
+    ssh -i "$CI_KEY" -o BatchMode=yes \
+        "pneuma@$CI_SSH_HOST" "$command" >"$log" 2>&1
+    rc=$?
+    set -e
+    if [[ "$rc" -eq 0 ]]; then
+        report fail "$description (command executed)"
+        printf '        output: %s\n' "$(head -c 200 "$log")"
+        return 0
+    fi
+    if ! grep -qF -- "$expected" "$log"; then
+        report fail "$description (missing rejection '$expected')"
+        printf '        output: %s\n' "$(head -c 200 "$log")"
+        return 0
+    fi
+    report ok "$description"
+    return 0
+}
+
+profile_assert_single() {
+    local line="$1" description="$2"
+    remote_assert "1" "$description" \
+        "count=\$(grep -cxF '$line' /home/pneuma/.profile); printf '%s\\n' \"\$count\"; test \"\$count\" -eq 1"
+}
+
+ci_assert_ok "pneuma" "CI dispatcher responds to version" "version"
+ci_assert_rejected "unknown command: id" \
+    "CI dispatcher rejects arbitrary command (id)" "id"
+ci_assert_rejected "unknown command: podman" \
+    "CI dispatcher rejects arbitrary command (podman ps)" "podman ps"
+
+# Phase 6: Final bootstrap idempotency (singular state survives a re-run)
 echo
-echo "==> Phase 6: Application import + deploy via CI dispatcher..."
-
-echo "  -> ensuring local registry and insecure registry config..."
-ssh "$SSH_HOST" 'mkdir -p /etc/containers/registries.conf.d
-printf "[[registry]]\nlocation = \"localhost:5000\"\ninsecure = true\n" \
-    > /etc/containers/registries.conf.d/pneuma-test.conf' 2>&1
-ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "podman start pneuma-registry 2>/dev/null || podman run -d --name pneuma-registry -p 5000:5000 docker.io/library/registry:2"' \
-    2>&1 | grep -v level=warning || true
-
-echo "  -> copying fixture source and preparing Git repository..."
-scp -rq "$SCRIPT_DIR/dev-vm/fixtures" "$SSH_HOST":/var/lib/pneuma/checkouts/
-ssh "$SSH_HOST" 'chown -R pneuma:pneuma /var/lib/pneuma/checkouts/fixtures'
-
-SHA_OUT=$(ssh "$SSH_HOST" 'runuser -u pneuma -- bash -l -s' <<'REMOTE'
-set -euo pipefail
-cd "$HOME"
-REPOS_ROOT="/var/lib/pneuma/repos"
-REGISTRY="localhost:5000"
-FIXTURE="/var/lib/pneuma/checkouts/fixtures/healthy-http"
-
-rm -rf "$REPOS_ROOT"/*
-mkdir -p "$REPOS_ROOT"
-
-git init --quiet --initial-branch=main "$REPOS_ROOT/work"
-cd "$REPOS_ROOT/work"
-git config user.name "Pneuma Tests"
-git config user.email "pneuma@example.invalid"
-cp "$FIXTURE"/* .
-git add -A
-git commit --quiet -m "healthy-http v1.0"
-SHA_MAIN=$(git rev-parse HEAD)
-
-git checkout --quiet -b staging
-sed -i 's/healthy-http v1.0/healthy-http v2.0/' server.py
-git add server.py
-git commit --quiet -m "healthy-http v2.0"
-SHA_STAGING=$(git rev-parse HEAD)
-git checkout --quiet main
-
-git init --quiet --bare "$REPOS_ROOT/healthy-http.git"
-git push --quiet "$REPOS_ROOT/healthy-http.git" main staging
-git --git-dir="$REPOS_ROOT/healthy-http.git" symbolic-ref HEAD refs/heads/main
-
-for branch in main staging; do
-    git checkout --quiet "$branch"
-    sha=$(git rev-parse HEAD)
-    podman build --quiet --tag "$REGISTRY/healthy-http:$sha" . >/dev/null 2>&1
-    podman push --tls-verify=false "$REGISTRY/healthy-http:$sha" >/dev/null 2>&1
-done
-
-echo "SHA_MAIN=$SHA_MAIN"
-echo "SHA_STAGING=$SHA_STAGING"
-REMOTE
-)
-SHA_MAIN=$(echo "$SHA_OUT" | grep '^SHA_MAIN=' | cut -d= -f2)
-SHA_STAGING=$(echo "$SHA_OUT" | grep '^SHA_STAGING=' | cut -d= -f2)
-echo "  main=$SHA_MAIN staging=$SHA_STAGING"
-
-if ssh "$SSH_HOST" 'su - pneuma -c "pneuma app import file:///var/lib/pneuma/repos/healthy-http.git"' \
-    >/dev/null 2>&1; then
-    report ok "app imported from Git URL"
-else
-    report fail "app import failed"
-    exit 1
-fi
-check "healthy-http" "app registered" \
-    "su - pneuma -c 'pneuma app list'"
-
-echo "  -> deploying via CI dispatcher (deploy healthy-http staging)..."
-DEPLOY_OUT=$(ssh -i "$CI_KEY" -o BatchMode=yes "pneuma@$SSH_HOST" "deploy healthy-http staging" 2>&1) || true
-if printf '%s' "$DEPLOY_OUT" | grep -q "Status: Succeeded"; then
-    report ok "CI dispatcher deploy succeeded"
-else
-    report fail "CI dispatcher deploy failed"
-    printf '        output: %s\n' "$(printf '%s' "$DEPLOY_OUT" | head -c 400)"
-fi
-printf '%s\n' "$DEPLOY_OUT" | grep -v level=warning | sed 's/^/        /' || true
-
-check "Running" "application is running" \
-    "su - pneuma -c 'pneuma app status healthy-http'"
-check "pneuma-healthy-http.container" "quadlet unit created" \
-    "ls /home/pneuma/.config/containers/systemd/"
-
-BODY_CHECK=$(ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc '\''PORT=$(podman ps --format "{{.Ports}}" --filter name=pneuma-healthy-http | cut -d: -f2 | cut -d- -f1); curl -s "http://127.0.0.1:$PORT/"'\''' 2>&1) || true
-if [[ "$BODY_CHECK" == "healthy-http v2.0" ]]; then
-    report ok "staging revision served ($BODY_CHECK)"
-else
-    report fail "staging revision not served: $BODY_CHECK"
-fi
-
-# Phase 7: Bootstrap idempotency (installed state survives a re-run)
-echo
-echo "==> Phase 7: Bootstrap idempotency..."
+echo "==> Phase 6: Bootstrap idempotency..."
 if ssh "$SSH_HOST" 'bash /tmp/bootstrap-vps.sh '"$SOURCE_URL --ci-public-key /tmp/pneuma-ci-test.pub$REF_ARGS" >"$LOG_DIR/bootstrap-idempotent.log" 2>&1; then
-    report ok "bootstrap re-run after deploy completed"
+    report ok "final bootstrap re-run after deploy completed"
 else
-    report fail "bootstrap re-run failed (see $LOG_DIR/bootstrap-idempotent.log)"
+    report fail "final bootstrap re-run failed (see $LOG_DIR/bootstrap-idempotent.log)"
     exit 1
 fi
 if grep -q "CI key already installed" "$LOG_DIR/bootstrap-idempotent.log"; then
@@ -391,12 +446,36 @@ if [[ -n "$REF" && -n "${RESOLVED_SHA:-}" ]]; then
     fi
 fi
 
-check "pneuma" "pneuma user survives re-run" "id pneuma"
-check "active" "caddy still active" "systemctl is-active caddy"
-check "Running" "application survives re-run" \
-    "su - pneuma -c 'pneuma app status healthy-http'"
-check "Database connection: OK" "pneuma doctor passes after re-run" \
-    "su - pneuma -c '/usr/local/bin/pneuma doctor'"
+remote_assert "pneuma" "pneuma user survives re-run" "id pneuma"
+remote_assert "active" "caddy still active" "systemctl is-active caddy"
+
+remote_assert "1" "single CI key after re-run" \
+    "count=\$(grep -cF '$CI_PUBLIC' /home/pneuma/.ssh/authorized_keys); printf '%s\\n' \"\$count\"; test \"\$count\" -eq 1"
+profile_assert_single 'export XDG_RUNTIME_DIR="/run/user/$(id -u)"' \
+    "profile has one XDG_RUNTIME_DIR line after re-run"
+profile_assert_single 'export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus"' \
+    "profile has one DBUS_SESSION_BUS_ADDRESS line after re-run"
+profile_assert_single 'export PNEUMA_DATABASE_PATH=/var/lib/pneuma/database/pneuma.sqlite3' \
+    "profile has one database path line after re-run"
+profile_assert_single 'export PNEUMA_WORKSPACE_PATH=/var/lib/pneuma/checkouts' \
+    "profile has one workspace path line after re-run"
+profile_assert_single 'export PNEUMA_CADDY_MANAGED_PATH=/etc/caddy/applications' \
+    "profile has one caddy managed path line after re-run"
+profile_assert_single 'export PNEUMA_CADDYFILE_PATH=/etc/caddy/Caddyfile' \
+    "profile has one Caddyfile path line after re-run"
+profile_assert_single 'export PNEUMA_RUNTIME_PORT_RANGE=30000-39999' \
+    "profile has one runtime port range line after re-run"
+profile_assert_single 'export PNEUMA_QUADLET_DIR=$HOME/.config/containers/systemd' \
+    "profile has one Quadlet path line after re-run"
+if [[ -n "$SUBUID_ENTRY" ]]; then
+    remote_assert "$SUBUID_ENTRY" "stable subuid range after re-run" "grep '^pneuma:' /etc/subuid"
+fi
+if [[ -n "$SUBGID_ENTRY" ]]; then
+    remote_assert "$SUBGID_ENTRY" "stable subgid range after re-run" "grep '^pneuma:' /etc/subgid"
+fi
+
+remote_assert "Database connection: OK" "pneuma doctor passes after re-run" \
+    "runuser -u pneuma -- env HOME=/home/pneuma XDG_RUNTIME_DIR=/run/user/\$(id -u pneuma) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/\$(id -u pneuma)/bus bash -c 'cd /home/pneuma && /usr/local/bin/pneuma doctor'"
 
 # Summary
 echo
