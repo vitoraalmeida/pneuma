@@ -11,6 +11,7 @@
 #   scripts/dev-vm/e2e.sh [ssh-host]
 #
 # Default ssh-host: pneuma-dev
+# The SSH target must be root for fixture ownership and VM reboot operations.
 
 set -euo pipefail
 
@@ -49,7 +50,7 @@ echo
 echo "==> Step 5: Upgrade healthy-http to v2..."
 sed 's/healthy-http v1.0/healthy-http v2.0/' "$FIXTURE_SRC/server.py" > "$TMP_V2/server.py"
 scp -q "$TMP_V2/server.py" "$SSH_HOST":/var/lib/pneuma/checkouts/fixtures/healthy-http/server.py
-ssh "$SSH_HOST" 'sudo chown pneuma:pneuma /var/lib/pneuma/checkouts/fixtures/healthy-http/server.py'
+ssh "$SSH_HOST" 'chown pneuma:pneuma /var/lib/pneuma/checkouts/fixtures/healthy-http/server.py'
 ssh "$SSH_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && podman build -q -t $REGISTRY/healthy-http:latest /var/lib/pneuma/checkouts/fixtures/healthy-http 2>/dev/null && podman push --tls-verify=false $REGISTRY/healthy-http:latest 2>/dev/null'"
 DIGEST=$(ssh "$SSH_HOST" "curl -s -H 'Accept: application/vnd.oci.image.manifest.v1+json' http://$REGISTRY/v2/healthy-http/manifests/latest -D - -o /dev/null 2>/dev/null | grep -i docker-content-digest | awk '{print \$2}' | tr -d '\r'")
 DEPLOY_OUT=$(ssh "$SSH_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && pneuma app deploy healthy-http --image $REGISTRY/healthy-http@$DIGEST 2>&1'")
@@ -70,7 +71,7 @@ echo "  OK: $BODY"
 echo
 echo "==> Step 6: Rollback healthy-http to v1..."
 scp -q "$FIXTURE_SRC/server.py" "$SSH_HOST":/var/lib/pneuma/checkouts/fixtures/healthy-http/server.py
-ssh "$SSH_HOST" 'sudo chown pneuma:pneuma /var/lib/pneuma/checkouts/fixtures/healthy-http/server.py'
+ssh "$SSH_HOST" 'chown pneuma:pneuma /var/lib/pneuma/checkouts/fixtures/healthy-http/server.py'
 ssh "$SSH_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && podman build -q -t $REGISTRY/healthy-http:latest /var/lib/pneuma/checkouts/fixtures/healthy-http 2>/dev/null && podman push --tls-verify=false $REGISTRY/healthy-http:latest 2>/dev/null'"
 DIGEST=$(ssh "$SSH_HOST" "curl -s -H 'Accept: application/vnd.oci.image.manifest.v1+json' http://$REGISTRY/v2/healthy-http/manifests/latest -D - -o /dev/null 2>/dev/null | grep -i docker-content-digest | awk '{print \$2}' | tr -d '\r'")
 DEPLOY_OUT=$(ssh "$SSH_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && pneuma app deploy healthy-http --image $REGISTRY/healthy-http@$DIGEST 2>&1'")
@@ -88,102 +89,8 @@ fi
 echo "  OK: $BODY"
 
 echo
-echo "==> Step 7: Branch-based deploy (Git -> OCI)..."
-ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && podman start pneuma-registry 2>/dev/null || podman run -d --name pneuma-registry -p 5000:5000 docker.io/library/registry:2"' 2>&1 | grep -v level=warning || true
-ssh "$SSH_HOST" 'sudo mkdir -p /var/lib/pneuma/repos && sudo chown pneuma:pneuma /var/lib/pneuma/repos'
-SHA_OUT=$(ssh "$SSH_HOST" 'runuser -u pneuma -- bash -l -s' <<'REMOTE'
-set -euo pipefail
-cd "$HOME"
-REPOS_ROOT="/var/lib/pneuma/repos"
-REGISTRY="localhost:5000"
-FIXTURE="/var/lib/pneuma/checkouts/fixtures/healthy-http"
-
-rm -rf "$REPOS_ROOT"/*
-mkdir -p "$REPOS_ROOT"
-
-git init --quiet --initial-branch=main "$REPOS_ROOT/work"
-cd "$REPOS_ROOT/work"
-git config user.name "Pneuma Tests"
-git config user.email "pneuma@example.invalid"
-cp "$FIXTURE"/* .
-git add -A
-git commit --quiet -m "healthy-http v1.0"
-SHA_MAIN=$(git rev-parse HEAD)
-
-git checkout --quiet -b staging
-sed -i 's/healthy-http v1.0/healthy-http v2.0/' server.py
-git add server.py
-git commit --quiet -m "healthy-http v2.0"
-SHA_STAGING=$(git rev-parse HEAD)
-git checkout --quiet main
-
-git init --quiet --bare "$REPOS_ROOT/healthy-http.git"
-git push --quiet "$REPOS_ROOT/healthy-http.git" main staging
-git --git-dir="$REPOS_ROOT/healthy-http.git" symbolic-ref HEAD refs/heads/main
-
-for branch in main staging; do
-    git checkout --quiet "$branch"
-    sha=$(git rev-parse HEAD)
-    podman build --quiet --tag "$REGISTRY/healthy-http:$sha" . >/dev/null 2>&1
-    podman push --tls-verify=false "$REGISTRY/healthy-http:$sha" >/dev/null 2>&1
-done
-
-echo "SHA_MAIN=$SHA_MAIN"
-echo "SHA_STAGING=$SHA_STAGING"
-REMOTE
-)
-SHA_MAIN=$(echo "$SHA_OUT" | grep '^SHA_MAIN=' | cut -d= -f2)
-SHA_STAGING=$(echo "$SHA_OUT" | grep '^SHA_STAGING=' | cut -d= -f2)
-echo "  main=$SHA_MAIN staging=$SHA_STAGING"
-
-BRANCH_DEPLOY=$(ssh "$SSH_HOST" 'runuser -u pneuma -- bash -l -s' <<'REMOTE'
-set -euo pipefail
-cd "$HOME"
-REPO_URL="file:///var/lib/pneuma/repos/healthy-http.git"
-
-sqlite3 /var/lib/pneuma/database/pneuma.sqlite3 \
-    "UPDATE application_sources
-     SET repository_url = '$REPO_URL',
-         repository_kind = 'remote'
-     WHERE application_id = (SELECT id FROM applications WHERE name = 'healthy-http')" \
-    2>/dev/null && true || true
-
-deploy_branch() {
-    local branch="$1" expected_sha="$2" expected_body="$3"
-    local output port body
-    output=$(pneuma app deploy healthy-http --branch "$branch" 2>&1 | grep -v level=warning || true)
-    if ! echo "$output" | grep -q "Status: Succeeded"; then
-        echo "  ERROR: deploy of $branch did not succeed"
-        exit 1
-    fi
-    if ! echo "$output" | grep -q "Source revision: $expected_sha"; then
-        echo "  ERROR: expected source revision $expected_sha for $branch"
-        exit 1
-    fi
-    port=$(podman ps --format "{{.Ports}}" --filter name=pneuma-healthy-http | cut -d: -f2 | cut -d- -f1 | head -1)
-    body=$(curl -s "http://127.0.0.1:$port/")
-    if [ "$body" != "$expected_body" ]; then
-        echo "  ERROR: expected '$expected_body', got: $body"
-        exit 1
-    fi
-    echo "  OK: $branch -> $body ($expected_sha)"
-}
-
-deploy_branch main "$SHA_MAIN" "healthy-http v1.0"
-deploy_branch staging "$SHA_STAGING" "healthy-http v2.0"
-deploy_branch main "$SHA_MAIN" "healthy-http v1.0"
-echo "  branch deploy cycle complete"
-REMOTE
-)
-echo "$BRANCH_DEPLOY" 2>&1 | grep -v level=warning || true
-if ! echo "$BRANCH_DEPLOY" | grep -q "branch deploy cycle complete"; then
-    echo "  ERROR: branch-based deploy test failed"
-    exit 1
-fi
-
-echo
-echo "==> Step 8: Reboot VM..."
-ssh "$SSH_HOST" 'sudo reboot' 2>&1 || true
+echo "==> Step 7: Reboot VM..."
+ssh "$SSH_HOST" 'reboot' 2>&1 || true
 echo "  Waiting for VM to come back..."
 for _ in $(seq 1 60); do
     if ssh -o ConnectTimeout=3 -o BatchMode=yes "$SSH_HOST" 'uptime' 2>/dev/null; then
@@ -194,7 +101,7 @@ done
 sleep 15
 
 echo
-echo "==> Step 9: Verify apps after reboot..."
+echo "==> Step 8: Verify apps after reboot..."
 ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma app status healthy-http && pneuma app status redirect-public"' 2>&1 | grep -v level=warning || true
 
 echo

@@ -15,6 +15,7 @@
 #   scripts/dev-vm/test-branch-deploy.sh [ssh-host]
 #
 # Default ssh-host: pneuma-dev
+# The SSH target must be root to prepare fixture and repository directories.
 
 set -euo pipefail
 
@@ -45,10 +46,10 @@ echo "==> Step 1: Reset fixtures..."
 echo
 echo "==> Step 2: Ensure registry is running and copy fixture sources..."
 ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && (podman start pneuma-registry 2>/dev/null || podman run -d --name pneuma-registry -p 5000:5000 docker.io/library/registry:2)"' 2>&1 | grep -v level=warning || true
-ssh "$SSH_HOST" 'sudo mkdir -p /var/lib/pneuma/checkouts/fixtures'
-ssh "$SSH_HOST" 'sudo mkdir -p /var/lib/pneuma/repos && sudo chown pneuma:pneuma /var/lib/pneuma/repos'
+ssh "$SSH_HOST" 'mkdir -p /var/lib/pneuma/checkouts/fixtures'
+ssh "$SSH_HOST" 'mkdir -p /var/lib/pneuma/repos && chown pneuma:pneuma /var/lib/pneuma/repos'
 scp -rq "$FIXTURE_SRC" "$SSH_HOST":/var/lib/pneuma/checkouts/fixtures/
-ssh "$SSH_HOST" 'sudo chown -R pneuma:pneuma /var/lib/pneuma/checkouts/fixtures'
+ssh "$SSH_HOST" 'chown -R pneuma:pneuma /var/lib/pneuma/checkouts/fixtures'
 
 echo
 echo "==> Step 3: Create Git repository and tagged images on the VM..."

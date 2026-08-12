@@ -12,6 +12,7 @@
 #   scripts/dev-vm/sync-binary.sh pneuma-dev
 #
 # Default ssh-host: pneuma-dev
+# The SSH target must be root to install the binary under /usr/local/bin.
 
 set -euo pipefail
 
@@ -24,7 +25,7 @@ echo "==> Copying binary to $SSH_HOST..."
 scp -q target/release/pneuma "$SSH_HOST":/tmp/pneuma-new
 
 echo "==> Installing binary as root..."
-ssh "$SSH_HOST" 'sudo install -o root -g root -m 0755 /tmp/pneuma-new /usr/local/bin/pneuma && rm /tmp/pneuma-new'
+ssh "$SSH_HOST" 'install -o root -g root -m 0755 /tmp/pneuma-new /usr/local/bin/pneuma && rm /tmp/pneuma-new'
 
 echo "==> Validating installation..."
 ssh "$SSH_HOST" '/usr/local/bin/pneuma version'

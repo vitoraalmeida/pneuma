@@ -239,6 +239,10 @@ deploy o runtime anterior é retirado e o novo ganha uma porta host nova.
 Os scripts em `scripts/dev-vm/` automatizam o ciclo de desenvolvimento contra a
 VM (todos aceitam `[ssh-host]` opcional, default `pneuma-dev`):
 
+Os scripts que alteram Caddy, diretórios de estado, a instalação do binário ou
+reiniciam a VM esperam que o alias SSH conecte como `root`; eles não exigem nem
+instalam `sudo`. Os comandos de runtime continuam sob o usuário `pneuma`.
+
 | Script | O que faz | Quando usar |
 |---|---|---|
 | `sync-binary.sh` | `cargo build --release` + scp + install + `pneuma doctor` | Após alterar código Rust |

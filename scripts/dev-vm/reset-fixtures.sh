@@ -10,6 +10,7 @@
 #   scripts/dev-vm/reset-fixtures.sh [ssh-host]
 #
 # Default ssh-host: pneuma-dev
+# The SSH target must be root because this script resets Caddy and Pneuma state.
 
 set -euo pipefail
 
@@ -25,13 +26,13 @@ echo "==> Removing containers..."
 ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && podman rm -f \$(podman ps -aq --filter name=pneuma- 2>/dev/null) 2>/dev/null || true"' 2>&1 | grep -v level=warning || true
 
 echo "==> Removing Caddy fragments..."
-ssh "$SSH_HOST" 'sudo rm -f /etc/caddy/applications/*.caddy; sudo systemctl reload caddy 2>/dev/null || sudo caddy reload --config /etc/caddy/Caddyfile 2>/dev/null || true' 2>&1 | grep -v level=warning || true
+ssh "$SSH_HOST" 'rm -f /etc/caddy/applications/*.caddy; systemctl reload caddy 2>/dev/null || caddy reload --config /etc/caddy/Caddyfile 2>/dev/null || true' 2>&1 | grep -v level=warning || true
 
 echo "==> Removing checkouts..."
-ssh "$SSH_HOST" 'sudo rm -rf /var/lib/pneuma/checkouts/*' 2>&1
+ssh "$SSH_HOST" 'rm -rf /var/lib/pneuma/checkouts/*' 2>&1
 
 echo "==> Resetting database..."
-ssh "$SSH_HOST" 'sudo rm -f /var/lib/pneuma/database/pneuma.sqlite3*; sudo chown pneuma:pneuma /var/lib/pneuma/database' 2>&1
+ssh "$SSH_HOST" 'rm -f /var/lib/pneuma/database/pneuma.sqlite3*; chown pneuma:pneuma /var/lib/pneuma/database' 2>&1
 
 echo "==> Running pneuma doctor..."
 ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma doctor"' 2>&1 | grep -v level=warning || true

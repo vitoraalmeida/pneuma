@@ -10,6 +10,7 @@
 #   scripts/dev-vm/deploy-all-fixtures.sh [ssh-host]
 #
 # Default ssh-host: pneuma-dev
+# The SSH target must be root to prepare the fixture repository directory.
 
 set -euo pipefail
 
@@ -18,7 +19,7 @@ FIXTURES_DIR="scripts/dev-vm/fixtures"
 REGISTRY="localhost:5000"
 
 echo "==> Preparing Git repositories for fixtures..."
-ssh "$SSH_HOST" 'sudo mkdir -p /var/lib/pneuma/repos && sudo chown pneuma:pneuma /var/lib/pneuma/repos'
+ssh "$SSH_HOST" 'mkdir -p /var/lib/pneuma/repos && chown pneuma:pneuma /var/lib/pneuma/repos'
 
 echo "==> Importing fixtures..."
 for fixture in "$FIXTURES_DIR"/*/; do

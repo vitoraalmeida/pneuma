@@ -80,7 +80,7 @@ semântica de reconciliation antes de implementar `pneuma reconcile`.
       Resultado: catálogo indexado cobre drift de runtime/exposure, recovery de
       deployments interrompidos e concorrência; automação VM permanece adiada
       até `pneuma reconcile` existir.
-- [ ] Preparar VM Debian 13 reproduzível e executar regressão final de código,
+- [x] Preparar VM Debian 13 reproduzível e executar regressão final de código,
       migration e VM.
       Plano: a partir de clone descartável de `pneuma-dev-base`, gerar localmente
       `~/.ssh/pneuma-ci-test`; usar bootstrap nativo na VM a partir da URL pública
@@ -91,6 +91,11 @@ semântica de reconciliation antes de implementar `pneuma reconcile`.
       contagem real PASS/FAIL/SKIP. O bootstrap da VM pode usar autenticação root
       por senha somente no wrapper local, via `PNEUMA_VM_ROOT_PASSWORD`; nenhum
       segredo entra em script, argumento, log ou VM.
+      Resultado: bootstrap nativo a partir de `b6887a4` e rerun passaram em clone
+      Debian 13; snapshot `pneuma-ready` criado. A bateria no clone descartável
+      passou com 27 PASS / 0 FAIL / 1 SKIP (`redirect-public` requer a configuração
+      opcional de `local_certs`); os scripts VM usam SSH root diretamente para
+      operações administrativas e executam runtime como `pneuma`.
 
 ## Critérios de aceite
 
@@ -120,8 +125,12 @@ Nenhum.
 
 ## Validação final
 
-Pendente: quatro gates no commit final de código, banco novo e upgrade da
-migration, e regressão em VM Debian 13 conforme os critérios de aceite.
+Os quatro gates passaram após o ajuste final de scripts: `cargo fmt --check`,
+`cargo clippy --all-targets --all-features -- -D warnings`, `cargo test
+--all-features` e `cargo build --workspace --release`. A suite cobriu banco novo
+e upgrade 0014 (`open_configures_and_migrates_database` e
+`upgrades_release_provenance_to_historical_deployments`); a regressão VM passou
+com 27 PASS / 0 FAIL / 1 SKIP documentado.
 
 ## Próxima iteração proposta
 

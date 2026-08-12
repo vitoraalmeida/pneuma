@@ -9,6 +9,7 @@
 #   scripts/dev-vm/rebuild-fixtures.sh [ssh-host]
 #
 # Default ssh-host: pneuma-dev
+# The SSH target must be root to repair ownership after copying fixtures.
 
 set -euo pipefail
 
@@ -16,12 +17,15 @@ SSH_HOST="${1:-pneuma-dev}"
 FIXTURES_DIR="scripts/dev-vm/fixtures"
 REGISTRY="localhost:5000"
 
+echo "==> Configuring the local test registry..."
+ssh "$SSH_HOST" 'install -d -m 0755 /etc/containers/registries.conf.d && printf "[[registry]]\nlocation = \"localhost:5000\"\ninsecure = true\n" > /etc/containers/registries.conf.d/pneuma-dev.conf'
+
 echo "==> Ensuring registry is running..."
 ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && (podman start pneuma-registry 2>/dev/null || podman run -d --name pneuma-registry -p 5000:5000 docker.io/library/registry:2)"' 2>&1 | grep -v level=warning || true
 
 echo "==> Copying fixtures to VM..."
 scp -rq "$FIXTURES_DIR" "$SSH_HOST":/var/lib/pneuma/checkouts/
-ssh "$SSH_HOST" 'sudo chown -R pneuma:pneuma /var/lib/pneuma/checkouts/fixtures'
+ssh "$SSH_HOST" 'chown -R pneuma:pneuma /var/lib/pneuma/checkouts/fixtures'
 
 echo "==> Building and pushing fixtures..."
 for fixture in "$FIXTURES_DIR"/*/; do
