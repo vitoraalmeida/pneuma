@@ -16,25 +16,22 @@ use rusqlite::OptionalExtension;
 #[test]
 fn imports_and_lists_an_application_idempotently() {
     let database_path = temporary_database_path();
-    let repository_path = fixture_path("valid");
+    let workspace = temporary_workspace_path();
+    let repository_path = create_repository_from_fixture(&workspace, "valid");
+    let url = format!("file://{}", repository_path.display());
 
-    let first_import = run_pneuma(
+    let first_import = run_pneuma_env(
         &database_path,
-        &[
-            OsStr::new("app"),
-            OsStr::new("import"),
-            repository_path.as_os_str(),
-        ],
+        Some(&workspace),
+        &[OsStr::new("app"), OsStr::new("import"), OsStr::new(&url)],
     );
-    let second_import = run_pneuma(
+    let second_import = run_pneuma_env(
         &database_path,
-        &[
-            OsStr::new("app"),
-            OsStr::new("import"),
-            repository_path.as_os_str(),
-        ],
+        Some(&workspace),
+        &[OsStr::new("app"), OsStr::new("import"), OsStr::new(&url)],
     );
     let list = run_pneuma(&database_path, &[OsStr::new("app"), OsStr::new("list")]);
+    let _ = fs::remove_dir_all(&workspace);
     let _ = fs::remove_file(&database_path);
 
     assert!(first_import.status.success());
@@ -52,24 +49,77 @@ fn imports_and_lists_an_application_idempotently() {
 #[test]
 fn reports_manifest_errors_and_returns_failure() {
     let database_path = temporary_database_path();
-    let repository_path = fixture_path("missing");
+    let workspace = temporary_workspace_path();
+    let repository_path = workspace.join("remote");
+    fs::create_dir_all(&repository_path).unwrap();
+    fs::write(repository_path.join("README.md"), "missing manifest\n").unwrap();
+    initialize_repository(&repository_path);
+    let url = format!("file://{}", repository_path.display());
 
-    let output = run_pneuma(
+    let output = run_pneuma_env(
         &database_path,
+        Some(&workspace),
+        &[OsStr::new("app"), OsStr::new("import"), OsStr::new(&url)],
+    );
+    let _ = fs::remove_dir_all(&workspace);
+    let _ = fs::remove_file(&database_path);
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("pneuma.toml"),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn rejects_a_local_import_path_without_creating_an_application() {
+    let database_path = temporary_database_path();
+    let workspace = temporary_workspace_path();
+    let repository_path = fixture_path("valid");
+
+    let output = run_pneuma_env(
+        &database_path,
+        Some(&workspace),
         &[
             OsStr::new("app"),
             OsStr::new("import"),
             repository_path.as_os_str(),
         ],
     );
-    let _ = fs::remove_file(&database_path);
 
     assert!(!output.status.success());
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("missing/pneuma.toml"),
-        "unexpected stderr: {}",
         String::from_utf8_lossy(&output.stderr)
+            .contains("application imports require a Git URL; local paths are not supported")
     );
+    let connection = database::open(&database_path).unwrap();
+    let count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM applications", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 0);
+    assert!(!workspace.exists());
+    let _ = fs::remove_file(&database_path);
+}
+
+#[test]
+fn cleans_the_temporary_checkout_after_a_clone_failure() {
+    let database_path = temporary_database_path();
+    let workspace = temporary_workspace_path();
+    let url = format!("file://{}/missing", workspace.display());
+
+    let output = run_pneuma_env(
+        &database_path,
+        Some(&workspace),
+        &[OsStr::new("app"), OsStr::new("import"), OsStr::new(&url)],
+    );
+
+    assert!(!output.status.success());
+    let imports = workspace.join("imports");
+    assert!(imports.exists());
+    assert!(fs::read_dir(&imports).unwrap().next().is_none());
+    let _ = fs::remove_dir_all(&workspace);
+    let _ = fs::remove_file(&database_path);
 }
 
 #[test]
@@ -878,14 +928,13 @@ fn lists_deployments_for_a_deployed_application() {
 #[test]
 fn lists_no_deployments_for_an_application_without_deployment_history() {
     let database_path = temporary_database_path();
-    let repository_path = fixture_path("valid");
-    assert_command_succeeded(&run_pneuma(
+    let workspace = temporary_workspace_path();
+    let repository_path = create_repository_from_fixture(&workspace, "valid");
+    let url = format!("file://{}", repository_path.display());
+    assert_command_succeeded(&run_pneuma_env(
         &database_path,
-        &[
-            OsStr::new("app"),
-            OsStr::new("import"),
-            repository_path.as_os_str(),
-        ],
+        Some(&workspace),
+        &[OsStr::new("app"), OsStr::new("import"), OsStr::new(&url)],
     ));
 
     let output = run_pneuma(
@@ -896,6 +945,7 @@ fn lists_no_deployments_for_an_application_without_deployment_history() {
             OsStr::new("personal-site"),
         ],
     );
+    let _ = fs::remove_dir_all(&workspace);
     let _ = fs::remove_file(&database_path);
 
     assert_command_succeeded(&output);
@@ -1172,6 +1222,18 @@ fn fixture_path(name: &str) -> PathBuf {
         .join(name)
 }
 
+fn create_repository_from_fixture(workspace: &Path, fixture: &str) -> PathBuf {
+    let repository_path = workspace.join("remote");
+    fs::create_dir_all(&repository_path).unwrap();
+    fs::copy(
+        fixture_path(fixture).join("pneuma.toml"),
+        repository_path.join("pneuma.toml"),
+    )
+    .unwrap();
+    initialize_repository(&repository_path);
+    repository_path
+}
+
 struct DeploymentEnvironment {
     root: PathBuf,
     repository_path: PathBuf,
@@ -1258,12 +1320,14 @@ impl DeploymentEnvironment {
     }
 
     fn import(&self) -> Output {
-        run_pneuma(
+        let repository_url = format!("file://{}", self.repository_path.display());
+        run_pneuma_env(
             &self.database_path,
+            Some(&self.workspace_path),
             &[
                 OsStr::new("app"),
                 OsStr::new("import"),
-                self.repository_path.as_os_str(),
+                OsStr::new(&repository_url),
             ],
         )
     }

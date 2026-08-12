@@ -310,6 +310,7 @@ enum CliError {
     ImportWorkspace {
         source: std::io::Error,
     },
+    InvalidImportRepository,
     List {
         source: ListError,
     },
@@ -368,6 +369,12 @@ impl fmt::Display for CliError {
                     "failed to prepare the import workspace: {source}"
                 )
             }
+            Self::InvalidImportRepository => {
+                write!(
+                    formatter,
+                    "application imports require a Git URL; local paths are not supported"
+                )
+            }
             Self::List { source } => write!(formatter, "{source}"),
             Self::ListDeployments { source } => write!(formatter, "{source}"),
             Self::ApplicationNotFound { application_name } => {
@@ -413,7 +420,7 @@ impl Error for CliError {
             Self::SystemList { source } => Some(source),
             Self::SystemShow { source } => Some(source),
             Self::CiDispatch { source } => Some(source),
-            Self::Doctor | Self::MissingDeployOption => None,
+            Self::Doctor | Self::MissingDeployOption | Self::InvalidImportRepository => None,
         }
     }
 }
@@ -595,33 +602,30 @@ fn run_import(
     system_name: Option<&str>,
     manifest_path: Option<&str>,
 ) -> Result<(), CliError> {
+    if !is_remote_repository(repository) {
+        return Err(CliError::InvalidImportRepository);
+    }
+
     log_verbose(verbose, format!("import repository: {repository}"));
-    let (repository_path, temporary_checkout) = if is_remote_repository(repository) {
-        let workspace =
-            configured_path(WORKSPACE_PATH_ENVIRONMENT_VARIABLE, DEFAULT_WORKSPACE_PATH);
-        let temporary_root = workspace.join("imports");
-        fs::create_dir_all(&temporary_root)
-            .map_err(|source| CliError::ImportWorkspace { source })?;
-        let checkout = temporary_root.join(unique_suffix());
-        clone_repository(repository, &checkout)
-            .map_err(|source| CliError::ImportSource { source })?;
-        (checkout, true)
-    } else {
-        (PathBuf::from(repository), false)
-    };
+    let workspace = configured_path(WORKSPACE_PATH_ENVIRONMENT_VARIABLE, DEFAULT_WORKSPACE_PATH);
+    let temporary_root = workspace.join("imports");
+    fs::create_dir_all(&temporary_root).map_err(|source| CliError::ImportWorkspace { source })?;
+    let checkout = temporary_root.join(unique_suffix());
+    if let Err(source) = clone_repository(repository, &checkout) {
+        let _ = cleanup_checkout(&checkout);
+        return Err(CliError::ImportSource { source });
+    }
 
     let import_result = import_application(
         connection,
-        &repository_path,
+        &checkout,
         system_name,
         Some(repository),
         manifest_path,
     )
     .map_err(|source| CliError::Import { source });
 
-    if temporary_checkout {
-        let _ = cleanup_checkout(&repository_path);
-    }
+    let _ = cleanup_checkout(&checkout);
 
     let application = import_result?;
     println!("Imported {}", application.name);

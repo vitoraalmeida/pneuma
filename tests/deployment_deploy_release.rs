@@ -515,14 +515,17 @@ impl DeploymentEnvironment {
     }
 
     fn import(&self) -> Output {
-        run_pneuma(
-            &self.database_path,
-            &[
+        let repository_url = format!("file://{}", self.repository_path.display());
+        Command::new(env!("CARGO_BIN_EXE_pneuma"))
+            .env("PNEUMA_DATABASE_PATH", &self.database_path)
+            .env("PNEUMA_WORKSPACE_PATH", &self.workspace_path)
+            .args([
                 OsStr::new("app"),
                 OsStr::new("import"),
-                self.repository_path.as_os_str(),
-            ],
-        )
+                OsStr::new(&repository_url),
+            ])
+            .output()
+            .unwrap()
     }
 
     fn deploy(&self, port: u16, verbose: bool) -> Output {
@@ -879,14 +882,6 @@ fn read_request(stream: &mut TcpStream) {
         assert_ne!(bytes_read, 0);
         request.extend_from_slice(&buffer[..bytes_read]);
     }
-}
-
-fn run_pneuma(database_path: &Path, arguments: &[&OsStr]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_pneuma"))
-        .env("PNEUMA_DATABASE_PATH", database_path)
-        .args(arguments)
-        .output()
-        .unwrap()
 }
 
 fn fixture_path(name: &str) -> PathBuf {

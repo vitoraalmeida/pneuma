@@ -32,7 +32,10 @@ semântica de reconciliation antes de implementar `pneuma reconcile`.
       Resultado: design indexado define autoridades, invariantes, matrizes de
       runtime/exposure, recovery conservador de deployments interrompidos,
       concorrência e non-goals sem implementar `pneuma reconcile`.
-- [ ] Aplicar o contrato de importação exclusivamente por URL Git.
+- [x] Aplicar o contrato de importação exclusivamente por URL Git.
+      Resultado: CLI rejeita paths antes de efeitos, clona toda URL aceita em
+      checkout temporário (inclusive limpeza após falha de clone) e os testes
+      binários importam repositórios temporários via `file://`.
 - [ ] Consolidar os tipos de domínio de Deployment e Runtime.
 - [ ] Migrar `source_revision` para Deployment com cobertura fresh/upgrade.
 - [ ] Unificar Release artifact-only e renomear `DeploymentResult`.
