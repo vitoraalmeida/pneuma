@@ -111,24 +111,26 @@ de que todo use case já está livre de SQL.
 
 ## Sequência de commits
 
-1. `docs: revise pre-v0.3 consolidation decisions`
+`docs: revise pre-v0.3 consolidation decisions` (`99fd151`) aprovou este
+design antes de abrir a iteração. A partir daqui, a sequência é:
+
+1. `docs: open pre-v0.3 consolidation iteration`
 2. `docs: redefine roadmap after v0.2`
 3. `docs: define reconciliation semantics before refactoring`
-4. `docs: open pre-v0.3 consolidation iteration`
-5. `fix(import): enforce Git URL application imports`
-6. `refactor(domain): make deployment and runtime state first-class`
-7. `refactor(persistence): move source provenance to deployments`
-8. `refactor(release): use a single artifact-only Release type`
-9. `refactor(deployment): rename deployed release result`
-10. `refactor(runtime): materialize image digest as runtime identity`
-11. `refactor(store): move application import persistence to application store`
-12. `refactor(store): move application runtime persistence to stores`
-13. `refactor(exposure): persist desired visibility before materialization`
-14. `refactor(store): finish deployment creation persistence extraction`
-15. `test(deployment): verify immediate locking`
-16. `test(deployment): reject a second CLI deploy in progress`
-17. `docs: define v0.3 reconciliation e2e scenarios`
-18. `docs: record pre-v0.3 consolidation completion`
+4. `fix(import): enforce Git URL application imports`
+5. `refactor(domain): make deployment and runtime state first-class`
+6. `refactor(persistence): move source provenance to deployments`
+7. `refactor(release): use a single artifact-only Release type`
+8. `refactor(deployment): rename deployed release result`
+9. `refactor(runtime): materialize image digest as runtime identity`
+10. `refactor(store): move application import persistence to application store`
+11. `refactor(store): move application runtime persistence to stores`
+12. `refactor(exposure): persist desired visibility before materialization`
+13. `refactor(store): finish deployment creation persistence extraction`
+14. `test(deployment): verify immediate locking`
+15. `test(deployment): reject a second CLI deploy in progress`
+16. `docs: define v0.3 reconciliation e2e scenarios`
+17. `docs: record pre-v0.3 consolidation completion`
 
 Opcionalmente, publicar `v0.2.1` como baseline consolidada. Somente então pode
 começar `feat(reconcile): add one-shot application reconciliation`.
