@@ -30,7 +30,7 @@ pub(crate) struct CandidateStartInput<'a> {
     pub application_name: &'a str,
     pub image_reference: &'a str,
     pub container_port: u16,
-    pub source_revision: &'a str,
+    pub artifact_identity: &'a str,
 }
 
 pub(crate) enum CandidateStartError {
@@ -102,7 +102,7 @@ pub(crate) fn start_candidate(
         application_name,
         image_reference,
         container_port,
-        source_revision,
+        artifact_identity,
     } = input;
 
     advance_deployment(connection, deployment_id, DeploymentTransition::Start).map_err(
@@ -122,7 +122,7 @@ pub(crate) fn start_candidate(
         image_reference,
         container_port,
         host_port,
-        source_revision,
+        artifact_identity,
     )
     .map_err(|source| CandidateStartError::UnitCreation {
         source,

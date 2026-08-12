@@ -237,7 +237,7 @@ pub fn materialize_caddy_fragment(
     let fragment_path = managed_directory.join(format!("{application_id}.caddy"));
     let temporary_path = managed_directory.join(format!(".{application_id}.caddy.tmp"));
     let previous_fragment = read_previous_fragment(&fragment_path)?;
-    let contents = format!("{domain} {{\n    reverse_proxy {endpoint}\n}}\n");
+    let contents = canonical_fragment_contents(domain, endpoint);
     fs::write(&temporary_path, &contents).map_err(|source| {
         MaterializeCaddyFragmentError::Filesystem {
             action: CaddyFilesystemAction::WriteTemporaryFragment,
@@ -306,6 +306,10 @@ pub fn materialize_caddy_fragment(
         previous_fragment,
         temporary_path,
     })
+}
+
+pub fn canonical_fragment_contents(domain: &str, endpoint: SocketAddr) -> String {
+    format!("{domain} {{\n    reverse_proxy {endpoint}\n}}\n")
 }
 
 /// Restores the fragment that was active before a successful materialization and

@@ -50,6 +50,16 @@ fn deploys_a_branch_and_persists_source_revision() {
         )
         .unwrap();
     assert_eq!(source_revision.as_deref(), Some(staging_commit.as_str()));
+    let unit = fs::read_to_string(environment.root.join("quadlets").join(format!(
+        "pneuma-another-site-{}.container",
+        deployed.deployment_id
+    )))
+    .unwrap();
+    assert!(unit.contains(&format!(
+        "Label=io.pneuma.image-digest=sha256:{}",
+        "a".repeat(64)
+    )));
+    assert!(!unit.contains(&format!("io.pneuma.revision={staging_commit}")));
     assert!(environment.log().contains(&format!(
         "pull --quiet registry.example/team/service:{staging_commit}"
     )));

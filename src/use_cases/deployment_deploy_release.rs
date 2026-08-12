@@ -219,13 +219,12 @@ fn deploy_release_reporting(
     );
     progress.state_changed(&deployment.id, DeploymentStatus::Pending);
 
-    let runtime_identity = deployment.source_revision.as_deref().unwrap_or(&release.id);
     let execution = execute_deployment(
         connection,
         &deployment.id,
         &specification,
         &release.image_reference,
-        runtime_identity,
+        &release.image_digest,
         public_configuration,
         progress,
     );
@@ -309,7 +308,7 @@ fn execute_deployment(
     deployment_id: &str,
     specification: &DeploymentSpecification,
     image_reference: &str,
-    source_revision: &str,
+    artifact_identity: &str,
     public_configuration: Option<&PublicDeploymentConfiguration>,
     progress: &mut ProgressReporter<'_>,
 ) -> Result<(String, String, String), FailedExecution> {
@@ -326,7 +325,7 @@ fn execute_deployment(
         application_name: &specification.application_name,
         image_reference,
         container_port: specification.container_port,
-        source_revision,
+        artifact_identity,
     };
 
     let candidate = start_candidate(input).map_err(|err| match err {
@@ -437,7 +436,6 @@ fn execute_deployment(
             application_id: &specification.application_id,
             health_path: &specification.health_path,
             expected_status: specification.expected_status,
-            source_revision,
             managed_caddy_directory: &public_configuration.managed_caddy_directory,
             caddyfile_path: &public_configuration.caddyfile_path,
         };

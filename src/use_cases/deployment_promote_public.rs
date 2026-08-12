@@ -188,10 +188,10 @@ pub fn promote_public_candidate(
     runtime_id: &str,
     configuration_version: &str,
 ) -> Result<PromotedPublicCandidate, PromotePublicCandidateError> {
-    if !is_trimmed_nonempty(configuration_version) {
+    if configuration_version.is_empty() {
         return Err(PromotePublicCandidateError::InvalidExposure {
             application_id: "unknown".to_owned(),
-            reason: "configuration version must be trimmed and non-empty".to_owned(),
+            reason: "configuration version must be non-empty".to_owned(),
         });
     }
     let transaction = connection

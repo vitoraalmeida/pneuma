@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use pneuma::adapters::caddy_exposure::{
     CaddyCommandError, CaddyFilesystemAction, MaterializeCaddyFragmentError,
-    materialize_caddy_fragment, restore_materialized_caddy_fragment,
+    canonical_fragment_contents, materialize_caddy_fragment, restore_materialized_caddy_fragment,
 };
 
 const CHILD_CASE: &str = "PNEUMA_CADDY_TEST_CASE";
@@ -47,6 +47,22 @@ fn validates_the_complete_configuration_and_reloads_caddy() {
                 environment.caddyfile_path.display()
             ),
         ]
+    );
+}
+
+#[test]
+fn canonical_fragment_contents_changes_with_domain_or_endpoint() {
+    let endpoint: SocketAddr = "127.0.0.1:31000".parse().unwrap();
+
+    let baseline = canonical_fragment_contents("example.com", endpoint);
+
+    assert_ne!(
+        baseline,
+        canonical_fragment_contents("other.example.com", endpoint)
+    );
+    assert_ne!(
+        baseline,
+        canonical_fragment_contents("example.com", "127.0.0.1:32000".parse().unwrap())
     );
 }
 

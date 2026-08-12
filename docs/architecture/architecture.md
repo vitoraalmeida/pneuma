@@ -106,7 +106,8 @@ do usuário `pneuma`.
 
 - cada deployment gera uma unidade Quadlet
   `pneuma-<aplicação>-<deployment-id>.container` e container de mesmo nome,
-  com labels de aplicação e revisão;
+  com labels de aplicação e image digest (`io.pneuma.image-digest`); Quadlets
+  legados com `io.pneuma.revision` continuam operáveis até redeploy;
 - publicação restrita a loopback:
   `127.0.0.1:<porta-reservada>:<container_port>`; a porta fixa é a menor livre
   em `PNEUMA_RUNTIME_PORT_RANGE`, e a candidata nunca é alcançável
@@ -154,6 +155,9 @@ diretório gerenciado, importado pelo `Caddyfile` principal:
 4. health check externo;
 5. falha externa restaura o fragmento anterior e recarrega; se a recuperação
    falhar, a exposição fica `diverged` para inspeção manual.
+
+`exposures.configuration_version` guarda o conteúdo canônico do fragmento
+(`domain` e endpoint loopback), não a Release nem o Deployment.
 
 ## 6. Health check
 

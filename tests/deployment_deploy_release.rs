@@ -68,6 +68,10 @@ fn internal_deploy_succeeds_when_candidate_is_healthy() {
         .join("quadlets")
         .join(format!("pneuma-another-site-{deployment_id}.container"));
     assert!(unit_path.exists(), "unit file must exist");
+    let unit = fs::read_to_string(unit_path).unwrap();
+    let digest = format!("sha256:{}", "a".repeat(64));
+    assert!(unit.contains(&format!("Label=io.pneuma.image-digest={digest}")));
+    assert!(!unit.contains("io.pneuma.revision="));
 }
 
 #[test]
@@ -321,6 +325,18 @@ fn public_deploy_succeeds_with_caddy_and_external_health() {
         )
         .unwrap();
     assert_eq!(exposure_state, "active");
+
+    let configuration_version: String = connection
+        .query_row(
+            "SELECT configuration_version FROM exposures WHERE application_id = ?1",
+            [&app_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        configuration_version,
+        format!("vitoralmeida.tech {{\n    reverse_proxy 127.0.0.1:{port}\n}}\n")
+    );
 
     let caddy_fragments: Vec<_> = fs::read_dir(&environment.managed_caddy_directory)
         .unwrap()

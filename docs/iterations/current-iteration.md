@@ -48,7 +48,10 @@ semântica de reconciliation antes de implementar `pneuma reconcile`.
       Resultado: store retorna o único Release de domínio e o resultado dos
       caminhos de deploy chama-se DeploymentResult, preservando campos e saída
       CLI existentes.
-- [ ] Materializar image digest como identidade de runtime e versão de rota.
+- [x] Materializar image digest como identidade de runtime e versão de rota.
+      Resultado: novas unidades usam `io.pneuma.image-digest`; a versão da rota
+      é o fragmento Caddy canônico (domain + endpoint), e materializações v0.2
+      legadas permanecem operáveis até redeploy.
 - [ ] Extrair persistência de `application_import` para store.
 - [ ] Extrair persistência de `application_runtime` para stores.
 - [ ] Persistir desired visibility antes de materializar Caddy.

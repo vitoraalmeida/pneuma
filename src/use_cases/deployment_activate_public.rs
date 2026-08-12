@@ -5,7 +5,8 @@ use std::path::Path;
 use rusqlite::Connection;
 
 use crate::adapters::caddy_exposure::{
-    MaterializedCaddyFragment, materialize_caddy_fragment, restore_materialized_caddy_fragment,
+    MaterializedCaddyFragment, canonical_fragment_contents, materialize_caddy_fragment,
+    restore_materialized_caddy_fragment,
 };
 use crate::adapters::health_check_external::check_external_health;
 use crate::adapters::health_check_internal::{HealthCheckResult, check_internal_health};
@@ -24,7 +25,6 @@ pub(crate) struct PublicActivationInput<'a> {
     pub application_id: &'a str,
     pub health_path: &'a str,
     pub expected_status: u16,
-    pub source_revision: &'a str,
     pub managed_caddy_directory: &'a Path,
     pub caddyfile_path: &'a Path,
 }
@@ -70,7 +70,6 @@ pub(crate) fn activate_public_candidate(
         application_id,
         health_path,
         expected_status,
-        source_revision,
         managed_caddy_directory,
         caddyfile_path,
     } = input;
@@ -132,6 +131,7 @@ pub(crate) fn activate_public_candidate(
         DeploymentStep::ApplyPublicRoute,
         format!("{} -> {endpoint}", exposure.domain),
     );
+    let configuration_version = canonical_fragment_contents(&exposure.domain, endpoint);
 
     let materialized = materialize_caddy_fragment(
         managed_caddy_directory,
@@ -213,7 +213,7 @@ pub(crate) fn activate_public_candidate(
         format!("runtime {runtime_id}"),
     );
 
-    let promoted = match promote_public_candidate(connection, runtime_id, source_revision) {
+    let promoted = match promote_public_candidate(connection, runtime_id, &configuration_version) {
         Ok(promoted) => promoted,
         Err(source) => {
             let (source, outcome) = rollback_public_route(source, &materialized, caddyfile_path);
