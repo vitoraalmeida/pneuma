@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.2.1 — Operational Hardening (2026-08-13)
+
+### Added
+
+- Reproducible bootstrap and full E2E regression on disposable Debian 13 VMs.
+- Pinned ShellCheck and shfmt checks for every tracked shell script in CI.
+
+### Fixed
+
+- Bootstrap reruns, Caddy configuration replacement, rootless Podman account
+  invariants, and CI deploy-key provisioning.
+- Candidate failure preservation, rollback, reboot recovery, local HTTPS,
+  restricted CI SSH boundaries, and SQLite restore coverage in E2E.
+
+### Changed
+
+- Documentation now distinguishes production smoke tests from disposable VM
+  bootstrap and E2E regression.
+
 ## v0.2.0 — Git-aware OCI Delivery (2026-08-11)
 
 Pneuma moves from "operates an OCI image I provide" to "finds the artifact for
