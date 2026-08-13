@@ -36,7 +36,7 @@ Caddy reverse proxy (if public)
 - **Atomic deployments**: candidate containers are validated before promotion; failed deployments preserve the previous version
 - **Caddy integration**: automatic reverse proxy configuration for public apps
 - **Lifecycle management**: start, stop, and status commands with idempotent operations
-- **Deployment history**: track all deployment attempts with release, status, and timestamps
+- **Deployment history**: track all deployment attempts with type (`Deploy` or `Rollback`), release, status, and timestamps
 - **SQLite persistence**: all state in a single database file with versioned migrations and backup/restore commands
 
 ## Requirements

@@ -86,7 +86,9 @@ vez em `scripts/lib/provision-host.sh` e usadas também por
 2. verifica o gerador Quadlet (`podman-user-generator` >= 4.4);
 3. cria o usuário `pneuma` com `subuid/subgid` e linger;
 4. cria os diretórios persistentes do Pneuma com as permissões da VPS;
-5. configura o Caddyfile para importar apenas `/etc/caddy/applications/*.caddy`;
+5. configura o Caddyfile da VM com `local_certs`, importando apenas
+   `/etc/caddy/applications/*.caddy`, mapeia os domínios fixture em `/etc/hosts`
+   e instala a CA local do Caddy no trust store;
 6. grava o ambiente canônico em `/etc/pneuma/environment` e as variáveis
    `PNEUMA_*`/rootless no `~/.profile` do `pneuma`;
 7. valida `caddy validate` e inicia o serviço;
@@ -259,8 +261,9 @@ instalam `sudo`. Os comandos de runtime continuam sob o usuário `pneuma`.
 | `deploy-all-fixtures.sh` | Cria repos Git locais, importa cada fixture por `file://` e deploya por digest | Após reset ou mudança de fixtures |
 | `reset-fixtures.sh` | Para apps, remove units/containers/Caddy fragments/checkouts, recria o DB | Voltar a um estado limpo |
 | `overview.sh` | Status de apps, containers, units, Caddy e registry de uma vez | Debug rápido |
-| `e2e.sh` | Reset → rebuild → deploy → verifica health → upgrade → rollback → reboot → verifica | Bateria completa de regressão |
+| `e2e.sh` | Reset → rebuild → HTTPS público/internal → candidate falho → upgrade → rollback → reboot/recovery | Bateria de runtime e exposição |
 | `test-branch-deploy.sh` | Cria repo Git com `main`/`staging`, taggeia imagens com o SHA de cada commit, importa por URL Git e deploya por `--branch` | Validar o fluxo Git → OCI (fase G) |
+| `test-all.sh` | Orquestra E2E, Git/OCI, dispatcher CI, HTTPS, reboot e restore semântico; exige 0 FAIL/0 SKIP | Regressão descartável final |
 
 Fluxo típico de desenvolvimento:
 

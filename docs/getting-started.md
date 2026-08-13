@@ -283,5 +283,14 @@ ssh -i ~/.ssh/pneuma-ci pneuma@<host> "version"   # responde com a versão
 # Na VPS: pneuma status e pneuma list devem refletir o novo release Running
 ```
 
+### 6.1. Smoke de produção
+
+Na VPS, execute somente smoke não destrutivo: `pneuma doctor`, `pneuma app
+list`, `pneuma app status <app>` e uma requisição HTTPS ao domínio público.
+Não execute `reset-fixtures.sh`, `e2e.sh`, `test-all.sh`, restore de banco ou
+testes de bootstrap na VPS. Bootstrap limpo/rerun e regressão E2E pertencem a
+clones Debian 13 descartáveis, como descrito no
+[`tutorial da VM`](operations/dev-vm-tutorial.md).
+
 O ciclo fecha: push no Git → CI constrói/publica → `deploy <app> <branch>` →
 Pneuma resolve, valida e promove; Caddy expõe a aplicação pública automaticamente.
