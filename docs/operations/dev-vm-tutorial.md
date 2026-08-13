@@ -368,12 +368,7 @@ state between runs.
 - Use a dedicated SSH key for the VM.
 - Do not copy production secrets to the VM.
 - Use a public registry for fixtures or dedicated read-only credentials.
-- Keep VM SSH on the libvirt NAT network; do not assign the VM a public IP or
-  configure router port forwarding. This is defense in depth: public SSH is
-  routinely discovered by automated scans, and a stolen provisioning key would
-  otherwise give its holder remote root access. NAT means the development host
-  can still connect to the VM, while an Internet attacker also needs access to
-  the private host network.
+- Do not expose VM SSH to the Internet (NAT/libvirt network).
 - Run Pneuma as the non-root `pneuma` user.
 - Restrict root to provisioning and binary installation.
 - Disable password login for the `pneuma` user (`passwd -l`).
