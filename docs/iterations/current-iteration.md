@@ -1,6 +1,6 @@
 # Current Iteration
 
-**Status:** in progress
+**Status:** completed
 
 **Base:** `ce8b18f` (`docs: complete architecture audit`)
 
@@ -52,3 +52,9 @@ documentation-only iteration.
 ## Blockers
 
 None.
+
+## Result
+
+Completed in `49b9476` (`docs: refactor documentation architecture`). The next
+active iteration is v0.4 reconciliation, using the queued tracker and approved
+design already recorded in this repository.
