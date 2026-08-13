@@ -129,7 +129,7 @@ non-destructive smoke testing of DNS, TLS, and reachability.
 As `pneuma` (direct login with the provisioning key or `sudo -iu pneuma`):
 
 ```bash
-pneuma doctor        # todos os checks de host aprovados
+pneuma doctor        # all host checks pass
 pneuma app list      # empty (no applications yet)
 ```
 
@@ -137,7 +137,7 @@ From your machine, confirm the CI identity by authenticating with the **private*
 key: it should respond to `version`:
 
 ```bash
-ssh -i ~/.ssh/pneuma-ci pneuma@<ip-do-host> "version"
+ssh -i ~/.ssh/pneuma-ci pneuma@<host-ip> "version"
 ```
 
 If it responded, the host is ready to be managed by GitHub Actions.
