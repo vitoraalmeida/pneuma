@@ -258,7 +258,7 @@ branch tags, the deployment step is:
 ```
 
 - The SSH command is the dispatcher itself: `deploy <application> <branch>` (the
-  `pneuma ci dispatch` binary is invoked through a forced command; **do not**
+  `pneuma ci dispatch` subcommand is invoked through a forced command; **do not**
   write `pneuma app deploy ... --branch ...`, as it will be rejected).
 - `my-app` must already be imported on the host (section 4.1) **before** the
   first CI deployment.
