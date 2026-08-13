@@ -1,15 +1,15 @@
-# Roadmap consolidado do Pneuma — v0.1 a v0.7
+# Consolidated Pneuma Roadmap — v0.1 to v0.7
 
-**Status:** documento vivo — contrato de evolução do projeto
-**Aplicação-piloto:** `vitoralmeida.tech`
+**Status:** living document — project evolution contract
+**Pilot application:** `vitoralmeida.tech`
 
-## Fluxo unificado (v0.1 → v0.2)
+## Unified Flow (v0.1 → v0.2)
 
 ```text
 Git branch
     ↓ (v0.2: app deploy --branch)
 git ls-remote → CommitSha
-    ↓ (v0.2: convenção image:<commit>)
+    ↓ (v0.2: `image:<commit>` convention)
 OCI Registry (ghcr.io)
     │   image@sha256:...
     ▼
@@ -19,174 +19,174 @@ Create Release
 DeployRelease
 ```
 
-O CI produz o artifact (como `image:<commit-sha>`), o Pneuma descobre o artifact
-do commit e o opera. A v0.1 ainda aceita a Release vinda de build local
-(`deploy-source`); a v0.2 remove esse caminho e torna `Git → CI → OCI → Release
-→ deployment` o único fluxo.
+CI produces the artifact (such as `image:<commit-sha>`), and Pneuma discovers
+and operates the commit artifact. v0.1 still accepts a Release from a local
+build (`deploy-source`); v0.2 removes that path and makes `Git → CI → OCI → Release
+→ deployment` the only flow.
 
-## Princípios
+## Principles
 
-1. **Core não conhece interfaces** — CLI, TUI e API chamam os mesmos casos de uso.
-2. **Idempotência** — repetir operação não duplica recurso.
-3. **Estado desejado ≠ observado** — desejado no SQLite, observado no Podman.
-4. **Aplicação sobrevive ao Pneuma** — runtime supervisionado pelo host.
-5. **Release imutável** — identificada por digest OCI; deployment é tentativa.
-6. **Exposição independente** — visibility e runtime são ortogonais.
-7. **Pneuma é operável** — instalável, atualizável, diagnosticável, recuperável.
+1. **Core does not know interfaces** — CLI, TUI, and API call the same use cases.
+2. **Idempotence** — repeating an operation does not duplicate a resource.
+3. **Desired state ≠ observed state** — desired in SQLite, observed in Podman.
+4. **Application survives Pneuma** — runtime supervised by the host.
+5. **Immutable Release** — identified by OCI digest; deployment is an attempt.
+6. **Independent exposure** — visibility and runtime are orthogonal.
+7. **Pneuma is operable** — installable, updatable, diagnosable, recoverable.
 
 ---
 
-## v0.1 — Fundação OCI
+## v0.1 — OCI Foundation
 
-Pneuma registra aplicações e implanta releases OCI imutáveis com segurança
-operacional básica, preservando a versão saudável quando um novo deploy falha.
+Pneuma registers applications and deploys immutable OCI releases with basic
+operational safety, preserving the healthy version when a new deployment fails.
 
-### Entidades-alvo
+### Target Entities
 
 ```text
-System (novo)
+System (new)
 └── Application
       ├── desired_runtime_state
       ├── desired_visibility
       ├── active_deployment_id
       ├── delivery_spec (type, image_repository)
       │
-      └── Release (novo)
+      └── Release (new)
             └── Deployment
                   └── RuntimeInstance
 ```
 
-### Já implementado
+### Already Implemented
 
-| Capacidade | Status | Notas |
+| Capability | Status | Notes |
 |---|---|---|
-| Application entity + catálogo | ✅ | |
+| Application entity + catalog | ✅ | |
 | SQLite + migrations (13) | ✅ | |
 | Deployment persistence + state machine | ✅ | |
 | RuntimeInstance persistence | ✅ | |
-| Podman rootless (create, start, stop, inspect) | ✅ | Build local removido na v0.2 |
+| Podman rootless (create, start, stop, inspect) | ✅ | Local build removed in v0.2 |
 | Start / stop / status | ✅ | |
 | Internal health check | ✅ | |
 | External health check | ✅ | |
-| Safe traffic switch (falha preserva runtime saudável) | ✅ | |
+| Safe traffic switch (failure preserves healthy runtime) | ✅ | |
 | Caddy integration + public routing | ✅ | |
 | Exposure materialization state | ✅ | |
 | Deployment history | ✅ | |
 | CLI (import, list, status, deploy, start, stop, visibility set, deployments, version) | ✅ | |
-| Rollback (novo deployment da Release anterior, não depende do container antigo) | ✅ | |
-| Visibility set (public/internal) independente do lifecycle | ✅ | |
+| Rollback (new deployment of the prior Release, does not depend on the old container) | ✅ | |
+| Visibility set (public/internal) independent from lifecycle | ✅ | |
 | Doctor (13 checks: DB, migrations, workspace, Caddy dirs, Caddyfile/config, git, podman, rootless, Quadlet generator, OCI images, disk, caddy) | ✅ | |
 | Version | ✅ | |
 | Staging validation (`staging.vitoralmeida.tech`) | ✅ | |
-| System (entidade, migration, CLI create/list/show) | ✅ | |
-| Release imutável + engine DeployRelease | ✅ | DeploySource removido na v0.2 |
+| System (entity, migration, CLI create/list/show) | ✅ | |
+| Immutable Release + DeployRelease engine | ✅ | DeploySource removed in v0.2 |
 | OCI adapter (pull + digest) + `app deploy --image` | ✅ | |
-| Manifest v2 com `[delivery]` + enforcement de repositório | ✅ | Substituído por schema v3 na v0.2 |
+| Manifest v2 with `[delivery]` + repository enforcement | ✅ | Replaced by schema v3 in v0.2 |
 
-**Capacidades removidas na v0.2:**
-- ~~`app deploy-source`~~ (build local removido)
-- ~~`deployment_deploy_source.rs`~~ (engine de build local removido)
-- ~~`local_build`~~ (módulo de build local removido)
-- ~~`[source]` e `[build]` no manifesto~~ (removidos no schema v3)
-- ~~Import por path local~~ (apenas Git remoto na v0.2)
+**Capabilities removed in v0.2:**
+- ~~`app deploy-source`~~ (local build removed)
+- ~~`deployment_deploy_source.rs`~~ (local-build engine removed)
+- ~~`local_build`~~ (local-build module removed)
+- ~~`[source]` and `[build]` in the manifest~~ (removed in schema v3)
+- ~~Import by local path~~ (remote Git only in v0.2)
 
-### Pendente — 7 entregas
+### Pending — 7 Deliveries
 
 #### 1. System
 
-- [x] Entidade `System` (id, name, description?, created_at)
+- [x] `System` entity (id, name, description?, created_at)
 - [x] `Application.system_id`
 - [x] Migration `0005_systems`
 - [x] CLI: `pneuma system create`, `system list`, `system show`
 
-#### 2. Release + refatoração do engine de deploy
+#### 2. Release + Deployment Engine Refactoring
 
-Introduzir Release, substituir candidate/current/previous e dividir
-`deployment_deploy_internal.rs` (~1500 linhas) em dois caminhos com
-responsabilidades claras.
+Introduce Release, replace candidate/current/previous, and split
+`deployment_deploy_internal.rs` (~1500 lines) into two paths with clear
+responsibilities.
 
-**Domínio:**
+**Domain:**
 
-- [x] Entidade `Release` (id, application_id, image_repository, image_digest, source_revision?, created_at)
+- [x] `Release` entity (id, application_id, image_repository, image_digest, source_revision?, created_at)
 - [x] Migration `0006_releases`
-- [x] Migration `0007_deployment_release` (deployment referencia release, não mais revision)
-- [x] Remover `RuntimeRole` (candidate/current/previous); RuntimeInstance ganha estados próprios: `starting | running | stopped | failed | removed`
-- [x] `Application.active_deployment_id` substitui roles; deployment ativo → release ativa → runtime ativo
-- [x] Deployment states: `pending | starting | verifying | activating | succeeded | failed` (remover `preparing_source`, `building`, `switching_traffic`, `verifying_external`)
-- [x] Rollback cria novo deployment (type=rollback) a partir da Release anterior; não depende de container anterior existir
+- [x] Migration `0007_deployment_release` (deployment references release, no longer revision)
+- [x] Remove `RuntimeRole` (candidate/current/previous); RuntimeInstance gains its own states: `starting | running | stopped | failed | removed`
+- [x] `Application.active_deployment_id` replaces roles; active deployment → active release → active runtime
+- [x] Deployment states: `pending | starting | verifying | activating | succeeded | failed` (remove `preparing_source`, `building`, `switching_traffic`, `verifying_external`)
+- [x] Rollback creates a new deployment (type=rollback) from the prior Release; it does not depend on a prior container existing
 
 **Engine split:**
 
 - [x] `DeployRelease` (`deployment_deploy_release.rs`): ensure image → create deployment → create runtime → start → verify → activate
-- [x] Remover `reconcile_existing_runtime()` do deploy; mesma Release ativa → no-op, app parada → `app start`, release anterior → rollback
-- [x] `DeploymentSpecification` simplificado: sem containerfile/context; apenas application_id, image, container_port, health_path, expected_status, visibility
+- [x] Remove `reconcile_existing_runtime()` from deployment; same active Release → no-op, stopped app → `app start`, prior release → rollback
+- [x] Simplify `DeploymentSpecification`: no containerfile/context; only application_id, image, container_port, health_path, expected_status, visibility
 
-**Nova estrutura de use_cases:**
+**New use_cases structure:**
 
 ```text
 use_cases/
-├── release_create.rs          ← cria Release (OCI)
-├── deployment_deploy_oci.rs   ← DeployOci: pull/verifica → Release → DeployRelease
+├── release_create.rs          ← creates Release (OCI)
+├── deployment_deploy_oci.rs   ← DeployOci: pull/verify → Release → DeployRelease
 ├── deployment_deploy_branch.rs← DeployByBranch: branch → commit → image tag → DeployOci
-├── deployment_deploy_release.rs ← DeployRelease: orquestrador linear
-├── deployment_start_candidate.rs ← criação do runtime candidato
-├── deployment_activate_public.rs ← ativação pública (health + Caddy)
-├── deployment_runtime_cleanup.rs ← cleanup de candidates e runtimes antigos
-├── deployment_progress.rs        ← reporting de progresso
-├── deployment_transition.rs   ← máquina de estados persistida
-├── deployment_rollback.rs     ← rollback como novo deployment
-├── application_runtime.rs     ← lifecycle start/stop/status
-├── exposure_change.rs         ← public ↔ internal sem redeploy
+├── deployment_deploy_release.rs ← DeployRelease: linear orchestrator
+├── deployment_start_candidate.rs ← candidate runtime creation
+├── deployment_activate_public.rs ← public activation (health + Caddy)
+├── deployment_runtime_cleanup.rs ← cleanup of candidates and old runtimes
+├── deployment_progress.rs        ← progress reporting
+├── deployment_transition.rs   ← persisted state machine
+├── deployment_rollback.rs     ← rollback as a new deployment
+├── application_runtime.rs     ← start/stop/status lifecycle
+├── exposure_change.rs         ← public ↔ internal without redeployment
 └── ...
 ```
 
-**Nota:** `deployment_deploy_source.rs` foi removido na v0.2 junto com o build local.
+**Note:** `deployment_deploy_source.rs` was removed in v0.2 along with local build.
 
 #### 3. OCI adapter
 
-- [x] Adapter OCI: `podman pull`, `podman image inspect`, validar digest corresponde ao solicitado
-- [x] `DeployRelease` passa a aceitar imagem de registry (além de imagem local do build)
-- [x] CLI: `pneuma app deploy <app> --image <repo@sha256:...>` como caminho oficial
-- [x] Rejeitar tags mutáveis (exigir digest)
+- [x] OCI adapter: `podman pull`, `podman image inspect`, validate that the digest matches the requested one
+- [x] `DeployRelease` accepts a registry image (in addition to a local build image)
+- [x] CLI: `pneuma app deploy <app> --image <repo@sha256:...>` as the official path
+- [x] Reject mutable tags (require digest)
 
-#### 4. deploy-source (CLI) — REMOVIDO NA v0.2
+#### 4. deploy-source (CLI) — REMOVED IN v0.2
 
-- [x] CLI: `pneuma app deploy-source <app> <repo> --revision <rev>` (caminho alternativo)
-- [x] Engine único: `DeploySource` já criado na entrega 2; aqui apenas expor na CLI
+- [x] CLI: `pneuma app deploy-source <app> <repo> --revision <rev>` (alternative path)
+- [x] Single engine: `DeploySource` was already created in delivery 2; expose it only in the CLI here
 
-**Nota:** Este caminho foi removido na v0.2. O único artifact deployável agora é `image@digest` descoberto pelo CI.
+**Note:** This path was removed in v0.2. The only deployable artifact is now `image@digest` discovered by CI.
 
-#### 5. Manifesto com `[delivery]` — EVOLUÍDO PARA SCHEMA v3 NA v0.2
+#### 5. Manifest with `[delivery]` — EVOLVED TO SCHEMA v3 IN v0.2
 
-- [x] Seção `[delivery]` no manifesto: `type = "oci"`, `image = "ghcr.io/..."`
-- [x] `[source]` e `[build]` tornam-se opcionais (apenas para deploy-source)
+- [x] `[delivery]` section in the manifest: `type = "oci"`, `image = "ghcr.io/..."`
+- [x] `[source]` and `[build]` become optional (only for deploy-source)
 - [x] `schema_version = 2`
-- [x] Persistir `application_delivery_specs` na importação
-- [x] `app deploy --image` rejeita repositório diferente do permitido; `deploy-source` exige `[source]`/`[build]`
+- [x] Persist `application_delivery_specs` during import
+- [x] `app deploy --image` rejects a repository different from the permitted one; `deploy-source` requires `[source]`/`[build]`
 
-**Nota:** Na v0.2, o schema evoluiu para v3, removendo `[source]` e `[build]`. O repository vem do import, a branch vem do deploy.
+**Note:** In v0.2, the schema evolved to v3, removing `[source]` and `[build]`. The repository comes from import and the branch comes from deployment.
 
-#### 6. Histórico + visibility
+#### 6. History + Visibility
 
-- [x] Histórico baseado em Release/digest (não mais commit_sha)
-- [x] Saída: `DEPLOYMENT | RELEASE | SOURCE | STATUS`
-- [x] Renomear CLI: `app expose` → `app visibility set <app> public|internal`
-- [x] Mensagens de saída alinhadas com o termo "visibility"
+- [x] History based on Release/digest (no longer commit_sha)
+- [x] Output: `DEPLOYMENT | RELEASE | SOURCE | STATUS`
+- [x] Rename CLI: `app expose` → `app visibility set <app> public|internal`
+- [x] Output messages aligned with the term "visibility"
 
-#### 7. Operabilidade final
+#### 7. Final Operability
 
-- [x] Sobrevivência a reboot do host (Quadlet por deployment, habilitado após promoção)
-- [x] Doctor estendido: rootless funcional, `caddy validate`, pull OCI ativo e espaço em disco
+- [x] Survives host reboot (Quadlet per deployment, enabled after promotion)
+- [x] Extended doctor: working rootless mode, `caddy validate`, active OCI pull, and disk space
 - [x] `pneuma database backup <path>`
 - [x] `pneuma database restore <path>`
-- [x] Docs atualizadas (roadmap, arquitetura, scope, README) refletindo OCI-first
-- [x] E2E final: CI → GHCR → pull → deploy → health → active → rollback → reboot
+- [x] Updated docs (roadmap, architecture, scope, README) reflecting OCI-first
+- [x] Final E2E: CI → GHCR → pull → deploy → health → active → rollback → reboot
 
-**v0.1.0 concluída em 8 de agosto de 2026** — todos os critérios de aceite
-foram validados na VPS de produção (`srv655252`, Debian 13). A v0.2
-(Git-aware OCI Delivery) foi concluída em seguida — ver próxima seção.
+**v0.1.0 completed on August 8, 2026** — all acceptance criteria were validated
+on the production VPS (`srv655252`, Debian 13). v0.2 (Git-aware OCI Delivery)
+was completed next; see the following section.
 
-### Modelo de dados alvo (v0.1)
+### Target Data Model (v0.1)
 
 ```text
 System
@@ -214,162 +214,161 @@ RuntimeInstance
 
 ## v0.2 — Git-aware OCI Delivery
 
-**Status:** concluída em 10 de agosto de 2026
+**Status:** completed on August 10, 2026
 
-O Pneuma passa de "opera uma imagem OCI que recebo" para "encontra o artifact do
-commit de uma branch e o implanta". Pneuma deixa de construir aplicações: **CI
-produz artifacts, Pneuma descobre e opera artifacts.**
+Pneuma moves from "operates an OCI image it receives" to "finds the artifact for
+a branch commit and deploys it." Pneuma no longer builds applications: **CI
+produces artifacts, Pneuma discovers and operates artifacts.**
 
 ```text
 Git branch → commit → OCI digest → Release → deployment
 ```
 
-Princípios e mudanças estruturais:
+Principles and structural changes:
 
-- **Remover build local:** `app deploy-source`, `deployment_deploy_source`,
-  `local_build`, `[build]`, `application_build_specs` e checkout permanente de
-  build. O único artifact deployável é `image@digest`.
-- **Import apenas por Git remoto:** `pneuma app import <git-url>
-  [--manifest <path>]` substitui o import por path local. Checkout somente
-  temporário (clone → ler `pneuma.toml` → persistir → remover). `import` não
-  faz deployment; `active_deployment_id = null`, runtime desejado = stopped.
-- **Manifest schema v3:** sem `[source]`/`[build]`. Repository vem do import,
-  branch vem do deploy, OCI/runtime/exposure vêm do manifesto. Convenção
-  `deploy/<environment>/pneuma.toml` (dev/staging/production); environments
-  ainda não são entidade do domínio.
-- **Persistência:** regra arquitetural — use cases decidem o que deve acontecer,
-  stores SQLite decidem como persistir atomicamente. `SqliteApplicationStore`,
+- **Remove local build:** `app deploy-source`, `deployment_deploy_source`,
+  `local_build`, `[build]`, `application_build_specs`, and permanent build
+  checkout. The only deployable artifact is `image@digest`.
+- **Remote Git import only:** `pneuma app import <git-url>
+  [--manifest <path>]` replaces local-path import. Checkout is temporary only
+  (clone → read `pneuma.toml` → persist → remove). `import` does not create a
+  deployment; `active_deployment_id = null`, desired runtime = stopped.
+- **Manifest schema v3:** no `[source]`/`[build]`. Repository comes from import,
+  branch comes from deployment, and OCI/runtime/exposure come from the manifest.
+  Convention: `deploy/<environment>/pneuma.toml` (dev/staging/production);
+  environments are not yet domain entities.
+- **Persistence:** architectural rule — use cases decide what must happen, and
+  SQLite stores decide how to persist atomically. `SqliteApplicationStore`,
   `SqliteDeploymentStore`, `SqliteRuntimeStore`, `SqliteReleaseStore`
-  (orientados a capacidades, não repository por tabela). Reads simples (`app
-  list`, `system list`, histórico) continuam queries diretas. Nunca abrir
-  transação durante Git/registry/Podman/Caddy (I/O externo fora da transação;
-  persistir em transação curta no fim).
-- **Deploy por branch:** `pneuma app deploy <app> --branch <branch>`
-  (mutuamente exclusivo com `--image`). Novo use case `DeployByBranch`
+  (capability-oriented, not a repository per table). Simple reads (`app list`,
+  `system list`, history) remain direct queries. Never open a transaction during
+  Git/registry/Podman/Caddy (external I/O outside the transaction; persist in a
+  short transaction at the end).
+- **Deploy by branch:** `pneuma app deploy <app> --branch <branch>`
+  (mutually exclusive with `--image`). New `DeployByBranch` use case
   (`deployment_deploy_branch.rs`): branch → `git ls-remote` → `CommitSha`
-  (congelado para o deployment) → convenção `image:<commit-sha>` → resolver
-  tag → digest → `DeployOci`. Se o CI ainda não publicou o artifact →
-  `ArtifactNotFound`, sem fallback para `:latest`/anterior/build local.
-- **Release correlaciona source e artifact:** `source_revision`, `image_repository`,
+  (fixed for the deployment) → `image:<commit-sha>` convention → resolve tag →
+  digest → `DeployOci`. If CI has not yet published the artifact →
+  `ArtifactNotFound`, with no fallback to `:latest`/prior/local build.
+- **Release correlates source and artifact:** `source_revision`, `image_repository`,
   `image_digest`, `image_reference`.
-- **Fases de implementação (todas concluídas):**
+- **Implementation phases (all completed):**
 
-  - A — simplificar: remover `deploy-source`, `deployment_deploy_source`,
-    `local_build`, `[build]`, `application_build_specs`, import por path local,
-    source local e checkout permanente.
-  - B — separar persistência: criar os quatro SQLite stores e migrar
-    create/transition/fail/promotion, runtime persistence, release/rollback.
-  - C — novo schema: manifest v3, `deploy/<environment>/pneuma.toml`, novas
-    migrations (nunca alterar as históricas).
-  - D — import Git remoto: `app import <git-url>`, `--manifest`, checkout
-    temporário, persistir `repository_url`/`manifest_path`, idempotência.
-  - E — Git resolution: adapter de Git remoto, `resolve_branch()`, `CommitSha`,
-    erros de auth/repositório/branch.
-  - F — OCI discovery: convenção `image:<commit>`, resolver tag do commit →
-    digest, nunca devolver tag mutável ao engine.
-  - G — deploy por branch: `DeployByBranch`, `--branch`, exclusão mútua com
-    `--image`, persistir `source_revision`.
-  - H — aplicação real: mover manifestos do website, importar staging, testar
-    `--branch staging`, automatizar staging no Actions, importar production,
-    testar `--branch main` e rollback.
+  - A — simplify: remove `deploy-source`, `deployment_deploy_source`,
+    `local_build`, `[build]`, `application_build_specs`, local-path import,
+    local source, and permanent checkout.
+  - B — separate persistence: create the four SQLite stores and migrate
+    create/transition/fail/promotion, runtime persistence, and release/rollback.
+  - C — new schema: manifest v3, `deploy/<environment>/pneuma.toml`, new
+    migrations (never alter historical ones).
+  - D — remote Git import: `app import <git-url>`, `--manifest`, temporary
+    checkout, persist `repository_url`/`manifest_path`, idempotence.
+  - E — Git resolution: remote Git adapter, `resolve_branch()`, `CommitSha`,
+    authentication/repository/branch errors.
+  - F — OCI discovery: `image:<commit>` convention, resolve the commit tag →
+    digest, never return a mutable tag to the engine.
+  - G — deploy by branch: `DeployByBranch`, `--branch`, mutual exclusion with
+    `--image`, persist `source_revision`.
+  - H — real application: move website manifests, import staging, test
+    `--branch staging`, automate staging in Actions, import production, test
+    `--branch main`, and rollback.
 
 **Definition of Done:** `pneuma app import <git-url> --manifest
-deploy/staging/pneuma.toml` seguido de `pneuma app deploy
-vitoralmeida-tech-staging --branch staging` encontra e implanta o artifact
-correto — sem clone manual na VPS, import por path, build local, `podman build`
-pelo Pneuma, descoberta manual de digest ou edição manual de Caddy.
+deploy/staging/pneuma.toml` followed by `pneuma app deploy
+vitoralmeida-tech-staging --branch staging` finds and deploys the correct
+artifact — without manual cloning on the VPS, path import, local build, `podman
+build` by Pneuma, manual digest discovery, or manual Caddy editing.
 
 ---
 
 ## v0.3 — Reconciliation & Deployment Reliability
 
-Com Git/source/artifact bem definidos, o Pneuma evolui de command-driven para
-declarativo (estado desejado vs observado). O `pneuma reconcile` observa o
-estado materializado (Podman/systemd, Caddy) e converge para o estado desejado
-persistido no SQLite, sem alterar a intenção e sem criar Release/Deployment.
+With Git/source/artifact well defined, Pneuma evolves from command-driven to
+declarative (desired vs. observed state). `pneuma reconcile` observes the
+materialized state (Podman/systemd, Caddy) and converges it toward the desired
+state persisted in SQLite, without changing intent or creating a Release/Deployment.
 
 - [ ] Desired vs observed state
-- [ ] Drift detection e automatic recovery
+- [ ] Drift detection and automatic recovery
 - [ ] Deployment recovery
-- [ ] Melhor convergência de restart/reboot
-- [ ] Melhorias de candidate/activation
-- [ ] Exclusão mútua de deployment (um por aplicação por vez)
-- [ ] CLI não interativa (`--non-interactive`, output estruturado, exit codes)
+- [ ] Better restart/reboot convergence
+- [ ] Candidate/activation improvements
+- [ ] Deployment mutual exclusion (one per Application at a time)
+- [ ] Non-interactive CLI (`--non-interactive`, structured output, exit codes)
 
-Já entregues fora da v0.3 (não são trabalho futuro):
+Already delivered outside v0.3 (not future work):
 
-- GitHub Actions de validação (format, lint, test, build) e build/push GHCR
-  publicado como `image:<commit-sha>` — pipeline de CI ativo.
-- Deploy SSH via dispatcher restrito: GitHub Actions → chave exclusiva →
-  usuário `pneuma` (sem senha, sem sudo), `authorized_keys` com forced command
-  (`pneuma ci dispatch`) limitado a `deploy <app> <branch>` e `version`.
+- GitHub Actions validation (format, lint, test, build) and GHCR build/push
+  published as `image:<commit-sha>` — active CI pipeline.
+- SSH deployment through a restricted dispatcher: GitHub Actions → dedicated key
+  → `pneuma` user (no password, no sudo), `authorized_keys` with a forced command
+  (`pneuma ci dispatch`) limited to `deploy <app> <branch>` and `version`.
 
-Fora de escopo sem necessidade demonstrada: registry watcher (deploy quando o
-artifact da branch fica disponível) e automatic deploy policies. Sem auditoria
-completa, `--idempotency-key` genérica, retenção de imagens ou rollback
-automático posterior à promoção nesta etapa — a falha do candidate antes da
-promoção já preserva a versão ativa; decisão de reverter automaticamente uma
-versão já promovida fica para uma política explícita futura.
+Out of scope until a demonstrated need: registry watcher (deploy when the branch
+artifact becomes available) and automatic deployment policies. No complete audit,
+generic `--idempotency-key`, image retention, or automatic rollback after
+promotion at this stage — candidate failure before promotion already preserves
+the active version; a decision to automatically revert an already promoted
+version is deferred to an explicit future policy.
 
 ---
 
 ## v0.4 — Application Topology & Internal Networking
 
-Adicionar relacionamento entre Applications: o Pneuma passa a entender como as
-aplicações se relacionam, não apenas como cada uma roda isoladamente.
+Add relationships between Applications: Pneuma understands how applications
+relate to each other, not just how each runs in isolation.
 
 - [ ] Service relationships (`Application A depends on Application B`)
 - [ ] Internal services
 - [ ] Application dependencies
 - [ ] Network/service addressing
-- [ ] System como agrupador real
-- [ ] Service discovery básico
+- [ ] System as a real grouping mechanism
+- [ ] Basic service discovery
 
 ---
 
 ## v0.5 — Network Policy Enforcement
 
-As relações declaradas na v0.4 alimentam políticas de conectividade aplicadas
-no host.
+Relationships declared in v0.4 feed connectivity policies applied on the host.
 
 ### Network enforcement
 
-- [ ] `pneuma-netd` (nftables, default deny, conectividade explícita)
+- [ ] `pneuma-netd` (nftables, default deny, explicit connectivity)
 
 ---
 
 ## v0.6 — Workload Identity & Secure S2S
 
-Identidade por workload; a comunicação entre aplicações passa a ser
-autenticada e autorizada.
+Identity per workload; communication between applications becomes authenticated
+and authorized.
 
-- [ ] SPIFFE + SPIRE (cada `RuntimeInstance` recebe identidade própria)
-- [ ] `pneuma-proxy` por `RuntimeInstance` (mTLS, authn, authz, telemetria)
+- [ ] SPIFFE + SPIRE (each `RuntimeInstance` receives its own identity)
+- [ ] `pneuma-proxy` per `RuntimeInstance` (mTLS, authn, authz, telemetry)
 
 ---
 
 ## v0.7 — Artifact Security & Secrets
 
-Segurança do ciclo de artefato e segredos de aplicação.
+Artifact lifecycle security and application secrets.
 
 ### Artifact security
 
-- [ ] SBOM generation e enforcement
-- [ ] Verificação de assinatura de imagem (cosign/Notation)
-- [ ] Admission policies (rejeitar imagem não assinada)
-- [ ] Gestão de secrets (injeção, rotação)
-- [ ] Threat model implementado
+- [ ] SBOM generation and enforcement
+- [ ] Image signature verification (cosign/Notation)
+- [ ] Admission policies (reject unsigned images)
+- [ ] Secret management (injection, rotation)
+- [ ] Implemented threat model
 
 ---
 
-## Fora do escopo (congelado além da v0.7)
+## Out of Scope (frozen beyond v0.7)
 
-TUI, API HTTP, webhooks, observabilidade centralizada, múltiplos hosts,
-scheduler, agentes remotos, reconciliação distribuída, comunicação declarativa
-entre apps, dependencies, service discovery além do básico da v0.4, managed
-builds como feature oficial, canary, rollout gradual, autoscaling, Kubernetes,
-RBAC, multiusuário.
+TUI, HTTP API, webhooks, centralized observability, multiple hosts, scheduler,
+remote agents, distributed reconciliation, declarative communication between
+apps, dependencies, service discovery beyond the v0.4 basics, managed builds as
+an official feature, canary, gradual rollout, autoscaling, Kubernetes, RBAC,
+multi-user support.
 
-Os itens de rede, identidade, S2S e segurança de artifact saem do congelamento
-nas versões que os introduzem (v0.5 a v0.7); todo o restante é descongelado
-explicitamente em uma versão futura.
+Network, identity, S2S, and artifact-security items leave the freeze in the
+versions that introduce them (v0.5 through v0.7); everything else is explicitly
+unfrozen in a future version.

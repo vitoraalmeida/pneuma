@@ -1,16 +1,16 @@
-# Arquitetura do Pneuma
+# Pneuma Architecture
 
-**Status:** documento vivo — descreve o sistema como implementado.
+**Status:** living document - describes the system as implemented.
 
-## 1. Estrutura
+## 1. Structure
 
-Crate único organizado em três camadas:
+Single crate organized into three layers:
 
-- `src/main.rs` — CLI fina com parsing de argumentos via clap derive; compõe
-  configuração e chama os casos de uso; não contém lógica de domínio.
-- `src/domain/` — tipos de domínio puros (`application`, `manifest`, `release`,
-  `system`), sem dependências externas.
-- `src/use_cases/` — casos de uso que orquestram adapters e domínio
+- `src/main.rs` - thin CLI with argument parsing via clap derive; composes
+  configuration and calls use cases; contains no domain logic.
+- `src/domain/` - pure domain types (`application`, `manifest`, `release`,
+  `system`), with no external dependencies.
+- `src/use_cases/` - use cases that orchestrate adapters and domain
   (`application_import`, `application_list`, `application_runtime`,
   `ci_dispatch`, `deployment_activate_public`, `deployment_create`,
   `deployment_deploy_branch`, `deployment_deploy_oci`,
@@ -20,169 +20,170 @@ Crate único organizado em três camadas:
   `deployment_runtime_cleanup`, `deployment_start_candidate`,
   `deployment_transition`, `exposure_change`, `release_create`, `system_create`,
   `system_list`, `system_show`).
-  `deployment_deploy_release` orquestra o deployment inteiro (runtime, health,
-  Caddy e ativação) a partir de uma Release imutável; as responsabilidades
-  auxiliares foram extraídas em módulos coesos (`deployment_progress` para
-  reporting, `deployment_runtime_cleanup` para remoção de candidates e runtimes
-  antigos, `deployment_start_candidate` para criação do runtime candidato e
-  `deployment_activate_public` para a ativação pública). O caminho OCI
-  (`deployment_deploy_oci`) produz a Release e delega a ele. O caminho Git-aware
-  (`deployment_deploy_branch`) resolve branch → commit → image tag → digest e
-  delega ao `deployment_deploy_oci`.
-  `deployment_transition` aplica a máquina de estados persistida.
-  `ci_dispatch` é o dispatcher SSH restrito (forced command) que aceita apenas
-  `deploy <app> <branch>` e `version`.
-- `src/adapters/` — integrações com sistemas externos (`git_source`,
+   `deployment_deploy_release` orchestrates the entire deployment (runtime, health,
+   Caddy, and activation) from an immutable Release; supporting responsibilities
+   were extracted into cohesive modules (`deployment_progress` for reporting,
+   `deployment_runtime_cleanup` for removing old candidates and runtimes,
+   `deployment_start_candidate` for creating the candidate runtime, and
+   `deployment_activate_public` for public activation). The OCI path
+   (`deployment_deploy_oci`) produces the Release and delegates to it. The Git-aware
+   path (`deployment_deploy_branch`) resolves branch → commit → image tag → digest and
+   delegates to `deployment_deploy_oci`.
+   `deployment_transition` applies the persisted state machine.
+   `ci_dispatch` is the restricted SSH dispatcher (forced command) that accepts only
+   `deploy <app> <branch>` and `version`.
+- `src/adapters/` - integrations with external systems (`git_source`,
   `local_runtime`, `oci_image`, `port_allocator`,
   `systemd_quadlet`, `caddy_exposure`, `health_check_external`,
   `health_check_internal`, `stores`, `database`).
 
-Sem traits, generics, macros ou async: as restrições de
-[`docs/rust-guidelines.md`](../rust-guidelines.md) valem para toda mudança.
+No traits, generics, macros, or async: the constraints in
+[`docs/rust-guidelines.md`](../rust-guidelines.md) apply to every change.
 
-> **v0.2 concluída** (ver [`roadmap.md`](../roadmap.md)): o Pneuma agora opera
-> no modo Git-aware. O único artifact deployável é `image@digest` descoberto
-> pelo CI (`Git branch → commit → OCI digest`). A persistência é organizada em
-> SQLite stores por capacidade. A Fase A removeu `deploy-source`,
-> `deployment_deploy_source`, `local_build` e `[build]`. A Fase H validou o
-> fluxo completo com a aplicação-piloto `vitoralmeida.tech` em staging e
-> production. Este documento descreve a arquitetura atual (v0.2).
+> **v0.2 complete** (see [`roadmap.md`](../roadmap.md)): Pneuma now operates
+> in Git-aware mode. The only deployable artifact is `image@digest`, discovered
+> by CI (`Git branch → commit → OCI digest`). Persistence is organized into
+> SQLite stores by capability. Phase A removed `deploy-source`,
+> `deployment_deploy_source`, `local_build`, and `[build]`. Phase H validated
+> the complete flow with the pilot application `vitoralmeida.tech` in staging and
+> production. This document describes the current architecture (v0.2).
 
-## 2. Efeitos externos
+## 2. External effects
 
-Toda integração é um processo filho com argumentos estruturados, sem shell:
-`git`, `podman` (rootless), `systemctl --user`, `caddy`, `curl` e `df`. O
-Pneuma não possui daemon ou control plane próprio: cada execução da CLI compõe
-tudo no processo local e termina. A supervisão persistente dos containers é do
-user manager do systemd via Quadlet.
+Every integration is a child process with structured arguments, without a shell:
+`git`, `podman` (rootless), `systemctl --user`, `caddy`, `curl`, and `df`. Pneuma
+has no daemon or control plane of its own: every CLI invocation composes
+everything in the local process and exits. Persistent container supervision is
+handled by the systemd user manager through Quadlet.
 
-## 3. Persistência
+## 3. Persistence
 
-SQLite (rusqlite bundled) é a única persistência. Migrations versionadas e
-imutáveis vivem em `migrations/` e são registradas via `include_str!` em
-`src/adapters/database.rs`, que aplica as pendentes em cada abertura de conexão
-(`PRAGMA foreign_keys = ON`).
+SQLite (bundled rusqlite) is the only persistence layer. Versioned, immutable
+migrations live in `migrations/` and are registered through `include_str!` in
+`src/adapters/database.rs`, which applies pending migrations whenever a connection
+opens (`PRAGMA foreign_keys = ON`).
 
-A especificação da aplicação é persistida na importação do `pneuma.toml`
-(schema v3): `application_sources` existe quando o import informa
-`repository_url` (vem do comando, não do manifesto), e
-`application_delivery_specs` sempre guarda o repositório OCI permitido
-(`[delivery] image`), usado para validar o `app deploy --image`.
+The application specification is persisted when importing `pneuma.toml`
+(schema v3): `application_sources` exists when the import provides
+`repository_url` (it comes from the command, not the manifest), and
+`application_delivery_specs` always stores the permitted OCI repository
+(`[delivery] image`), used to validate `app deploy --image`.
 
-`pneuma app import` aceita somente URLs Git (paths locais são rejeitados;
-`file://` serve para repositórios de teste locais). A importação clona o
-repositório temporariamente, lê o `pneuma.toml`, persiste a aplicação e remove o
-checkout; não faz deployment.
+`pneuma app import` accepts only Git URLs (local paths are rejected;
+`file://` is used for local test repositories). Import temporarily clones the
+repository, reads `pneuma.toml`, persists the application, and removes the
+checkout; it does not deploy.
 
-Regras observadas:
+Rules observed:
 
-- transações curtas, nunca abertas durante Git, build, Podman, Caddy ou HTTP;
-- intenção persistida antes dos efeitos; conclusão persistida após confirmar o
-  efeito (saga local, sem transação distribuída);
-- a promoção pública (runtime do deployment ativo, deployment `succeeded` e
-  exposição `active`) acontece em uma única transação;
-- o banco não é fonte do estado observado do runtime; o Podman é.
+- short transactions, never kept open during Git, build, Podman, Caddy, or HTTP;
+- intent persisted before effects; completion persisted after confirming the
+  effect (local saga, without a distributed transaction);
+- public promotion (the active deployment runtime, deployment `succeeded`, and
+  exposure `active`) occurs in a single transaction;
+- the database is not the source of observed runtime state; Podman is.
 
-`runtime_port_reservations` (migration 0012) impede que candidatas concorrentes
-recebam a mesma porta loopback. A reserva existe antes de o runtime ser
-registrado, é consumida após o registro e é liberada no cleanup da candidata.
+`runtime_port_reservations` (migration 0012) prevents concurrent candidates
+from receiving the same loopback port. The reservation exists before the runtime
+is registered, is consumed after registration, and is released during candidate cleanup.
 
-Backup e restore usam a API de backup do SQLite. O restore valida
-`PRAGMA integrity_check`, toma um lock exclusivo `<database>.restore.lock`,
-preserva uma cópia `pre-restore`, substitui o banco por rename atômico e remove
-sidecars WAL antes da próxima abertura.
+Backup and restore use the SQLite backup API. Restore validates
+`PRAGMA integrity_check`, takes an exclusive `<database>.restore.lock`,
+preserves a `pre-restore` copy, replaces the database through an atomic rename,
+and removes WAL sidecars before the next open.
 
-Todos os paths vêm de variáveis de ambiente (`PNEUMA_DATABASE_PATH`,
+All paths come from environment variables (`PNEUMA_DATABASE_PATH`,
 `PNEUMA_WORKSPACE_PATH`, `PNEUMA_CADDY_MANAGED_PATH`, `PNEUMA_CADDYFILE_PATH`,
-`PNEUMA_RUNTIME_PORT_RANGE`, `PNEUMA_QUADLET_DIR`), com defaults em
-`/var/lib/pneuma`, `/etc/caddy`, `30000-39999` e
+`PNEUMA_RUNTIME_PORT_RANGE`, `PNEUMA_QUADLET_DIR`), with defaults under
+`/var/lib/pneuma`, `/etc/caddy`, `30000-39999`, and
 `$HOME/.config/containers/systemd`.
 
-O ambiente do Pneuma é desacoplado do login shell: o bootstrap grava as
-variáveis em `/etc/pneuma/environment` (lido pelo binário) e no `~/.profile`
-do usuário `pneuma`.
+The Pneuma environment is decoupled from the login shell: bootstrap writes the
+variables to `/etc/pneuma/environment` (read by the binary) and to the
+`~/.profile` of the `pneuma` user.
 
 ## 4. Runtime
 
-- cada deployment gera uma unidade Quadlet
-  `pneuma-<aplicação>-<deployment-id>.container` e container de mesmo nome,
-  com labels de aplicação e image digest (`io.pneuma.image-digest`); Quadlets
-  legados com `io.pneuma.revision` continuam operáveis até redeploy;
-- publicação restrita a loopback:
-  `127.0.0.1:<porta-reservada>:<container_port>`; a porta fixa é a menor livre
-  em `PNEUMA_RUNTIME_PORT_RANGE`, e a candidata nunca é alcançável
-  publicamente;
-- sem modo privilegiado, mounts arbitrários ou acesso ao socket do Podman;
-- a unidade tem `Restart=on-failure`; ela inicia a candidata, mas só é
-  habilitada depois da promoção, portanto apenas o runtime atual volta após
-  reboot.
+- each deployment generates a Quadlet unit
+  `pneuma-<application>-<deployment-id>.container` and a container with the same
+  name, with application labels and image digest
+  (`io.pneuma.image-digest`); legacy Quadlets with `io.pneuma.revision` remain
+  operable until redeployment;
+- publication is restricted to loopback:
+  `127.0.0.1:<reserved-port>:<container_port>`; the fixed port is the lowest
+  free port in `PNEUMA_RUNTIME_PORT_RANGE`, and the candidate is never publicly
+  reachable;
+- no privileged mode, arbitrary mounts, or access to the Podman socket;
+- the unit has `Restart=on-failure`; it starts the candidate but is enabled only
+  after promotion, so only the current runtime returns after reboot.
 
-O caminho de criação é: reservar porta → escrever a unidade → `systemctl --user
-daemon-reload` → iniciar a unidade → resolver o ID do container pelo nome. A
-falha em qualquer etapa limpa unidade, container, runtime candidato e reserva
-quando já existirem.
+The creation path is: reserve port → write unit → `systemctl --user
+daemon-reload` → start unit → resolve the container ID by name. Failure at any
+step cleans up the unit, container, candidate runtime, and reservation whenever
+they already exist.
 
-Depois de uma promoção transacional bem-sucedida, o Pneuma habilita a unidade
-atual e tenta retirar o runtime anterior (stop, disable, remove unit,
-daemon-reload, remove container e `removed_at`). Essa finalização é best-effort:
-um erro gera warning sem reverter a promoção já concluída.
+After a successful transactional promotion, Pneuma enables the current unit and
+attempts to remove the previous runtime (stop, disable, remove unit,
+daemon-reload, remove container, and `removed_at`). This finalization is best-effort:
+an error emits a warning without reverting the already completed promotion.
 
-### 4.1 Ciclo de vida do runtime
+### 4.1 Runtime lifecycle
 
-- a promoção do deployment marca `applications.desired_runtime_state` como
-  `running`, persistindo a intenção junto da ativação;
-- `app status` observa o container do deployment ativo (`active_deployment_id`)
-  no Podman e registra a observação: `last_observed_state`, `last_observed_at`
-  e, quando em execução, `host_port`; se o container estiver ausente, registra
-  `missing` sem `removed_at`, preservando a RuntimeInstance para recuperação;
-- `app stop` e `app start` persistem o estado desejado antes do efeito externo,
-  controlam a unidade Quadlet e persistem a observação resultante (saga local);
-  um runtime legado sem arquivo Quadlet usa `podman start`/`podman stop` até ser
-  redeployado; `app start` recupera um container ausente pela unidade Quadlet
-  quando ela ainda existe;
-- parar uma aplicação já parada e iniciar uma já em execução são sucessos
-  idempotentes;
-- aplicação registrada mas nunca implantada, e nome desconhecido, falham antes
-  de qualquer efeito externo.
+- deployment promotion sets `applications.desired_runtime_state` to `running`,
+  persisting intent together with activation;
+- `app status` observes the active deployment container (`active_deployment_id`)
+  in Podman and records the observation: `last_observed_state`, `last_observed_at`,
+  and, when running, `host_port`; if the container is absent, it records
+  `missing` without `removed_at`, preserving the RuntimeInstance for recovery;
+- `app stop` and `app start` persist the desired state before the external effect,
+  control the Quadlet unit, and persist the resulting observation (local saga);
+  a legacy runtime without a Quadlet file uses `podman start`/`podman stop` until
+  redeployed; `app start` recovers an absent container through the Quadlet unit
+  when it still exists;
+- stopping an already stopped application and starting an already running one are
+  idempotent successes;
+- a registered but never deployed application, and an unknown name, fail before
+  any external effect.
 
-## 5. Exposição pelo Caddy
+## 5. Caddy exposure
 
-Aplicações públicas são publicadas por fragmentos `<application-id>.caddy` no
-diretório gerenciado, importado pelo `Caddyfile` principal:
+Public applications are published through `<application-id>.caddy` fragments in
+the managed directory, imported by the main `Caddyfile`:
 
-1. persistir `desired_visibility` e `materialization_state=applying` antes de
-   materializar a rota;
-2. gerar o fragmento em arquivo temporário na mesma filesystem;
-3. `caddy validate` contra o `Caddyfile` completo;
-4. rename atômico, `caddy reload` e health check externo;
-5. finalizar `active` somente após todos os efeitos confirmados; uma falha
-   restaura o fragmento anterior e recarrega; se a recuperação
-   falhar, a exposição fica `diverged` para inspeção manual.
+1. persist `desired_visibility` and `materialization_state=applying` before
+   materializing the route;
+2. generate the fragment in a temporary file on the same filesystem;
+3. run `caddy validate` against the complete `Caddyfile`;
+4. atomically rename, `caddy reload`, and perform an external health check;
+5. finalize as `active` only after all effects are confirmed; a failure restores
+   and reloads the previous fragment; if recovery fails, exposure becomes
+   `diverged` for manual inspection.
 
-Para tornar uma aplicação interna, o Pneuma persiste `Internal/removing` antes
-de remover a rota. Após remover e recarregar, finaliza `not_materialized`; se a
-persistência posterior falhar, registra `diverged` porque a rota já foi alterada.
+To make an application internal, Pneuma persists `Internal/removing` before
+removing the route. After removal and reload, it finalizes as `not_materialized`;
+if subsequent persistence fails, it records `diverged` because the route has
+already changed.
 
-`exposures.configuration_version` guarda o conteúdo canônico do fragmento
-(`domain` e endpoint loopback), não a Release nem o Deployment.
+`exposures.configuration_version` stores the canonical fragment content
+(`domain` and loopback endpoint), not the Release or Deployment.
 
 ## 6. Health check
 
-- **interno:** HTTP no endpoint loopback da candidata, antes de qualquer troca
-  de tráfego;
-- **externo (público):** `curl` em `https://<domínio><path>` com
-  `--resolve <domínio>:443:127.0.0.1`, verificando o listener local do Caddy
-  com retries.
+- **internal:** HTTP on the candidate loopback endpoint, before any traffic
+  switch;
+- **external (public):** `curl` at `https://<domain><path>` with
+  `--resolve <domain>:443:127.0.0.1`, checking the local Caddy listener with
+  retries.
 
-## 7. Máquina de estados do deployment
+## 7. Deployment state machine
 
 ```mermaid
 stateDiagram-v2
     [*] --> Pending
     Pending --> Starting
     Starting --> Verifying
-    Verifying --> Activating : aplicação pública
-    Verifying --> Succeeded : aplicação interna
+    Verifying --> Activating : public application
+    Verifying --> Succeeded : internal application
     Activating --> Succeeded
 
     Pending --> Failed
@@ -191,19 +192,19 @@ stateDiagram-v2
     Activating --> Failed
 ```
 
-Todo `Failed` persiste código, estágio e mensagem; a candidata é removida e a
-Release anterior (rota e runtime) é preservada. Apenas um deployment ativo por
-aplicação é permitido (`create_deployment`). Rollback cria um novo deployment
-(`type = rollback`) a partir da Release anterior bem-sucedida.
+Every `Failed` state persists a code, stage, and message; the candidate is
+removed and the previous Release (route and runtime) is preserved. Only one
+active deployment per application is permitted (`create_deployment`). Rollback
+creates a new deployment (`type = rollback`) from the previous successful Release.
 
-## 8. Operação e diagnóstico
+## 8. Operations and diagnostics
 
-- `pneuma database backup <path>` cria uma cópia consistente do SQLite;
-  `pneuma database restore <path>` executa a recuperação descrita na seção de
-  persistência antes de abrir a conexão normal da CLI;
-- `pneuma doctor` verifica banco, migrations, paths, disponibilidade de Git,
-  Podman e Caddy, Podman rootless funcional, validação do Caddyfile, pull das
-  imagens OCI ativas e pelo menos 1 GiB livre nos filesystems do banco e do
-  workspace;
-- o bootstrap habilita linger para o usuário `pneuma`, permitindo que as
-  unidades Quadlet user-level iniciem após reboot sem uma sessão SSH ativa.
+- `pneuma database backup <path>` creates a consistent SQLite copy;
+  `pneuma database restore <path>` performs the recovery described in the
+  persistence section before opening the normal CLI connection;
+- `pneuma doctor` checks the database, migrations, paths, availability of Git,
+  Podman, and Caddy, a functioning rootless Podman, Caddyfile validation, pulls
+  of active OCI images, and at least 1 GiB free on the database and workspace
+  filesystems;
+- bootstrap enables linger for the `pneuma` user, allowing user-level Quadlet
+  units to start after reboot without an active SSH session.

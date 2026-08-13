@@ -1,181 +1,176 @@
 # Design — Reconciliation
 
-**Status:** design aprovado para a v0.3; não descreve comportamento já
-implementado. A execução e o progresso vivem somente em
+**Status:** approved design for v0.3; it does not describe behavior already
+implemented. Execution and progress live only in
 `docs/iterations/current-iteration.md`.
 
-## Objetivo
+## Objective
 
-Definir a semântica que o futuro `pneuma reconcile` usará para convergir uma
-Application para a intenção persistida, sem escolher uma versão nova nem
-transformar uma observação ambígua em alteração destrutiva. Este design orienta
-os refactors de domínio, runtime e exposure da consolidação pré-v0.3.
+Define the semantics that future `pneuma reconcile` will use to converge an
+Application to persisted intent, without selecting a new version or turning an
+ambiguous observation into a destructive change. This design guides the domain,
+runtime, and exposure refactors of pre-v0.3 consolidation.
 
-Este documento não introduz o comando, APIs, migrations ou políticas de retry.
+This document does not introduce the command, APIs, migrations, or retry policies.
 
-## Modelo e vocabulário
+## Model and Vocabulary
 
-- **Intenção:** estado desejado persistido no SQLite, incluindo runtime e
+- **Intent:** desired state persisted in SQLite, including runtime and
   visibility.
-- **Estado lógico:** Application, Release, Deployment e RuntimeInstance
-  persistidos; seus IDs não são substituídos por IDs externos.
-- **Estado observado:** container e unidade Quadlet observados em
-  Podman/systemd, e rota observada no Caddy.
-- **Materialização correta:** estado observado que corresponde integralmente à
-  intenção e à identidade lógica esperada.
-- **Drift:** divergência entre a materialização observada e a configuração ou
-  identidade esperada.
-- **Retirement:** remoção intencional de um runtime durante cleanup ou troca de
-  runtime ativo. Somente retirement grava `removed_at`.
+- **Logical state:** persisted Application, Release, Deployment, and
+  RuntimeInstance; their IDs are not replaced with external IDs.
+- **Observed state:** container and Quadlet unit observed in Podman/systemd, and
+  route observed in Caddy.
+- **Correct materialization:** observed state that fully corresponds to intent
+  and expected logical identity.
+- **Drift:** divergence between observed materialization and expected
+  configuration or identity.
+- **Retirement:** intentional removal of a runtime during cleanup or active
+  runtime replacement. Only retirement writes `removed_at`.
 
-Release é o artifact OCI imutável. Deployment é a tentativa de ativar uma
-Release. RuntimeInstance é a materialização concreta de um Deployment e é
-reutilizada durante a recuperação de drift recuperável.
+Release is the immutable OCI artifact. Deployment is the attempt to activate a
+Release. RuntimeInstance is the concrete materialization of a Deployment and is
+reused during recoverable drift recovery.
 
-## Fontes de verdade
+## Sources of Truth
 
-| Sistema | Autoridade |
+| System | Authority |
 |---|---|
-| SQLite | Intenção, histórico e identidades lógicas. |
-| Podman/systemd | Estado observado do container e da unidade Quadlet. |
-| Caddy | Fragmento, reload e rota materializados. |
-| OCI registry | Disponibilidade de artifact, nunca seleção de versão pelo reconcile. |
+| SQLite | Intent, history, and logical identities. |
+| Podman/systemd | Observed state of the container and Quadlet unit. |
+| Caddy | Materialized fragment, reload, and route. |
+| OCI registry | Artifact availability, never version selection by reconcile. |
 
-O reconciler não consulta o registry para criar ou selecionar uma Release. Uma
-Application com container ausente não recebe Deployment novo por esse motivo.
+The reconciler does not query the registry to create or select a Release. An
+Application with a missing container does not receive a new Deployment for that reason.
 
-## Invariantes
+## Invariants
 
-1. O deployment ativo e seu runtime ativo definem a identidade lógica que pode
-   ser recuperada. Recovery não cria Deployment ou RuntimeInstance novos.
-2. `Missing` é uma observação, não um tombstone. `removed_at` é reservado a
-   cleanup de candidate, retirement de runtime anterior e remoção intencional.
-3. `Running/Running` somente é no-op quando deployment ativo, image digest,
-   labels, endpoint loopback, porta, unidade Quadlet e container correspondem
-   à materialização esperada.
-4. Nenhuma transação SQLite permanece aberta durante Podman, systemd, Caddy ou
-   HTTP. O use case observa ou materializa externamente e persiste o resultado
-   em transação curta.
-5. Toda persistência posterior a efeito externo usa compare-and-set e row
-   count. Zero linhas é estado stale ou concorrente, nunca sucesso.
-6. Materializações v0.2 que usam `release.id` em labels, Quadlet ou
-   `configuration_version` continuam observáveis até redeploy ou
-   rematerialização. Novas materializações usam as regras de identidade
-   definidas nos refactors correspondentes.
-7. Diante de identidade ambígua ou configuração divergente, reconcile não para,
-   remove, substitui nem promove recursos automaticamente sem política
-   explícita.
+1. The active deployment and its active runtime define the logical identity that
+   can be recovered. Recovery creates no new Deployment or RuntimeInstance.
+2. `Missing` is an observation, not a tombstone. `removed_at` is reserved for
+   candidate cleanup, prior-runtime retirement, and intentional removal.
+3. `Running/Running` is a no-op only when active deployment, image digest,
+   labels, loopback endpoint, port, Quadlet unit, and container correspond to
+   the expected materialization.
+4. No SQLite transaction remains open during Podman, systemd, Caddy, or HTTP.
+   The use case observes or materializes externally and persists the result in a
+   short transaction.
+5. All persistence after an external effect uses compare-and-set and row count.
+   Zero rows is stale or concurrent state, never success.
+6. v0.2 materializations that use `release.id` in labels, Quadlet, or
+   `configuration_version` remain observable until redeployment or
+   rematerialization. New materializations use the identity rules defined in
+   the corresponding refactors.
+7. Given ambiguous identity or divergent configuration, reconcile does not stop,
+   remove, replace, or promote resources automatically without an explicit policy.
 
-## Reconciliação de runtime
+## Runtime Reconciliation
 
-Antes de agir, reconcile carrega a intenção, o deployment ativo e a
-RuntimeInstance bem-sucedida não removida. A observação confirma o nome
-determinístico do container/unidade, a relação com a Application e o
-Deployment, image digest, labels, porta loopback e conteúdo/configuração da
-unidade Quadlet. A atualização de `external_runtime_id` usa o runtime lógico
-esperado e falha como `RuntimeChanged` se o CAS não atualizar exatamente uma
-linha.
+Before acting, reconcile loads intent, the active deployment, and the successful
+non-removed RuntimeInstance. Observation confirms the deterministic container/unit
+name, its relationship to the Application and Deployment, image digest, labels,
+loopback port, and Quadlet unit content/configuration. Updating
+`external_runtime_id` uses the expected logical runtime and fails as
+`RuntimeChanged` if the CAS does not update exactly one row.
 
-| Desired | Observed | Ação |
+| Desired | Observed | Action |
 |---|---|---|
-| Running | Running, identidade e configuração corretas | No-op. |
-| Running | Stopped, unidade presente e identidade confirmada | Iniciar a unidade e observar novamente. |
-| Running | Missing, unidade presente e identidade confirmada | Iniciar a unidade, resolver o container pelo nome estável e reconciliar `external_runtime_id`. |
-| Running | Missing, unidade ausente e identidade lógica confirmada | Rematerializar a mesma unidade para a mesma RuntimeInstance, iniciar e reconciliar `external_runtime_id`. |
-| Running | Failed | Coletar diagnóstico seguro; reiniciar somente quando unidade e identidade forem confirmadas e a política de recuperação o permitir. Caso contrário, reportar sem alteração destrutiva. |
-| Running | Running com digest, label, porta, container ou unidade divergente | Reportar drift e requerer política explícita ou intervenção manual. |
-| Stopped | Running, Starting, Created ou Stopping | Parar a unidade quando ela for a unidade esperada; observar novamente. |
+| Running | Running, correct identity and configuration | No-op. |
+| Running | Stopped, unit present and identity confirmed | Start the unit and observe again. |
+| Running | Missing, unit present and identity confirmed | Start the unit, resolve the container by stable name, and reconcile `external_runtime_id`. |
+| Running | Missing, unit absent and logical identity confirmed | Rematerialize the same unit for the same RuntimeInstance, start it, and reconcile `external_runtime_id`. |
+| Running | Failed | Collect safe diagnostics; restart only when unit and identity are confirmed and recovery policy permits it. Otherwise, report without destructive change. |
+| Running | Running with divergent digest, label, port, container, or unit | Report drift and require explicit policy or manual intervention. |
+| Stopped | Running, Starting, Created, or Stopping | Stop the unit when it is the expected unit; observe again. |
 | Stopped | Stopped | No-op. |
-| Stopped | Missing | No-op; manter RuntimeInstance e não gravar `removed_at`. |
-| Stopped | Failed ou unidade divergente | Reportar diagnóstico; não remover a unidade ou tombar o runtime. |
+| Stopped | Missing | No-op; retain RuntimeInstance and do not write `removed_at`. |
+| Stopped | Failed or divergent unit | Report diagnostics; do not remove the unit or tombstone the runtime. |
 
-Na rematerialização, a porta persistida da RuntimeInstance é a identidade de
-endpoint esperada. Se ela não puder ser usada com segurança, reconcile reporta
-drift em vez de alocar outra porta silenciosamente. O runtime legado permanece
-operável pela compatibilidade v0.2 até uma rematerialização que aplique a nova
-identidade.
+On rematerialization, the persisted RuntimeInstance port is the expected endpoint
+identity. If it cannot be safely used, reconcile reports drift instead of silently
+allocating another port. The legacy runtime remains operable through v0.2
+compatibility until a rematerialization applies the new identity.
 
-## Reconciliação de exposure
+## Exposure Reconciliation
 
-Visibility é intenção persistida. A exposição pública está correta somente se o
-fragmento canônico esperado estiver no disco, o reload tiver sido confirmado e
-o health externo da rota tiver passado. Fragmento correto sem reload confirmado
-ou sem health externo não é uma rota correta.
+Visibility is persisted intent. Public exposure is correct only if the expected
+canonical fragment is on disk, reload has been confirmed, and external route
+health has passed. A correct fragment without confirmed reload or external health
+is not a correct route.
 
-`configuration_version` identifica a representação canônica do fragmento Caddy
-(`domain` e endpoint). Ele não identifica Release, Deployment ou RuntimeInstance.
+`configuration_version` identifies the canonical representation of the Caddy
+fragment (`domain` and endpoint). It does not identify Release, Deployment, or RuntimeInstance.
 
-| Desired | Observed | Ação |
+| Desired | Observed | Action |
 |---|---|---|
-| Public | Fragmento canônico, reload confirmado e health externo correto | No-op. |
-| Public | Fragmento ausente, runtime ativo saudável e endpoint confirmado | Materializar, reload e executar health externo. |
-| Public | Fragmento divergente, runtime ativo saudável e endpoint confirmado | Substituir pelo fragmento canônico, reload e executar health externo. |
-| Public | Sem runtime ativo saudável, domain ou endpoint confirmado | Registrar diagnóstico recuperável; não publicar rota. |
-| Internal | Fragmento ausente | No-op. |
-| Internal | Fragmento presente | Remover, reload e confirmar remoção. |
+| Public | Canonical fragment, confirmed reload, and correct external health | No-op. |
+| Public | Missing fragment, healthy active runtime, and confirmed endpoint | Materialize, reload, and run external health. |
+| Public | Divergent fragment, healthy active runtime, and confirmed endpoint | Replace with canonical fragment, reload, and run external health. |
+| Public | No confirmed healthy active runtime, domain, or endpoint | Record recoverable diagnostics; do not publish a route. |
+| Internal | Missing fragment | No-op. |
+| Internal | Present fragment | Remove, reload, and confirm removal. |
 
-Falha durante materialização, reload ou health preserva a intenção solicitada e
-grava `failed` com diagnóstico. Se a compensação não puder restaurar uma
-situação observável conhecida, grava `diverged`. Reconcile pode reparar
-`failed` quando o fragmento esperado e a identidade do runtime forem
-inequívocos; `diverged` é reportado para intervenção manual até que uma política
-explícita defina como substituir um fragmento de origem ambígua.
+Failure during materialization, reload, or health preserves requested intent and
+writes `failed` with diagnostics. If compensation cannot restore a known observable
+situation, it writes `diverged`. Reconcile may repair `failed` when the expected
+fragment and runtime identity are unambiguous; `diverged` is reported for manual
+intervention until an explicit policy defines how to replace an ambiguous-origin fragment.
 
-## Recovery de deployments interrompidos
+## Interrupted Deployment Recovery
 
-Deployment em `Pending`, `Starting`, `Verifying` ou `Activating` reserva a
-Application e impede reconcile de competir por seus efeitos. O recovery futuro
-observa primeiro candidate, unidade, rota e runtime anterior, preservando a
-versão saudável já ativa.
+A Deployment in `Pending`, `Starting`, `Verifying`, or `Activating` reserves the
+Application and prevents reconcile from competing for its effects. Future recovery
+first observes candidate, unit, route, and prior runtime, preserving the already
+active healthy version.
 
-| Status interrompido | Regra de recovery |
+| Interrupted status | Recovery rule |
 |---|---|
-| Pending | Sem efeitos externos confirmados: registrar falha/interrupção e liberar apenas recursos comprovadamente associados ao deployment. |
-| Starting | Observar candidate e unidade; limpar somente o candidate comprovadamente associado, registrar falha/interrupção e preservar runtime anterior. |
-| Verifying | Não promover candidate cuja saúde não esteja comprovada; limpar candidate com identidade confirmada, registrar falha/interrupção e preservar runtime/rota anteriores. |
-| Activating | Não inferir promoção a partir de fragmento, reload ou runtime isolados. Se a promoção atômica não estiver comprovada, restaurar apenas o que tiver compensação segura, registrar falha/interrupção e marcar exposure `diverged` quando a recuperação for incompleta. |
+| Pending | No confirmed external effects: record failure/interruption and release only resources proven associated with the deployment. |
+| Starting | Observe candidate and unit; clean only the proven associated candidate, record failure/interruption, and preserve the prior runtime. |
+| Verifying | Do not promote a candidate with unproven health; clean a candidate with confirmed identity, record failure/interruption, and preserve prior runtime/route. |
+| Activating | Do not infer promotion from an isolated fragment, reload, or runtime. If atomic promotion is not proven, restore only what has safe compensation, record failure/interruption, and mark exposure `diverged` when recovery is incomplete. |
 
-Recovery nunca promove automaticamente um candidate ambíguo. Falhas de cleanup
-são diagnósticos recuperáveis e não revogam a promoção que já tenha sido
-confirmada atomicamente.
+Recovery never automatically promotes an ambiguous candidate. Cleanup failures
+are recoverable diagnostics and do not revoke promotion already atomically confirmed.
 
-## Concorrência e resultados
+## Concurrency and Results
 
-Não será criado lock adicional neste design. O deploy existente mantém a
-reserva lógica por Deployment não terminal. Enquanto houver Deployment não
-terminal, reconcile retorna resultado `deferred` com o deployment que bloqueia
-a operação e não aciona runtime, Caddy ou cleanup concorrente.
+This design creates no additional lock. Existing deployment retains the logical
+reservation through a non-terminal Deployment. While a non-terminal Deployment
+exists, reconcile returns `deferred` with the deployment blocking the operation
+and does not trigger concurrent runtime, Caddy, or cleanup work.
 
-O futuro comando deve serializar `reconcile × reconcile` por Application pela
-mesma reserva ou por uma primitive persistida equivalente antes de executar
-efeitos externos. Um CAS perdido após um efeito externo resulta em `failed` ou
-`deferred`, com diagnóstico e sem reportar sucesso.
+The future command must serialize `reconcile × reconcile` per Application through
+the same reservation or an equivalent persisted primitive before executing external
+effects. A lost CAS after an external effect results in `failed` or `deferred`,
+with diagnostics and without reporting success.
 
-Resultados observáveis são:
+Observable results are:
 
-- `no-op`: a materialização já era correta;
-- `repaired`: uma divergência recuperável foi convergida e confirmada;
-- `deferred`: deployment ou mudança concorrente impede ação segura;
-- `failed`: a convergência não foi concluída, com diagnóstico recuperável;
-- `diverged`: a compensação ou observação não permite afirmar a materialização;
-- `manual-intervention`: drift de identidade ou configuração exige política
-  explícita.
+- `no-op`: materialization was already correct;
+- `repaired`: recoverable divergence was converged and confirmed;
+- `deferred`: a deployment or concurrent change prevents safe action;
+- `failed`: convergence was not completed, with recoverable diagnostics;
+- `diverged`: compensation or observation does not allow materialization to be asserted;
+- `manual-intervention`: identity or configuration drift requires an explicit
+  policy.
 
 ## Non-goals
 
-Reconcile não cria Release, não faz build, não descobre artifact novo, não
-seleciona versão no registry, não cria Deployment porque um container morreu,
-não muda desired runtime state ou visibility, não promove candidate incerto e
-não executa reparo destrutivo diante de identidade ambígua.
+Reconcile does not create a Release, build, discover a new artifact, select a
+registry version, create a Deployment because a container died, change desired
+runtime state or visibility, promote an uncertain candidate, or perform destructive
+repair given ambiguous identity.
 
-## Cenários de aceite futuros
+## Future Acceptance Scenarios
 
-O catálogo E2E posterior deve cobrir, no mínimo:
+The subsequent E2E catalog must cover at minimum:
 
-- container removido com unidade presente e com unidade ausente;
-- digest, label, porta, container ou unidade divergentes;
-- reboot e recovery de runtime stopped/running;
-- fragmento Caddy ausente ou com target divergente, reload não confirmado e
-  desired visibility incompatível com a rota;
-- interrupção em cada status não terminal de Deployment;
-- reconcile repetido, reconcile paralelo, deploy × deploy e deploy × reconcile.
+- removed container with unit present and with unit absent;
+- divergent digest, label, port, container, or unit;
+- reboot and stopped/running runtime recovery;
+- missing or divergent-target Caddy fragment, unconfirmed reload, and desired
+  visibility incompatible with the route;
+- interruption at each non-terminal Deployment status;
+- repeated reconcile, parallel reconcile, deploy × deploy, and deploy × reconcile.

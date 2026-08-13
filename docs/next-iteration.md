@@ -1,50 +1,50 @@
-Antes de começar a implementar a v0.3, eu faria uma etapa formal de consolidação da v0.2. Não é para remodelar o Pneuma; é para deixar o modelo que já existe explícito, consistente e suficientemente testado para o reconciler não nascer sobre ambiguidades.
+Before starting to implement v0.3, I would carry out a formal v0.2 consolidation stage. This is not about reshaping Pneuma; it is about making the existing model explicit, consistent, and sufficiently tested so the reconciler is not born on top of ambiguities.
 
-O estado atual já é uma boa base: v0.2 está marcada como concluída, CI → OCI → SSH → ci dispatch → deploy funciona, o bootstrap foi validado em Debian 13 limpo, e a bateria atual registra 27 PASS / 0 FAIL / 1 SKIP.
+The current state is already a solid foundation: v0.2 is marked complete, CI → OCI → SSH → ci dispatch → deploy works, bootstrap has been validated on a clean Debian 13 installation, and the current suite records 27 PASS / 0 FAIL / 1 SKIP.
 
-O objetivo do pré-v0.3
+The pre-v0.3 objective
 
-Ao terminar essa etapa, estas afirmações precisam ser verdadeiras:
+At the end of this stage, these statements must be true:
 
 Release
-= artifact imutável que pode ser implantado
+= immutable artifact that can be deployed
 
 Deployment
-= tentativa/evento de ativar uma Release
+= attempt/event to activate a Release
 
 Runtime
-= materialização concreta produzida por um Deployment
+= concrete materialization produced by a Deployment
 
 Application
-= possui desired state e aponta para o Deployment ativo
+= owns desired state and points to the active Deployment
 
 SQLite
-= intenção + histórico
+= intent + history
 
 Podman/systemd/Caddy
-= estado observado
+= observed state
 
 Use case
-= decisão/orquestração
+= decision/orchestration
 
 Store
-= persistência
+= persistence
 
 CI
-= apenas solicita operações ao Pneuma
+= only requests operations from Pneuma
 
 Reconciler
-= ainda não existe, mas suas regras já estão definidas
+= does not exist yet, but its rules are already defined
 
-Hoje o modelo geral já aponta nessa direção: o próprio roadmap define Release como imutável, Deployment como tentativa e diferencia estado desejado de observado.
+Today, the general model already points in this direction: the roadmap itself defines Release as immutable, Deployment as an attempt, and differentiates desired from observed state.
 
-1. Corrigir o roadmap antes de qualquer código da v0.3
+1. Fix the roadmap before any v0.3 code
 
-Esse seria o primeiro trabalho.
+This would be the first task.
 
-O roadmap.md atual ainda chama a v0.3 de “Reconciliation, automation & CI/CD” e apresenta como pendentes GitHub Actions, build/push para GHCR, deploy SSH e forced command. Isso já não representa o estado atual.
+The current roadmap.md still calls v0.3 “Reconciliation, automation & CI/CD” and presents GitHub Actions, build/push to GHCR, SSH deployment, and forced command as pending. This no longer represents the current state.
 
-Eu mudaria para:
+I would change it to:
 
 v0.1 — OCI Deployment Foundation         ✅
 v0.2 — Git-aware OCI Delivery            ✅
@@ -55,7 +55,7 @@ v0.5 — Network Policy Enforcement
 v0.6 — Workload Identity & Secure S2S
 v0.7 — Artifact Security & Secrets
 
-E retiraria da v0.3 como trabalho futuro:
+And I would remove the following from v0.3 as future work:
 
 GitHub Actions build/push
 SSH deployment
@@ -65,43 +65,43 @@ registry watcher
 automatic deploy policies
 dedicated pneuma-deployer
 
-Os quatro primeiros já existem; registry watcher e auto-deploy policies não têm necessidade demonstrada no modelo atual; e a identidade restrita já foi implementada usando o próprio usuário pneuma.
+The first four already exist; registry watcher and auto-deploy policies have no demonstrated need in the current model; and the restricted identity has already been implemented using the pneuma user itself.
 
-Também reformularia:
+I would also reframe:
 
-rollback automático em health failure
+automatic rollback on health failure
 
-porque candidate failing antes da promoção é diferente de fazer rollback automático depois de uma promoção.
+because a candidate failing before promotion differs from performing an automatic rollback after a promotion.
 
-2. Fechar formalmente a v0.2 e abrir uma iteração “pre-v0.3 consolidation”
+2. Formally close v0.2 and open a “pre-v0.3 consolidation” iteration
 
-Eu não começaria a próxima current-iteration.md com:
+I would not start the next current-iteration.md with:
 
 Implement Reconciler.
 
-Criaria algo como:
+I would create something like:
 
 Pre-v0.3 — Domain and persistence consolidation
 
-Ela deveria ter como Definition of Done:
+It should have the following Definition of Done:
 
-roadmap atualizado
-domínio Release/Deployment/Runtime consolidado
-SQL mutável retirado dos principais use cases
-sem regressões de deploy
-concorrência de deployment validada
-semântica de reconciliation documentada
-E2E limpo passando
+roadmap updated
+Release/Deployment/Runtime domain consolidated
+mutable SQL removed from the main use cases
+no deployment regressions
+deployment concurrency validated
+reconciliation semantics documented
+clean E2E passing
 
-A iteração atual já registra como concluídos bootstrap, ciclo stop/start/status, CI dispatcher e a regressão completa.
+The current iteration already records bootstrap, the stop/start/status cycle, the CI dispatcher, and the complete regression as complete.
 
-3. Consolidar definitivamente Release, Deployment e Runtime
+3. Definitively consolidate Release, Deployment, and Runtime
 
-Este é provavelmente o ajuste conceitual mais importante antes do reconciler.
+This is probably the most important conceptual adjustment before the reconciler.
 
-O banco/modelo está correto, mas os tipos estão distribuídos de forma inconsistente.
+The database/model is correct, but the types are distributed inconsistently.
 
-Hoje existe:
+Today there is:
 
 domain/
 └── release.rs
@@ -114,9 +114,9 @@ use_cases/
       DeploymentStatus
       RuntimeState
 
-Deployment, DeploymentType, DeploymentStatus e RuntimeState são conceitos centrais do domínio, mas atualmente vivem dentro de um caso de uso.
+Deployment, DeploymentType, DeploymentStatus, and RuntimeState are central domain concepts, but they currently live within a use case.
 
-Eu transformaria em:
+I would transform it into:
 
 domain/
 ├── release.rs
@@ -130,31 +130,31 @@ domain/
 └── runtime.rs
       └── RuntimeState
 
-Sem comportamento sofisticado, traits ou abstrações novas. Apenas ownership correto dos conceitos.
+No sophisticated behavior, traits, or new abstractions. Just correct ownership of the concepts.
 
-Eliminar o Release duplicado
+Eliminate the duplicate Release
 
-Hoje existe:
+Today there is:
 
 domain::release::Release
 
-e também:
+and also:
 
 adapters::stores::release_store::Release
 
-com praticamente os mesmos campos.
+with practically the same fields.
 
-Eu eliminaria o segundo.
+I would eliminate the latter.
 
-O store deveria simplesmente devolver:
+The store should simply return:
 
 domain::release::Release
 
-Isso deixa explícito que existe uma única representação conceitual de Release.
+This makes explicit that there is a single conceptual representation of Release.
 
-4. Corrigir os nomes que hoje borram Release e Deployment
+4. Fix the names that currently blur Release and Deployment
 
-O exemplo principal é:
+The main example is:
 
 pub struct DeployedRelease {
     pub deployment_id: String,
@@ -162,17 +162,17 @@ pub struct DeployedRelease {
     ...
 }
 
-Esse objeto representa o resultado de um Deployment, mas se chama DeployedRelease.
+This object represents the result of a Deployment, but is named DeployedRelease.
 
-Eu o renomearia para algo como:
+I would rename it to something like:
 
 DeploymentResult
 
-Minha preferência seria essa, porque a função:
+That would be my preference, because the function:
 
 deploy_release(...)
 
-passaria a significar claramente:
+would clearly mean:
 
 input:
 Release
@@ -183,73 +183,73 @@ Deployment
 output:
 DeploymentResult
 
-Isso reforça:
+This reinforces:
 
 Release ≠ Deployment
 
-sem alterar qualquer comportamento.
+without changing any behavior.
 
-5. Corrigir a ambiguidade de source_revision
+5. Fix the source_revision ambiguity
 
-Existe atualmente:
+There is currently:
 
 let runtime_identity =
     release.source_revision.as_deref().unwrap_or(&release.id);
 
-Ou seja, se não houver commit Git, um release.id passa a ser usado na posição de uma identidade que deriva de source_revision.
+That is, if there is no Git commit, a release.id is used in the position of an identity derived from source_revision.
 
-Eu não deixaria isso entrar na v0.3 assim.
+I would not let this enter v0.3 as-is.
 
-A pergunta deve ser:
+The question must be:
 
-Para que essa string realmente existe no runtime?
+What does this string actually exist for in the runtime?
 
-Se é uma label para identificar a versão executada, ela deve ter nome como:
+If it is a label to identify the running version, it should have a name such as:
 
 runtime_revision
 artifact_identity
 release_identity
 
-e usar uma identidade coerente, provavelmente:
+and use a coherent identity, probably:
 
-source_revision quando disponível
-ou
+source_revision when available
+or
 image_digest
 
-Mas release.id não deveria semanticamente virar uma source revision.
+But release.id should not semantically become a source revision.
 
-Isso precisa ser resolvido antes do reconciler porque reconciliation terá que identificar com precisão:
+This needs to be resolved before the reconciler because reconciliation will need to identify precisely:
 
-“Este runtime observado corresponde à Release que deveria estar ativa?”
+“Does this observed runtime correspond to the Release that should be active?”
 
-6. Terminar a separação entre use cases e stores
+6. Finish separating use cases and stores
 
-Esse é o maior trabalho estrutural do pré-v0.3.
+This is the largest structural task of pre-v0.3.
 
-O próprio roadmap da v0.2 define a regra:
+The v0.2 roadmap itself defines the rule:
 
-use cases decidem o que deve acontecer; stores SQLite decidem como persistir.
+use cases decide what should happen; SQLite stores decide how to persist.
 
-Mas isso ainda não está aplicado uniformemente.
+But this is not yet applied uniformly.
 
 application_import
 
-Hoje abre uma transaction e contém diretamente SQL para:
+Today it opens a transaction and directly contains SQL to:
 
-criar/encontrar System;
-criar Application;
+create/find System;
+create Application;
 delivery spec;
 source spec;
 runtime spec;
 health check;
 exposure.
 
-Deveria ficar conceitualmente:
+Conceptually, it should become:
 
 application_import
     │
-    ├── valida manifest
-    ├── define intenção
+    ├── validates manifest
+    ├── defines intent
     │
     └── transaction
           │
@@ -262,61 +262,61 @@ application_import
                 ├── insert_health_spec
                 └── insert_exposure
 
-A transaction continua no use case quando ele precisa garantir atomicidade do conjunto.
+The transaction remains in the use case when it needs to guarantee atomicity for the set.
 
-Isso é importante: não queremos simplesmente “esconder transactions nos stores”.
+This is important: we do not want to simply “hide transactions in stores”.
 
 application_runtime
 
-Este é ainda mais importante porque será reutilizado diretamente pelo reconciler.
+This is even more important because it will be reused directly by the reconciler.
 
-Hoje ele possui queries próprias para carregar desired state/current runtime e updates próprios para desired state e observações do runtime.
+Today it has its own queries to load desired state/current runtime and its own updates for desired state and runtime observations.
 
-Eu moveria essas operações para:
+I would move these operations to:
 
 application_store
 runtime_store
 
-deixando application_runtime somente com:
+leaving application_runtime with only:
 
-carregar intenção
+load intent
         ↓
-observar Podman
+observe Podman
         ↓
-decidir
+decide
         ↓
-produzir efeito
+produce effect
         ↓
-persistir resultado
+persist result
 
-Esse é quase exatamente o padrão que o reconciler vai precisar.
+This is almost exactly the pattern the reconciler will need.
 
 exposure_change
 
-Hoje também contém diretamente leitura e escrita das tabelas de Applications, exposures e runtimes.
+Today it also directly contains reads and writes to the Applications, exposures, and runtimes tables.
 
-Eu moveria as queries para stores antes do reconciler, porque exposição fará parte do futuro desired-vs-observed.
+I would move the queries to stores before the reconciler, because exposure will be part of future desired-vs-observed.
 
 deployment_create
 
-Esse já está parcialmente melhor: utiliza application_store, release_store e deployment_store, mas ainda mantém SQL próprio para verificar deployment concorrente, descobrir a Release ativa, inserir Deployment e recarregá-lo.
+This is already partially better: it uses application_store, release_store, and deployment_store, but it still retains its own SQL to check for a concurrent deployment, discover the active Release, insert a Deployment, and reload it.
 
-Eu terminaria a migração.
+I would finish the migration.
 
-O resultado deveria ser:
+The result should be:
 
 deployment_create
       │
-      ├── abre TransactionBehavior::Immediate
-      ├── verifica regras
-      ├── chama stores
+      ├── opens TransactionBehavior::Immediate
+      ├── checks rules
+      ├── calls stores
       └── commit
 
-e não possuir SQL.
+and contain no SQL.
 
-A regra final
+The final rule
 
-Eu escreveria explicitamente em architecture.md:
+I would write explicitly in architecture.md:
 
 Use case owns:
 - orchestration
@@ -336,15 +336,15 @@ External adapters own:
 - systemd
 - Caddy
 
-E manteria uma regra que a arquitetura atual já possui:
+And I would retain a rule the current architecture already has:
 
-Nunca manter uma transaction SQLite aberta durante Git, Podman, Caddy ou HTTP.
+Never keep a SQLite transaction open during Git, Podman, Caddy, or HTTP.
 
-7. Não criar abstrações extras durante essa limpeza
+7. Do not create additional abstractions during this cleanup
 
-Isso também precisa fazer parte do plano.
+This also needs to be part of the plan.
 
-Eu não adicionaria antes da v0.3:
+I would not add before v0.3:
 
 Repository<T>
 Repository traits
@@ -355,104 +355,104 @@ generic storage abstractions
 async
 event bus
 
-Os stores concretos já existentes são suficientes.
+The existing concrete stores are sufficient.
 
-A limpeza é:
+The cleanup is:
 
-SQL saiu do use case
+SQL left the use case
 
-e não:
+and not:
 
-vamos redesenhar toda a arquitetura de persistência
+let's redesign the entire persistence architecture
 
-Isso mantém o estilo simples que o projeto explicitamente busca; a arquitetura atual inclusive registra ausência deliberada de traits/generics/async para essas abstrações.
+This retains the simple style the project explicitly seeks; the current architecture even records the deliberate absence of traits/generics/async for these abstractions.
 
-8. Validar a exclusão mútua já existente
+8. Validate the existing mutual exclusion
 
-Eu não implementaria locking novo antes da v0.3.
+I would not implement new locking before v0.3.
 
-create_deployment() já abre:
+create_deployment() already opens:
 
 TransactionBehavior::Immediate
 
-e dentro dela verifica se existe outro deployment não terminal da Application antes de inserir o próximo.
+and within it checks whether another non-terminal deployment for the Application exists before inserting the next one.
 
-Isso é uma boa base para impedir:
+This is a good basis to prevent:
 
 deploy A
 +
 deploy A
 
-concorrentes.
+from running concurrently.
 
-O que falta é provar isso com um teste de concorrência real, idealmente dois processos/conexões separados.
+What is missing is proving this with a real concurrency test, ideally two separate processes/connections.
 
-O teste deveria garantir:
+The test should guarantee:
 
-processo 1
+process 1
 pneuma app deploy app ...
 
-processo 2 simultâneo
+simultaneous process 2
 pneuma app deploy app ...
 
-resultado:
+result:
 
-1 ganha
-1 recebe ActiveDeployment
+1 wins
+1 receives ActiveDeployment
 
-Se isso passar, marcaríamos:
+If this passes, we would mark:
 
 deployment mutual exclusion ✅
 
-em vez de construir outro lock.
+instead of building another lock.
 
-Depois, para a v0.3, teremos que definir a interação:
+Later, for v0.3, we will need to define the interaction:
 
 deploy × reconcile
 
-mas isso depende primeiro do design do reconciler.
+but that first depends on the reconciler design.
 
-9. Não mexer mais em CI/bootstrap, salvo validação/documentação
+9. Do not change CI/bootstrap further, except for validation/documentation
 
-Esse bloco já pode ser considerado essencialmente concluído.
+This block can already be considered essentially complete.
 
-O bootstrap atual cria o ambiente operacional, usa /etc/pneuma/environment e já possui suporte à identidade CI restrita; architecture.md registra o ci_dispatch como forced-command que aceita somente deploy <app> <branch> e version.
+The current bootstrap creates the operational environment, uses /etc/pneuma/environment, and already supports the restricted CI identity; architecture.md records ci_dispatch as a forced-command that accepts only deploy <app> <branch> and version.
 
-A iteração atual também registra staging funcionando via essa identidade CI restrita.
+The current iteration also records staging working through this restricted CI identity.
 
-Portanto, antes da v0.3:
+Therefore, before v0.3:
 
-não:
-  redesenhar SSH
-  criar pneuma-deployer
-  criar API
-  adicionar OIDC
+no:
+  redesign SSH
+  create pneuma-deployer
+  create API
+  add OIDC
 
-sim:
-  manter testes
-  atualizar roadmap
-  validar que production continua funcionando
-10. Escrever o design do reconciliation antes do reconciler.rs
+yes:
+  keep tests
+  update roadmap
+  validate that production continues to work
+10. Write the reconciliation design before reconciler.rs
 
-Esse é o último grande artefato obrigatório antes de começar código da v0.3.
+This is the last major mandatory artifact before starting v0.3 code.
 
-Criaria:
+I would create:
 
 docs/design/reconciliation.md
 
-ou nome equivalente.
+or an equivalent name.
 
-Esse documento precisa congelar semântica, não implementação.
+This document needs to freeze semantics, not implementation.
 
-Fontes de verdade
+Sources of truth
 
-Eu definiria:
+I would define:
 
 SQLite
     desired state
     active deployment
     Release identity
-    histórico
+    history
 
 Podman/systemd
     observed runtime state
@@ -463,13 +463,13 @@ Caddy
 OCI registry
     artifact availability
 
-A arquitetura atual já deixa explicitamente claro que SQLite não é fonte do estado observado do runtime; Podman é.
+The current architecture already makes it explicitly clear that SQLite is not the source of observed runtime state; Podman is.
 
-Matriz de runtime
+Runtime matrix
 
-Por exemplo:
+For example:
 
-Desired	Observed	Ação
+Desired	Observed	Action
 Running	Running	no-op
 Running	Stopped	start
 Running	Missing	recover
@@ -478,9 +478,9 @@ Stopped	Running	stop
 Stopped	Stopped	no-op
 Stopped	Missing	no-op
 
-Hoje já existe parte dessa semântica: a bateria atual mostra que um container removido com desired Running pode ser recriado pelo Quadlet e que status reconcilia a identidade observada; também houve correção específica para Stopped + Missing.
+Part of this semantics already exists today: the current suite shows that a removed container with desired Running can be recreated by Quadlet and that status reconciles observed identity; there was also a specific fix for Stopped + Missing.
 
-Matriz de exposição
+Exposure matrix
 desired Public
 observed correct
 → no-op
@@ -502,62 +502,62 @@ fragment present
 → remove
 Deployment recovery
 
-Definir o que acontece se o processo morrer em:
+Define what happens if the process dies in:
 
 Pending
 Starting
 Verifying
 Activating
 
-Minha política inicial continuaria sendo conservadora:
+My initial policy would remain conservative:
 
-não sabemos se promoção concluiu?
+do we not know whether promotion completed?
         ↓
-não promover automaticamente
+do not promote automatically
         ↓
-inspecionar estado real
+inspect real state
         ↓
-preservar runtime saudável anterior
+preserve previous healthy runtime
         ↓
-cleanup seguro
+safe cleanup
         ↓
-marcar interrupted/failed
-Invariantes
+mark interrupted/failed
+Invariants
 
-Documentaria pelo menos:
+I would document at least:
 
-uma Application tem no máximo um Deployment ativo
+an Application has at most one active Deployment
 
-uma Release é imutável
+a Release is immutable
 
-reconciliation não cria Release nova
+reconciliation does not create a new Release
 
-runtime recovery não cria Deployment novo por padrão
+runtime recovery does not create a new Deployment by default
 
-reconciliation não muda desired state
+reconciliation does not change desired state
 
-reconciliation nunca escolhe versão mais nova
+reconciliation never selects a newer version
 
-reconciliation não observa registry procurando release nova
+reconciliation does not observe the registry looking for a new release
 
-reconciliation deve ser idempotente
+reconciliation must be idempotent
 
-Essa última frase define muito da v0.3:
+This last sentence defines much of v0.3:
 
-Reconcile não decide uma nova intenção; apenas converge a realidade para uma intenção já persistida.
+Reconcile does not decide a new intent; it only converges reality toward an already persisted intent.
 
-11. Definir a bateria de testes da v0.3 antes da implementação
+11. Define the v0.3 test suite before implementation
 
-Não precisa escrever todo o código de teste antecipadamente, mas os cenários têm que estar definidos.
+It is not necessary to write all test code in advance, but the scenarios must be defined.
 
-O documento de testes deveria cobrir quatro classes:
+The test document should cover four classes:
 
 RUNTIME DRIFT
 
 kill container
 remove container
 stop unit
-remove materialização Quadlet
+remove Quadlet materialization
 reboot
 
 
@@ -565,32 +565,32 @@ EXPOSURE DRIFT
 
 delete Caddy fragment
 alter Caddy target
-public sem route
-internal com route
+public without route
+internal with route
 
 
 DEPLOYMENT RECOVERY
 
-crash em Pending
-crash em Starting
-crash em Verifying
-crash em Activating
+crash in Pending
+crash in Starting
+crash in Verifying
+crash in Activating
 
 
 CONCURRENCY / IDEMPOTENCY
 
-reconcile duas vezes
-reconcile paralelo
+reconcile twice
+parallel reconcile
 deploy × deploy
 deploy × reconcile
 
-Assim a v0.3 passa a ser conduzida por comportamentos esperados, e não pelo formato que reconciler.rs assumir.
+This way v0.3 becomes driven by expected behaviors, rather than the shape reconciler.rs takes.
 
-12. Rodar uma regressão completa depois da consolidação
+12. Run a complete regression after consolidation
 
-Só depois dos refactors de domínio/persistência.
+Only after the domain/persistence refactors.
 
-Primeiro:
+First:
 
 cargo fmt --check
 
@@ -604,9 +604,9 @@ cargo test --all-features
 
 cargo build --release
 
-A iteração atual já usa esses quatro gates.
+The current iteration already uses these four gates.
 
-Depois, VM Debian limpa:
+Then, clean Debian VM:
 
 bootstrap
    ↓
@@ -634,18 +634,18 @@ reboot
    ↓
 CI dispatcher
 
-A baseline atual é forte: bootstrap 20 PASS / 0 FAIL e bateria principal 27 PASS / 0 FAIL / 1 SKIP. O pré-v0.3 não deveria reduzir isso.
+The current baseline is strong: bootstrap 20 PASS / 0 FAIL and the main suite 27 PASS / 0 FAIL / 1 SKIP. Pre-v0.3 should not reduce this.
 
-Ordem concreta que eu seguiria
+Concrete order I would follow
 
-Eu faria exatamente nesta sequência:
+I would do it exactly in this sequence:
 
-docs: redefine roadmap after v0.2 — corrigir v0.3 e dividir v0.5 em etapas futuras.
-docs: open pre-v0.3 consolidation iteration — registrar escopo e DoD.
-refactor(domain): make deployment and runtime first-class domain types — mover Deployment, DeploymentType, DeploymentStatus, RuntimeState.
-refactor(release): use a single domain Release type — eliminar release_store::Release.
+docs: redefine roadmap after v0.2 — fix v0.3 and split v0.5 into future stages.
+docs: open pre-v0.3 consolidation iteration — record scope and DoD.
+refactor(domain): make deployment and runtime first-class domain types — move Deployment, DeploymentType, DeploymentStatus, RuntimeState.
+refactor(release): use a single domain Release type — eliminate release_store::Release.
 refactor(deployment): rename DeployedRelease to DeploymentResult.
-refactor(runtime): separate source revision from runtime identity — resolver o fallback de release.id.
+refactor(runtime): separate source revision from runtime identity — resolve the release.id fallback.
 refactor(store): move application import persistence to application store.
 refactor(store): move application runtime persistence to stores.
 refactor(store): move exposure persistence to stores.
@@ -653,51 +653,51 @@ refactor(store): finish deployment create persistence extraction.
 test(deployment): verify concurrent deployment exclusion.
 docs: define reconciliation semantics and invariants.
 test: define v0.3 reconciliation E2E scenarios.
-regressão completa em VM limpa.
-Opcionalmente publicar v0.2.1 como baseline consolidada.
-Só então: primeiro commit funcional da v0.3.
-O que não deve bloquear a v0.3
+complete regression on a clean VM.
+Optionally publish v0.2.1 as a consolidated baseline.
+Only then: first functional v0.3 commit.
+What should not block v0.3
 
-Eu não esperaria por:
+I would not wait for:
 
 registry watcher
-idempotency-key genérica
-audit trail completo do GitHub
+generic idempotency key
+complete GitHub audit trail
 image retention
-API HTTP
+HTTP API
 TUI
 OIDC
 GitHub App
 RBAC
-novo usuário Linux de deploy
+new Linux deployment user
 
-São preocupações válidas, mas nenhuma delas é necessária para implementar corretamente desired-vs-observed e recovery.
+These are valid concerns, but none is required to correctly implement desired-vs-observed and recovery.
 
-Definition of Done do pré-v0.3
+Definition of Done for pre-v0.3
 
-Eu só começaria pneuma reconcile quando puder responder sim a estas perguntas:
+I would only start pneuma reconcile when I can answer yes to these questions:
 
-Existe uma definição única e inequívoca de Release, Deployment e Runtime no código?
+Is there a single, unambiguous definition of Release, Deployment, and Runtime in the code?
 
-Os principais use cases que o reconciler reutilizará estão livres de SQL direto?
+Are the main use cases the reconciler will reuse free of direct SQL?
 
-Está claro quem controla as transactions e quem controla SQL?
+Is it clear who controls transactions and who controls SQL?
 
-source_revision significa apenas source revision?
+Does source_revision mean only source revision?
 
-Deployment concorrente já está testado?
+Has concurrent Deployment already been tested?
 
-Sabemos exatamente qual sistema é fonte de verdade para cada estado?
+Do we know exactly which system is the source of truth for each state?
 
-Temos uma tabela dizendo o que fazer para cada combinação desired × observed?
+Do we have a table saying what to do for every desired × observed combination?
 
-Sabemos o que fazer com cada Deployment interrompido?
+Do we know what to do with every interrupted Deployment?
 
-Sabemos explicitamente o que o reconciler não pode fazer?
+Do we explicitly know what the reconciler cannot do?
 
-Toda a regressão v0.2 continua verde?
+Does the entire v0.2 regression remain green?
 
-Quando essas respostas forem positivas, aí a primeira implementação da v0.3 pode ser pequena e muito objetiva:
+When these answers are positive, the first v0.3 implementation can be small and very focused:
 
 pneuma reconcile <app>
         ↓
@@ -709,4 +709,4 @@ produce ReconciliationPlan
         ↓
 apply
 
-Esse é o ponto em que eu consideraria a base realmente pronta para evoluir de “Pneuma executa mudanças” para “Pneuma mantém o estado desejado”
+This is the point at which I would consider the foundation truly ready to evolve from “Pneuma executes changes” to “Pneuma maintains desired state”

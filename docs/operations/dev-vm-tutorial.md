@@ -1,54 +1,54 @@
-# VM de desenvolvimento Pneuma (Debian 13)
+# Pneuma Development VM (Debian 13)
 
-Tutorial para criar e preparar uma VM Debian 13 que reproduz as propriedades
-relevantes da VPS de produção e serve como alvo padrão de integração e testes
-E2E do Pneuma — sem usar a VPS como laboratório. O plano completo está em
-`~/Downloads/pneuma-development-vm-plan.md`; este documento é o passo a passo
-operacional.
+Tutorial for creating and preparing a Debian 13 VM that reproduces the relevant
+properties of the production VPS and serves as the standard target for Pneuma
+integration and E2E tests, without using the VPS as a laboratory. The complete
+plan is at `~/Downloads/pneuma-development-vm-plan.md`; this document is the
+operational walkthrough.
 
-A VM é o **host operacional** do Pneuma, não uma segunda estação de
-desenvolvimento: a edição, compilação e os testes unitários continuam no host.
-A VM valida Podman rootless, Caddy, Quadlet/systemd, SQLite, permissões,
-networking, instalação do binário e reboot/recovery.
+The VM is Pneuma's **operational host**, not a second development workstation:
+editing, compilation, and unit tests remain on the host. The VM validates
+rootless Podman, Caddy, Quadlet/systemd, SQLite, permissions, networking,
+binary installation, and reboot/recovery.
 
-## 1. Pré-requisitos
+## 1. Prerequisites
 
-- VM Debian 13 (trixie) **básica** já criada e acessível por SSH a partir do
-  host de desenvolvimento — Debian 12 (bookworm) entrega Podman 4.3.1, que
-  **não inclui** o gerador Quadlet (`podman-user-generator`).
-- Chave SSH **exclusiva** para a VM, gerada no host antes do provisionamento
-  (seção 2).
-- Aplicações fixture pequenas e determinísticas para os testes (seção 6).
-- Registry local (container `registry:2` na porta 5000) para entregar as
-  fixtures por digest (seção 6.2).
+- A **basic** Debian 13 (trixie) VM already created and reachable over SSH from
+  the development host. Debian 12 (bookworm) provides Podman 4.3.1, which
+  **does not include** the Quadlet generator (`podman-user-generator`).
+- A **dedicated** SSH key for the VM, generated on the host before provisioning
+  (section 2).
+- Small, deterministic fixture applications for testing (section 6).
+- A local registry (the `registry:2` container on port 5000) to deliver fixtures
+  by digest (section 6.2).
 
-> **Nota:** a VM usa rede NAT do libvirt com DHCP; o IP pode mudar entre
-> restores de snapshot. Ao reconectar depois de um restore, confira o IP atual
-> (`virsh -c qemu:///system domifaddr <vm>`) e atualize `~/.ssh/config`.
+> **Note:** the VM uses libvirt NAT networking with DHCP; its IP may change
+> between snapshot restores. When reconnecting after a restore, check the current
+> IP (`virsh -c qemu:///system domifaddr <vm>`) and update `~/.ssh/config`.
 
-> **Nota:** uma conta com acesso root (por exemplo `root` ou um usuário com
-> `sudo`) serve apenas para o provisionamento. O Pneuma roda sob o usuário
-> dedicado `pneuma`, sem acesso ao root, replicando o modelo da VPS.
+> **Note:** an account with root access (such as `root` or a user with `sudo`) is
+> used only for provisioning. Pneuma runs under the dedicated `pneuma` user,
+> without root access, replicating the VPS model.
 
-## 2. Gerar a chave SSH e configurar o acesso
+## 2. Generate the SSH Key and Configure Access
 
-Gere uma chave exclusiva para a VM no host de desenvolvimento (conforme o
-plano, o usuário `pneuma` não usa a chave do GitHub):
+Generate a dedicated key for the VM on the development host (as specified in
+the plan, the `pneuma` user does not use the GitHub key):
 
 ```bash
 ssh-keygen -t ed25519 -f ~/.ssh/pneuma-dev -N "" -C "pneuma-dev VM key"
 ```
 
-Copie a chave pública para uma conta de provisionamento da VM (root ou
-administrativa). Com `ssh-copy-id`, informando o IP que a VM recebeu na rede
-(ex.: `192.168.122.50`):
+Copy the public key to a VM provisioning account (root or administrative). With
+`ssh-copy-id`, provide the IP assigned to the VM on the network (for example,
+`192.168.122.50`):
 
 ```bash
 ssh-copy-id -i ~/.ssh/pneuma-dev.pub root@192.168.122.50
 ```
 
-O Debian aceita login root por chave (`PermitRootLogin prohibit-password`) sem
-expor a senha. Configure o `~/.ssh/config` do host para acesso previsível:
+Debian accepts root login by key (`PermitRootLogin prohibit-password`) without
+exposing the password. Configure the host's `~/.ssh/config` for predictable access:
 
 ```text
 Host pneuma-dev
@@ -58,18 +58,18 @@ Host pneuma-dev
     IdentitiesOnly yes
 ```
 
-E adicione ao `/etc/hosts` do host: `192.168.122.50 pneuma-dev`. Confirme:
+Also add `192.168.122.50 pneuma-dev` to the host's `/etc/hosts`. Confirm:
 
 ```bash
 ssh pneuma-dev 'hostname'
 ```
 
-## 3. Provisionar o host
+## 3. Provision the Host
 
-Com a chave de provisionamento já instalada, envie o script e a biblioteca
-comum e execute como root na VM. O layout no `/tmp` deve preservar a estrutura
-do repositório (`provision-host.sh` em `dev-vm/`, biblioteca em `lib/`), porque
-o script calcula o caminho da biblioteca a partir do próprio caminho:
+With the provisioning key already installed, transfer the script and shared
+library and run it as root on the VM. The layout in `/tmp` must preserve the
+repository structure (`provision-host.sh` in `dev-vm/`, library in `lib/`),
+because the script derives the library path from its own path:
 
 ```bash
 scp scripts/dev-vm/provision-host.sh pneuma-dev:/tmp/dev-vm/
@@ -77,33 +77,33 @@ scp -r scripts/lib pneuma-dev:/tmp/
 ssh pneuma-dev 'sudo bash /tmp/dev-vm/provision-host.sh'
 ```
 
-A VM e a VPS aplicam **as mesmas invariantes de host**, implementadas uma única
-vez em `scripts/lib/provision-host.sh` e usadas também por
-`scripts/bootstrap-vps.sh`. O script assume uma VM Debian básica e:
+The VM and VPS apply **the same host invariants**, implemented once in
+`scripts/lib/provision-host.sh` and also used by `scripts/bootstrap-vps.sh`. The
+script assumes a basic Debian VM and:
 
-1. instala o conjunto de runtime (Podman, `uidmap`, `fuse-overlayfs`, Caddy,
-   Git e `curl`) e, como conveniência exclusiva da VM, `sqlite3`;
-2. verifica o gerador Quadlet (`podman-user-generator` >= 4.4);
-3. cria o usuário `pneuma` com `subuid/subgid` e linger;
-4. cria os diretórios persistentes do Pneuma com as permissões da VPS;
-5. configura o Caddyfile da VM com `local_certs`, importando apenas
-   `/etc/caddy/applications/*.caddy`, mapeia os domínios fixture em `/etc/hosts`
-   e instala a CA local do Caddy no trust store;
-6. grava o ambiente canônico em `/etc/pneuma/environment` e as variáveis
-   `PNEUMA_*`/rootless no `~/.profile` do `pneuma`;
-7. valida `caddy validate` e inicia o serviço;
-8. confirma Podman rootless com `podman info`.
+1. installs the runtime set (Podman, `uidmap`, `fuse-overlayfs`, Caddy, Git,
+   and `curl`) and, as a VM-only convenience, `sqlite3`;
+2. verifies the Quadlet generator (`podman-user-generator` >= 4.4);
+3. creates the `pneuma` user with `subuid/subgid` and linger;
+4. creates Pneuma persistent directories with VPS permissions;
+5. configures the VM Caddyfile with `local_certs`, importing only
+   `/etc/caddy/applications/*.caddy`, maps fixture domains in `/etc/hosts`, and
+   installs Caddy's local CA in the trust store;
+6. writes the canonical environment to `/etc/pneuma/environment` and
+   `PNEUMA_*`/rootless variables to `pneuma`'s `~/.profile`;
+7. validates `caddy validate` and starts the service;
+8. confirms rootless Podman with `podman info`.
 
-Ao contrário do bootstrap de produção, o provisionamento da VM **não** clona o
-repositório, não compila nem instala o binário, não instala a chave CI nem roda
-`pneuma doctor`: o acesso de provisionamento é pré-existente e a instalação do
-Pneuma é um passo separado (seção 4).
+Unlike production bootstrap, VM provisioning **does not** clone the repository,
+compile or install the binary, install the CI key, or run `pneuma doctor`:
+provisioning access already exists, and Pneuma installation is a separate step
+(section 4).
 
-## 4. Instalar o binário Pneuma na VM
+## 4. Install the Pneuma Binary on the VM
 
-A VM não compila nem clona o repositório. O ciclo parte do binário compilado no
-host, e a instalação é um passo **separado** do provisionamento: envie o
-binário e instale em `/usr/local/bin/pneuma`:
+The VM does not compile or clone the repository. The cycle starts with the
+binary compiled on the host, and installation is **separate** from provisioning:
+transfer the binary and install it to `/usr/local/bin/pneuma`:
 
 ```bash
 cargo build --release
@@ -111,18 +111,17 @@ scp target/release/pneuma pneuma-dev:/tmp/pneuma-new
 ssh pneuma-dev 'sudo install -o root -g root -m 0755 /tmp/pneuma-new /usr/local/bin/pneuma'
 ```
 
-Valide o binário antes de instalar e rode `pneuma doctor` como o usuário
-`pneuma` depois, para que uma build quebrada nunca substitua um runtime
-funcionando:
+Validate the binary before installing it and run `pneuma doctor` afterward as
+the `pneuma` user, so a broken build never replaces a working runtime:
 
 ```bash
 ssh pneuma-dev '/usr/local/bin/pneuma version'
 ssh pneuma-dev 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma doctor"'
 ```
 
-## 5. Verificação
+## 5. Verification
 
-Na VM, abra o shell do `pneuma` e confirme o ambiente:
+On the VM, open the `pneuma` shell and confirm the environment:
 
 ```bash
 sudo -iu pneuma
@@ -131,14 +130,14 @@ pneuma doctor
 pneuma app list
 ```
 
-A VM recém-provisionada ainda não tem aplicações registradas; o `pneuma app
-list` deve retornar uma lista vazia (ou a mensagem correspondente), e o
-`pneuma doctor` deve passar em todos os checks de host.
+The freshly provisioned VM does not yet have registered applications; `pneuma
+app list` must return an empty list (or the corresponding message), and `pneuma
+doctor` must pass every host check.
 
-O ciclo normal de desenvolvimento passa a ser:
+The normal development cycle becomes:
 
 ```text
-editar código
+edit code
     ↓
 cargo build --release
     ↓
@@ -151,31 +150,31 @@ ssh pneuma-dev 'runuser -u pneuma -- bash -lc "cd $HOME && pneuma doctor"'
 Pneuma atualizado e validado na VM
 ```
 
-## 6. Aplicações fixture
+## 6. Fixture Applications
 
-Manter as fixtures independentes do site pessoal, pequenas e determinísticas:
+Keep fixtures independent from the personal site, small, and deterministic:
 
-| Fixture | Comportamento | Uso |
+| Fixture | Behavior | Use |
 |---|---|---|
-| `healthy-http` | `/healthz` 200; `/` mostra versão | Happy path, upgrade, rollback |
-| `unhealthy-http` | `/healthz` 500 | Preservação da release ativa |
-| `slow-start` | Health 200 após atraso controlado | Janela de verificação |
-| `bad-port` | Porta diferente da declarada | Falha de runtime/configuração |
-| `redirect-public` | HTTP simples atrás do Caddy | Visibility e proxy |
+| `healthy-http` | `/healthz` 200; `/` shows version | Happy path, upgrade, rollback |
+| `unhealthy-http` | `/healthz` 500 | Active release preservation |
+| `slow-start` | Health 200 after a controlled delay | Verification window |
+| `bad-port` | Port differs from the declared one | Runtime/configuration failure |
+| `redirect-public` | Simple HTTP behind Caddy | Visibility and proxy |
 
-Cada fixture vive em `scripts/dev-vm/fixtures/<nome>/` com seu `pneuma.toml` e
-Containerfile.
+Each fixture resides in `scripts/dev-vm/fixtures/<name>/` with its `pneuma.toml`
+and Containerfile.
 
-### 6.1. Copiar e importar
+### 6.1. Copy and Import
 
-Copie as fixtures para o checkout na VM (owner `pneuma:pneuma`) e registre-as
-por **Git remoto** (a v0.2 removeu o import por path local): para fixtures
-locais, crie um repositório Git acessível pela MV e importe pela URL.
+Copy the fixtures to the VM checkout (owner `pneuma:pneuma`) and register them
+through **remote Git** (v0.2 removed import by local path): for local fixtures,
+create a Git repository accessible from the VM and import it by URL.
 
 ```bash
 scp -r scripts/dev-vm/fixtures pneuma-dev:/var/lib/pneuma/checkouts/
 ssh pneuma-dev 'chown -R pneuma:pneuma /var/lib/pneuma/checkouts/fixtures'
-# Dentro da VM, torne o diretório das fixtures um repositório Git remoto:
+# Inside the VM, make the fixture directory available as a remote Git repository:
 ssh pneuma-dev 'su - pneuma -c "
   cd /var/lib/pneuma/checkouts/fixtures/healthy-http &&
   git init -q && git add . && git -c user.email=dev@local -c user.name=dev commit -qm initial && 
@@ -183,13 +182,13 @@ ssh pneuma-dev 'su - pneuma -c "
 ssh pneuma-dev 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma app import file:///var/lib/pneuma/checkouts/healthy-http.git --manifest pneuma.toml"'
 ```
 
-O script `deploy-all-fixtures.sh` automatiza esse processo para todas as
-fixtures: cria um repositório Git local por fixture em
-`/var/lib/pneuma/repos/<fixture>.git` e importa via `file://`.
+The `deploy-all-fixtures.sh` script automates this process for all fixtures: it
+creates one local Git repository per fixture in
+`/var/lib/pneuma/repos/<fixture>.git` and imports it through `file://`.
 
-> **Atenção:** `app import` usa `ON CONFLICT(name) DO NOTHING`; um re-import após
-> alterar `pneuma.toml` **não** atualiza a entrega registrada. Para trocar o
-> repositório/entrega de uma fixture já registrada, atualize o banco:
+> **Warning:** `app import` uses `ON CONFLICT(name) DO NOTHING`; re-importing
+> after changing `pneuma.toml` **does not** update the registered delivery. To
+> change the repository/delivery of an already registered fixture, update the database:
 >
 > ```bash
 > runuser -u pneuma -- bash -lc 'cd $HOME && sqlite3 /var/lib/pneuma/database/pneuma.sqlite3 \
@@ -197,12 +196,12 @@ fixtures: cria um repositório Git local por fixture em
 >   '\''localhost/'\'', '\''localhost:5000/'\'')"'
 > ```
 
-### 6.2. Registry local e deploy por digest
+### 6.2. Local Registry and Digest Deployment
 
-As fixtures são construídas e publicadas num registry local (container
-`registry:2`, porta 5000). **O digest usado no deploy é o do manifest no
-registry, não o Image ID local** — o push reescreve o manifest para OCI. Para
-obter o digest do registry:
+Fixtures are built and published to a local registry (the `registry:2` container
+on port 5000). **The digest used for deployment is the manifest digest in the
+registry, not the local Image ID**. Push rewrites the manifest to OCI. To obtain
+the registry digest:
 
 ```bash
 curl -s -H "Accept: application/vnd.oci.image.manifest.v1+json" \
@@ -210,8 +209,8 @@ curl -s -H "Accept: application/vnd.oci.image.manifest.v1+json" \
   | grep -i docker-content-digest
 ```
 
-Configure o registry como inseguro em `/etc/containers/registries.conf.d/pneuma-dev.conf`
-(formato v2; o antigo `[registries.insecure]` é rejeitado):
+Configure the registry as insecure in `/etc/containers/registries.conf.d/pneuma-dev.conf`
+(v2 format; the old `[registries.insecure]` is rejected):
 
 ```text
 [[registry]]
@@ -219,7 +218,7 @@ location = "localhost:5000"
 insecure = true
 ```
 
-Construa, publique e deploye:
+Build, publish, and deploy:
 
 ```bash
 podman build -t localhost:5000/<fixture>:latest /var/lib/pneuma/checkouts/fixtures/<fixture>
@@ -227,52 +226,52 @@ podman push --tls-verify=false localhost:5000/<fixture>:latest
 pneuma app deploy <fixture> --image localhost:5000/<fixture>@sha256:<digest-do-registry>
 ```
 
-> **Enforcement de repositório:** o deploy só aceita imagens cujo repositório
-> (`localhost:5000/<fixture>`) bate com `[delivery] image` do `pneuma.toml`.
-> O argumento `--image` aceita apenas `<repository>@sha256:<hex>` (o digest
-> solto é rejeitado).
+> **Repository enforcement:** deployment accepts only images whose repository
+> (`localhost:5000/<fixture>`) matches `[delivery] image` in `pneuma.toml`. The
+> `--image` argument accepts only `<repository>@sha256:<hex>` (a bare digest is
+> rejected).
 
-### 6.3. Resultado esperado da bateria
+### 6.3. Expected Battery Results
 
-| Fixture | Deploy | Observação |
+| Fixture | Deployment | Note |
 |---|---|---|
-| `healthy-http` | Succeeded | Porta host alocada; `/` responde a versão |
-| `unhealthy-http` | Failed | Health check recebe 500 |
-| `slow-start` | Failed | Health 503 dentro da janela de verificação |
-| `bad-port` | Failed | Conexão recusada (porta divergente) |
-| `redirect-public` | Succeeded | Requer Caddy com `local_certs` (seção 7) |
+| `healthy-http` | Succeeded | Host port allocated; `/` responds with the version |
+| `unhealthy-http` | Failed | Health check receives 500 |
+| `slow-start` | Failed | Health 503 within the verification window |
+| `bad-port` | Failed | Connection refused (divergent port) |
+| `redirect-public` | Succeeded | Requires Caddy with `local_certs` (section 7) |
 
-Upgrade e rollback usam um digest novo/antigo do mesmo repositório; a cada
-deploy o runtime anterior é retirado e o novo ganha uma porta host nova.
+Upgrade and rollback use a new/old digest from the same repository; on each
+deployment, the previous runtime is removed and the new one receives a new host port.
 
-### 6.4. Scripts de automação do ciclo
+### 6.4. Cycle Automation Scripts
 
-Os scripts em `scripts/dev-vm/` automatizam o ciclo de desenvolvimento contra a
-VM (todos aceitam `[ssh-host]` opcional, default `pneuma-dev`):
+The scripts in `scripts/dev-vm/` automate the development cycle against the VM
+(all accept optional `[ssh-host]`, defaulting to `pneuma-dev`):
 
-Os scripts que alteram Caddy, diretórios de estado, a instalação do binário ou
-reiniciam a VM esperam que o alias SSH conecte como `root`; eles não exigem nem
-instalam `sudo`. Os comandos de runtime continuam sob o usuário `pneuma`.
+Scripts that change Caddy, state directories, binary installation, or reboot the
+VM expect the SSH alias to connect as `root`; they neither require nor install
+`sudo`. Runtime commands continue under the `pneuma` user.
 
-| Script | O que faz | Quando usar |
+| Script | What it does | When to use it |
 |---|---|---|
-| `sync-binary.sh` | `cargo build --release` + scp + install + `pneuma doctor` | Após alterar código Rust |
-| `rebuild-fixtures.sh` | Copia fixtures, build + push no registry local, mostra digests | Após editar fixtures/`server.py` |
-| `deploy-all-fixtures.sh` | Cria repos Git locais, importa cada fixture por `file://` e deploya por digest | Após reset ou mudança de fixtures |
-| `reset-fixtures.sh` | Para apps, remove units/containers/Caddy fragments/checkouts, recria o DB | Voltar a um estado limpo |
-| `overview.sh` | Status de apps, containers, units, Caddy e registry de uma vez | Debug rápido |
-| `e2e.sh` | Reset → rebuild → HTTPS público/internal → candidate falho → upgrade → rollback → reboot/recovery | Bateria de runtime e exposição |
-| `test-branch-deploy.sh` | Cria repo Git com `main`/`staging`, taggeia imagens com o SHA de cada commit, importa por URL Git e deploya por `--branch` | Validar o fluxo Git → OCI (fase G) |
-| `test-all.sh` | Orquestra E2E, Git/OCI, dispatcher CI, HTTPS, reboot e restore semântico; exige 0 FAIL/0 SKIP | Regressão descartável final |
+| `sync-binary.sh` | `cargo build --release` + scp + install + `pneuma doctor` | After changing Rust code |
+| `rebuild-fixtures.sh` | Copies fixtures, builds + pushes to the local registry, shows digests | After editing fixtures/`server.py` |
+| `deploy-all-fixtures.sh` | Creates local Git repos, imports each fixture through `file://`, and deploys by digest | After reset or fixture changes |
+| `reset-fixtures.sh` | Stops apps, removes units/containers/Caddy fragments/checkouts, recreates the DB | Return to a clean state |
+| `overview.sh` | Shows app, container, unit, Caddy, and registry status at once | Quick debugging |
+| `e2e.sh` | Reset → rebuild → public/internal HTTPS → failed candidate → upgrade → rollback → reboot/recovery | Runtime and exposure battery |
+| `test-branch-deploy.sh` | Creates a Git repo with `main`/`staging`, tags images with each commit SHA, imports by Git URL, and deploys through `--branch` | Validate the Git → OCI flow (phase G) |
+| `test-all.sh` | Orchestrates E2E, Git/OCI, CI dispatcher, HTTPS, reboot, and semantic restore; requires 0 FAIL/0 SKIP | Final disposable regression |
 
-Fluxo típico de desenvolvimento:
+Typical development flow:
 
 ```bash
-scripts/dev-vm/sync-binary.sh        # depois de cada mudança de código
+scripts/dev-vm/sync-binary.sh        # after every code change
 scripts/dev-vm/overview.sh           # inspecionar o estado
 ```
 
-Fluxo de reset completo:
+Complete reset flow:
 
 ```bash
 scripts/dev-vm/reset-fixtures.sh
@@ -280,54 +279,51 @@ scripts/dev-vm/rebuild-fixtures.sh
 scripts/dev-vm/deploy-all-fixtures.sh
 ```
 
-> **Nota:** `e2e.sh` reinicia a VM (`sudo reboot`) e espera ela voltar; não o
-> execute durante trabalho não persistido na VM. O `reset-fixtures.sh` apaga o
-> banco e os checkouts — a VM volta ao estado pós-provisionamento.
+> **Note:** `e2e.sh` reboots the VM (`sudo reboot`) and waits for it to return;
+> do not run it during unpersisted work on the VM. `reset-fixtures.sh` deletes
+> the database and checkouts, returning the VM to its post-provisioning state.
 
-### 6.5. Regressão descartável final
+### 6.5. Final Disposable Regression
 
-Há três ambientes distintos. Não substitua um pelo outro:
+There are three distinct environments. Do not substitute one for another:
 
-| Ambiente | Objetivo | Operações destrutivas |
+| Environment | Objective | Destructive operations |
 |---|---|---|
-| Clone bootstrap | Provar bootstrap Debian 13 limpo e rerun por SHA/tag imutável | Somente `pneuma-dev-base-test` |
-| Clone E2E | Provar registry, TLS local, dispatcher CI, rollback, reboot e restore | Somente `pneuma-dev-base-test` |
-| VPS de produção | Smoke não destrutivo de DNS, TLS e reachability reais | Nunca reset, E2E ou restore |
+| Bootstrap clone | Prove clean Debian 13 bootstrap and rerun by immutable SHA/tag | Only `pneuma-dev-base-test` |
+| E2E clone | Prove registry, local TLS, CI dispatcher, rollback, reboot, and restore | Only `pneuma-dev-base-test` |
+| Production VPS | Non-destructive smoke testing of real DNS, TLS, and reachability | Never reset, E2E, or restore |
 
-Para a regressão final, clone `pneuma-dev-base` como
-`pneuma-dev-base-test`, provisione, sincronize o binário e instale apenas a
-chave pública de `~/.ssh/pneuma-ci-test` com o forced command do dispatcher.
-Então execute:
+For final regression, clone `pneuma-dev-base` as `pneuma-dev-base-test`,
+provision it, sync the binary, and install only the public key from
+`~/.ssh/pneuma-ci-test` with the dispatcher's forced command. Then run:
 
 ```bash
 bash scripts/dev-vm/test-all.sh root@<ip-da-clone> ~/.ssh/pneuma-ci-test
 ```
 
-O script reseta fixtures, usa o registry local, exige HTTPS com a CA local,
-reinicia a VM, testa fronteiras da chave CI e prova restore semântico. Exija
-`0 FAIL` e `0 SKIP`, então destrua e undefina a clone, inclusive seu storage.
-Execute `scripts/test-bootstrap-vps.sh` em outra clone nova para a acceptance
-de bootstrap; ela recebe um SHA completo ou tag e não compartilha estado com a
-VM E2E.
+The script resets fixtures, uses the local registry, requires HTTPS with the
+local CA, reboots the VM, tests CI key boundaries, and proves semantic restore.
+Require `0 FAIL` and `0 SKIP`, then destroy and undefine the clone, including
+its storage. Run `scripts/test-bootstrap-vps.sh` on another fresh clone for
+bootstrap acceptance; it receives a full SHA or tag and shares no state with the
+E2E VM.
 
-## 7. DNS local e Caddy
+## 7. Local DNS and Caddy
 
-O provisionamento da VM configura `local_certs`, mapeia
-`redirect-public.pneuma.test` para `127.0.0.1` em `/etc/hosts`, instala a CA
-local do Caddy no trust store e executa `update-ca-certificates`. O E2E exige o
-redirect HTTPS desse fixture e a transição posterior para `internal`; não há
-skip de TLS local.
+VM provisioning configures `local_certs`, maps `redirect-public.pneuma.test` to
+`127.0.0.1` in `/etc/hosts`, installs Caddy's local CA in the trust store, and
+runs `update-ca-certificates`. E2E requires this fixture's HTTPS redirect and
+the subsequent transition to `internal`; local TLS cannot be skipped.
 
-Para testar nomes adicionais sem DNS público, adicione-os ao `/etc/hosts` da
-VM:
+To test additional names without public DNS, add them to the VM's `/etc/hosts`:
 
 ```text
 192.168.122.50 site.pneuma.test
 192.168.122.50 api.pneuma.test
 ```
 
-Aplicações públicas passam por **external health check via HTTPS**; sem um
-domínio real a VM usa certificados locais. A configuração equivalente é:
+Public applications undergo an **external health check over HTTPS**; without a
+real domain, the VM uses local certificates. The equivalent configuration is:
 
 ```caddy
 {
@@ -342,57 +338,58 @@ sudo cp /var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt \
 sudo update-ca-certificates
 ```
 
-Sem isso, o health check externo de uma app `public` falha com erro de TLS e o
-deploy é marcado Failed (em produção não é necessário: Let's Encrypt emite o
-certificado real).
+Without this, the external health check of a `public` app fails with a TLS error
+and deployment is marked Failed (this is unnecessary in production: Let's
+Encrypt issues the real certificate).
 
-## 8. Snapshots e reset
+## 8. Snapshots and Reset
 
-Crie pelo menos dois snapshots via `virt-manager` ou `virsh`
+Create at least two snapshots through `virt-manager` or `virsh`
 (`-c qemu:///system`):
 
-| Snapshot | Estado |
+| Snapshot | State |
 |---|---|
-| `pneuma-dev-base` | Podman/Caddy/user/diretórios prontos, Pneuma instalado |
-| `pneuma-dev-fixtures-ready` | Fixtures registradas, registry local, Caddy `local_certs`, baseline E2E |
+| `pneuma-dev-base` | Podman/Caddy/user/directories ready, Pneuma installed |
+| `pneuma-dev-fixtures-ready` | Fixtures registered, local registry, Caddy `local_certs`, E2E baseline |
 
-Testes destrutivos (rollback, reboot, recovery, Caddy quebrado, banco
-inconsistente) devem começar de `pneuma-dev-base`, sem acumular estado invisível
-entre execuções.
+Destructive tests (rollback, reboot, recovery, broken Caddy, inconsistent
+database) must begin from `pneuma-dev-base`, without accumulating invisible
+state between runs.
 
-> **Nota:** a VM usa DHCP do libvirt; após restaurar um snapshot o IP pode
-> mudar (o atual está em `~/.ssh/config`). Não confie no IP antigo.
+> **Note:** the VM uses libvirt DHCP; after restoring a snapshot, its IP may
+> change (the current one is in `~/.ssh/config`). Do not trust the old IP.
 
-## 9. Segurança do ambiente
+## 9. Environment Security
 
-- Usar chave SSH exclusiva para a VM.
-- Não copiar secrets de produção para a VM.
-- Usar registry público para fixtures ou credencial read-only exclusiva.
-- Não expor o SSH da VM à Internet (rede NAT/libvirt).
-- Executar o Pneuma como usuário não-root (`pneuma`).
-- Restringir root ao provisionamento e à instalação do binário.
-- Bloquear login por senha do usuário `pneuma` (`passwd -l`).
-- A chave CI usa `restrict` e forced command; o E2E exige apenas `version` e
-  `deploy healthy-http staging`, e rejeita shell, PTY, forwarding, agent/X11
-  forwarding, leitura de arquivo e injection em branch.
+- Use a dedicated SSH key for the VM.
+- Do not copy production secrets to the VM.
+- Use a public registry for fixtures or dedicated read-only credentials.
+- Do not expose VM SSH to the Internet (NAT/libvirt network).
+- Run Pneuma as the non-root `pneuma` user.
+- Restrict root to provisioning and binary installation.
+- Disable password login for the `pneuma` user (`passwd -l`).
+- The CI key uses `restrict` and a forced command; E2E requires only `version`
+  and `deploy healthy-http staging`, and rejects shell, PTY, forwarding,
+  agent/X11 forwarding, file reading, and branch injection.
 
-## 10. Próximos passos
+## 10. Next Steps
 
-A bateria `scripts/dev-vm/e2e.sh` já cobre o ciclo principal (import, deploy por
-digest, upgrade, rollback e reboot). Upgrade/rollback e reboot foram validados
-na VM: o Quadlet (via `[Install] WantedBy=default.target`) restaura as
-aplicações no boot com linger habilitado, sem `systemctl enable` explícito.
-Com a v0.2 concluída, o fluxo Git → OCI é coberto por `test-branch-deploy.sh`
-(repo Git com `main`/`staging`, import por URL `file://` e deploy por `--branch`)
-e o `e2e.sh` importa as fixtures por repositórios Git locais. A VPS é usada
-apenas para smoke final de integração pública (DNS e TLS reais).
+The `scripts/dev-vm/e2e.sh` battery already covers the main cycle (import,
+digest deployment, upgrade, rollback, and reboot). Upgrade/rollback and reboot
+were validated on the VM: Quadlet (through `[Install] WantedBy=default.target`)
+restores applications at boot with linger enabled, without explicit `systemctl
+enable`. With v0.2 complete, the Git → OCI flow is covered by
+`test-branch-deploy.sh` (Git repo with `main`/`staging`, import by `file://` URL,
+and deployment through `--branch`) and `e2e.sh` imports fixtures through local
+Git repositories. The VPS is used only for final public-integration smoke tests
+(real DNS and TLS).
 
-## Referências
+## References
 
-- `scripts/dev-vm/provision-host.sh` — provisionamento do host.
-- `scripts/dev-vm/smoke.sh` — verificação básica (version, doctor, app list).
-- `scripts/dev-vm/sync-binary.sh` — build + deploy do binário na VM.
-- `scripts/dev-vm/{rebuild,deploy-all,reset,overview,e2e}.sh` — automação do
-  ciclo de fixtures (seção 6.4).
-- `scripts/dev-vm/fixtures/` — cinco fixtures determinísticas para os cenários
-  E2E (seção 6).
+- `scripts/dev-vm/provision-host.sh` — host provisioning.
+- `scripts/dev-vm/smoke.sh` — basic verification (version, doctor, app list).
+- `scripts/dev-vm/sync-binary.sh` — build + deployment of the binary to the VM.
+- `scripts/dev-vm/{rebuild,deploy-all,reset,overview,e2e}.sh` — fixture-cycle
+  automation (section 6.4).
+- `scripts/dev-vm/fixtures/` — five deterministic fixtures for E2E scenarios
+  (section 6).

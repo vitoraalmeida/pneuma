@@ -1,26 +1,24 @@
-# Documentação do Pneuma
+# Pneuma Documentation
 
-Índice dos documentos e seus status. Regra: um documento **vivo** descreve o
-sistema ou o trabalho atual e deve ser atualizado na mesma mudança que o
-altera; um **registro** descreve algo executado e não muda.
+Index of documents and their status. Rule: a **living** document describes the
+system or current work and must be updated in the same change that alters it;
+a **record** describes completed work and does not change.
 
-## Vivos
+## Living Documents
 
-| Documento | Conteúdo |
+| Document | Contents |
 |---|---|
-| [`rust-guidelines.md`](rust-guidelines.md) | Convenções obrigatórias de código Rust |
-| [`getting-started.md`](getting-started.md) | Configuração completa de uma VPS Debian 13: chaves CI, bootstrap, import, deploy e GitHub Actions |
-| [`operations/dev-vm-tutorial.md`](operations/dev-vm-tutorial.md) | Tutorial da VM de desenvolvimento (Debian 13): criação, provisionamento, deploy e E2E |
-| [`architecture/architecture.md`](architecture/architecture.md) | Arquitetura implementada: estrutura, runtime Quadlet, exposição, persistência e máquina de estados |
-| [`iterations/current-iteration.md`](iterations/current-iteration.md) | Iteração em andamento (o único acompanhamento de trabalho) |
-| [`design/pre-v0.3-consolidation.md`](design/pre-v0.3-consolidation.md) | Design aprovado da consolidação pós-v0.2 / pré-v0.3 |
-| [`design/bootstrap-e2e-hardening.md`](design/bootstrap-e2e-hardening.md) | Design aprovado para hardening de bootstrap, VM e E2E antes de reconciliation |
-| [`design/reconciliation.md`](design/reconciliation.md) | Semântica aprovada de reconciliation para a v0.3 |
-| [`design/reconciliation-e2e.md`](design/reconciliation-e2e.md) | Catálogo E2E futuro de reconciliation para a v0.3 |
-| [`roadmap.md`](roadmap.md) | Roadmap consolidado v0.1 → v0.7; contrato de evolução do projeto |
+| [`rust-guidelines.md`](rust-guidelines.md) | Mandatory Rust code conventions |
+| [`getting-started.md`](getting-started.md) | Complete Debian 13 VPS setup: CI keys, bootstrap, import, deployment, and GitHub Actions |
+| [`operations/dev-vm-tutorial.md`](operations/dev-vm-tutorial.md) | Development VM tutorial (Debian 13): creation, provisioning, deployment, and E2E |
+| [`architecture/architecture.md`](architecture/architecture.md) | Implemented architecture: structure, Quadlet runtime, exposure, persistence, and state machine |
+| [`iterations/current-iteration.md`](iterations/current-iteration.md) | Current iteration (the sole work tracker) |
+| [`design/reconciliation.md`](design/reconciliation.md) | Approved reconciliation semantics for v0.3 |
+| [`design/reconciliation-e2e.md`](design/reconciliation-e2e.md) | Future reconciliation E2E catalog for v0.3 |
+| [`roadmap.md`](roadmap.md) | Consolidated v0.1 → v0.7 roadmap; project evolution contract |
 
-## Registros operacionais
+## Operational Records
 
-| Documento | Conteúdo |
+| Document | Contents |
 |---|---|
-| [`operations/backup-and-restore.md`](operations/backup-and-restore.md) | Backup consistente e recuperação do banco SQLite |
+| [`operations/backup-and-restore.md`](operations/backup-and-restore.md) | Consistent SQLite database backup and recovery |

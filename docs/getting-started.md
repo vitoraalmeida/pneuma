@@ -1,69 +1,69 @@
-# Configuração completa de um host Pneuma
+# Complete Pneuma Host Setup
 
-Guia passo a passo para tornar uma VPS Debian 13 num host Pneuma de produção e
-conectar um repositório de aplicação a ele via GitHub Actions. Cobre: geração
-das chaves, execução do `bootstrap-vps.sh`, import e deploy, e configuração do
-workflow de deploy.
+Step-by-step guide to turn a Debian 13 VPS into a production Pneuma host and
+connect an application repository to it through GitHub Actions. Covers key
+generation, running `bootstrap-vps.sh`, import and deployment, and deployment
+workflow configuration.
 
-O `scripts/bootstrap-vps.sh` instala tudo (pacotes, usuário `pneuma`, Podman
-rootless, Caddy, binário) **e** prepara a identidade para o CI. Depois que ele
-termina com sucesso, o host está pronto para importar e deployar aplicações.
+`scripts/bootstrap-vps.sh` installs everything (packages, the `pneuma` user,
+rootless Podman, Caddy, binary) **and** prepares the CI identity. After it
+completes successfully, the host is ready to import and deploy applications.
 
-## 1. Pré-requisitos
+## 1. Prerequisites
 
-- VPS Debian 13 (trixie) com acesso root por SSH. Debian 12 **não** serve
-  (Podman 4.3.1 sem o gerador Quadlet necessário ao Pneuma).
-- Acesso à internet, DNS resolvendo, portas 80/443 livres e pelo menos 2 GiB de
-  RAM e 3 GiB de disco livre (o script confere tudo antes de mexer no sistema e
-  aborta com mensagens acionáveis se algo faltar).
-- O domínio público das aplicações (e o `*.staging`, se usar pré-produção)
-  apontando (DNS A/AAAA) para o IP da VPS.
-- Ignorar nginx/apache rodando na VPS — são conflito bloqueante.
+- Debian 13 (trixie) VPS with root access over SSH. Debian 12 **is not** suitable
+  (Podman 4.3.1 lacks the Quadlet generator required by Pneuma).
+- Internet access, resolving DNS, free ports 80/443, and at least 2 GiB of RAM
+  and 3 GiB of free disk space (the script checks everything before changing the
+  system and aborts with actionable messages if anything is missing).
+- The applications' public domain (and `*.staging`, if using pre-production)
+  pointing through DNS A/AAAA records to the VPS IP.
+- No nginx/apache running on the VPS: they are blocking conflicts.
 
-## 2. Gerar as chaves
+## 2. Generate the Keys
 
-O host Pneuma usa duas identidades diferentes. São funções distintas, não as
-confunda:
+The Pneuma host uses two different identities. They serve distinct roles; do
+not confuse them:
 
-### 2.1. Chave do usuário `pneuma` (acesso do host a repositórios Git)
+### 2.1. `pneuma` User Key (host access to Git repositories)
 
-Usada pelo próprio Pneuma para `git clone`/`git fetch` no deploy por branch — só
-necessária se o repositório **da aplicação** (ou do próprio Pneuma) for
-privado via SSH. **O bootstrap gera essa chave automaticamente** quando você
-passa uma URL de fonte SSH:
+Used by Pneuma itself for `git clone`/`git fetch` during branch deployments;
+needed only if the **application** repository (or Pneuma itself) is private over
+SSH. **Bootstrap generates this key automatically** when you provide an SSH
+source URL:
 
 ```bash
 bash scripts/bootstrap-vps.sh git@github.com:USER/pneuma.git
 ```
 
-Na primeira execução o script cria `~pneuma/.ssh/id_ed25519`, imprime a chave
-pública e para. Você adiciona essa pública como *deploy key* read-only do(s)
-repositório(s) privado(s) e reexecuta o script para continuar.
+On the first run, the script creates `~pneuma/.ssh/id_ed25519`, prints the
+public key, and stops. Add that public key as a read-only *deploy key* to the
+private repository or repositories, then rerun the script to continue.
 
-> Se a URL de fonte do Pneuma for pública via HTTPS (URL comum ao clonar o
-> próprio Pneuma, que não é privado), essa chave nunca é criada. Nesse caso,
-> para aplicações com repositórios Git **privados**, gere uma chave para o
-> usuário `pneuma` manualmente na VPS ou configure o acesso de outra forma; o
-> bootstrap serve apenas o fluxo HTTPS-público/SSH-privado da fonte do Pneuma.
+> If the Pneuma source URL is public over HTTPS (the usual URL for cloning
+> Pneuma itself, which is not private), this key is never created. In that case,
+> for applications with **private** Git repositories, generate a key for the
+> `pneuma` user manually on the VPS or configure access another way; bootstrap
+> only supports the public-HTTPS/private-SSH flow for the Pneuma source.
 
-### 2.2. Chave do CI (deploy via GitHub Actions)
+### 2.2. CI Key (deployment through GitHub Actions)
 
-Usada nas máquinas do GitHub Actions para autenticar no host como `pneuma` e
-disparar deploys. Como o próprio bootstrap ensina: **gere o par numa máquina
-confiável, nunca na VPS** — a privada vira secret do GitHub, e só a pública é
-entregue ao script:
+Used on GitHub Actions machines to authenticate to the host as `pneuma` and
+trigger deployments. As bootstrap itself instructs: **generate the pair on a
+trusted machine, never on the VPS**. The private key becomes a GitHub secret,
+and only the public key is provided to the script:
 
 ```bash
 ssh-keygen -t ed25519 -f ~/.ssh/pneuma-ci -N "" -C "pneuma-ci deploy key"
 ```
 
-Isso cria `~/.ssh/pneuma-ci` (privada) e `~/.ssh/pneuma-ci.pub` (pública). O
-script aceita `ssh-ed25519`, `ssh-rsa` e `ecdsa-sha2-nistp*`.
+This creates `~/.ssh/pneuma-ci` (private) and `~/.ssh/pneuma-ci.pub` (public).
+The script accepts `ssh-ed25519`, `ssh-rsa`, and `ecdsa-sha2-nistp*`.
 
-## 3. Executar o bootstrap
+## 3. Run Bootstrap
 
-Todas as chaves em mãos, rode como root na VPS, passando a **pública** do CI
-com `--ci-public-key <caminho>`:
+With all keys ready, run as root on the VPS, providing the **public** CI key
+with `--ci-public-key <path>`:
 
 ```bash
 bash bootstrap-vps.sh \
@@ -71,34 +71,34 @@ bash bootstrap-vps.sh \
   --ci-public-key ~/.ssh/pneuma-ci.pub
 ```
 
-O script instala a chave pública do CI em `~pneuma/.ssh/authorized_keys` com
-`restrict,command="/usr/local/bin/pneuma ci dispatch"` — ou seja, quem autentica
-com essa chave **só** pode executar o dispatcher restrito (nada de shell). Ao
-final, além de `pneuma doctor`, ele imprime o mesmo `DEPLOY_SSH_KEY` de aviso e
-o comando de teste.
+The script installs the CI public key in `~pneuma/.ssh/authorized_keys` with
+`restrict,command="/usr/local/bin/pneuma ci dispatch"`; in other words, anyone
+authenticating with this key can **only** run the restricted dispatcher (no
+shell). At the end, in addition to `pneuma doctor`, it prints the same
+`DEPLOY_SSH_KEY` notice and test command.
 
-Existem duas formas de levar o arquivo até a VPS:
+There are two ways to transfer the file to the VPS:
 
 ```bash
-# A) copiar com scp e ler de lá
+# A) copy with scp and read it from the host
 scp ~/.ssh/pneuma-ci.pub root@<ip>:pneuma-ci.pub
 ssh root@<ip> 'bash scripts/bootstrap-vps.sh git@github.com:USER/pneuma.git --ci-public-key pneuma-ci.pub'
-# B) colar o conteúdo numa chave direta (sem arquivo temporário)
+# B) pipe the content directly (without a temporary file)
 ssh root@<ip> 'bash bootstrap-vps.sh git@github.com:USER/pneuma.git --ci-public-key /dev/stdin' < ~/.ssh/pneuma-ci.pub
 ```
 
-As invariantes de host aplicadas pelo bootstrap (pacotes de runtime, usuário e
-grupo `pneuma`, subids, linger, diretórios, ambiente canônico, Caddy e Podman
-rootless) vivem numa biblioteca comum, `scripts/lib/provision-host.sh`,
-compartilhada com o provisionamento da VM de desenvolvimento. A biblioteca não
-muda o comportamento exclusivo do bootstrap: clonar a fonte, compilar e
-instalar o binário e instalar a chave CI continuam no `bootstrap-vps.sh`.
+The host invariants applied by bootstrap (runtime packages, the `pneuma` user
+and group, subids, linger, directories, canonical environment, Caddy, and
+rootless Podman) reside in a shared library, `scripts/lib/provision-host.sh`,
+which is also used by development VM provisioning. The library does not change
+bootstrap-specific behavior: cloning the source, compiling and installing the
+binary, and installing the CI key remain in `bootstrap-vps.sh`.
 
-### 3.1. Fixar a versão do Pneuma com `--ref`
+### 3.1. Pin the Pneuma Version with `--ref`
 
-Para instalações reproduzíveis, o bootstrap aceita `--ref` com **apenas** SHA
-completo de commit (`[0-9a-f]{40}`) ou tag Git existente; branch e SHA abreviado
-são rejeitados antes de qualquer mudança no host:
+For reproducible installations, bootstrap accepts `--ref` with **only** a full
+commit SHA (`[0-9a-f]{40}`) or existing Git tag; branches and abbreviated SHAs
+are rejected before any host change:
 
 ```bash
 bash bootstrap-vps.sh \
@@ -107,141 +107,140 @@ bash bootstrap-vps.sh \
   --ref v0.3.0
 ```
 
-Cada execução (inclusive reruns) resolve o `--ref`, faz checkout detached
-**forçado** do commit resolvido e compila exatamente esse commit;
-configurações de APT, usuário, subids e Caddy permanecem idempotentes. No rerun,
-o próprio Caddy gerenciado e ativo pode ocupar as portas 80/443; qualquer outro
-processo nessas portas continua bloqueante. O baseline do Caddy é gerado como
-candidate no mesmo diretório, validado antes da troca atômica e recebe backup
-somente quando o conteúdo muda; um rerun sem mudanças não cria backup nem
-recarrega o serviço. Sem `--ref`, o script compila o branch default do
-repositório, como antes.
+Each run (including reruns) resolves `--ref`, performs a **forced** detached
+checkout of the resolved commit, and compiles exactly that commit; APT, user,
+subid, and Caddy configuration remain idempotent. On a rerun, the active managed
+Caddy itself may occupy ports 80/443; any other process on those ports remains a
+blocker. The Caddy baseline is generated as a candidate in the same directory,
+validated before the atomic replacement, and backed up only when its contents
+change; an unchanged rerun creates no backup and does not reload the service.
+Without `--ref`, the script compiles the repository's default branch, as before.
 
-### 3.2. Acceptance descartável
+### 3.2. Disposable Acceptance
 
-Antes de alterar uma VPS, valide bootstrap e rerun em uma clone descartável
-Debian 13 por SHA completo ou tag imutável. Essa acceptance usa
-`scripts/test-bootstrap-vps.sh`; ela pode instalar pacotes, criar o usuário
-`pneuma` e testar a chave CI somente na clone. A VPS de produção fica restrita
-ao smoke não destrutivo de DNS, TLS e reachability.
+Before changing a VPS, validate bootstrap and rerun on a disposable Debian 13
+clone using a full SHA or immutable tag. This acceptance uses
+`scripts/test-bootstrap-vps.sh`; it may install packages, create the `pneuma`
+user, and test the CI key only on the clone. The production VPS is limited to
+non-destructive smoke testing of DNS, TLS, and reachability.
 
-### 3.3. Confirmação
+### 3.3. Confirmation
 
-Como `pneuma` (login direto com a chave de provisionamento ou `sudo -iu
-pneuma`):
+As `pneuma` (direct login with the provisioning key or `sudo -iu pneuma`):
 
 ```bash
 pneuma doctor        # todos os checks de host aprovados
-pneuma app list      # vazio (nenhuma aplicação ainda)
+pneuma app list      # empty (no applications yet)
 ```
 
-Da sua máquina, confirme a identidade do CI autenticando com a **privada**:
-deveria responder a `version`:
+From your machine, confirm the CI identity by authenticating with the **private**
+key: it should respond to `version`:
 
 ```bash
 ssh -i ~/.ssh/pneuma-ci pneuma@<ip-do-host> "version"
 ```
 
-Se respondeu, o host está pronto para ser gerenciado pelo GitHub Actions.
+If it responded, the host is ready to be managed by GitHub Actions.
 
-## 4. Importar e deployar manualmente
+## 4. Import and Deploy Manually
 
-O fluxo padrão do Pneuma com CI é: CI constrói e publica a imagem (tag com o
-SHA do commit) e, em seguida, pede o deploy ao host. Em qualquer momento dá
-para importar e deployar manualmente a partir do host.
+The standard Pneuma flow with CI is: CI builds and publishes the image (tagged
+with the commit SHA), then requests deployment from the host. You can import
+and deploy manually from the host at any time.
 
-### 4.1. Importar a aplicação
+### 4.1. Import the Application
 
-Entre como `pneuma` e importe do repositório Git, apontando o manifest da
-entrega com `--manifest`:
+Log in as `pneuma` and import from the Git repository, specifying the delivery
+manifest with `--manifest`:
 
 ```bash
 sudo -iu pneuma
 pneuma app import https://github.com/owner/my-app --manifest deploy/staging/pneuma.toml
 ```
 
-O Pneuma clona o repositório **somente temporariamente** (lê o `pneuma.toml`,
-persiste a aplicação e remove o checkout) e registra a aplicação com a entrega
-declarada (imagem OCI, porta, healthcheck, visibilidade). O `--manifest` é o
-caminho do `pneuma.toml` **dentro do repositório**. `app import` aceita apenas
-URLs Git; paths locais são rejeitados e `file://` é reservado a repositórios de
-teste locais.
+Pneuma clones the repository **only temporarily** (reads `pneuma.toml`, persists
+the application, and removes the checkout) and registers the application with
+the declared delivery (OCI image, port, health check, visibility). `--manifest`
+is the path to `pneuma.toml` **inside the repository**. `app import` accepts
+only Git URLs; local paths are rejected and `file://` is reserved for local test
+repositories.
 
-### 4.2. Deploy por branch (recomendado com CI)
+### 4.2. Branch Deployment (recommended with CI)
 
-O CI já publicou a imagem com a tag do SHA; o Pneuma resolve o branch → SHA →
-tag → digest:
+CI has already published the image tagged with the SHA; Pneuma resolves branch →
+SHA → tag → digest:
 
 ```bash
 pneuma app deploy my-app --branch staging
 ```
 
-### 4.3. Deploy por digest (imutável, manual)
+### 4.3. Digest Deployment (immutable, manual)
 
 ```bash
 pneuma app deploy my-app --image ghcr.io/owner/my-app@sha256:<digest>
 ```
 
-O deploy valida a imagem (pull + health check) antes de promover; se falhar, a
-versão anterior continua ativa. Acompanhe com:
+Deployment validates the image (pull + health check) before promotion; if it
+fails, the previous version remains active. Monitor it with:
 
 ```bash
 pneuma app status my-app
 pneuma app deployments my-app
 ```
 
-## 5. Configurar o GitHub Actions
+## 5. Configure GitHub Actions
 
-O workflow do repositório da aplicação precisa de secrets e variables de
-repositório ou de conta. Secrets são obrigatoriamente `DEPLOY_SSH_KEY` e
-`DEPLOY_KNOWN_HOSTS`; as variables são `DEPLOY_HOST` e `DEPLOY_USER`.
+The application repository workflow needs repository- or account-level secrets
+and variables. The required secrets are `DEPLOY_SSH_KEY` and
+`DEPLOY_KNOWN_HOSTS`; the variables are `DEPLOY_HOST` and `DEPLOY_USER`.
 
 ### 5.1. Secrets
 
-No GitHub (perfil → Settings → Secrets and variables → Actions → New
-repository secret), crie:
+In GitHub (profile → Settings → Secrets and variables → Actions → New repository
+secret), create:
 
-- **`DEPLOY_SSH_KEY`** — conteúdo da chave privada do CI, o arquivo
-  `~/.ssh/pneuma-ci`. Cole o texto de arquivo inteiro, incluindo o bloco
-  `-----BEGIN OPENSSH PRIVATE KEY-----`/`-----END...-----` e com a última linha
-  terminada em quebra de linha. Erros aqui são a causa #1 de
+- **`DEPLOY_SSH_KEY`** — contents of the CI private key, the
+  `~/.ssh/pneuma-ci` file. Paste the entire file text, including the
+  `-----BEGIN OPENSSH PRIVATE KEY-----`/`-----END...-----` block, with the last
+  line ending in a newline. Errors here are the #1 cause of
   `Permission denied (publickey)`.
-- **`DEPLOY_KNOWN_HOSTS`** — linha(s) de fingerprint do host, obtidas por
-  `ssh-keyscan`. Com a VPS já acessível:
+- **`DEPLOY_KNOWN_HOSTS`** — host fingerprint line or lines, obtained with
+  `ssh-keyscan`. With the VPS already reachable:
 
 ```bash
-ssh-keyscan 46.202.150.155   # ou o hostname/domínio do host
+ssh-keyscan 46.202.150.155   # or the host hostname/domain
 ```
 
-Cole a saída como valor (se você também acessa o IP diretamente, inclua as
-linhas do IP e do hostname). Não adicione artefato além das linhas
-`<host> <algoritmo> <chave>`.
+Paste the output as the value (if you also access the IP directly, include the
+IP and hostname lines). Do not add anything beyond the
+`<host> <algorithm> <key>` lines.
 
-> Dica: com impedimento de acesso no momento da configuração, você pode gerar o
-> known_hosts localmente com `ssh-keyscan` pela mesma rede; o bom fingerprint
-> `ecdsa-sha2-*`/`ssh-ed25519` apresentado ao primeiro `ssh` continua o mesmo.
+> Tip: if access is unavailable at configuration time, you can generate
+> known_hosts locally using `ssh-keyscan` from the same network; the correct
+> `ecdsa-sha2-*`/`ssh-ed25519` fingerprint presented on the first `ssh` remains
+> the same.
 
 ### 5.2. Variables
 
-No mesmo painel, em "Variables", crie:
+In the same panel, under "Variables", create:
 
-- **`DEPLOY_HOST`** — IP ou hostname da VPS (ex.: `46.202.150.155`).
-- **`DEPLOY_USER`** — `pneuma` (não admin).
+- **`DEPLOY_HOST`** — VPS IP or hostname (for example, `46.202.150.155`).
+- **`DEPLOY_USER`** — `pneuma` (not an administrator).
 
-Manter IP/host como variable permite trocar de VPS sem editar o workflow.
+Keeping the IP/host as a variable allows changing VPSs without editing the workflow.
 
-### 5.3. (Opcional) scope de conta
+### 5.3. (Optional) Account Scope
 
-Como a chave é restrita ao dispatcher, um único par de secrets a nível de conta
-serve todos os repositórios da conta: acesse **Settings da conta → Secrets and
-variables → Actions** e crie os mesmos quatro itens uma vez. Repositórios que
-precisem de hosts diferentes criam secrets próprios sobrescrevendo.
+Because the key is restricted to the dispatcher, one account-level set of
+secrets serves every repository in the account: go to **Account Settings →
+Secrets and variables → Actions** and create the same four items once.
+Repositories that need different hosts create their own overriding secrets.
 
-### 5.4. Workflow de exemplo
+### 5.4. Example Workflow
 
-O repositório da aplicação precisa de um workflow que (1) construa e publique a
-imagem OCI e (2) dispare o deploy. Depois de publicada a imagem com tag do SHA
-e do branch, o passo de deploy replica:
+The application repository needs a workflow that (1) builds and publishes the
+OCI image and (2) triggers deployment. Once the image is published with SHA and
+branch tags, the deployment step is:
 
 ```yaml
 - name: Deploy to staging
@@ -258,39 +257,40 @@ e do branch, o passo de deploy replica:
       "deploy my-app staging"
 ```
 
-- O comando SSH é SIM o dispatcher: `deploy <application> <branch>` (o binário
-  `pneuma ci dispatch` é invocado via forced command; **não** escreva
-  `pneuma app deploy ... --branch ...` — seria rejeitado).
-- `my-app` precisa já estar importado no host (seção 4.1) **antes** do primeiro
-  deploy via CI.
-- O workflow completo (build da imagem, smoke test, push para GHCR, deploy por
-  staging/main) pode ser copiado do repositório
-  `github.com/vitoraalmeida/vitoralmeida.tech`, arquivo
+- The SSH command is the dispatcher itself: `deploy <application> <branch>` (the
+  `pneuma ci dispatch` binary is invoked through a forced command; **do not**
+  write `pneuma app deploy ... --branch ...`, as it will be rejected).
+- `my-app` must already be imported on the host (section 4.1) **before** the
+  first CI deployment.
+- The full workflow (image build, smoke test, push to GHCR, deployment through
+  staging/main) can be copied from the repository
+  `github.com/vitoraalmeida/vitoralmeida.tech`, file
   `.github/workflows/deploy.yml`.
 
-## 6. Checagem final
+## 6. Final Check
 
 ```bash
 # No host
 sudo -iu pneuma
 pneuma doctor          # ok
 
-# Na sua máquina
-ssh -i ~/.ssh/pneuma-ci pneuma@<host> "version"   # responde com a versão
+# On your machine
+ssh -i ~/.ssh/pneuma-ci pneuma@<host> "version"   # responds with the version
 
-# Após um push no branch do workflow
+# After a push to the workflow branch
 # → workflow publica a imagem e pede deploy
 # Na VPS: pneuma status e pneuma list devem refletir o novo release Running
 ```
 
-### 6.1. Smoke de produção
+### 6.1. Production Smoke Test
 
-Na VPS, execute somente smoke não destrutivo: `pneuma doctor`, `pneuma app
-list`, `pneuma app status <app>` e uma requisição HTTPS ao domínio público.
-Não execute `reset-fixtures.sh`, `e2e.sh`, `test-all.sh`, restore de banco ou
-testes de bootstrap na VPS. Bootstrap limpo/rerun e regressão E2E pertencem a
-clones Debian 13 descartáveis, como descrito no
-[`tutorial da VM`](operations/dev-vm-tutorial.md).
+On the VPS, run only non-destructive smoke tests: `pneuma doctor`, `pneuma app
+list`, `pneuma app status <app>`, and an HTTPS request to the public domain. Do
+not run `reset-fixtures.sh`, `e2e.sh`, `test-all.sh`, database restore, or
+bootstrap tests on the VPS. Clean bootstrap/rerun and E2E regression belong on
+disposable Debian 13 clones, as described in the
+[`VM tutorial`](operations/dev-vm-tutorial.md).
 
-O ciclo fecha: push no Git → CI constrói/publica → `deploy <app> <branch>` →
-Pneuma resolve, valida e promove; Caddy expõe a aplicação pública automaticamente.
+The cycle is complete: Git push → CI builds/publishes → `deploy <app> <branch>`
+→ Pneuma resolves, validates, and promotes; Caddy exposes the public application
+automatically.

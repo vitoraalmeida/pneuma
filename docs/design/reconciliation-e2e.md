@@ -1,92 +1,91 @@
-# Catálogo E2E — Reconciliation v0.3
+# E2E Catalog — Reconciliation v0.3
 
-**Status:** catálogo aprovado para implementação futura; não descreve testes já
-executados nem introduz `pneuma reconcile`.
+**Status:** catalog approved for future implementation; it does not describe
+tests already executed or introduce `pneuma reconcile`.
 
-**Semântica:** [`reconciliation.md`](reconciliation.md) define as autoridades,
-invariantes, resultados e non-goals. Este catálogo define a prova operacional
-em VM Debian 13 depois que o comando existir.
+**Semantics:** [`reconciliation.md`](reconciliation.md) defines authorities,
+invariants, results, and non-goals. This catalog defines the operational proof
+on a Debian 13 VM after the command exists.
 
-## Limites
+## Boundaries
 
-- Estes cenários não entram em `scripts/dev-vm/test-all.sh` antes de
-  `pneuma reconcile` existir.
-- O catálogo não autoriza criar Release, construir imagem, consultar registry
-  para escolher versão, criar Deployment por drift, alterar intenção ou fazer
-  reparo destrutivo diante de identidade ambígua.
-- Cada cenário observa SQLite, Podman/systemd e Caddy conforme aplicável. Um
-  resultado de processo bem-sucedido sem estado materializado confirmado não é
-  sucesso do cenário.
+- These scenarios do not enter `scripts/dev-vm/test-all.sh` before
+  `pneuma reconcile` exists.
+- The catalog does not authorize creating a Release, building an image, querying
+  a registry to choose a version, creating a Deployment because of drift,
+  changing intent, or destructively repairing ambiguous identity.
+- Each scenario observes SQLite, Podman/systemd, and Caddy as applicable. A
+  successful process result without confirmed materialized state is not scenario success.
 
-## Ambiente Futuro
+## Future Environment
 
-Os testes devem usar uma VM Debian 13 limpa, com Podman rootless, linger do
-usuário `pneuma`, systemd user/Quadlet, Caddy, banco SQLite e imagens fixture
-disponíveis. O harness precisa conseguir:
+Tests must use a clean Debian 13 VM with rootless Podman, `pneuma` user linger,
+systemd user/Quadlet, Caddy, SQLite database, and fixture images available. The
+harness must be able to:
 
-- importar por URL Git e fazer deploy de aplicação interna e pública;
-- inspecionar `runtime_instances`, `deployments` e `exposures` no SQLite;
-- remover/inspecionar containers e unidades Quadlet sem alterar identidades;
-- editar/remover fragmentos Caddy e confirmar reload/health externo;
-- interromper o processo Pneuma em pontos controlados dos estados não terminais;
-- executar comandos com timeout, coletar logs e limpar recursos no fim.
+- import by Git URL and deploy internal and public applications;
+- inspect `runtime_instances`, `deployments`, and `exposures` in SQLite;
+- remove/inspect containers and Quadlet units without changing identities;
+- edit/remove Caddy fragments and confirm reload/external health;
+- interrupt the Pneuma process at controlled points in non-terminal states;
+- run commands with timeouts, collect logs, and clean resources at the end.
 
-Cada caso deve registrar a versão de fixture, IDs de Application/Deployment/
-RuntimeInstance, estado desejado inicial e resultado final. Os resultados
-esperados usam: `no-op`, `repaired`, `deferred`, `failed`, `diverged` ou
+Each case must record fixture version, Application/Deployment/RuntimeInstance
+IDs, initial desired state, and final result. Expected results use: `no-op`,
+`repaired`, `deferred`, `failed`, `diverged`, or
 `manual-intervention`.
 
 ## Runtime Drift
 
-| Cenário | Injeção e ação | Resultado esperado | Proibido |
+| Scenario | Injection and action | Expected result | Forbidden |
 |---|---|---|---|
-| Container removido antes de observação | Remover o container do deployment ativo com intent `Running`; executar reconcile. | Com unidade presente e identidade confirmada, `repaired`: a mesma RuntimeInstance/Deployment é reutilizada, porta persistida é mantida e `external_runtime_id` é reconciliado por CAS. | Criar Deployment/RuntimeInstance, tombar `removed_at`, trocar porta. |
-| Container removido depois de `status` | Executar `app status` para registrar `Missing`, remover/confirmar ausência e executar reconcile. | Mesmo recovery do caso anterior; `Missing` não impede recuperar a identidade lógica. | Interpretar `Missing` como retirement. |
-| Unidade presente, container ausente | Manter Quadlet esperado e remover somente o container. | Iniciar unidade, observar container pelo nome estável e confirmar identidade, endpoint e CAS. | Reescrever unidade sem necessidade. |
-| Unidade ausente, container ausente | Remover o Quadlet esperado e o container, preservando SQLite. | Rematerializar a mesma unidade para a mesma RuntimeInstance e iniciar somente após confirmar identidade lógica. | Criar novo Deployment, alocar porta nova ou promover candidate. |
-| Identidade divergente em runtime Running | Alterar separadamente digest, label, porta, container ou conteúdo/unidade Quadlet. | `manual-intervention` com diagnóstico do campo divergente; nenhum efeito destrutivo. | Stop/remove/substituição automática. |
-| Reboot com intent Running | Reboot após materialização correta. | Runtime ativo volta e reconcile produz `no-op` ou `repaired` apenas para ID externo renovado. | Criar Deployment novo. |
-| Reboot com intent Stopped | Parar aplicação, rebootar e executar reconcile. | `no-op`; RuntimeInstance permanece sem `removed_at`, container ausente é aceitável. | Iniciar unidade ou tombar runtime. |
+| Container removed before observation | Remove the active deployment container with `Running` intent; run reconcile. | With unit present and identity confirmed, `repaired`: the same RuntimeInstance/Deployment is reused, persisted port is retained, and `external_runtime_id` is reconciled by CAS. | Create Deployment/RuntimeInstance, tombstone `removed_at`, change port. |
+| Container removed after `status` | Run `app status` to record `Missing`, remove/confirm absence, and run reconcile. | Same recovery as the prior case; `Missing` does not prevent recovery of logical identity. | Interpret `Missing` as retirement. |
+| Unit present, container absent | Retain expected Quadlet and remove only the container. | Start the unit, observe the container by stable name, and confirm identity, endpoint, and CAS. | Rewrite the unit unnecessarily. |
+| Unit absent, container absent | Remove expected Quadlet and container while preserving SQLite. | Rematerialize the same unit for the same RuntimeInstance and start only after confirming logical identity. | Create a new Deployment, allocate a new port, or promote candidate. |
+| Divergent identity in Running runtime | Separately change digest, label, port, container, or Quadlet content/unit. | `manual-intervention` with diagnostics for the divergent field; no destructive effect. | Automatic stop/remove/replacement. |
+| Reboot with Running intent | Reboot after correct materialization. | Active runtime returns and reconcile produces `no-op` or `repaired` only for renewed external ID. | Create a new Deployment. |
+| Reboot with Stopped intent | Stop application, reboot, and run reconcile. | `no-op`; RuntimeInstance remains without `removed_at`, and an absent container is acceptable. | Start unit or tombstone runtime. |
 
 ## Exposure Drift
 
-| Cenário | Injeção e ação | Resultado esperado | Proibido |
+| Scenario | Injection and action | Expected result | Forbidden |
 |---|---|---|---|
-| Fragmento público removido | Apagar fragmento canônico de Application `Public` saudável. | `repaired`: recriar fragmento, validar, reload e health externo confirmados; estado `active`. | Alterar visibility ou Deployment. |
-| Upstream divergente | Alterar target loopback no fragmento público. | Substituir pelo conteúdo canônico, reload e health externo; atualizar `configuration_version` somente após confirmação. | Preservar fragmento divergente como sucesso. |
-| Fragmento correto sem reload confirmado | Deixar conteúdo correto no disco e forçar reload a falhar. | Intent `Public` preservado; `failed` ou `diverged` com diagnóstico conforme compensação; não reportar rota ativa. | Declarar `no-op` só pelo conteúdo no disco. |
-| Intent Public sem rota | Persistir `Public` com runtime saudável e fragmento ausente. | Materializar e confirmar rota, ou `failed` recuperável se pré-condição/efeito falhar. | Reverter intent para `Internal`. |
-| Intent Internal com rota | Persistir `Internal` e manter fragmento no disco. | Remover fragmento, reload e confirmar ausência; estado `not_materialized`. | Manter rota pública ou alterar runtime. |
-| Compensação de exposure falha | Forçar falha após materialização/remoção e falha na restauração. | `diverged` com diagnóstico explícito e estado observável preservado para intervenção. | Afirmar compensação completa. |
+| Public fragment removed | Delete canonical fragment of a healthy `Public` Application. | `repaired`: recreate fragment, validate it, and confirm reload and external health; `active` state. | Change visibility or Deployment. |
+| Divergent upstream | Change loopback target in the public fragment. | Replace with canonical contents, reload, and run external health; update `configuration_version` only after confirmation. | Preserve divergent fragment as success. |
+| Correct fragment without confirmed reload | Leave correct content on disk and force reload to fail. | `Public` intent preserved; `failed` or `diverged` with diagnostics based on compensation; do not report active route. | Declare `no-op` based only on disk content. |
+| Public intent without route | Persist `Public` with healthy runtime and missing fragment. | Materialize and confirm route, or recoverable `failed` if precondition/effect fails. | Revert intent to `Internal`. |
+| Internal intent with route | Persist `Internal` and retain fragment on disk. | Remove fragment, reload, and confirm absence; `not_materialized` state. | Retain public route or change runtime. |
+| Exposure compensation fails | Force failure after materialization/removal and restoration failure. | `diverged` with explicit diagnostics and observable state retained for intervention. | Assert complete compensation. |
 
-## Deployments Interrompidos
+## Interrupted Deployments
 
-Todos os casos preservam runtime e rota anteriores saudáveis. O harness
-interrompe o processo depois da transição persistida e antes do próximo efeito,
-então executa reconcile uma vez.
+All cases preserve the prior healthy runtime and route. The harness interrupts
+the process after the persisted transition and before the next effect, then runs
+reconcile once.
 
-| Estado | Evidência mínima e resultado esperado |
+| State | Minimum evidence and expected result |
 |---|---|
-| `Pending` | Nenhum efeito externo confirmado. Registrar falha/interrupção e liberar somente reserva comprovadamente associada. |
-| `Starting` | Observar candidate, unidade e container. Limpar somente recursos com identidade confirmada; registrar falha/interrupção. |
-| `Verifying` | Não promover candidate sem health comprovado. Limpar candidate confirmado e preservar runtime/rota anteriores. |
-| `Activating` | Não inferir promoção por fragmento, reload ou runtime isolado. Restaurar somente o que tiver compensação segura; registrar `diverged` se não for possível afirmar estado conhecido. |
+| `Pending` | No confirmed external effect. Record failure/interruption and release only the proven associated reservation. |
+| `Starting` | Observe candidate, unit, and container. Clean only resources with confirmed identity; record failure/interruption. |
+| `Verifying` | Do not promote candidate without proven health. Clean confirmed candidate and preserve prior runtime/route. |
+| `Activating` | Do not infer promotion from isolated fragment, reload, or runtime. Restore only what has safe compensation; record `diverged` if a known state cannot be asserted. |
 
-Em todos: reconcile não promove candidate ambíguo, não cria Release e não muda
-intent de runtime ou visibility.
+In all cases: reconcile does not promote an ambiguous candidate, create a
+Release, or change runtime intent or visibility.
 
-## Concorrência E Idempotência
+## Concurrency and Idempotence
 
-| Cenário | Execução | Resultado esperado |
+| Scenario | Execution | Expected result |
 |---|---|---|
-| Reconcile repetido | Executar reconcile duas vezes sobre materialização correta e, separadamente, sobre drift recuperável. | Segundo resultado é `no-op` após convergência; não duplica unidades, rotas, RuntimeInstances ou Deployments. |
-| Reconcile paralelo | Iniciar dois reconciles para a mesma Application, bloqueando o primeiro após adquirir reserva. | Um converte ou termina; o outro retorna `deferred`, sem `database is locked` e sem efeitos concorrentes. |
-| Deploy x deploy | Bloquear deploy A depois de persistir Deployment não terminal e iniciar B. | B retorna `ActiveDeployment`; A pode concluir com um Deployment succeeded e um runtime running. A prova atual de CLI deve permanecer como regressão. |
-| Deploy x reconcile | Bloquear deploy após persistir estado não terminal e executar reconcile. | Reconcile retorna `deferred`, não toca candidate, runtime anterior, Caddy ou cleanup. |
+| Repeated reconcile | Run reconcile twice on correct materialization and, separately, on recoverable drift. | The second result is `no-op` after convergence; it duplicates no units, routes, RuntimeInstances, or Deployments. |
+| Parallel reconcile | Start two reconciles for the same Application, blocking the first after it acquires reservation. | One converges or finishes; the other returns `deferred`, without `database is locked` or concurrent effects. |
+| Deploy x deploy | Block deploy A after persisting a non-terminal Deployment and start B. | B returns `ActiveDeployment`; A may finish with one succeeded Deployment and one running runtime. The current CLI proof must remain as a regression. |
+| Deploy x reconcile | Block deployment after persisting non-terminal state and run reconcile. | Reconcile returns `deferred` and does not touch candidate, prior runtime, Caddy, or cleanup. |
 
-## Automação Posterior
+## Subsequent Automation
 
-Quando `pneuma reconcile` existir, cada linha deste catálogo vira um caso
-nomeado no harness de VM. O script deve reportar PASS/FAIL/SKIP, guardar logs e
-nunca marcar como PASS uma dependência ausente de registry, rede, VM ou
-credencial. Skips exigem motivo explícito no tracker da iteração.
+When `pneuma reconcile` exists, every row in this catalog becomes a named case
+in the VM harness. The script must report PASS/FAIL/SKIP, retain logs, and never
+mark an unavailable registry, network, VM, or credential dependency as PASS.
+Skips require an explicit reason in the iteration tracker.
