@@ -1,32 +1,31 @@
 # Next Iteration
 
-**Status:** queued, not an execution tracker.
+**Status:** planning reminder, not an execution tracker.
 
-**Target:** v0.4 - Reconciliation and Deployment Reliability.
+**Target:** v0.5 - Application Topology and Internal Networking.
 
-The documentation architecture refactor precedes v0.4. Do not implement this
-queued work until the current iteration is closed and this tracker is promoted.
-
-**Approved design:** [`../design/reconciliation.md`](../design/reconciliation.md)
+Do not implement this work until v0.4 is complete, an approved design exists,
+and this tracker is promoted to `current-iteration.md`.
 
 ## Objective
 
-Converge runtime and exposure materialization toward persisted intent without
-selecting a new Release or making destructive changes from ambiguity.
+Model how Applications relate to each other so Pneuma can support internal
+services and their connectivity rather than treating every Application as an
+isolated workload.
 
 ## Checkpoints
 
-- Convert the reconciliation E2E catalog into an executable test plan.
-- Add read-only observation and `pneuma reconcile <application>` results.
-- Repair unambiguous runtime and Caddy drift.
-- Handle interrupted Deployments and per-Application concurrency safely.
-- Complete the approved disposable-VM E2E catalog and final regression.
+- Service relationships and Application dependencies.
+- Internal services and network/service addressing.
+- System as a functional grouping mechanism.
+- Basic service discovery.
 
 ## Boundaries
 
-- Reconciliation does not create a Release or Deployment, select a registry
-  artifact, or change desired runtime state or visibility.
-- Ambiguous identity or configuration drift requires manual intervention.
+- Network policy enforcement belongs to v0.6.
+- Workload identity and authenticated service-to-service communication belong to
+  v0.7.
+- Do not introduce topology before an approved design defines entities,
+  persistence, runtime behavior, and acceptance scenarios.
 
-See [`../design/reconciliation.md`](../design/reconciliation.md) for complete
-semantics and [`../roadmap.md`](../roadmap.md) for later v0.5 work.
+See [`../roadmap.md`](../roadmap.md) for the authoritative v0.5 scope.

@@ -32,9 +32,15 @@ overrides current architecture.
 | Contribute | system context → architecture → [`rust-guidelines.md`](rust-guidelines.md) → active iteration → relevant approved design |
 | Understand future work | [`roadmap.md`](roadmap.md) → relevant `design/` document → active iteration |
 
-Production hosts receive only non-destructive smoke tests. Disposable Debian 13
-VMs are the environment for bootstrap and E2E regression; see
-[`operations/dev-vm-tutorial.md`](operations/dev-vm-tutorial.md).
+## Operating Environments
+
+| Environment | Use | Entry point |
+|---|---|---|
+| Production host | Bootstrap, application operation, and non-destructive smoke tests only | [`getting-started.md`](getting-started.md) |
+| Development VM | Disposable Debian 13 provisioning and manual regression | [`operations/dev-vm-tutorial.md`](operations/dev-vm-tutorial.md) |
+| Automated VM regression | Fixture-cycle E2E and full disposable regression | [`../scripts/dev-vm/e2e.sh`](../scripts/dev-vm/e2e.sh), [`../scripts/dev-vm/test-all.sh`](../scripts/dev-vm/test-all.sh) |
+
+Do not run reset, restore, bootstrap acceptance, or E2E scripts on production.
 
 ## Documentation Requirements
 
@@ -60,7 +66,6 @@ direction (`roadmap.md`).
 | [`design/reconciliation.md`](design/reconciliation.md) | Approved design | Queued v0.4 reconciliation semantics |
 | [`design/reconciliation-e2e.md`](design/reconciliation-e2e.md) | Approved design | Queued v0.4 E2E catalog |
 | [`design/caddy-unmatched-host-fallback.md`](design/caddy-unmatched-host-fallback.md) | Historical record | Completed v0.3.1 design |
-| [`iterations/current-iteration.md`](iterations/current-iteration.md) | Active planning | Documentation architecture refactor tracker |
-| [`iterations/next-iteration.md`](iterations/next-iteration.md) | Queued planning | v0.4 reconciliation tracker |
+| [`iterations/current-iteration.md`](iterations/current-iteration.md) | Active planning | v0.4 reconciliation tracker |
+| [`iterations/next-iteration.md`](iterations/next-iteration.md) | Queued planning | v0.5 topology planning reminder |
 | [`roadmap.md`](roadmap.md) | Living | v0.1 → v0.8 evolution and direction |
-| [`roadmap-history/`](roadmap-history/) | Historical records | Completed detailed version plans and superseded terminology |

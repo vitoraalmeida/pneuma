@@ -1,8 +1,8 @@
 # Design — Reconciliation
 
 **Status:** approved design for v0.4; it does not describe behavior already
-implemented. It is queued for the next iteration; execution and progress will
-live in `docs/iterations/current-iteration.md` when that iteration is promoted.
+implemented. Execution and progress live only in
+`docs/iterations/current-iteration.md`.
 
 ## Objective
 

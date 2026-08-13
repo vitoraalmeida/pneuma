@@ -24,7 +24,11 @@ def tracked_markdown_files() -> list[Path]:
         capture_output=True,
         text=True,
     ).stdout.splitlines()
-    return [Path(path) for path in sorted(set(tracked + untracked))]
+    return [
+        Path(path)
+        for path in sorted(set(tracked + untracked))
+        if Path(path).is_file()
+    ]
 
 
 def local_target(raw_target: str) -> str | None:
