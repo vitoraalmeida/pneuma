@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/vitoraalmeida/pneuma/actions/workflows/ci.yml/badge.svg)](https://github.com/vitoraalmeida/pneuma/actions/workflows/ci.yml)
 
-Single-host deployment CLI for containerized applications.
+Pneuma is a Single-host deployment Tool (song) for containerized applications.
 
 ## Why Pneuma?
 
