@@ -156,7 +156,7 @@ Pneuma updated and validated on the VM
 
 ## 6. Fixture Applications
 
-Keep fixtures independent from the personal site, small, and deterministic:
+Keep fixtures self-contained, small, and deterministic:
 
 | Fixture | Behavior | Use |
 |---|---|---|
@@ -227,7 +227,7 @@ Build, publish, and deploy:
 ```bash
 podman build -t localhost:5000/<fixture>:latest /var/lib/pneuma/checkouts/fixtures/<fixture>
 podman push --tls-verify=false localhost:5000/<fixture>:latest
-pneuma app deploy <fixture> --image localhost:5000/<fixture>@sha256:<digest-do-registry>
+pneuma app deploy <fixture> --image localhost:5000/<fixture>@sha256:<registry-digest>
 ```
 
 > **Repository enforcement:** deployment accepts only images whose repository
