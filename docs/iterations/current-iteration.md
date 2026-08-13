@@ -13,6 +13,11 @@ without selecting a new Release or making destructive changes from ambiguity.
 
 ## Checkpoints
 
+- [ ] Convert `reconciliation-e2e.md` into an executable reconciliation test
+  plan before implementation: assign every scenario to a focused Rust test or
+  disposable-VM E2E case, define fixtures, fault injection, persisted-state and
+  external-observation assertions, and add initial failing tests for the first
+  implementation slice.
 - [ ] Implement v0.4 reconciliation from the approved reconciliation design.
 
 ## Scope and Non-goals
