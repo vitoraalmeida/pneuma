@@ -20,4 +20,5 @@ a **record** describes completed work and does not change.
 
 | Document | Contents |
 |---|---|
-| [`iterations/current-iteration.md`](iterations/current-iteration.md) | Concluded bootstrap, VM, and E2E hardening iteration |
+| [`iterations/current-iteration.md`](iterations/current-iteration.md) | Active v0.4 reconciliation work tracker |
+| [`design/caddy-unmatched-host-fallback.md`](design/caddy-unmatched-host-fallback.md) | Caddy routing-fallback design implemented in v0.3.1 |

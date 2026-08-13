@@ -2,30 +2,21 @@
 
 **Status:** in progress
 
-**Base:** `6ccd178` (`chore: remove redundant VPS validation scripts`)
+**Base:** `95d86ab` (`feat: add Caddy unmatched-host fallback`)
 
-**Approved design:** [`caddy-unmatched-host-fallback.md`](../design/caddy-unmatched-host-fallback.md)
+**Approved design:** [`reconciliation.md`](../design/reconciliation.md)
 
-## Iteration - v0.4 Routing and Reconciliation
+## Iteration - v0.4 Reconciliation
 
-Objective: establish the remaining public-routing contract before implementing
-reconciliation.
+Objective: converge runtime and exposure materialization toward persisted intent
+without selecting a new Release or making destructive changes from ambiguity.
 
 ## Checkpoints
 
-- [x] Add the generic Caddy unmatched-host fallback defined in
-  `caddy-unmatched-host-fallback.md`.
-  Result: the shared production/VM Caddy baseline returns `Not Found` with HTTP
-  404 for unmatched hosts, while public fragments retain domain routing. Clean
-  bootstrap/rerun on a disposable Debian 13 clone passed 89 PASS/0 FAIL; full
-  VM E2E passed 45 PASS/0 FAIL/0 SKIP, including public-to-internal fallback and
-  a running internal runtime. Both disposable clones were destroyed.
 - [ ] Implement v0.4 reconciliation from the approved reconciliation design.
 
 ## Scope and Non-goals
 
-- v0.4 begins with the Caddy fallback checkpoint. Reconciliation follows only
-  after that checkpoint is complete.
 - DNS, certificate lifecycle, registry watching, auto-deploy, API, TUI, OIDC,
   RBAC, multiple hosts, and precompiled binary download are out of scope.
 

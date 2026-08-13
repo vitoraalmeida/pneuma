@@ -304,6 +304,17 @@ app import` accepts remote Git URLs only; local paths are rejected, while
 
 ---
 
+## v0.3.1 — Caddy Routing Fix
+
+**Status:** completed on August 13, 2026
+
+- Unmatched HTTP hosts receive a generic `404 Not Found` fallback.
+- Changing an Application from public to internal removes its public route while
+  preserving its running loopback runtime.
+- Bootstrap reruns correctly identify active Caddy listeners on ports 80/443.
+
+---
+
 ## v0.4 — Reconciliation & Deployment Reliability
 
 With Git/source/artifact well defined, Pneuma evolves from command-driven to

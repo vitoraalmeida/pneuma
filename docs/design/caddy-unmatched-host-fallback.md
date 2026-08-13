@@ -1,6 +1,6 @@
 # Design - Caddy Unmatched-Host Fallback
 
-**Status:** approved design for v0.4 checkpoint 1.
+**Status:** implemented in v0.3.1.
 
 **Base:** `6ccd178` (`chore: remove redundant VPS validation scripts`)
 
@@ -36,7 +36,7 @@ subsequent unmatched HTTP request.
 - Do not add DNS management, certificate management, wildcard certificates, or
   a generic HTTPS certificate solely for internalized hostnames.
 - Do not alter Application, Deployment, RuntimeInstance, or Exposure persistence.
-- Do not implement v0.4 reconciliation in this checkpoint.
+- Do not implement reconciliation in this patch release.
 
 ## Acceptance Criteria
 

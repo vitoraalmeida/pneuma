@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.3.1 — Caddy Routing Fix (2026-08-13)
+
+### Fixed
+
+- Unmatched HTTP hosts return a generic `404 Not Found`, including after a
+  public Application becomes internal.
+- Bootstrap reruns correctly identify Caddy as the owner of ports 80/443.
+
+### Changed
+
+- Internalized Applications remove their public Caddy route while their
+  loopback runtime remains running.
+
 ## v0.3.0 — Consolidation and Operational Hardening (2026-08-13)
 
 ### Added
