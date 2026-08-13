@@ -8,48 +8,40 @@ Single crate organized into three layers:
 
 - `src/main.rs` - thin CLI with argument parsing via clap derive; composes
   configuration and calls use cases; contains no domain logic.
-- `src/domain/` - pure domain types (`application`, `manifest`, `release`,
-  `system`), with no external dependencies.
-- `src/use_cases/` - use cases that orchestrate adapters and domain
-  (`application_import`, `application_list`, `application_runtime`,
-  `ci_dispatch`, `deployment_activate_public`, `deployment_create`,
+- `src/domain/` - pure domain types (`application`, `deployment`, `manifest`,
+  `release`, `runtime`, `system`), with no external dependencies.
+- `src/use_cases/` - application and system management (`application_import`,
+  `application_list`, `application_runtime`, `system_create`, `system_list`,
+  `system_show`); deployment pipeline (`deployment_create`,
   `deployment_deploy_branch`, `deployment_deploy_oci`,
-  `deployment_deploy_release`, `deployment_list`, `deployment_progress`,
-  `deployment_promote_internal`, `deployment_promote_public`,
-  `deployment_register_runtime`, `deployment_rollback`,
-  `deployment_runtime_cleanup`, `deployment_start_candidate`,
-  `deployment_transition`, `exposure_change`, `release_create`, `system_create`,
-  `system_list`, `system_show`).
-   `deployment_deploy_release` orchestrates the entire deployment (runtime, health,
-   Caddy, and activation) from an immutable Release; supporting responsibilities
-   were extracted into cohesive modules (`deployment_progress` for reporting,
-   `deployment_runtime_cleanup` for removing old candidates and runtimes,
-   `deployment_start_candidate` for creating the candidate runtime, and
-   `deployment_activate_public` for public activation). The OCI path
-   (`deployment_deploy_oci`) produces the Release and delegates to it. The Git-aware
-   path (`deployment_deploy_branch`) resolves branch → commit → image tag → digest and
-   delegates to `deployment_deploy_oci`.
-   `deployment_transition` applies the persisted state machine.
-   `ci_dispatch` is the restricted SSH dispatcher (forced command) that accepts only
-   `deploy <app> <branch>` and `version`.
+  `deployment_deploy_release`, `deployment_transition`, `deployment_rollback`);
+  runtime and exposure lifecycle (`deployment_start_candidate`,
+  `deployment_activate_public`, `deployment_runtime_cleanup`, `exposure_change`);
+  and the restricted SSH dispatcher (`ci_dispatch`).
+
+  `deployment_deploy_release` orchestrates runtime creation, health verification,
+  Caddy activation, and promotion from an immutable Release. The OCI path produces
+  the Release and delegates to it; the Git-aware path resolves branch → commit →
+  image tag → digest and delegates to the OCI path. Supporting modules isolate
+  progress reporting, candidate creation, public activation, runtime cleanup, and
+  persisted state transitions. `ci_dispatch` accepts only `deploy <app> <branch>`
+  and `version` through an SSH forced command.
 - `src/adapters/` - integrations with external systems (`git_source`,
   `local_runtime`, `oci_image`, `port_allocator`,
   `systemd_quadlet`, `caddy_exposure`, `health_check_external`,
   `health_check_internal`, `stores`, `database`).
 
-No traits, generics, macros, or async: the constraints in
+Avoid custom traits, generic abstractions, and async unless a demonstrated need
+requires them; the constraints in
 [`docs/rust-guidelines.md`](../rust-guidelines.md) apply to every change.
 
 > **v0.3.0 current release** (see [`roadmap.md`](../roadmap.md)): Pneuma now operates
 > in Git-aware mode. The only deployable artifact is `image@digest`, discovered
 > by CI (`Git branch → commit → OCI digest`). Persistence is organized into
-> SQLite stores by capability. Phase A removed `deploy-source`,
-> `deployment_deploy_source`, `local_build`, and `[build]`. Phase H validated
-> the complete flow with the pilot application `vitoralmeida.tech` in staging and
-> production. v0.3 added domain/persistence consolidation and bootstrap, VM, and
-> E2E operational hardening; this document describes the current implemented
-> architecture before v0.4
-> reconciliation.
+> SQLite stores by capability. v0.3 removed local-path imports, made Deployment
+> and RuntimeInstance first-class domain types, and added reproducible bootstrap,
+> VM, and E2E operational hardening. This document describes the current
+> implemented architecture; v0.4 reconciliation remains future work.
 
 ## 2. External effects
 
@@ -66,6 +58,8 @@ migrations live in `migrations/` and are registered through `include_str!` in
 `src/adapters/database.rs`, which applies pending migrations whenever a connection
 opens (`PRAGMA foreign_keys = ON`).
 
+### 3.1 Import and application specification
+
 The application specification is persisted when importing `pneuma.toml`
 (schema v3): `application_sources` exists when the import provides
 `repository_url` (it comes from the command, not the manifest), and
@@ -77,7 +71,9 @@ The application specification is persisted when importing `pneuma.toml`
 repository, reads `pneuma.toml`, persists the application, and removes the
 checkout; it does not deploy.
 
-Rules observed:
+### 3.2 Transactions and external effects
+
+Rules:
 
 - short transactions, never kept open during Git, build, Podman, Caddy, or HTTP;
 - intent persisted before effects; completion persisted after confirming the
@@ -86,14 +82,20 @@ Rules observed:
   exposure `active`) occurs in a single transaction;
 - the database is not the source of observed runtime state; Podman is.
 
+### 3.3 Port reservations
+
 `runtime_port_reservations` (migration 0012) prevents concurrent candidates
 from receiving the same loopback port. The reservation exists before the runtime
 is registered, is consumed after registration, and is released during candidate cleanup.
+
+### 3.4 Backup and restore
 
 Backup and restore use the SQLite backup API. Restore validates
 `PRAGMA integrity_check`, takes an exclusive `<database>.restore.lock`,
 preserves a `pre-restore` copy, replaces the database through an atomic rename,
 and removes WAL sidecars before the next open.
+
+### 3.5 Configuration
 
 All paths come from environment variables (`PNEUMA_DATABASE_PATH`,
 `PNEUMA_WORKSPACE_PATH`, `PNEUMA_CADDY_MANAGED_PATH`, `PNEUMA_CADDYFILE_PATH`,
@@ -106,6 +108,16 @@ variables to `/etc/pneuma/environment` (read by the binary) and to the
 `~/.profile` of the `pneuma` user.
 
 ## 4. Runtime
+
+Three identifiers describe a running application at different layers:
+
+- **Deployment ID:** the logical deployment attempt, including its status and
+  source provenance.
+- **RuntimeInstance:** the persisted record of the concrete materialization for
+  a Deployment, including its loopback endpoint and observed state.
+- **Quadlet/container name:** the external systemd/Podman resource,
+  `pneuma-<application>-<deployment-id>.container`, used to observe and control
+  the RuntimeInstance.
 
 - each deployment generates a Quadlet unit
   `pneuma-<application>-<deployment-id>.container` and a container with the same
@@ -149,6 +161,11 @@ an error emits a warning without reverting the already completed promotion.
   any external effect.
 
 ## 5. Caddy exposure
+
+`desired_visibility` is the user's persisted intent (`public` or `internal`);
+`materialization_state` records whether the corresponding Caddy route was
+successfully applied. Changing intent does not imply that the route is already
+active.
 
 Public applications are published through `<application-id>.caddy` fragments in
 the managed directory, imported by the main `Caddyfile`:
@@ -199,6 +216,11 @@ Every `Failed` state persists a code, stage, and message; the candidate is
 removed and the previous Release (route and runtime) is preserved. Only one
 active deployment per application is permitted (`create_deployment`). Rollback
 creates a new deployment (`type = rollback`) from the previous successful Release.
+
+`Pending`, `Starting`, `Verifying`, and `Activating` are non-terminal states that
+reserve the application for that deployment. `Succeeded` and `Failed` are
+terminal; rollback creates a new deployment record rather than changing a prior
+record.
 
 ## 8. Operations and diagnostics
 
