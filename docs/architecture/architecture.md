@@ -29,7 +29,7 @@ The project uses concrete synchronous Rust code. The constraints in
 
 | Concept | Role |
 |---|---|
-| System | Optional organizational grouping for Applications. |
+| System | Organizational grouping for Applications. Import requires a selected System and creates it when it does not already exist. |
 | Application | Durable command-facing identity and desired runtime state. It owns the imported specification, Releases, Deployment history, and exposure intent. |
 | Manifest | Import-time desired specification. It supplies delivery, runtime, health, and exposure configuration; the repository URL and manifest path come from the import command. |
 | Release | Reusable immutable OCI artifact for one Application, identified by image digest. |
@@ -40,9 +40,9 @@ The project uses concrete synchronous Rust code. The constraints in
 Logical identifiers are distinct from external identifiers. `active_deployment_id`
 identifies a successful Deployment, not a container. A RuntimeInstance identifies
 the logical materialization; its Podman container ID can change when Quadlet
-recreates the container. Pneuma instead uses the deterministic external name
-`pneuma-<application>-<deployment-id>.container` for its Quadlet unit and
-container.
+recreates the container. The deterministic base name is
+`pneuma-<application>-<deployment-id>`: the Podman container uses the base name,
+the Quadlet file uses `<base>.container`, and systemd controls `<base>.service`.
 
 ## Authority and Persistence
 
@@ -78,11 +78,28 @@ All configurable paths and ports use `PNEUMA_DATABASE_PATH`,
 
 ## Business Rules
 
+### Import and manifest
+
+- Import requires a Git URL plus a System from `--system` or `[system].name`.
+  The command-line System takes precedence; Pneuma creates the selected System
+  when absent.
+- Manifests use schema version `3` and reject unknown fields. System and
+  Application names are 1-63 lowercase ASCII letters, digits, or hyphens, with
+  alphanumeric first and last characters.
+- Delivery is OCI-only. Its image value is a repository, not a digest reference,
+  and must not contain surrounding whitespace.
+- Runtime configuration requires a nonzero container port, an absolute
+  whitespace-free health path, and an expected HTTP status from 100 through 599.
+  Public default visibility requires a valid domain.
+- Import is create-only. Once an Application exists, a repeated import returns
+  it without rewriting its stored specification.
+
 ### Artifact and deployment
 
 - A deployed artifact is always an `image@digest`; mutable tags are rejected.
 - An Application permits only the OCI repository recorded from its manifest.
-- Branch deployment resolves `branch -> commit -> image:<commit> -> digest`.
+- The CLI deploy input resolves a branch or Git tag to a commit, then resolves
+  `commit -> image:<commit> -> digest`.
   If CI has not published that artifact, deployment fails; Pneuma never falls
   back to `latest`, a prior artifact, or a local build.
 - The `(application, digest)` pair identifies a reusable Release. Source
@@ -91,6 +108,8 @@ All configurable paths and ports use `PNEUMA_DATABASE_PATH`,
 - Only one non-terminal Deployment may exist for an Application. Rollback creates
   a new `rollback` Deployment for a historical successful Release; it never edits
   prior history.
+- A normal deployment rejects a Release that is already active with a live
+  runtime. Rollback remains a new Deployment even when it reuses a prior Release.
 - Candidate failure persists a code, stage, and message, cleans resources proven
   to belong to that candidate, and preserves the prior active runtime and route.
 
@@ -98,11 +117,13 @@ All configurable paths and ports use `PNEUMA_DATABASE_PATH`,
 
 - Every candidate reserves a unique loopback port before runtime registration.
   Its endpoint is `127.0.0.1:<reserved-port>:<container-port>` and is not
-  directly public.
+  directly public. The persisted reservation is consumed once the runtime is
+  registered and released when a failed candidate is cleaned up.
 - Candidate creation writes the Quadlet unit, reloads the user manager, starts
   the unit, resolves its container, and registers the RuntimeInstance.
-- A candidate unit is enabled only after promotion, so only the active runtime
-  returns after reboot. Units use `Restart=on-failure`.
+- Candidate creation starts its generated Quadlet unit before health checks and
+  promotion. Units use `Restart=on-failure`; current implementation does not
+  enable units through `systemctl --user enable`.
 - Promotion sets desired runtime intent to `running`. `app start` and `app stop`
   persist intent before controlling the runtime and persist the resulting
   observation afterward.
@@ -117,15 +138,19 @@ All configurable paths and ports use `PNEUMA_DATABASE_PATH`,
 
 - `desired_visibility` is operator intent; `materialization_state` records the
   confirmed Caddy result. Changing intent alone does not make a route active.
-- Public visibility requires a configured domain, an active runtime, a running
-  container, Caddy validation and reload, and a successful external health check.
+- Materializing public visibility requires a configured domain, an active running
+  runtime, Caddy validation and reload, and a successful external health check.
+  Stopping a public Application does not remove its existing Caddy fragment.
 - Internal visibility removes only the managed Caddy route. It leaves the
   loopback runtime running.
 - The bootstrap-managed Caddy baseline returns generic HTTP `404 Not Found` for
   unmatched hosts. HTTPS can fail during TLS before this fallback when no
   certificate exists for the hostname.
-- Materialization failures restore the previous fragment when possible and record
+- Materialization failures attempt to restore the previous fragment and record
   `failed`; incomplete compensation records `diverged` for manual inspection.
+  A persistence failure can prevent either state from being confirmed.
+- Repeating a visibility request that already matches desired visibility succeeds
+  without inspecting or retrying its materialization state.
 
 ## Command Data Flows
 
@@ -135,19 +160,18 @@ All configurable paths and ports use `PNEUMA_DATABASE_PATH`,
 Git URL + manifest path
   -> temporary checkout
   -> parse and validate pneuma.toml
+  -> resolve or create System from --system or [system]
   -> SQLite transaction: System, Application, specification, Exposure
   -> remove checkout
 ```
 
-`pneuma app import` accepts remote Git URLs; `file://` is available for local
-test repositories. It creates no Deployment and leaves runtime intent stopped.
-Import is create-only: an existing Application is returned without rewriting its
-stored specification.
+`pneuma app import` accepts Git URL syntax, including `file://`; local paths are
+rejected. It creates no Deployment and leaves runtime intent stopped.
 
 ### Deploy by branch or digest
 
 ```text
---branch: Application source -> Git branch -> commit -> OCI commit tag -> digest
+--branch: Application source -> Git branch or tag -> commit -> OCI commit tag -> digest
 --image:  CLI digest reference -> allowed repository validation
 both:     pull and verify OCI image -> reuse or create Release -> DeployRelease
 ```
@@ -166,7 +190,7 @@ Release + Application specification
   -> internal health check
   -> public only: materialize Caddy fragment, reload, external health check
   -> transactional promotion to active successful Deployment
-  -> enable candidate unit and best-effort retire prior runtime
+  -> best-effort retire prior runtime
 ```
 
 Internal deployments promote after the internal health check. Public deployments
@@ -204,8 +228,8 @@ internal: persist internal/removing -> remove and reload Caddy fragment
 ```
 
 If an effect completes but its persistence confirmation loses a compare-and-set,
-Pneuma attempts route compensation and records `failed` or `diverged` rather than
-claiming a successful exposure change.
+Pneuma attempts route compensation and attempts to record `failed` or `diverged`
+rather than claiming a successful exposure change.
 
 ### Rollback and CI dispatch
 
@@ -214,16 +238,34 @@ its immutable Release if necessary, and runs the normal deployment flow as a new
 `rollback` Deployment. It does not rely on the old container still existing.
 
 The restricted SSH dispatcher parses `SSH_ORIGINAL_COMMAND` and permits only
-`version` or `deploy <application> <branch>`. It validates both arguments and
-dispatches the permitted deploy command through the same branch deployment flow.
+`version` or `deploy <application> <branch-or-tag>`. It validates both arguments
+and dispatches the permitted deploy command through the same source-resolution
+flow.
+
+### Catalog and history
+
+```text
+system create -> create or return the named System
+system list   -> list Systems by name
+system show   -> System details and its Applications by name
+
+app list      -> registered Applications and whether each has an active deployment
+app deployments -> Deployment history with type, Release digest, source, and status
+```
+
+`system show` fails for an unknown System. `app deployments` first resolves the
+Application by name; an Application with no history reports that explicitly.
 
 ## Health and Exposure Effects
 
 Internal health uses HTTP against the candidate loopback endpoint before traffic
-switches. Public health uses `curl` at `https://<domain><path>` with
-`--resolve <domain>:443:127.0.0.1`, validating Caddy's local listener with
-retries. Public Caddy fragments are stored as `<application-id>.caddy` files in
-the managed directory and imported by the main Caddyfile.
+switches, with five bounded attempts. During public deployment, external health
+uses the configured path and expected status through `curl` at
+`https://<domain><path>` with `--resolve <domain>:443:127.0.0.1`. A standalone
+change to public visibility instead checks `/` for HTTP `200`. External health
+retries through Caddy's local listener. Public Caddy fragments are stored as
+`<application-id>.caddy` files in the managed directory and imported by the main
+Caddyfile.
 
 ## Deployment State Machine
 
@@ -254,8 +296,12 @@ for its observed state.
   linger for the `pneuma` user, and maintains the Caddy baseline.
 - The binary updater changes only the binary; bootstrap must be rerun when a
   release changes host-managed files such as the Caddy baseline.
-- `pneuma database backup` and `restore` use SQLite's backup API. Restore checks
-  integrity, takes an exclusive restore lock, preserves a pre-restore copy, and
+- `pneuma database backup <path>` makes a SQLite backup, refusing an existing
+  destination. `pneuma database restore <path>` checks source integrity, takes a
+  create-only `<database>.restore.lock` file, makes a pre-restore backup, and
   replaces the database atomically.
-- `pneuma doctor` validates host dependencies and operational prerequisites. It
-  does not establish that an individual Application is healthy.
+- `pneuma doctor` checks the database and migrations, configured paths, Caddy
+  configuration, Git/Podman/Caddy availability, rootless Podman, the Quadlet user
+  generator, disk capacity, and that active OCI images remain pullable. It does
+  not establish that an individual Application is healthy.
+- `pneuma version` prints the package version without opening the database.
