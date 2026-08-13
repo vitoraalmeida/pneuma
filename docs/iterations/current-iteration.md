@@ -1,6 +1,6 @@
 # Iteração atual
 
-**Status:** em andamento
+**Status:** concluída
 
 **Base:** `8328842` (`docs: record pre-v0.3 consolidation completion`)
 
@@ -92,17 +92,17 @@ capazes de provar as garantias operacionais necessárias antes de reconciliation
 
 ## Critérios de aceite
 
-- [ ] Bootstrap aceita somente `--ref` SHA completo ou tag e reinstala o commit
+- [x] Bootstrap aceita somente `--ref` SHA completo ou tag e reinstala o commit
   resolvido em todo rerun.
-- [ ] Host limpo e rerun validam invariantes de usuário, subids, linger,
+- [x] Host limpo e rerun validam invariantes de usuário, subids, linger,
   diretórios, ambiente, Caddy, rootless Podman, binário e chave CI.
-- [ ] VPS e VM chamam uma implementação comum das invariantes de host.
-- [ ] Caddy é atualizado atomicamente e o preflight aceita apenas Caddy próprio
+- [x] VPS e VM chamam uma implementação comum das invariantes de host.
+- [x] Caddy é atualizado atomicamente e o preflight aceita apenas Caddy próprio
   nas portas 80/443 durante rerun.
-- [ ] CI executa `bash -n`, ShellCheck e shfmt com versões fixadas.
-- [ ] E2E prova candidate falho preservando v1, rollback real, reboot real,
+- [x] CI executa `bash -n`, ShellCheck e shfmt com versões fixadas.
+- [x] E2E prova candidate falho preservando v1, rollback real, reboot real,
   HTTPS público/internal, fronteiras da chave CI e restore semântico.
-- [ ] Quatro gates e regressões de bootstrap/E2E VM exigidas estão verdes, sem
+- [x] Quatro gates e regressões de bootstrap/E2E VM exigidas estão verdes, sem
   skips não aceitos.
 
 ## Bloqueadores
@@ -111,5 +111,8 @@ Nenhum.
 
 ## Validação final
 
-Pendente: gates e regressões proporcionais a cada checkpoint; repetição integral
-no commit final da iteração.
+Em `eb1fce6`: `cargo fmt --check`, Clippy com `-D warnings`, `cargo test
+--all-features` e build release verdes; shfmt 3.10.0, `bash -n` e ShellCheck
+0.10.0 verdes. Acceptance bootstrap limpa: 87 PASS/0 FAIL. E2E descartável:
+45 PASS/0 FAIL/0 SKIP. Os quatro testes Rust ignorados exigem Podman rootless
+configurado no host local; a cobertura equivalente executou na VM descartável.
