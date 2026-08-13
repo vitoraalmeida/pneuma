@@ -46,7 +46,9 @@ No traits, generics, macros, or async: the constraints in
 > SQLite stores by capability. Phase A removed `deploy-source`,
 > `deployment_deploy_source`, `local_build`, and `[build]`. Phase H validated
 > the complete flow with the pilot application `vitoralmeida.tech` in staging and
-> production. This document describes the current architecture (v0.2).
+> production. Bootstrap, VM, and E2E operational hardening completed after v0.2;
+> this document describes the current implemented architecture before v0.3
+> reconciliation.
 
 ## 2. External effects
 

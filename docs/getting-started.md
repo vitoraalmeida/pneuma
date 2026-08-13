@@ -270,7 +270,7 @@ branch tags, the deployment step is:
 ## 6. Final Check
 
 ```bash
-# No host
+# On the host
 sudo -iu pneuma
 pneuma doctor          # ok
 
@@ -278,8 +278,9 @@ pneuma doctor          # ok
 ssh -i ~/.ssh/pneuma-ci pneuma@<host> "version"   # responds with the version
 
 # After a push to the workflow branch
-# → workflow publica a imagem e pede deploy
-# Na VPS: pneuma status e pneuma list devem refletir o novo release Running
+# → the workflow publishes the image and requests deployment
+# On the VPS, `pneuma app status <app>` should report Running and
+# `pneuma app list` should show the application as Deployed
 ```
 
 ### 6.1. Production Smoke Test

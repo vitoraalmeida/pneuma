@@ -1,6 +1,6 @@
 # Design — application_import Persistence Extraction
 
-**Status:** approved design for the persistence-extraction checkpoint.
+**Status:** historical design; implemented during v0.2 consolidation.
 
 **Base:** `589970a` (`refactor(runtime): materialize image digest as runtime identity`)
 

@@ -25,7 +25,7 @@ artifacts; Pneuma discovers and operates artifacts.**
   CPU, conflicting services, ports 80/443) and final-state validation.
 - Restricted CI deploy-key provisioning during bootstrap
   (`--ci-public-key`), with forced command `pneuma ci dispatch`.
-- E2E test battery (`scripts/test-battery.sh`) and VPS bootstrap test
+- Development VM E2E battery (`scripts/dev-vm/e2e.sh`) and VPS bootstrap test
   (`scripts/test-bootstrap-vps.sh`).
 - Development VM scripts and tutorial (`scripts/dev-vm/`,
   `docs/operations/dev-vm-tutorial.md`).
