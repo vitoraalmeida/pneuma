@@ -120,34 +120,27 @@ Without `--ref`, the script compiles the repository's default branch, as before.
 
 For a routine version update, do not rerun bootstrap. Bootstrap converges the
 entire host (packages, account, Caddy, and environment); a binary-only update
-leaves those host settings unchanged. Run the following as `root` on the VPS,
+leaves those host settings unchanged. Run the updater as `root` on the VPS,
 replacing `v0.3.0` with the target immutable tag:
 
 ```bash
-# Back up the catalog before an update that may apply a database migration.
-/usr/local/bin/pneuma database backup /var/backups/pneuma-before-v0.3.0.sqlite3
-
-PNEUMA_HOME=/home/pneuma
-PNEUMA_SOURCE_PATH="$PNEUMA_HOME/pneuma"
-PNEUMA_VERSION=v0.3.0
-
-runuser -u pneuma -- env HOME="$PNEUMA_HOME" \
-  git -C "$PNEUMA_SOURCE_PATH" fetch --prune --tags origin
-TARGET_SHA="$(runuser -u pneuma -- env HOME="$PNEUMA_HOME" \
-  git -C "$PNEUMA_SOURCE_PATH" rev-parse --verify "refs/tags/$PNEUMA_VERSION^{commit}")"
-runuser -u pneuma -- env HOME="$PNEUMA_HOME" \
-  git -C "$PNEUMA_SOURCE_PATH" checkout --force --detach "$TARGET_SHA"
-runuser -u pneuma -- bash -lc "source '$PNEUMA_HOME/.cargo/env' && cd '$PNEUMA_SOURCE_PATH' && cargo build --release"
-install -o root -g root -m 0755 \
-  "$PNEUMA_SOURCE_PATH/target/release/pneuma" /usr/local/bin/pneuma
-
-/usr/local/bin/pneuma version
-runuser -u pneuma -- bash -lc 'cd "$HOME" && pneuma doctor'
+bash /home/pneuma/pneuma/scripts/update-pneuma.sh --ref v0.3.0
 ```
 
-The first command that opens the database, such as `pneuma doctor`, applies
-pending forward-only migrations. Existing deployed applications continue to run
-while the binary is replaced because Quadlet supervises their containers.
+For the first update from a release that predates this script, copy the updater
+from the development machine and run the copied file as `root`:
+
+```bash
+scp scripts/update-pneuma.sh root@<host>:/tmp/update-pneuma.sh
+ssh root@<host> 'bash /tmp/update-pneuma.sh --ref v0.3.0'
+```
+
+The updater requires a tag or full commit SHA, rejects branches and abbreviated
+SHAs, creates a database backup in `/var/backups/pneuma/`, fetches and checks out
+the target commit, builds and installs the binary, then verifies its version and
+runs `pneuma doctor`. The first command that opens the database applies pending
+forward-only migrations. Existing deployed applications continue to run while
+the binary is replaced because Quadlet supervises their containers.
 
 Before upgrading across a version with a migration, validate the target version
 on a disposable VM and keep the backup until verification succeeds. v0.3 rejects
