@@ -236,7 +236,7 @@ listening_inodes() {
 	local port="$1"
 	local hex_port
 	hex_port="$(printf '%04X' "$port")"
-	awk -v p=":$hex_port" '$4 == "0A" && $2 ~ p"$" { print $12 }' \
+	awk -v p=":$hex_port" '$4 == "0A" && $2 ~ p"$" { print $10 }' \
 		/proc/net/tcp /proc/net/tcp6 2>/dev/null
 }
 

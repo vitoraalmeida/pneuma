@@ -66,11 +66,15 @@ if ssh "$SSH_HOST" 'grep -rlF "redirect-public.pneuma.test" /etc/caddy/applicati
 	echo "  ERROR: redirect-public Caddy fragment remains after internal visibility"
 	exit 1
 fi
+if ! ssh "$SSH_HOST" 'test "$(curl -s -o /dev/null -w "%{http_code}" http://redirect-public.pneuma.test/)" = 404'; then
+	echo "  ERROR: redirect-public HTTP request does not receive the generic 404 fallback"
+	exit 1
+fi
 if ! ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && podman ps --format '\''{{.Names}}'\'' --filter '\''name=^pneuma-redirect-public-'\'' | grep -q ."'; then
 	echo "  ERROR: redirect-public runtime stopped after becoming internal"
 	exit 1
 fi
-echo "  OK: redirect-public HTTPS and internal transition"
+echo "  OK: redirect-public HTTPS, generic HTTP fallback, and internal transition"
 
 echo
 echo "==> Step 5: Failed candidate preserves healthy-http v1..."

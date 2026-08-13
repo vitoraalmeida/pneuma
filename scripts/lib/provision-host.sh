@@ -313,10 +313,18 @@ provision_caddy_baseline() {
 	local_certs
 }
 
+http:// {
+	respond "Not Found" 404
+}
+
 import /etc/caddy/applications/*.caddy
 EOF
 	else
 		cat >"$candidate" <<'EOF'
+http:// {
+	respond "Not Found" 404
+}
+
 import /etc/caddy/applications/*.caddy
 EOF
 	fi

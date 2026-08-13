@@ -148,6 +148,22 @@ new local-path `pneuma app import` calls; existing imported applications remain
 registered. Downgrading after a migration is unsupported: restore the pre-update
 database backup before running an earlier Pneuma binary.
 
+When an update changes the bootstrap-managed Caddy baseline, rerun bootstrap
+after the binary updater completes to apply the candidate configuration
+atomically:
+
+```bash
+bash /home/pneuma/pneuma/scripts/bootstrap-vps.sh \
+  <pneuma-source-url> \
+  --ci-public-key <existing-ci-public-key> \
+  --ref <target-tag>
+```
+
+For the generic unmatched-host fallback, this makes HTTP requests to an
+internalized Application's former hostname return `404 Not Found`. HTTPS returns
+404 only when TLS can complete; otherwise a TLS handshake failure is expected.
+Remove public DNS separately when the hostname should no longer resolve.
+
 ### 3.3. Disposable Acceptance
 
 Before changing a VPS, validate bootstrap and rerun on a disposable Debian 13

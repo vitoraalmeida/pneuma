@@ -68,5 +68,16 @@ assert_invalid overlapping-other 'pneuma:100000:65536
 other:120000:65536'
 assert_invalid malformed 'pneuma:not-a-number:65536'
 
+listener_inode=$(printf '%s\n' \
+	'  0: 00000000:0050 00000000:0000 0A 00000000:00000000 00:00000000 00000000 100 0 12345 1 0000000000000000' |
+	awk '$4 == "0A" && $2 ~ /:0050$/ { print $10 }')
+if [[ "$listener_inode" == 12345 ]]; then
+	pass=$((pass + 1))
+	printf 'PASS  listener inode column\n'
+else
+	fail=$((fail + 1))
+	printf 'FAIL  listener inode column\n'
+fi
+
 printf '%s passed, %s failed.\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]

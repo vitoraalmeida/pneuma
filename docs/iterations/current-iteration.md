@@ -13,8 +13,13 @@ reconciliation.
 
 ## Checkpoints
 
-- [ ] Add the generic Caddy unmatched-host fallback defined in
+- [x] Add the generic Caddy unmatched-host fallback defined in
   `caddy-unmatched-host-fallback.md`.
+  Result: the shared production/VM Caddy baseline returns `Not Found` with HTTP
+  404 for unmatched hosts, while public fragments retain domain routing. Clean
+  bootstrap/rerun on a disposable Debian 13 clone passed 89 PASS/0 FAIL; full
+  VM E2E passed 45 PASS/0 FAIL/0 SKIP, including public-to-internal fallback and
+  a running internal runtime. Both disposable clones were destroyed.
 - [ ] Implement v0.4 reconciliation from the approved reconciliation design.
 
 ## Scope and Non-goals

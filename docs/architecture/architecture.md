@@ -167,6 +167,13 @@ an error emits a warning without reverting the already completed promotion.
 successfully applied. Changing intent does not imply that the route is already
 active.
 
+The bootstrap-managed Caddy baseline returns a generic `Not Found` HTTP 404 for
+an unmatched host. Changing an Application to `internal` removes only its
+managed route, so its former hostname receives that fallback when reached over
+HTTP. HTTPS returns the fallback only after TLS succeeds; a TLS handshake failure
+is valid when Caddy has no certificate for the hostname. DNS and certificate
+lifecycle remain operator-managed.
+
 Public applications are published through `<application-id>.caddy` fragments in
 the managed directory, imported by the main `Caddyfile`:
 

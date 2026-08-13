@@ -293,6 +293,8 @@ remote_assert "PNEUMA_RUNTIME_PORT_RANGE=30000-39999" "environment runtime port 
 
 # Caddy valid and Quadlet generator present.
 remote_assert "Valid configuration" "caddy validates its Caddyfile" "caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile"
+remote_assert 'http:// {' "Caddyfile has the unmatched HTTP fallback" "cat /etc/caddy/Caddyfile"
+remote_assert 'respond "Not Found" 404' "Caddyfile returns generic HTTP 404" "cat /etc/caddy/Caddyfile"
 remote_assert "" "quadlet generator discovered" "test -x /usr/lib/systemd/user-generators/podman-user-generator || test -x /lib/systemd/user-generators/podman-user-generator"
 remote_assert "pneuma" "quadlet directory created" "ls -la /home/pneuma/.config/containers/systemd"
 
