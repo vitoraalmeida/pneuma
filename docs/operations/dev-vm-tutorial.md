@@ -378,7 +378,7 @@ The `scripts/dev-vm/e2e.sh` battery already covers the main cycle (import,
 digest deployment, upgrade, rollback, and reboot). Upgrade/rollback and reboot
 were validated on the VM: Quadlet (through `[Install] WantedBy=default.target`)
 restores applications at boot with linger enabled, without explicit `systemctl
-enable`. With v0.2 complete, the Git → OCI flow is covered by
+enable`. With v0.2.1 as the current release, the Git → OCI flow is covered by
 `test-branch-deploy.sh` (Git repo with `main`/`staging`, import by `file://` URL,
 and deployment through `--branch`) and `e2e.sh` imports fixtures through local
 Git repositories. The VPS is used only for final public-integration smoke tests

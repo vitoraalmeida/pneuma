@@ -40,14 +40,14 @@ Single crate organized into three layers:
 No traits, generics, macros, or async: the constraints in
 [`docs/rust-guidelines.md`](../rust-guidelines.md) apply to every change.
 
-> **v0.2 complete** (see [`roadmap.md`](../roadmap.md)): Pneuma now operates
+> **v0.2.1 current release** (see [`roadmap.md`](../roadmap.md)): Pneuma now operates
 > in Git-aware mode. The only deployable artifact is `image@digest`, discovered
 > by CI (`Git branch → commit → OCI digest`). Persistence is organized into
 > SQLite stores by capability. Phase A removed `deploy-source`,
 > `deployment_deploy_source`, `local_build`, and `[build]`. Phase H validated
 > the complete flow with the pilot application `vitoralmeida.tech` in staging and
-> production. Bootstrap, VM, and E2E operational hardening completed after v0.2;
-> this document describes the current implemented architecture before v0.3
+> production. v0.2.1 added bootstrap, VM, and E2E operational hardening; this
+> document describes the current implemented architecture before v0.3
 > reconciliation.
 
 ## 2. External effects
