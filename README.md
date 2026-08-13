@@ -74,7 +74,8 @@ deploy key to install the restricted SSH dispatcher.
 See `scripts/bootstrap-vps.sh` for prerequisites and usage instructions, and follow
 [`docs/getting-started.md`](docs/getting-started.md) for the complete setup:
 generating the CI deploy key, running the bootstrap, importing and deploying an
-application, and configuring the GitHub Actions workflow.
+application, configuring the GitHub Actions workflow, and updating the Pneuma
+binary.
 
 For disposable bootstrap and full E2E regression procedures, including local
 TLS, restricted CI SSH, reboot, and semantic database restore, see
