@@ -90,9 +90,9 @@ script assumes a basic Debian VM and:
 2. verifies the Quadlet generator (`podman-user-generator` >= 4.4);
 3. creates the `pneuma` user with `subuid/subgid` and linger;
 4. creates Pneuma persistent directories with VPS permissions;
-5. configures the VM Caddyfile with `local_certs`, importing only
-   `/etc/caddy/applications/*.caddy`, maps fixture domains in `/etc/hosts`, and
-   installs Caddy's local CA in the trust store;
+5. configures the VM Caddyfile with `local_certs`, a generic unmatched-host HTTP
+   404 fallback, and `/etc/caddy/applications/*.caddy` fragments; maps fixture
+   domains in `/etc/hosts`; and installs Caddy's local CA in the trust store;
 6. writes the canonical environment to `/etc/pneuma/environment` and
    `PNEUMA_*`/rootless variables to `pneuma`'s `~/.profile`;
 7. validates `caddy validate` and starts the service;

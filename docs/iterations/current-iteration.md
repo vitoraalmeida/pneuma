@@ -22,11 +22,11 @@ without selecting a new Release or making destructive changes from ambiguity.
 
 ## Acceptance Criteria
 
-- Unmatched HTTP requests receive the generic fallback without identifying an
-  Application.
-- Existing public routes continue to work; internalized Applications retain a
-  running internal runtime.
-- Bootstrap and VM E2E coverage prove the behavior.
+- Reconciliation converges runtime and exposure materialization only when the
+  identity and desired state are unambiguous.
+- Reconciliation does not create a Release or Deployment, change intent, or
+  destructively repair ambiguous drift.
+- Required VM E2E coverage proves the approved reconciliation scenarios.
 
 ## Blockers
 
