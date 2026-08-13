@@ -169,10 +169,10 @@ The `pneuma.toml` manifest declares application configuration. Convention: place
 schema_version = 3
 
 [system]
-name = "personal-website"
+name = "my-system"
 
 [application]
-name = "vitoralmeida-tech-staging"
+name = "my-app-staging"
 
 [delivery]
 type = "oci"
@@ -225,8 +225,10 @@ pneuma/
 │   ├── lib.rs                       # Module declarations
 │   ├── domain/                      # Pure domain types
 │   │   ├── application.rs           # Application model
+│   │   ├── deployment.rs            # Deployment model and state machine
 │   │   ├── manifest.rs              # Manifest parsing
 │   │   ├── release.rs               # Release model
+│   │   ├── runtime.rs               # Runtime instance model
 │   │   └── system.rs                # System model
 │   ├── use_cases/                   # Business logic
 │   │   ├── application_import.rs    # Application import (Git remote)
@@ -238,9 +240,13 @@ pneuma/
 │   │   ├── deployment_deploy_oci.rs # OCI image deployment entry point
 │   │   ├── deployment_deploy_release.rs # Deployment orchestrator
 │   │   ├── deployment_list.rs       # Deployment history
+│   │   ├── deployment_rollback.rs   # Deployment rollback
 │   │   ├── deployment_transition.rs # State machine
 │   │   ├── release_create.rs        # Release creation
-│   │   └── ...                      # Other use cases
+│   │   ├── system_create.rs          # System creation
+│   │   ├── system_list.rs            # System list
+│   │   ├── system_show.rs            # System details
+│   │   └── ...                       # Other use cases
 │   └── adapters/                    # External integrations
 │       ├── git_source.rs            # Git adapter (remote resolution)
 │       ├── local_runtime.rs         # Container lifecycle
@@ -256,7 +262,10 @@ pneuma/
 ├── scripts/                         # Operational scripts
 │   ├── bootstrap-vps.sh             # VPS setup script
 │   ├── test-bootstrap-vps.sh        # VPS bootstrap test
+│   ├── test-integration.sh          # Integration test runner
+│   ├── test-subordinate-ids.sh      # Subordinate-ID test
 │   ├── verify-vps.sh                # VPS post-setup verification
+│   ├── lib/                          # Shared provisioning code
 │   └── dev-vm/                      # Development VM scripts and fixtures
 ├── tests/                           # Integration tests
 ├── CHANGELOG.md                     # Version history
