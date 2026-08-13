@@ -22,4 +22,3 @@ a **record** describes completed work and does not change.
 |---|---|
 | [`operations/backup-and-restore.md`](operations/backup-and-restore.md) | Consistent SQLite database backup and recovery |
 | [`iterations/current-iteration.md`](iterations/current-iteration.md) | Concluded bootstrap, VM, and E2E hardening iteration |
-| [`design/application-import-store-extraction.md`](design/application-import-store-extraction.md) | Historical persistence-extraction design implemented during v0.2 consolidation |
