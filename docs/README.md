@@ -14,7 +14,7 @@ a **record** describes completed work and does not change.
 | [`architecture/architecture.md`](architecture/architecture.md) | Implemented architecture: structure, Quadlet runtime, exposure, persistence, and state machine |
 | [`design/reconciliation.md`](design/reconciliation.md) | Approved reconciliation semantics for v0.4 |
 | [`design/reconciliation-e2e.md`](design/reconciliation-e2e.md) | Future reconciliation E2E catalog for v0.4 |
-| [`roadmap.md`](roadmap.md) | Consolidated v0.1 → v0.7 roadmap; project evolution contract |
+| [`roadmap.md`](roadmap.md) | Consolidated v0.1 → v0.8 roadmap; project evolution contract |
 
 ## Operational Records
 
