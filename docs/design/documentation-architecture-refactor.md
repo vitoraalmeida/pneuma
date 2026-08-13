@@ -22,8 +22,8 @@ boundaries, future design, and product direction.
   a historical record and is not rewritten as current truth.
 - `iterations/current-iteration.md` is the sole active execution tracker.
   Queued work is recorded separately and is not an implementation authority.
-- `roadmap.md` records evolution and direction. Completed detailed plans move to
-  `roadmap-history/`; neither replaces current architecture.
+- `roadmap.md` records evolution and direction. Completed detailed plans remain
+  available in Git history; neither replaces current architecture.
 - The root README is a five-minute newcomer guide. Detailed CLI, manifest, and
   configuration reference stays in the getting-started guide.
 - CI checks local relative Markdown link paths only. It does not attempt external
@@ -48,3 +48,17 @@ boundaries, future design, and product direction.
 - Every local relative Markdown link resolves in CI.
 - A newcomer can answer the documented product, delivery, runtime, persistence,
   exposure, security, and evolution questions without source inspection.
+
+## New Engineer Review
+
+The completed refactor was reviewed against this map without source inspection:
+
+| Area | Questions covered | Primary documents |
+|---|---|---|
+| Product | Problem, audience, Kubernetes boundary, non-goals | Root README; `architecture/system-context.md` |
+| Delivery | Builder, artifact selection, digest identity, Release, Deployment, rollback | `architecture/architecture.md`; `architecture/data-model.md`; ADR-0002; ADR-0006 |
+| Runtime | Starter, post-exit ownership, reboot, Quadlet, rootless model | `architecture/architecture.md`; ADR-0003 |
+| Persistence | SQLite authority, external authority, short transactions | `architecture/data-model.md`; ADR-0004 |
+| Exposure | Internal/public separation, Caddy authority, internal transition | `architecture/architecture.md`; ADR-0005 |
+| Security | CI key capability and limits, container compromise, host assumptions, out-of-scope protections | `architecture/security-model.md`; ADR-0007 |
+| Evolution | Implemented behavior, approved future design, active work, roadmap direction, releases | `docs/README.md`; `design/`; `iterations/`; `roadmap.md`; `CHANGELOG.md` |

@@ -11,9 +11,8 @@ persistence, [`../CHANGELOG.md`](../CHANGELOG.md) for released changes, and
 [`iterations/current-iteration.md`](iterations/current-iteration.md) for active
 implementation.
 
-Completed-version delivery detail is preserved in
-[`roadmap-history/`](roadmap-history/). The summaries below deliberately do not
-redefine current architecture.
+Completed-version delivery detail remains in Git history. The summaries below
+deliberately do not redefine current architecture.
 
 ## Principles
 
@@ -70,7 +69,7 @@ persistence, and the restricted SSH CI dispatcher.
 
 ## v0.4 - Reconciliation and Deployment Reliability
 
-**Status:** queued after the current documentation architecture refactor.
+**Status:** in progress.
 
 Pneuma will converge runtime and exposure materialization toward persisted intent
 without selecting a new Release or creating a Deployment from drift.

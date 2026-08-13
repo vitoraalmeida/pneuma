@@ -89,8 +89,7 @@ follow [`docs/getting-started.md`](docs/getting-started.md).
 
 ## Status
 
-v0.3.1 is released. The current iteration is a documentation architecture
-refactor; v0.4 reconciliation is queued next. See
+v0.3.1 is released. The current iteration is v0.4 reconciliation. See
 [`docs/roadmap.md`](docs/roadmap.md) for direction and
 [`CHANGELOG.md`](CHANGELOG.md) for released changes.
 

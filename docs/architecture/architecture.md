@@ -89,7 +89,8 @@ relationships, state values, and database invariants.
 
 Multiple authorities are intentional: persisted intent and observed external
 reality are different categories of state. SQLite does not prove that an
-external resource still exists.
+external resource still exists. Rationale:
+[`ADR-0004`](../decisions/0004-sqlite-intent-vs-runtime-authority.md).
 
 Use cases follow a local saga model:
 
@@ -157,7 +158,8 @@ Rationale for these boundaries is in [`../decisions/`](../decisions/) and
   back to `latest`, a prior artifact, or a local build.
 - The `(application, digest)` pair identifies a reusable Release. Source
   revision belongs to Deployment because one artifact can be activated from
-  different requests.
+  different requests. Rationale:
+  [`ADR-0006`](../decisions/0006-release-deployment-runtime-model.md).
 - Only one non-terminal Deployment may exist for an Application. Rollback creates
   a new `rollback` Deployment for a historical successful Release; it never edits
   prior history.
@@ -178,7 +180,8 @@ Rationale for these boundaries is in [`../decisions/`](../decisions/) and
   promotion. Units use `Restart=on-failure`; current implementation does not
   enable units through `systemctl --user enable`. Their Quadlet content includes
   `WantedBy=default.target`; with user linger, generated units can return after a
-  host reboot.
+  host reboot. Rationale:
+  [`ADR-0003`](../decisions/0003-rootless-podman-and-quadlet.md).
 - Promotion sets desired runtime intent to `running`. `app start` and `app stop`
   persist intent before controlling the runtime and persist the resulting
   observation afterward.
@@ -197,7 +200,8 @@ Rationale for these boundaries is in [`../decisions/`](../decisions/) and
   runtime, Caddy validation and reload, and a successful external health check.
   Stopping a public Application does not remove its existing Caddy fragment.
 - Internal visibility removes only the managed Caddy route. It leaves the
-  loopback runtime running.
+  loopback runtime running. Rationale:
+  [`ADR-0005`](../decisions/0005-caddy-for-public-exposure.md).
 - The bootstrap-managed Caddy baseline returns generic HTTP `404 Not Found` for
   unmatched hosts. HTTPS can fail during TLS before this fallback when no
   certificate exists for the hostname.
@@ -295,7 +299,8 @@ its immutable Release if necessary, and runs the normal deployment flow as a new
 The restricted SSH dispatcher parses `SSH_ORIGINAL_COMMAND` and permits only
 `version` or `deploy <application> <branch-or-tag>`. It validates both arguments
 and dispatches the permitted deploy command through the same source-resolution
-flow.
+flow. Security rationale: [`ADR-0007`](../decisions/0007-restricted-ssh-ci-interface.md)
+and [`security-model.md`](security-model.md).
 
 ### Catalog and history
 
