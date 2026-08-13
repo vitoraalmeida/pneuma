@@ -58,6 +58,9 @@ migrations live in `migrations/` and are registered through `include_str!` in
 `src/adapters/database.rs`, which applies pending migrations whenever a connection
 opens (`PRAGMA foreign_keys = ON`).
 
+[`data-model.md`](data-model.md) is the detailed reference for persisted
+entities, relationships, state, and database invariants.
+
 ### 3.1 Import and application specification
 
 The application specification is persisted when importing `pneuma.toml`
