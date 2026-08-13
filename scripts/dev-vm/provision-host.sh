@@ -36,7 +36,7 @@
 # repository layout (script under /tmp/dev-vm/, library under /tmp/lib/):
 #   scp scripts/dev-vm/provision-host.sh pneuma-dev:/tmp/dev-vm/
 #   scp -r scripts/lib pneuma-dev:/tmp/
-#   ssh pneuma-dev 'sudo bash /tmp/dev-vm/provision-host.sh'
+#   ssh pneuma-dev 'bash /tmp/dev-vm/provision-host.sh'
 
 set -euo pipefail
 
@@ -82,7 +82,7 @@ verify_rootless_podman
 echo
 echo "Provisioning complete."
 echo "Open a Pneuma shell:"
-echo "  sudo -iu $PNEUMA_USER"
+echo "  runuser -u $PNEUMA_USER -- bash -l"
 echo
 echo "Next steps:"
 echo "  1. Install the Pneuma binary as a separate step (see section 4 of"

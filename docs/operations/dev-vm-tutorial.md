@@ -78,7 +78,7 @@ because the script derives the library path from its own path:
 ```bash
 scp scripts/dev-vm/provision-host.sh pneuma-dev:/tmp/dev-vm/
 scp -r scripts/lib pneuma-dev:/tmp/
-ssh pneuma-dev 'sudo bash /tmp/dev-vm/provision-host.sh'
+ssh pneuma-dev 'bash /tmp/dev-vm/provision-host.sh'
 ```
 
 The VM and VPS apply **the same host invariants**, implemented once in
@@ -112,7 +112,7 @@ transfer the binary and install it to `/usr/local/bin/pneuma`:
 ```bash
 cargo build --release
 scp target/release/pneuma pneuma-dev:/tmp/pneuma-new
-ssh pneuma-dev 'sudo install -o root -g root -m 0755 /tmp/pneuma-new /usr/local/bin/pneuma'
+ssh pneuma-dev 'install -o root -g root -m 0755 /tmp/pneuma-new /usr/local/bin/pneuma'
 ```
 
 Validate the binary before installing it and run `pneuma doctor` afterward as
@@ -128,7 +128,7 @@ ssh pneuma-dev 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma doctor"'
 On the VM, open the `pneuma` shell and confirm the environment:
 
 ```bash
-sudo -iu pneuma
+runuser -u pneuma -- bash -l
 pneuma version
 pneuma doctor
 pneuma app list
@@ -147,11 +147,11 @@ cargo build --release
     ↓
 scp target/release/pneuma pneuma-dev:/tmp/pneuma-new
     ↓
-ssh pneuma-dev 'sudo install ... /usr/local/bin/pneuma'
+ssh pneuma-dev 'install ... /usr/local/bin/pneuma'
     ↓
 ssh pneuma-dev 'runuser -u pneuma -- bash -lc "cd $HOME && pneuma doctor"'
     ↓
-Pneuma atualizado e validado na VM
+Pneuma updated and validated on the VM
 ```
 
 ## 6. Fixture Applications
@@ -272,7 +272,7 @@ Typical development flow:
 
 ```bash
 scripts/dev-vm/sync-binary.sh        # after every code change
-scripts/dev-vm/overview.sh           # inspecionar o estado
+scripts/dev-vm/overview.sh           # inspect the state
 ```
 
 Complete reset flow:
@@ -283,7 +283,7 @@ scripts/dev-vm/rebuild-fixtures.sh
 scripts/dev-vm/deploy-all-fixtures.sh
 ```
 
-> **Note:** `e2e.sh` reboots the VM (`sudo reboot`) and waits for it to return;
+> **Note:** `e2e.sh` reboots the VM (`reboot`) and waits for it to return;
 > do not run it during unpersisted work on the VM. `reset-fixtures.sh` deletes
 > the database and checkouts, returning the VM to its post-provisioning state.
 
@@ -302,7 +302,7 @@ provision it, sync the binary, and install only the public key from
 `~/.ssh/pneuma-ci-test` with the dispatcher's forced command. Then run:
 
 ```bash
-bash scripts/dev-vm/test-all.sh root@<ip-da-clone> ~/.ssh/pneuma-ci-test
+bash scripts/dev-vm/test-all.sh root@<clone-ip> ~/.ssh/pneuma-ci-test
 ```
 
 The script resets fixtures, uses the local registry, requires HTTPS with the
@@ -336,10 +336,10 @@ real domain, the VM uses local certificates. The equivalent configuration is:
 ```
 
 ```bash
-# CA raiz local do Caddy (instalada automaticamente pelo provisionamento)
-sudo cp /var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt \
+# Caddy local root CA (installed automatically by provisioning)
+cp /var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt \
   /usr/local/share/ca-certificates/caddy-local-root.crt
-sudo update-ca-certificates
+update-ca-certificates
 ```
 
 Without this, the external health check of a `public` app fails with a TLS error
