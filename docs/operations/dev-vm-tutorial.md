@@ -283,8 +283,14 @@ scripts/dev-vm/deploy-all-fixtures.sh
 
 ## 7. DNS local e Caddy
 
-Para validar o proxy do Caddy sem DNS público, use nomes locais no `/etc/hosts`
-do host:
+O provisionamento da VM configura `local_certs`, mapeia
+`redirect-public.pneuma.test` para `127.0.0.1` em `/etc/hosts`, instala a CA
+local do Caddy no trust store e executa `update-ca-certificates`. O E2E exige o
+redirect HTTPS desse fixture e a transição posterior para `internal`; não há
+skip de TLS local.
+
+Para testar nomes adicionais sem DNS público, adicione-os ao `/etc/hosts` da
+VM:
 
 ```text
 192.168.122.50 site.pneuma.test
@@ -292,8 +298,7 @@ do host:
 ```
 
 Aplicações públicas passam por **external health check via HTTPS**; sem um
-domínio real o Caddy precisa emitir certificados locais. Habilite `local_certs`
-no Caddyfile da VM e confie na CA raiz:
+domínio real a VM usa certificados locais. A configuração equivalente é:
 
 ```caddy
 {
@@ -302,7 +307,7 @@ no Caddyfile da VM e confie na CA raiz:
 ```
 
 ```bash
-# CA raiz local do Caddy (caminho de exemplo) — instalá-la no trust store
+# CA raiz local do Caddy (instalada automaticamente pelo provisionamento)
 sudo cp /var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt \
   /usr/local/share/ca-certificates/caddy-local-root.crt
 sudo update-ca-certificates
@@ -338,6 +343,9 @@ entre execuções.
 - Executar o Pneuma como usuário não-root (`pneuma`).
 - Restringir root ao provisionamento e à instalação do binário.
 - Bloquear login por senha do usuário `pneuma` (`passwd -l`).
+- A chave CI usa `restrict` e forced command; o E2E exige apenas `version` e
+  `deploy healthy-http staging`, e rejeita shell, PTY, forwarding, agent/X11
+  forwarding, leitura de arquivo e injection em branch.
 
 ## 10. Próximos passos
 

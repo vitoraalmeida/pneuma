@@ -76,7 +76,12 @@ capazes de provar as garantias operacionais necessárias antes de reconciliation
     depois confirma `user@<uid>.service`, Quadlet, container, `app status`
     Running e body v1. Clone Debian 13 descartável passou o ciclo e foi
     destruída.
-- [ ] Tornar HTTPS local e fronteiras SSH CI obrigatórios no E2E.
+- [x] Tornar HTTPS local e fronteiras SSH CI obrigatórios no E2E.
+    Resultado: provisionamento VM configura `local_certs`, host mapping e CA
+    confiável; E2E exige HTTPS público e transição internal de `redirect-public`.
+    Suite exige dispatcher CI para `version`/deploy permitido e rejeita shell,
+    PTY, forwarding, agent/X11, leitura e injection sem alterar histórico. Clone
+    Debian 13 passou `test-all.sh` com 38 PASS/0 FAIL/0 SKIP e foi destruída.
 - [ ] Provar restore semântico, sincronizar docs e executar regressão final.
 
 ## Critérios de aceite

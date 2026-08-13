@@ -41,6 +41,7 @@
 set -euo pipefail
 
 PNEUMA_USER="pneuma"
+export PNEUMA_CADDY_LOCAL_CERTS=true
 # Exported so the shared library and any rootless runtime inherit the same
 # values even though this caller never references PNEUMA_HOME itself.
 export PNEUMA_HOME="/home/$PNEUMA_USER"
@@ -69,6 +70,12 @@ provision_linger
 provision_host_directories
 provision_host_environment
 provision_caddy_baseline
+
+grep -qxF "127.0.0.1 redirect-public.pneuma.test" /etc/hosts ||
+	echo "127.0.0.1 redirect-public.pneuma.test" >>/etc/hosts
+install -m 0644 /var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt \
+	/usr/local/share/ca-certificates/pneuma-caddy-local.crt
+update-ca-certificates
 start_pneuma_user_manager
 verify_rootless_podman
 

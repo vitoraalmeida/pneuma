@@ -29,6 +29,7 @@
 set -euo pipefail
 
 SSH_HOST="${1:-pneuma-dev}"
+CI_SSH_HOST="${SSH_HOST#*@}"
 CI_KEY="${2:-$HOME/.ssh/pneuma-ci-test}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="${TMPDIR:-/tmp}/pneuma-test-all"
@@ -72,14 +73,36 @@ check_remote() {
 	fi
 }
 
-check_ci() {
-	local expected="$1" description="$2" command="$3"
-	local output
-	output=$(ssh -i "$CI_KEY" pneuma@"$SSH_HOST" "$command" 2>&1 | grep -v level=warning || true)
-	if printf '%s' "$output" | grep -qF -- "$expected"; then
+ci_assert_ok() {
+	local expected="$1" description="$2"
+	shift 2
+	local output rc
+	set +e
+	output=$(timeout 15 ssh -i "$CI_KEY" -o BatchMode=yes "$@" 2>&1)
+	rc=$?
+	set -e
+	if [[ "$rc" -eq 0 ]] && printf '%s' "$output" | grep -qF -- "$expected"; then
 		report ok "$description"
 	else
-		report fail "$description"
+		report fail "$description (exit $rc)"
+		printf '        output: %s\n' "$(printf '%s' "$output" | tr '\n' ' ')"
+	fi
+}
+
+ci_assert_rejected() {
+	local description="$1"
+	shift
+	local output rc before after
+	before=$(pneuma_cmd "pneuma app deployments healthy-http" 2>&1 || true)
+	set +e
+	output=$(timeout 15 ssh -i "$CI_KEY" -o BatchMode=yes "$@" 2>&1)
+	rc=$?
+	set -e
+	after=$(pneuma_cmd "pneuma app deployments healthy-http" 2>&1 || true)
+	if [[ "$rc" -ne 0 && "$before" == "$after" ]]; then
+		report ok "$description"
+	else
+		report fail "$description (exit $rc or deployment history changed)"
 		printf '        output: %s\n' "$(printf '%s' "$output" | tr '\n' ' ')"
 	fi
 }
@@ -153,12 +176,7 @@ check_remote $'healthy-http\tRegistered\tDeployed' "healthy-http is registered a
 for fixture in unhealthy-http slow-start bad-port; do
 	check_remote "$(printf '%s\tRegistered\tNot deployed' "$fixture")" "$fixture is registered and not deployed (expected health/config failure)" "pneuma app list"
 done
-APP_LIST=$(pneuma_cmd "pneuma app list" 2>&1 | grep -v level=warning || true)
-if printf '%s' "$APP_LIST" | grep -qF $'redirect-public\tRegistered\tDeployed'; then
-	check_remote "Observed state: Running" "redirect-public deployed (Caddy local_certs enabled)" "pneuma app status redirect-public"
-else
-	report skip "redirect-public public exposure (requires Caddy local_certs; see dev-vm-tutorial.md section 7)"
-fi
+check_remote $'redirect-public\tRegistered\tDeployed' "redirect-public deployed with local HTTPS" "pneuma app list"
 check_remote "Observed state: Running" "healthy-http is Running after reboot" "pneuma app status healthy-http"
 check_http_body "healthy-http v1.0" "healthy-http serves v1.0 after rollback and reboot"
 
@@ -176,9 +194,19 @@ fi
 echo
 echo "==> Phase 4: restricted-key CI dispatcher..."
 if [[ -f "$CI_KEY" ]]; then
-	check_ci "pneuma" "ci dispatch: version via restricted SSH key" "version"
-	check_ci "Status: Succeeded" "ci dispatch: deploy healthy-http staging via restricted SSH key" "deploy healthy-http staging"
+	ci_assert_ok "pneuma" "ci dispatch: version via restricted SSH key" "pneuma@$CI_SSH_HOST" version
+	ci_assert_ok "Status: Succeeded" "ci dispatch: deploy healthy-http staging via restricted SSH key" "pneuma@$CI_SSH_HOST" "deploy healthy-http staging"
 	check_http_body "healthy-http v2.0" "healthy-http serves v2.0 after CI deploy of staging"
+	ci_assert_rejected "ci dispatch rejects id" "pneuma@$CI_SSH_HOST" id
+	ci_assert_rejected "ci dispatch rejects podman" "pneuma@$CI_SSH_HOST" "podman ps"
+	ci_assert_rejected "ci dispatch rejects file reads" "pneuma@$CI_SSH_HOST" "cat /etc/passwd"
+	ci_assert_rejected "ci dispatch rejects branch injection" "pneuma@$CI_SSH_HOST" "deploy healthy-http 'staging;id'"
+	ci_assert_rejected "ci dispatch rejects an empty command" "pneuma@$CI_SSH_HOST"
+	ci_assert_rejected "ci dispatch rejects PTY allocation" -tt "pneuma@$CI_SSH_HOST" version
+	ci_assert_rejected "ci dispatch rejects local forwarding" -N -L 127.0.0.1:18999:127.0.0.1:22 "pneuma@$CI_SSH_HOST"
+	ci_assert_rejected "ci dispatch rejects remote forwarding" -N -R 18999:127.0.0.1:22 "pneuma@$CI_SSH_HOST"
+	ci_assert_rejected "ci dispatch rejects agent forwarding" -A -N "pneuma@$CI_SSH_HOST"
+	ci_assert_rejected "ci dispatch rejects X11 forwarding" -X -N "pneuma@$CI_SSH_HOST"
 fi
 
 echo

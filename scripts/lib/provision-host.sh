@@ -42,6 +42,7 @@ PNEUMA_USER="${PNEUMA_USER:-pneuma}"
 PNEUMA_HOME="${PNEUMA_HOME:-/home/$PNEUMA_USER}"
 PNEUMA_SUBUID_FILE="${PNEUMA_SUBUID_FILE:-/etc/subuid}"
 PNEUMA_SUBGID_FILE="${PNEUMA_SUBGID_FILE:-/etc/subgid}"
+PNEUMA_CADDY_LOCAL_CERTS="${PNEUMA_CADDY_LOCAL_CERTS:-false}"
 
 # Prints the reusable pneuma allocation start or the first available 65536-ID
 # range at or above 100000. Every non-comment record is validated so malformed
@@ -306,9 +307,19 @@ provision_caddy_baseline() {
 	local caddyfile=/etc/caddy/Caddyfile candidate backup=""
 	candidate="$(mktemp /etc/caddy/.pneuma-caddyfile.XXXXXX)"
 
-	cat >"$candidate" <<'EOF'
+	if [[ "$PNEUMA_CADDY_LOCAL_CERTS" == true ]]; then
+		cat >"$candidate" <<'EOF'
+{
+	local_certs
+}
+
 import /etc/caddy/applications/*.caddy
 EOF
+	else
+		cat >"$candidate" <<'EOF'
+import /etc/caddy/applications/*.caddy
+EOF
+	fi
 
 	chown root:caddy "$candidate"
 	chmod 0644 "$candidate"

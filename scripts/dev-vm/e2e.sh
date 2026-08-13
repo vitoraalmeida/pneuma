@@ -46,6 +46,31 @@ echo "==> Step 3: Deploy all fixtures..."
 echo
 echo "==> Step 4: Verify baseline status..."
 ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma app status healthy-http"' 2>&1 | grep -v level=warning
+if ! ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma app status redirect-public"' | grep -q "Observed state: Running"; then
+	echo "  ERROR: redirect-public is not Running"
+	exit 1
+fi
+if ! ssh "$SSH_HOST" 'grep -rlF "redirect-public.pneuma.test" /etc/caddy/applications/*.caddy | grep -q .'; then
+	echo "  ERROR: redirect-public Caddy fragment is missing"
+	exit 1
+fi
+if ! ssh "$SSH_HOST" 'curl -fsS -D - -o /dev/null https://redirect-public.pneuma.test/ | grep -qi "^location: https://example.com/"'; then
+	echo "  ERROR: redirect-public HTTPS redirect is unavailable"
+	exit 1
+fi
+if ! ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma app visibility set redirect-public internal"' | grep -q "Internal"; then
+	echo "  ERROR: redirect-public could not become internal"
+	exit 1
+fi
+if ssh "$SSH_HOST" 'grep -rlF "redirect-public.pneuma.test" /etc/caddy/applications/*.caddy 2>/dev/null | grep -q .'; then
+	echo "  ERROR: redirect-public Caddy fragment remains after internal visibility"
+	exit 1
+fi
+if ! ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && podman ps --format '\''{{.Names}}'\'' --filter '\''name=^pneuma-redirect-public-'\'' | grep -q ."'; then
+	echo "  ERROR: redirect-public runtime stopped after becoming internal"
+	exit 1
+fi
+echo "  OK: redirect-public HTTPS and internal transition"
 
 echo
 echo "==> Step 5: Failed candidate preserves healthy-http v1..."
