@@ -224,7 +224,7 @@ IP and hostname lines). Do not add anything beyond the
 
 In the same panel, under "Variables", create:
 
-- **`DEPLOY_HOST`** — VPS IP or hostname, for example `46.202.150.155`.
+- **`DEPLOY_HOST`** — VPS IP or hostname (for example, `46.202.150.155`).
 - **`DEPLOY_USER`** — `pneuma` (not an administrator).
 
 Keeping the IP/host as a variable allows changing VPSs without editing the workflow.
