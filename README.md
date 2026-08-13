@@ -78,8 +78,7 @@ application, and configuring the GitHub Actions workflow.
 
 For disposable bootstrap and full E2E regression procedures, including local
 TLS, restricted CI SSH, reboot, and semantic database restore, see
-[`docs/operations/dev-vm-tutorial.md`](docs/operations/dev-vm-tutorial.md) and
-[`docs/operations/backup-and-restore.md`](docs/operations/backup-and-restore.md).
+[`docs/operations/dev-vm-tutorial.md`](docs/operations/dev-vm-tutorial.md).
 
 ## Quick start
 

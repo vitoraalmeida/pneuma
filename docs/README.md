@@ -20,5 +20,4 @@ a **record** describes completed work and does not change.
 
 | Document | Contents |
 |---|---|
-| [`operations/backup-and-restore.md`](operations/backup-and-restore.md) | Consistent SQLite database backup and recovery |
 | [`iterations/current-iteration.md`](iterations/current-iteration.md) | Concluded bootstrap, VM, and E2E hardening iteration |
