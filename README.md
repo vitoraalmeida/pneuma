@@ -275,7 +275,7 @@ cargo test --all-features
 cargo build --release
 ```
 
-See `docs/rust-guidelines.md` for code conventions and `AGENTS.md` for contribution guidelines.
+See `docs/rust-guidelines.md` for code conventions.
 
 ## Roadmap
 
