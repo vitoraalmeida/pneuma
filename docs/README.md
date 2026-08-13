@@ -11,7 +11,7 @@ a **record** describes completed work and does not change.
 | [`rust-guidelines.md`](rust-guidelines.md) | Mandatory Rust code conventions |
 | [`getting-started.md`](getting-started.md) | Complete Debian 13 VPS setup: CI keys, bootstrap, import, deployment, and GitHub Actions |
 | [`operations/dev-vm-tutorial.md`](operations/dev-vm-tutorial.md) | Development VM tutorial (Debian 13): creation, provisioning, deployment, and E2E |
-| [`architecture/architecture.md`](architecture/architecture.md) | Implemented architecture: structure, Quadlet runtime, exposure, persistence, and state machine |
+| [`architecture/architecture.md`](architecture/architecture.md) | Implemented architecture: domain roles, business rules, authority boundaries, and command flows |
 | [`architecture/data-model.md`](architecture/data-model.md) | Implemented SQLite data model, entity relationships, state, and persistence invariants |
 | [`design/reconciliation.md`](design/reconciliation.md) | Approved reconciliation semantics for v0.4 |
 | [`design/reconciliation-e2e.md`](design/reconciliation-e2e.md) | Future reconciliation E2E catalog for v0.4 |
