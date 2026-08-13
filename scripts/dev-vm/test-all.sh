@@ -73,6 +73,21 @@ check_remote() {
 	fi
 }
 
+check_remote_rejected() {
+	local expected="$1" description="$2" command="$3"
+	local output rc
+	set +e
+	output=$(pneuma_cmd "$command" 2>&1)
+	rc=$?
+	set -e
+	if [[ "$rc" -ne 0 ]] && printf '%s' "$output" | grep -qF -- "$expected"; then
+		report ok "$description"
+	else
+		report fail "$description (exit $rc)"
+		printf '        output: %s\n' "$(printf '%s' "$output" | tr '\n' ' ')"
+	fi
+}
+
 ci_assert_ok() {
 	local expected="$1" description="$2"
 	shift 2
@@ -157,6 +172,7 @@ if [[ -f "$CI_KEY" ]]; then
 	report ok "CI key present ($CI_KEY)"
 else
 	report fail "CI key missing ($CI_KEY)"
+	exit 1
 fi
 
 echo
@@ -210,7 +226,7 @@ if [[ -f "$CI_KEY" ]]; then
 fi
 
 echo
-echo "==> Phase 5: administrative CLI..."
+echo "==> Phase 5: administrative CLI and semantic restore..."
 check_remote "Created e2e-cli-test" "system create" "pneuma system create e2e-cli-test --description e2e-battery"
 check_remote "e2e-cli-test" "system list contains created system" "pneuma system list"
 check_remote "System: fixtures-test" "system show resolves manifest system" "pneuma system show fixtures-test"
@@ -222,8 +238,15 @@ check_remote "Started healthy-http" "app start is idempotent" "pneuma app start 
 check_remote "Observed state: Running" "app status reflects Running" "pneuma app status healthy-http"
 check_remote "Deployments for healthy-http:" "app deployments lists history" "pneuma app deployments healthy-http"
 BACKUP_PATH="$LOG_DIR/pneuma-backup-$$.sqlite3"
+check_remote "Created e2e-before-backup" "create pre-backup system" "pneuma system create e2e-before-backup --description restore-baseline"
+check_remote "e2e-before-backup" "pre-backup system exists" "pneuma system list"
 check_remote "Database backup:" "database backup" "pneuma database backup $BACKUP_PATH"
+check_remote "Created e2e-after-backup" "create post-backup system" "pneuma system create e2e-after-backup --description restore-mutation"
+check_remote "e2e-before-backup" "pre-backup system remains before restore" "pneuma system list"
+check_remote "e2e-after-backup" "post-backup system exists before restore" "pneuma system list"
 check_remote "Database restored from" "database restore" "pneuma database restore $BACKUP_PATH"
+check_remote "System: e2e-before-backup" "restore keeps pre-backup system" "pneuma system show e2e-before-backup"
+check_remote_rejected "was not found" "restore removes post-backup system" "pneuma system show e2e-after-backup"
 
 echo
 echo "==> Phase 6: smoke..."

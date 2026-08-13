@@ -281,6 +281,32 @@ scripts/dev-vm/deploy-all-fixtures.sh
 > execute durante trabalho não persistido na VM. O `reset-fixtures.sh` apaga o
 > banco e os checkouts — a VM volta ao estado pós-provisionamento.
 
+### 6.5. Regressão descartável final
+
+Há três ambientes distintos. Não substitua um pelo outro:
+
+| Ambiente | Objetivo | Operações destrutivas |
+|---|---|---|
+| Clone bootstrap | Provar bootstrap Debian 13 limpo e rerun por SHA/tag imutável | Somente `pneuma-dev-base-test` |
+| Clone E2E | Provar registry, TLS local, dispatcher CI, rollback, reboot e restore | Somente `pneuma-dev-base-test` |
+| VPS de produção | Smoke não destrutivo de DNS, TLS e reachability reais | Nunca reset, E2E ou restore |
+
+Para a regressão final, clone `pneuma-dev-base` como
+`pneuma-dev-base-test`, provisione, sincronize o binário e instale apenas a
+chave pública de `~/.ssh/pneuma-ci-test` com o forced command do dispatcher.
+Então execute:
+
+```bash
+bash scripts/dev-vm/test-all.sh root@<ip-da-clone> ~/.ssh/pneuma-ci-test
+```
+
+O script reseta fixtures, usa o registry local, exige HTTPS com a CA local,
+reinicia a VM, testa fronteiras da chave CI e prova restore semântico. Exija
+`0 FAIL` e `0 SKIP`, então destrua e undefina a clone, inclusive seu storage.
+Execute `scripts/test-bootstrap-vps.sh` em outra clone nova para a acceptance
+de bootstrap; ela recebe um SHA completo ou tag e não compartilha estado com a
+VM E2E.
+
 ## 7. DNS local e Caddy
 
 O provisionamento da VM configura `local_certs`, mapeia

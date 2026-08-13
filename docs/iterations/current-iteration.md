@@ -82,7 +82,13 @@ capazes de provar as garantias operacionais necessárias antes de reconciliation
     Suite exige dispatcher CI para `version`/deploy permitido e rejeita shell,
     PTY, forwarding, agent/X11, leitura e injection sem alterar histórico. Clone
     Debian 13 passou `test-all.sh` com 38 PASS/0 FAIL/0 SKIP e foi destruída.
-- [ ] Provar restore semântico, sincronizar docs e executar regressão final.
+- [x] Provar restore semântico, sincronizar docs e executar regressão final.
+    Resultado: suite cria `e2e-before-backup`, gera backup, cria
+    `e2e-after-backup` e confirma após restore que só o primeiro existe; docs
+    distinguem clone bootstrap, clone E2E e smoke de produção. Regressão final:
+    bootstrap limpo 87 PASS/0 FAIL pelo SHA
+    `927eb8502285d4658c9455a3c69734bbf9ee95fd`; E2E 45 PASS/0 FAIL/0 SKIP.
+    Ambas as clones descartáveis foram destruídas.
 
 ## Critérios de aceite
 

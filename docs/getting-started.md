@@ -117,7 +117,15 @@ somente quando o conteúdo muda; um rerun sem mudanças não cria backup nem
 recarrega o serviço. Sem `--ref`, o script compila o branch default do
 repositório, como antes.
 
-### 3.2. Confirmação
+### 3.2. Acceptance descartável
+
+Antes de alterar uma VPS, valide bootstrap e rerun em uma clone descartável
+Debian 13 por SHA completo ou tag imutável. Essa acceptance usa
+`scripts/test-bootstrap-vps.sh`; ela pode instalar pacotes, criar o usuário
+`pneuma` e testar a chave CI somente na clone. A VPS de produção fica restrita
+ao smoke não destrutivo de DNS, TLS e reachability.
+
+### 3.3. Confirmação
 
 Como `pneuma` (login direto com a chave de provisionamento ou `sudo -iu
 pneuma`):
