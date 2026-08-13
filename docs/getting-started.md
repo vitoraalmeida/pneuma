@@ -240,7 +240,7 @@ secret), create:
   `ssh-keyscan`. With the VPS already reachable:
 
 ```bash
-ssh-keyscan 46.202.150.155   # or the host hostname/domain
+ssh-keyscan <host>   # VPS hostname or IP address
 ```
 
 Paste the output as the value (if you also access the IP directly, include the
@@ -294,35 +294,37 @@ branch tags, the deployment step is:
   write `pneuma app deploy ... --branch ...`, as it will be rejected).
 - `my-app` must already be imported on the host (section 4.1) **before** the
   first CI deployment.
-- The full workflow (image build, smoke test, push to GHCR, deployment through
-  staging/main) can be copied from the repository
-  `github.com/vitoraalmeida/vitoralmeida.tech`, file
-  `.github/workflows/deploy.yml`.
+- The complete workflow must build and push immutable SHA and branch tags before
+  it requests deployment through the restricted SSH command.
 
 ## 6. Final Check
 
 ```bash
-# On the host
+# On the VPS, as pneuma
 sudo -iu pneuma
-pneuma doctor          # ok
+pneuma version
+pneuma doctor
+pneuma app list
 
 # On your machine
 ssh -i ~/.ssh/pneuma-ci pneuma@<host> "version"   # responds with the version
 
-# After a push to the workflow branch
-# → the workflow publishes the image and requests deployment
-# On the VPS, `pneuma app status <app>` should report Running and
-# `pneuma app list` should show the application as Deployed
+# After the first CI deployment, on the VPS as pneuma
+pneuma app status <app>
+pneuma app deployments <app>
+curl -fsS https://<public-domain>/healthz
 ```
 
 ### 6.1. Production Smoke Test
 
-On the VPS, run only non-destructive smoke tests: `pneuma doctor`, `pneuma app
-list`, `pneuma app status <app>`, and an HTTPS request to the public domain. Do
-not run `reset-fixtures.sh`, `e2e.sh`, `test-all.sh`, database restore, or
-bootstrap tests on the VPS. Clean bootstrap/rerun and E2E regression belong on
-disposable Debian 13 clones, as described in the
-[`VM tutorial`](operations/dev-vm-tutorial.md).
+On the VPS, run only non-destructive smoke tests: `pneuma version`, `pneuma
+doctor`, `pneuma app list`, `pneuma app status <app>`, `pneuma app deployments
+<app>`, and an HTTPS request to the public domain. Do not run
+`reset-fixtures.sh`, `e2e.sh`, `test-all.sh`, database restore, or bootstrap
+tests on the VPS. Clean bootstrap/rerun acceptance belongs to
+`scripts/test-bootstrap-vps.sh`; full functional acceptance belongs to
+`scripts/dev-vm/test-all.sh`. Run both only on disposable Debian 13 clones, as
+described in the [`VM tutorial`](operations/dev-vm-tutorial.md).
 
 The cycle is complete: Git push → CI builds/publishes → `deploy <app> <branch>`
 → Pneuma resolves, validates, and promotes; Caddy exposes the public application

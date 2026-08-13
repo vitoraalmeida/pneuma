@@ -263,10 +263,8 @@ pneuma/
 ├── scripts/                         # Operational scripts
 │   ├── bootstrap-vps.sh             # VPS setup script
 │   ├── test-bootstrap-vps.sh        # VPS bootstrap test
-│   ├── test-integration.sh          # Integration test runner
 │   ├── test-subordinate-ids.sh      # Subordinate-ID test
 │   ├── update-pneuma.sh             # Binary-only VPS updater
-│   ├── verify-vps.sh                # VPS post-setup verification
 │   ├── lib/                          # Shared provisioning code
 │   └── dev-vm/                      # Development VM scripts and fixtures
 ├── tests/                           # Integration tests
