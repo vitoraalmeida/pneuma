@@ -2,61 +2,52 @@
 
 **Status:** in progress
 
-**Base:** `95d86ab` (`feat: add Caddy unmatched-host fallback`)
+**Base:** `ce8b18f` (`docs: complete architecture audit`)
 
-**Approved design:** [`reconciliation.md`](../design/reconciliation.md)
+**Approved design:**
+[`documentation-architecture-refactor.md`](../design/documentation-architecture-refactor.md)
 
-## Iteration - v0.4 Reconciliation
+## Iteration - Documentation Architecture Refactor
 
-Objective: converge runtime and exposure materialization toward persisted intent
-without selecting a new Release or making destructive changes from ambiguity.
+Objective: make current behavior, rationale, trust boundaries, future design,
+active work, and historical evolution distinct and navigable before v0.4
+reconciliation implementation begins.
 
 ## Checkpoints
 
-- [ ] Convert `reconciliation-e2e.md` into an executable reconciliation test
-  plan before implementation: assign every scenario to a focused Rust test or
-  disposable-VM E2E case, define fixtures, fault injection, persisted-state and
-  external-observation assertions, and add initial failing tests for the first
-  implementation slice.
-- [ ] Define reconciliation input and read-only observation: load persisted
-  Application intent, active Deployment, RuntimeInstance, and Exposure; observe
-  Podman/systemd and Caddy without changing SQLite or external resources.
-- [ ] Add `pneuma reconcile <application>` with observable `no-op` and
-  `deferred` results. A non-terminal Deployment must defer reconciliation before
-  any external effect.
-- [ ] Reconcile confirmed runtime drift: recover a missing container only when
-  the persisted RuntimeInstance, deterministic unit/container identity, image
-  digest, labels, and loopback endpoint are unambiguous. Preserve the persisted
-  port and reconcile `external_runtime_id` by compare-and-set.
-- [ ] Reconcile Caddy exposure drift: repair missing or divergent public
-  fragments only with a healthy confirmed runtime; remove an internal route;
-  validate, reload, externally health-check, and preserve `failed` or `diverged`
-  diagnostics when convergence cannot be confirmed.
-- [ ] Handle interrupted Deployments and concurrency: clean only resources with
-  proven identity, preserve the active healthy runtime and route, and serialize
-  reconcile against reconcile and deployment effects per Application.
-- [ ] Complete the approved VM E2E catalog and final regression. Record actual
-  PASS/FAIL/SKIP evidence for bootstrap and reconciliation scenarios; destroy
-  every disposable clone.
+- [x] Establish taxonomy, precedence, reader journeys, tracker transition, and
+  metadata correctness.
+- [x] Add system context, vocabulary, implemented-architecture navigation,
+  invariants, and end-to-end scenarios.
+- [x] Add the ADR mechanism and retrospective decisions for platform, delivery,
+  runtime, state, exposure, domain, and CI-dispatch architecture.
+- [x] Add the current security model and trust-boundary documentation.
+- [x] Refocus the root README and retain detailed CLI, manifest, and configuration
+  reference in the getting-started guide.
+- [x] Separate roadmap history from current architecture and preserve completed
+  detail under `roadmap-history/`.
+- [x] Align terminology and cross-links; add local Markdown-link CI validation;
+  complete the new-engineer documentation review.
+
+Validation: local Markdown-link, shell, format, clippy, test, and release-build
+checks pass. Rootless Podman tests remain ignored because this host is not
+configured for that environment; no VM regression was required by this
+documentation-only iteration.
 
 ## Scope and Non-goals
 
-- DNS, certificate lifecycle, registry watching, auto-deploy, API, TUI, OIDC,
-  RBAC, multiple hosts, and precompiled binary download are out of scope.
-- Reconciliation never creates a Release, selects a registry artifact, or
-  changes desired runtime state or visibility.
-- Ambiguous identity or configuration drift is reported for manual intervention,
-  not repaired destructively.
+- This iteration changes documentation and documentation validation only.
+- It does not implement reconciliation or alter v0.4 behavior.
+- It does not rewrite release-history records to use current terminology.
+- It does not create a documentation platform or per-technology manuals.
 
 ## Acceptance Criteria
 
-- Reconciliation converges runtime and exposure materialization only when the
-  identity and desired state are unambiguous.
-- Reconciliation does not create a Release or Deployment, change intent, or
-  destructively repair ambiguous drift.
-- Required VM E2E coverage proves the approved reconciliation scenarios.
-- The exact CI gates and all required VM evidence are green before this
-  iteration is closed.
+- Documentation precedence and reader journeys identify the correct authority.
+- Current architecture, rationale, security, operations, future design, roadmap,
+  and release history have distinct homes and cross-links.
+- The exact CI gates, including local Markdown-link validation, are green.
+- The new-engineer review questions can be answered without source inspection.
 
 ## Blockers
 

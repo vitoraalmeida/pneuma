@@ -5,6 +5,11 @@ connect an application repository to it through GitHub Actions. Covers key
 generation, running `bootstrap-vps.sh`, import and deployment, and deployment
 workflow configuration.
 
+For why Pneuma uses this model, see
+[`architecture/system-context.md`](architecture/system-context.md). For current
+trust boundaries, including the restricted CI key, see
+[`architecture/security-model.md`](architecture/security-model.md).
+
 `scripts/bootstrap-vps.sh` installs everything (packages, the `pneuma` user,
 rootless Podman, Caddy, binary) **and** prepares the CI identity. After it
 completes successfully, the host is ready to import and deploy applications.
@@ -345,3 +350,87 @@ described in the [`VM tutorial`](operations/dev-vm-tutorial.md).
 The cycle is complete: Git push → CI builds/publishes → `deploy <app> <branch>`
 → Pneuma resolves, validates, and promotes; Caddy exposes the public application
 automatically.
+
+## 7. Reference
+
+### Commands
+
+| Command | Description |
+|---|---|
+| `pneuma system create <name>` | Create a System grouping. |
+| `pneuma system list` | List Systems. |
+| `pneuma system show <name>` | Show a System and its Applications. |
+| `pneuma app import <git-url> [--manifest <path>]` | Import an Application from a Git repository. |
+| `pneuma app list` | List registered Applications. |
+| `pneuma app deploy <app> --branch <branch-or-tag>` | Resolve and deploy the artifact for a Git revision. |
+| `pneuma app deploy <app> --image <repository@sha256:...>` | Deploy an explicit digest-pinned image. |
+| `pneuma app visibility set <app> <public\|internal>` | Set desired public visibility. |
+| `pneuma app status <app>` | Show desired and observed runtime state. |
+| `pneuma app start <app>` | Start a stopped Application. |
+| `pneuma app stop <app>` | Stop a running Application. |
+| `pneuma app deployments <app>` | List Deployment history. |
+| `pneuma deployment rollback <app>` | Deploy the prior successful Release as a new rollback Deployment. |
+| `pneuma database backup <path>` | Create a consistent SQLite backup. |
+| `pneuma database restore <path>` | Validate and restore a SQLite backup. |
+| `pneuma ci dispatch` | Restricted SSH dispatcher; not for direct interactive use. |
+| `pneuma version` | Print version without opening the database. |
+| `pneuma doctor` | Verify host prerequisites. |
+
+Place `--verbose` before the command for step-by-step progress.
+
+### Manifest
+
+The manifest convention is `deploy/<environment>/pneuma.toml` in the application
+repository. Import receives the repository URL and manifest path; deployment
+receives the branch or tag. The manifest does not contain either value.
+
+```toml
+schema_version = 3
+
+[system]
+name = "my-system"
+
+[application]
+name = "my-app"
+
+[delivery]
+type = "oci"
+image = "ghcr.io/user/my-app"
+
+[runtime]
+container_port = 8080
+healthcheck_path = "/healthz"
+expected_status = 200
+
+[exposure]
+default_visibility = "public"
+domain = "my-app.example.com"
+```
+
+| Field | Meaning |
+|---|---|
+| `schema_version` | Manifest schema version; currently `3`. |
+| `system.name` | System grouping identifier. |
+| `application.name` | Application identifier used by commands. |
+| `delivery.type` | Delivery model; currently `oci`. |
+| `delivery.image` | OCI repository CI publishes to; it is not a digest reference. |
+| `container_port` | Container port exposed to the loopback runtime endpoint. |
+| `healthcheck_path` | Absolute internal health path. |
+| `expected_status` | Required HTTP health status. |
+| `default_visibility` | `internal` or `public`. |
+| `domain` | Required when default visibility is public. |
+
+`app import` accepts Git URLs; local paths are rejected and `file://` is reserved
+for local test repositories. Import is create-only, so changing a registered
+manifest requires the applicable supported migration or reconfiguration process.
+
+### Configuration
+
+| Variable | Default | Description |
+|---|---|---|
+| `PNEUMA_DATABASE_PATH` | `/var/lib/pneuma/database/pneuma.sqlite3` | SQLite database location. |
+| `PNEUMA_WORKSPACE_PATH` | `/var/lib/pneuma/checkouts` | Temporary Git checkout directory. |
+| `PNEUMA_CADDY_MANAGED_PATH` | `/etc/caddy/applications` | Managed Caddy fragment directory. |
+| `PNEUMA_CADDYFILE_PATH` | `/etc/caddy/Caddyfile` | Main Caddyfile location. |
+| `PNEUMA_RUNTIME_PORT_RANGE` | `30000-39999` | Loopback runtime port range. |
+| `PNEUMA_QUADLET_DIR` | `$HOME/.config/containers/systemd` | Quadlet unit directory. |

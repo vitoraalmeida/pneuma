@@ -12,6 +12,34 @@ This document describes implemented behavior. The detailed persisted schema is
 in [`data-model.md`](data-model.md). Future v0.4 reconciliation behavior is
 specified separately in [`../design/reconciliation.md`](../design/reconciliation.md).
 
+## How to Read This Document
+
+Read [`system-context.md`](system-context.md) for motivation, scope, and
+constraints; [`../decisions/`](../decisions/) for architectural rationale;
+[`data-model.md`](data-model.md) for persisted semantics; and
+[`security-model.md`](security-model.md) for trust boundaries. This document
+answers how the current implementation works.
+
+## Overview
+
+Pneuma has a short-lived invocation path and a long-lived runtime path.
+
+```text
+Pneuma invocation -> evaluate SQLite intent -> controlled external effects
+                  -> persist confirmed result -> exit
+
+systemd -> Quadlet-generated service -> rootless Podman -> application
+```
+
+The invocation path makes deployment, lifecycle, and routing decisions. SQLite
+records logical intent before external effects and confirmed results afterward.
+The runtime path owns process survival after the invocation exits. Public Caddy
+routes are a separate materialization path from the loopback runtime.
+
+Pneuma has no resident control plane or daemon. Calling the first path a
+"command plane" is useful shorthand only; it is not a continuously available
+controller.
+
 ## Responsibilities
 
 | Layer | Owns | Does not own |
@@ -59,6 +87,10 @@ registered in `src/adapters/database.rs` and are applied when a connection opens
 with foreign keys enabled. See [`data-model.md`](data-model.md) for entities,
 relationships, state values, and database invariants.
 
+Multiple authorities are intentional: persisted intent and observed external
+reality are different categories of state. SQLite does not prove that an
+external resource still exists.
+
 Use cases follow a local saga model:
 
 - transactions are short and never remain open during Git, OCI, Podman, systemd,
@@ -75,6 +107,27 @@ All configurable paths and ports use `PNEUMA_DATABASE_PATH`,
 `PNEUMA_WORKSPACE_PATH`, `PNEUMA_CADDY_MANAGED_PATH`,
 `PNEUMA_CADDYFILE_PATH`, `PNEUMA_RUNTIME_PORT_RANGE`, and
 `PNEUMA_QUADLET_DIR`, with host defaults described in the getting-started guide.
+
+## Cross-Cutting Invariants
+
+1. An active Deployment is terminal and succeeded.
+2. A failed candidate never replaces the prior active runtime or public route.
+3. Release identity is an immutable OCI digest; mutable tags never become a
+   Release identity.
+4. Rollback creates a new Deployment and preserves history.
+5. Application runtime ports remain bound to loopback, including public
+   Applications.
+6. systemd and Quadlet own long-lived runtime supervision after Pneuma exits.
+7. Persisted desired state is not treated as a current runtime observation.
+8. SQLite transactions do not remain open during Git, OCI, Podman, systemd,
+   Caddy, or HTTP effects.
+9. CI's deployment key reaches only the restricted dispatcher, not an arbitrary
+   CLI command or interactive shell.
+10. A zero-row compare-and-set update is stale or concurrent state, never
+    successful persistence.
+
+Rationale for these boundaries is in [`../decisions/`](../decisions/) and
+[`security-model.md`](security-model.md).
 
 ## Business Rules
 
@@ -99,7 +152,7 @@ All configurable paths and ports use `PNEUMA_DATABASE_PATH`,
 - A deployed artifact is always an `image@digest`; mutable tags are rejected.
 - An Application permits only the OCI repository recorded from its manifest.
 - The CLI deploy input resolves a branch or Git tag to a commit, then resolves
-  `commit -> image:<commit> -> digest`.
+  `commit -> repository:<commit-sha> -> digest`.
   If CI has not published that artifact, deployment fails; Pneuma never falls
   back to `latest`, a prior artifact, or a local build.
 - The `(application, digest)` pair identifies a reusable Release. Source
@@ -123,7 +176,9 @@ All configurable paths and ports use `PNEUMA_DATABASE_PATH`,
   the unit, resolves its container, and registers the RuntimeInstance.
 - Candidate creation starts its generated Quadlet unit before health checks and
   promotion. Units use `Restart=on-failure`; current implementation does not
-  enable units through `systemctl --user enable`.
+  enable units through `systemctl --user enable`. Their Quadlet content includes
+  `WantedBy=default.target`; with user linger, generated units can return after a
+  host reboot.
 - Promotion sets desired runtime intent to `running`. `app start` and `app stop`
   persist intent before controlling the runtime and persist the resulting
   observation afterward.
@@ -266,6 +321,40 @@ change to public visibility instead checks `/` for HTTP `200`. External health
 retries through Caddy's local listener. Public Caddy fragments are stored as
 `<application-id>.caddy` files in the managed directory and imported by the main
 Caddyfile.
+
+## End-to-End Scenarios
+
+### First Deployment
+
+Import temporarily checks out the repository, validates `pneuma.toml`, and
+persists the Application specification and Exposure intent in SQLite. Deploy by
+branch resolves a Git revision, pulls `repository:<commit-sha>`, resolves the
+image digest, and creates or reuses a Release. Pneuma persists a pending
+Deployment, reserves a loopback port, writes and starts a candidate Quadlet
+unit, then records its RuntimeInstance after observing Podman.
+
+Internal health passes before promotion. For public intent, Pneuma additionally
+materializes a Caddy fragment, reloads Caddy, and confirms external health.
+Promotion transactionally records the successful Deployment, active runtime,
+and active exposure. SQLite owns those logical facts; Podman/systemd own the
+runtime observation and Caddy owns route behavior after Pneuma exits.
+
+### Candidate Health Failure
+
+With active Deployment A running, Deployment B begins as a candidate. If B fails
+internal or public health, Pneuma records B as failed with diagnostic evidence,
+cleans resources proven to belong to B, and releases its reservation. It does
+not promote B. A remains the active Deployment and, for a public Application,
+Caddy continues to route to A.
+
+### Host Reboot
+
+Pneuma is not running after a reboot. The promoted Quadlet file remains in the
+user Quadlet directory and contains `WantedBy=default.target`; linger keeps the
+`pneuma` user manager available. systemd regenerates and starts the Quadlet
+service, and Podman recreates the deterministic container. Caddy starts
+independently. A later `pneuma app status` observes the runtime and may update
+the recorded external container ID without changing its logical identity.
 
 ## Deployment State Machine
 

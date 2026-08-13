@@ -200,8 +200,12 @@ active runtime and public route remain intact.
 
 ## Related Documents
 
+- [`system-context.md`](system-context.md) explains the scope and vocabulary.
 - [`architecture.md`](architecture.md) describes layer responsibilities and
   operational behavior.
+- [`security-model.md`](security-model.md) describes trust boundaries.
+- [`../decisions/0004-sqlite-intent-vs-runtime-authority.md`](../decisions/0004-sqlite-intent-vs-runtime-authority.md)
+  explains the authority split.
 - [`../design/reconciliation.md`](../design/reconciliation.md) defines future
   v0.4 reconciliation semantics.
 - [`../getting-started.md`](../getting-started.md) describes manifest authoring,

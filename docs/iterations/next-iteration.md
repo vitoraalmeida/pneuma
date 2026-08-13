@@ -1,35 +1,32 @@
 # Next Iteration
 
-**Status:** planning reminder, not an execution tracker.
+**Status:** queued, not an execution tracker.
 
-**Target:** v0.5 - Application Topology & Internal Networking.
+**Target:** v0.4 - Reconciliation and Deployment Reliability.
 
-This document is a reminder of the roadmap work that follows v0.4
-reconciliation. Do not implement it until v0.4 is complete, an approved design
-exists, and `current-iteration.md` is replaced with the corresponding active
-tracker.
+The documentation architecture refactor precedes v0.4. Do not implement this
+queued work until the current iteration is closed and this tracker is promoted.
+
+**Approved design:** [`../design/reconciliation.md`](../design/reconciliation.md)
 
 ## Objective
 
-Model how Applications relate to each other so Pneuma can support internal
-services and their connectivity, rather than treating every Application as an
-isolated workload.
+Converge runtime and exposure materialization toward persisted intent without
+selecting a new Release or making destructive changes from ambiguity.
 
-## Roadmap Scope
+## Checkpoints
 
-- Service relationships: Application A depends on Application B.
-- Internal services.
-- Application dependencies.
-- Network and service addressing.
-- System as a real grouping mechanism.
-- Basic service discovery.
+- Convert the reconciliation E2E catalog into an executable test plan.
+- Add read-only observation and `pneuma reconcile <application>` results.
+- Repair unambiguous runtime and Caddy drift.
+- Handle interrupted Deployments and per-Application concurrency safely.
+- Complete the approved disposable-VM E2E catalog and final regression.
 
 ## Boundaries
 
-- This iteration does not define host network enforcement; that belongs to v0.6.
-- Workload identity and authenticated service-to-service communication belong to
-  v0.7.
-- Do not introduce a topology implementation before a v0.5 approved design
-  defines entities, persistence, runtime behavior, and acceptance scenarios.
+- Reconciliation does not create a Release or Deployment, select a registry
+  artifact, or change desired runtime state or visibility.
+- Ambiguous identity or configuration drift requires manual intervention.
 
-See [`../roadmap.md`](../roadmap.md) for the authoritative v0.5 scope.
+See [`../design/reconciliation.md`](../design/reconciliation.md) for complete
+semantics and [`../roadmap.md`](../roadmap.md) for later v0.5 work.
