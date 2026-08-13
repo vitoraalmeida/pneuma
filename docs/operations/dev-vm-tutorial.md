@@ -6,6 +6,10 @@ integration and E2E tests, without using the VPS as a laboratory. The complete
 plan is at `~/Downloads/pneuma-development-vm-plan.md`; this document is the
 operational walkthrough.
 
+This tutorial is intended for a KVM virtual machine managed by libvirt through
+the `qemu:///system` connection. Its `virsh` commands, NAT networking, and
+snapshot procedures assume that environment.
+
 The VM is Pneuma's **operational host**, not a second development workstation:
 editing, compilation, and unit tests remain on the host. The VM validates
 rootless Podman, Caddy, Quadlet/systemd, SQLite, permissions, networking,
