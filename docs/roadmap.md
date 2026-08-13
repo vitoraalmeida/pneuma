@@ -229,10 +229,10 @@ Principles and structural changes:
 - **Remove local build:** `app deploy-source`, `deployment_deploy_source`,
   `local_build`, `[build]`, `application_build_specs`, and permanent build
   checkout. The only deployable artifact is `image@digest`.
-- **Remote Git import only:** `pneuma app import <git-url>
-  [--manifest <path>]` replaces local-path import. Checkout is temporary only
-  (clone → read `pneuma.toml` → persist → remove). `import` does not create a
-  deployment; `active_deployment_id = null`, desired runtime = stopped.
+- **Remote Git import:** `pneuma app import <git-url> [--manifest <path>]`
+  supports a temporary checkout (clone → read `pneuma.toml` → persist → remove).
+  `import` does not create a deployment; `active_deployment_id = null`, desired
+  runtime = stopped.
 - **Manifest schema v3:** no `[source]`/`[build]`. Repository comes from import,
   branch comes from deployment, and OCI/runtime/exposure come from the manifest.
   Convention: `deploy/<environment>/pneuma.toml` (dev/staging/production);
@@ -255,8 +255,8 @@ Principles and structural changes:
 - **Implementation phases (all completed):**
 
   - A — simplify: remove `deploy-source`, `deployment_deploy_source`,
-    `local_build`, `[build]`, `application_build_specs`, local-path import,
-    local source, and permanent checkout.
+    `local_build`, `[build]`, `application_build_specs`, local source, and
+    permanent checkout.
   - B — separate persistence: create the four SQLite stores and migrate
     create/transition/fail/promotion, runtime persistence, and release/rollback.
   - C — new schema: manifest v3, `deploy/<environment>/pneuma.toml`, new
@@ -281,7 +281,30 @@ build` by Pneuma, manual digest discovery, or manual Caddy editing.
 
 ---
 
-## v0.3 — Reconciliation & Deployment Reliability
+## v0.3 — Consolidation and Operational Hardening
+
+**Status:** completed on August 13, 2026
+
+v0.3 consolidates the domain and persistence model and hardens host operations
+before reconciliation. It introduces a breaking import-contract change: `pneuma
+app import` accepts remote Git URLs only; local paths are rejected, while
+`file://` remains available for local test repositories.
+
+- Deployment and RuntimeInstance are first-class domain types.
+- Release represents only the immutable OCI artifact; source provenance belongs
+  to Deployment.
+- Application import, runtime lifecycle, and deployment creation persist through
+  capability-oriented SQLite stores.
+- Bootstrap reruns, rootless Podman account invariants, Caddy replacement, and
+  CI deploy-key provisioning are reproducible and validated.
+- Disposable Debian 13 bootstrap and E2E regressions prove candidate failure
+  preservation, rollback, reboot recovery, local HTTPS, CI SSH boundaries, and
+  semantic SQLite restore.
+- CI runs pinned ShellCheck and shfmt for tracked shell scripts.
+
+---
+
+## v0.4 — Reconciliation & Deployment Reliability
 
 With Git/source/artifact well defined, Pneuma evolves from command-driven to
 declarative (desired vs. observed state). `pneuma reconcile` observes the
@@ -296,7 +319,7 @@ state persisted in SQLite, without changing intent or creating a Release/Deploym
 - [ ] Deployment mutual exclusion (one per Application at a time)
 - [ ] Non-interactive CLI (`--non-interactive`, structured output, exit codes)
 
-Already delivered outside v0.3 (not future work):
+Already delivered outside v0.4 (not future work):
 
 - GitHub Actions validation (format, lint, test, build) and GHCR build/push
   published as `image:<commit-sha>` — active CI pipeline.
@@ -313,7 +336,7 @@ version is deferred to an explicit future policy.
 
 ---
 
-## v0.4 — Application Topology & Internal Networking
+## v0.5 — Application Topology & Internal Networking
 
 Add relationships between Applications: Pneuma understands how applications
 relate to each other, not just how each runs in isolation.
@@ -327,9 +350,9 @@ relate to each other, not just how each runs in isolation.
 
 ---
 
-## v0.5 — Network Policy Enforcement
+## v0.6 — Network Policy Enforcement
 
-Relationships declared in v0.4 feed connectivity policies applied on the host.
+Relationships declared in v0.5 feed connectivity policies applied on the host.
 
 ### Network enforcement
 
@@ -337,7 +360,7 @@ Relationships declared in v0.4 feed connectivity policies applied on the host.
 
 ---
 
-## v0.6 — Workload Identity & Secure S2S
+## v0.7 — Workload Identity & Secure S2S
 
 Identity per workload; communication between applications becomes authenticated
 and authorized.
@@ -347,7 +370,7 @@ and authorized.
 
 ---
 
-## v0.7 — Artifact Security & Secrets
+## v0.8 — Artifact Security & Secrets
 
 Artifact lifecycle security and application secrets.
 
@@ -361,14 +384,14 @@ Artifact lifecycle security and application secrets.
 
 ---
 
-## Out of Scope (frozen beyond v0.7)
+## Out of Scope (frozen beyond v0.8)
 
 TUI, HTTP API, webhooks, centralized observability, multiple hosts, scheduler,
 remote agents, distributed reconciliation, declarative communication between
-apps, dependencies, service discovery beyond the v0.4 basics, managed builds as
+apps, dependencies, service discovery beyond the v0.5 basics, managed builds as
 an official feature, canary, gradual rollout, autoscaling, Kubernetes, RBAC,
 multi-user support.
 
 Network, identity, S2S, and artifact-security items leave the freeze in the
-versions that introduce them (v0.5 through v0.7); everything else is explicitly
+versions that introduce them (v0.6 through v0.8); everything else is explicitly
 unfrozen in a future version.

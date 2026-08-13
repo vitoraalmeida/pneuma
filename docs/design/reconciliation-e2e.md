@@ -1,4 +1,4 @@
-# E2E Catalog — Reconciliation v0.3
+# E2E Catalog — Reconciliation v0.4
 
 **Status:** catalog approved for future implementation; it does not describe
 tests already executed or introduce `pneuma reconcile`.

@@ -1,11 +1,19 @@
 # Changelog
 
-## v0.2.1 — Operational Hardening (2026-08-13)
+## v0.3.0 — Consolidation and Operational Hardening (2026-08-13)
 
 ### Added
 
 - Reproducible bootstrap and full E2E regression on disposable Debian 13 VMs.
 - Pinned ShellCheck and shfmt checks for every tracked shell script in CI.
+- First-class `Deployment` and `RuntimeInstance` domain types.
+- Capability-oriented persistence for application import, runtime lifecycle, and
+  deployment creation.
+
+### Breaking Changes
+
+- `pneuma app import` accepts remote Git URLs only. Local paths are rejected;
+  `file://` remains available for local test repositories.
 
 ### Fixed
 
@@ -13,11 +21,15 @@
   invariants, and CI deploy-key provisioning.
 - Candidate failure preservation, rollback, reboot recovery, local HTTPS,
   restricted CI SSH boundaries, and SQLite restore coverage in E2E.
+- Re-import reports the persisted deployment state; rollback preserves source
+  provenance; visibility and runtime state remain correct after failed effects.
 
 ### Changed
 
 - Documentation now distinguishes production smoke tests from disposable VM
   bootstrap and E2E regression.
+- Deployment source provenance is stored on `Deployment`, while `Release`
+  represents only the immutable OCI artifact.
 
 ## v0.2.0 — Git-aware OCI Delivery (2026-08-11)
 

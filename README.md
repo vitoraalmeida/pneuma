@@ -289,8 +289,8 @@ See `docs/rust-guidelines.md` for code conventions.
 
 - **v0.1** (released): OCI-first deployments — immutable image pulls, rootless Quadlet runtime, health checks, Caddy exposure, rollback, and VPS operations
 - **v0.2** (released): Git-aware OCI delivery — deploy by branch, automatic artifact discovery from CI, manifest schema v3, SQLite stores for persistence
-- **v0.2.1** (released): Operational hardening — reproducible bootstrap and VM/E2E regression
-- **v0.3** (planned): reconciliation and deployment reliability — desired vs observed state, drift detection and recovery, deployment recovery, non-interactive CLI
+- **v0.3** (released): remote-Git-only import, domain/persistence consolidation, and reproducible bootstrap and VM/E2E regression
+- **v0.4** (planned): reconciliation and deployment reliability — desired vs observed state, drift detection and recovery, deployment recovery, non-interactive CLI
 
 See `docs/roadmap.md` for the full product vision.
 

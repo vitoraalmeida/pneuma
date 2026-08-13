@@ -1,6 +1,6 @@
 # Design — Reconciliation
 
-**Status:** approved design for v0.3; it does not describe behavior already
+**Status:** approved design for v0.4; it does not describe behavior already
 implemented. Execution and progress live only in
 `docs/iterations/current-iteration.md`.
 
@@ -9,7 +9,7 @@ implemented. Execution and progress live only in
 Define the semantics that future `pneuma reconcile` will use to converge an
 Application to persisted intent, without selecting a new version or turning an
 ambiguous observation into a destructive change. This design guides the domain,
-runtime, and exposure refactors of pre-v0.3 consolidation.
+runtime, and exposure refactors completed in v0.3.
 
 This document does not introduce the command, APIs, migrations, or retry policies.
 
