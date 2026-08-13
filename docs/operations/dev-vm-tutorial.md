@@ -363,20 +363,7 @@ state between runs.
 > **Note:** the VM uses libvirt DHCP; after restoring a snapshot, its IP may
 > change (the current one is in `~/.ssh/config`). Do not trust the old IP.
 
-## 9. Environment Security
-
-- Use a dedicated SSH key for the VM.
-- Do not copy production secrets to the VM.
-- Use a public registry for fixtures or dedicated read-only credentials.
-- Do not expose VM SSH to the Internet (NAT/libvirt network).
-- Run Pneuma as the non-root `pneuma` user.
-- Restrict root to provisioning and binary installation.
-- Disable password login for the `pneuma` user (`passwd -l`).
-- The CI key uses `restrict` and a forced command; E2E requires only `version`
-  and `deploy healthy-http staging`, and rejects shell, PTY, forwarding,
-  agent/X11 forwarding, file reading, and branch injection.
-
-## 10. Next Steps
+## 9. Next Steps
 
 The `scripts/dev-vm/e2e.sh` battery already covers the main cycle (import,
 digest deployment, upgrade, rollback, and reboot). Upgrade/rollback and reboot
