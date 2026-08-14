@@ -11,7 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use pneuma::adapters::database;
 use pneuma::use_cases::application_import::import_application;
-use pneuma::use_cases::deployment_deploy_branch::{DeployBranchError, deploy_branch};
+use pneuma::use_cases::deployment_from_revision::{DeployBranchError, deploy_branch};
 
 #[test]
 fn deploys_a_branch_and_persists_source_revision() {

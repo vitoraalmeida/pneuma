@@ -6,10 +6,10 @@ use rusqlite::Connection;
 use crate::adapters::git_source::{CommitSha, ResolveBranchError, resolve_branch};
 use crate::adapters::oci_image::{ResolveImageDigestError, resolve_image_digest};
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
-use crate::use_cases::deployment_deploy_oci::{DeployOciError, deploy_oci};
-use crate::use_cases::deployment_deploy_release::{
+use crate::use_cases::deployment_execute_release::{
     DeploymentResult, PublicDeploymentConfiguration,
 };
+use crate::use_cases::deployment_from_oci::{DeployOciError, deploy_oci};
 
 #[derive(Debug)]
 pub enum DeployBranchError {

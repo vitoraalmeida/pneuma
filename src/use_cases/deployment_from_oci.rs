@@ -5,7 +5,7 @@ use rusqlite::{Connection, OptionalExtension};
 
 use crate::adapters::oci_image::{OciImageReference, PullImageError, pull_image};
 use crate::domain::deployment::DeploymentType;
-use crate::use_cases::deployment_deploy_release::{
+use crate::use_cases::deployment_execute_release::{
     DeployReleaseError, DeploymentResult, PublicDeploymentConfiguration, deploy_release,
 };
 use crate::use_cases::release_create::{CreateReleaseError, create_release};

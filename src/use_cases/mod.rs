@@ -1,12 +1,12 @@
 pub mod application_import;
 pub mod application_list;
 pub mod application_runtime;
-pub mod ci_dispatch;
+pub mod ci_command;
 pub mod deployment_activate_public;
 pub mod deployment_create;
-pub mod deployment_deploy_branch;
-pub mod deployment_deploy_oci;
-pub mod deployment_deploy_release;
+pub mod deployment_execute_release;
+pub mod deployment_from_oci;
+pub mod deployment_from_revision;
 pub mod deployment_list;
 pub mod deployment_progress;
 pub mod deployment_promote_internal;

@@ -19,10 +19,10 @@ use pneuma::use_cases::application_list::{ListError, application_is_deployed, li
 use pneuma::use_cases::application_runtime::{
     RuntimeLifecycleError, report_application_status, start_application, stop_application,
 };
-use pneuma::use_cases::ci_dispatch::{CiCommand, CiDispatchError, parse_ci_command};
-use pneuma::use_cases::deployment_deploy_branch::{DeployBranchError, deploy_branch};
-use pneuma::use_cases::deployment_deploy_oci::{DeployOciError, deploy_oci};
-use pneuma::use_cases::deployment_deploy_release::PublicDeploymentConfiguration;
+use pneuma::use_cases::ci_command::{CiCommand, CiDispatchError, parse_ci_command};
+use pneuma::use_cases::deployment_execute_release::PublicDeploymentConfiguration;
+use pneuma::use_cases::deployment_from_oci::{DeployOciError, deploy_oci};
+use pneuma::use_cases::deployment_from_revision::{DeployBranchError, deploy_branch};
 use pneuma::use_cases::deployment_list::{ListDeploymentsError, list_deployments};
 use pneuma::use_cases::deployment_rollback::{RollbackError, rollback_deployment};
 use pneuma::use_cases::exposure_change::{ExposureChangeError, change_exposure};
