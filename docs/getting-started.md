@@ -14,6 +14,43 @@ trust boundaries, including the restricted CI key, see
 rootless Podman, Caddy, binary) **and** prepares the CI identity. After it
 completes successfully, the host is ready to import and deploy applications.
 
+## Host Provisioning Flow
+
+```mermaid
+flowchart LR
+    operator[Root operator]
+    bootstrap[bootstrap-vps.sh]
+    preflight[Host preflight]
+    packages[Runtime and compiler packages]
+    account[pneuma account, subids, and linger]
+    directories[Persistent directories and permissions]
+    source[Pinned source checkout]
+    binary[Build and install Pneuma binary]
+    environment[Canonical host environment]
+    ci_key[Optional restricted CI public key]
+    caddy[Caddy baseline]
+    runtime[User manager and rootless Podman]
+    doctor[pneuma doctor and final-state checks]
+
+    operator -->|1. run as root with source and optional CI key| bootstrap
+    bootstrap -->|2. verify Debian, network, resources, and ports| preflight
+    preflight -->|3. install dependencies| packages
+    packages -->|4. create and validate deployment identity| account
+    account -->|5. create host paths| directories
+    directories -->|6. clone and resolve tag or full commit SHA| source
+    source -->|7. compile and install root-owned binary| binary
+    binary -->|8. write environment| environment
+    environment -.->|9. when supplied, install forced-command key| ci_key
+    environment -->|10. validate and apply ingress baseline| caddy
+    ci_key -->|10. continue provisioning| caddy
+    caddy -->|11. start and verify rootless runtime| runtime
+    runtime -->|12. diagnose and verify final state| doctor
+```
+
+The CI-key step is optional. When the Pneuma source repository requires a newly
+generated SSH deploy key, bootstrap stops after printing the public key and the
+operator reruns it after granting repository access.
+
 ## 1. Prerequisites
 
 - Debian 13 (trixie) VPS with root access over SSH. Debian 12 **is not** suitable

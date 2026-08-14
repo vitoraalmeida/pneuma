@@ -110,53 +110,25 @@ flowchart LR
         end
     end
 
-    operator -->|S1. provision host| bootstrap
-    bootstrap -->|S2. install CLI binary and environment| cli
-    bootstrap -->|S3. install forced CI command| sshd
-    bootstrap -->|S4. configure ingress baseline| caddy
-    bootstrap -->|S5. create shared fragment directory| fragments
-    bootstrap -->|S6. enable user runtime and linger| systemd
-    operator -->|S7. import Git URL and manifest| cli
-    cli -->|S8. temporary clone and read manifest| repository
-    cli -->|S9. persist Application specification| sqlite
-
-    repository -->|1. source and pneuma.toml| ci
-    ci -->|2. publish repository:commit-sha| registry
-    ci -->|3. SSH deploy request| sshd
-    sshd -->|4. forced command| dispatcher
-    dispatcher -->|5. validated deployment request| cli
-    cli -->|6. load imported source and delivery configuration| sqlite
-    cli -->|7. resolve branch or tag| repository
-    cli -->|8. request tagged image pull| podman
-    podman -->|9. pull repository:commit-sha| registry
-    registry -->|10. tagged OCI artifact| podman
-    podman -.->|11. resolved digest| cli
-    cli -->|12. verify digest-pinned image| podman
-    cli -->|13. persist Release and pending Deployment| sqlite
-    cli -->|14. transition Starting and reserve port| sqlite
-    cli -->|15. write candidate Quadlet file| quadlet
-    cli -->|16. daemon-reload| systemd
-    systemd -->|17. read Quadlet and generate service| quadlet
-    cli -->|18. start candidate service| systemd
-    systemd -->|19. create, start, and supervise| podman
-    podman -->|20. materialize loopback runtime| application
-    cli -->|21. inspect deterministic container| podman
-    podman -.->|22. observed container identity and endpoint| cli
-    cli -->|23. register RuntimeInstance and transition Verifying| sqlite
-    cli -->|24. internal health request| application
-    application -.->|25. internal health result| cli
-    cli -->|26. for public intent, persist Activating and applying| sqlite
-    cli -->|27. write managed route| fragments
-    fragments -->|28. imported configuration| caddy
-    cli -->|29. validate, reload, and check public route| caddy
-    caddy -->|30. loopback health request| application
-    application -.->|31. health response| caddy
-    caddy -.->|32. reload and route-health result| cli
-    cli -->|33. transactional promotion| sqlite
-    cli -->|34. best-effort retire prior runtime| systemd
-
-    client -->|steady state public HTTP or HTTPS| caddy
-    caddy -->|steady state loopback HTTP| application
+    operator --- bootstrap
+    operator --- cli
+    repository --- ci
+    ci --- registry
+    ci --- sshd
+    sshd --- dispatcher
+    dispatcher --- cli
+    cli --- repository
+    cli --- sqlite
+    cli --- quadlet
+    cli --- systemd
+    cli --- podman
+    cli --- fragments
+    quadlet --- systemd
+    systemd --- podman
+    podman --- application
+    fragments --- caddy
+    client --- caddy
+    caddy --- application
 
     classDef trusted fill:#dbeafe,stroke:#2563eb,color:#172554;
     classDef external fill:#ffedd5,stroke:#ea580c,color:#7c2d12;
@@ -168,14 +140,51 @@ flowchart LR
     class application workload;
 ```
 
-`S1` through `S9` show one-time host and Application setup. Numbers `1` through
-`34` show the normal branch-deployment and public-exposure path. Steady-state
-traffic is intentionally unnumbered. Solid arrows represent commands, data, or
-materialization effects; dashed arrows represent observations and results. Blue
-components are trusted host controls; orange components are trusted external
-delivery dependencies; red is untrusted public traffic; purple is the
-less-trusted Application workload. Internal deployments skip public-exposure
-steps `26` through `32` and proceed to promotion at step `33`.
+This diagram shows components, relationships, and trust boundaries only; it does
+not imply execution order. Blue components are trusted host controls; orange
+components are trusted external delivery dependencies; red is untrusted public
+traffic; purple is the less-trusted Application workload.
+
+Operational flows are intentionally separated:
+
+- [Host provisioning](../getting-started.md#host-provisioning-flow)
+- [Artifact delivery](#artifact-delivery-flow)
+- [Application deployment](architecture.md#deployment-sequence)
+- [Steady-state runtime and traffic](architecture.md#steady-state-runtime-and-traffic)
+
+## Artifact Delivery Flow
+
+```mermaid
+flowchart LR
+    repository[Application repository]
+    ci[CI workflow]
+    image[OCI image]
+    registry[OCI registry]
+    sshd[Host sshd]
+    forced[authorized_keys forced command]
+    dispatcher[pneuma ci dispatch]
+    deployment[Deployment sequence]
+
+    repository -->|1. checkout source| ci
+    ci -->|2. build immutable artifact candidate| image
+    image -->|3. publish repository:commit-sha| registry
+    ci -->|4. SSH deploy application revision| sshd
+    sshd -->|5. enforce restricted key options| forced
+    forced -->|6. invoke dispatcher with SSH_ORIGINAL_COMMAND| dispatcher
+    dispatcher -->|7. validate application and revision arguments| deployment
+
+    classDef external fill:#ffedd5,stroke:#ea580c,color:#7c2d12;
+    classDef host fill:#dbeafe,stroke:#2563eb,color:#172554;
+    classDef artifact fill:#fef3c7,stroke:#d97706,color:#78350f;
+    class repository,ci,registry external;
+    class sshd,forced,dispatcher,deployment host;
+    class image artifact;
+```
+
+Artifact publication precedes the deployment request. The CI key cannot select
+an arbitrary host command: sshd applies the forced command, and the dispatcher
+accepts only `version` or `deploy <application> <branch-or-tag>`. The deployment
+then resolves the requested revision and digest independently.
 
 The repository supplies an import-time specification. CI publishes an image
 whose tag equals the resolved full commit SHA. Pneuma resolves that tag to an OCI

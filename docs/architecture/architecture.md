@@ -25,13 +25,6 @@ document answers how the current implementation works.
 
 Pneuma has a short-lived invocation path and a long-lived runtime path.
 
-```text
-Pneuma invocation -> evaluate SQLite intent -> controlled external effects
-                  -> persist confirmed result -> exit
-
-systemd -> Quadlet-generated service -> rootless Podman -> application
-```
-
 The invocation path makes deployment, lifecycle, and routing decisions. SQLite
 records logical intent before external effects and confirmed results afterward.
 The runtime path owns process survival after the invocation exits. Public Caddy
@@ -40,6 +33,55 @@ routes are a separate materialization path from the loopback runtime.
 Pneuma has no resident control plane or daemon. Calling the first path a
 "command plane" is useful shorthand only; it is not a continuously available
 controller.
+
+### Steady-State Runtime and Traffic
+
+```mermaid
+flowchart LR
+    client[Internet client]
+    caddy[Caddy]
+    fragments[Managed Caddy fragments]
+    quadlet[Promoted Quadlet file]
+    systemd[systemd user manager]
+    podman[Rootless Podman]
+    application[Application container]
+    operator[Operator]
+    cli[On-demand Pneuma invocation]
+    sqlite[(SQLite intent and history)]
+
+    fragments -->|imported route configuration| caddy
+    client -->|public HTTP or HTTPS| caddy
+    caddy -->|loopback HTTP| application
+    quadlet -->|generated service definition| systemd
+    systemd -->|start, restart, and supervise| podman
+    podman -->|run loopback-bound workload| application
+
+    operator -.->|status, start, or stop on demand| cli
+    sqlite -->|desired state and active logical identity| cli
+    cli -->|control generated service| systemd
+    cli -->|inspect container state| podman
+    podman -.->|observed state and container identity| cli
+    cli -->|persist confirmed observation| sqlite
+
+    classDef ingress fill:#dbeafe,stroke:#2563eb,color:#172554;
+    classDef runtime fill:#dcfce7,stroke:#16a34a,color:#14532d;
+    classDef persisted fill:#cffafe,stroke:#0891b2,color:#164e63;
+    classDef workload fill:#f3e8ff,stroke:#9333ea,color:#581c87;
+    classDef ondemand fill:#fef3c7,stroke:#d97706,color:#78350f;
+    classDef untrusted fill:#fee2e2,stroke:#dc2626,color:#7f1d1d;
+    class caddy,fragments ingress;
+    class quadlet,systemd,podman runtime;
+    class sqlite persisted;
+    class application workload;
+    class operator,cli ondemand;
+    class client untrusted;
+```
+
+For a healthy running Application, Pneuma is absent from the steady-state traffic
+and supervision paths. Caddy owns public ingress, and systemd/Quadlet/Podman own
+runtime continuity. Pneuma returns only for an operator command, observes Podman,
+persists confirmed results, and exits. An internal Application follows the same
+runtime path without the Caddy traffic path.
 
 ## Responsibilities
 
