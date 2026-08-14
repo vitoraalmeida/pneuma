@@ -92,27 +92,34 @@ flowchart LR
     runtime[Podman and systemd]
     caddy[Caddy]
 
-    cli -->|persist desired intent and confirmed results| sqlite
-    cli -->|resolve requested revision| git
-    cli -->|resolve digest and pull artifact| registry
-    cli -->|materialize and control| runtime
+    sqlite -->|load desired intent and logical state| cli
+    cli -->|persist intent, history, and confirmed results| sqlite
+    cli -->|request revision resolution| git
+    git -.->|resolved commit| cli
+    cli -->|resolve, pull, materialize, and control| runtime
+    runtime -->|pull tagged or digest artifact| registry
+    registry -.->|artifact availability and bytes| runtime
+    runtime -.->|resolved digest and observed runtime state| cli
     cli -->|materialize and control| caddy
-    runtime -.->|observe runtime state| cli
-    caddy -.->|observe route state| cli
-    cli -.->|persist confirmed observation| sqlite
+    caddy -.->|effect result and route health| cli
 
-    classDef authority fill:#dbeafe,stroke:#2563eb,color:#172554;
-    classDef external fill:#ffedd5,stroke:#ea580c,color:#7c2d12;
+    classDef persisted fill:#dbeafe,stroke:#2563eb,color:#172554;
+    classDef remote fill:#ffedd5,stroke:#ea580c,color:#7c2d12;
+    classDef hostAuthority fill:#dcfce7,stroke:#16a34a,color:#14532d;
     classDef orchestrator fill:#f3e8ff,stroke:#9333ea,color:#581c87;
-    class sqlite authority;
-    class git,registry,runtime,caddy external;
+    class sqlite persisted;
+    class git,registry remote;
+    class runtime,caddy hostAuthority;
     class cli orchestrator;
 ```
 
 SQLite owns desired intent, logical identity, history, and last confirmed
 results. Git, the registry, Podman/systemd, and Caddy remain authoritative for
 their external observations. Pneuma orchestrates those authorities; it is not a
-long-lived runtime authority.
+long-lived runtime authority. Solid arrows represent requests, effects, and
+persistence; dashed arrows represent observations or returned authoritative
+results. Blue is persisted state, orange is a remote authority, green is a
+host-local materialization authority, and purple is the short-lived orchestrator.
 
 SQLite is bundled through rusqlite. Immutable migrations in `migrations/` are
 registered in `src/adapters/database.rs` and are applied when a connection opens
@@ -290,55 +297,94 @@ never promoted, so the previously active runtime and public route remain in use.
 
 ### Deployment Sequence
 
+The requester is either an operator invoking the CLI or the validated restricted
+CI dispatcher. The sequence shows branch or tag deployment; explicit digest
+deployment starts at digest verification.
+
 ```mermaid
 sequenceDiagram
-    actor Operator
+    actor Requester
     participant CLI as Pneuma CLI
-    participant Git
-    participant Registry as OCI registry
     participant DB as SQLite
-    participant Quadlet
-    participant Systemd as systemd user manager
+    participant Git
     participant Podman
+    participant Registry as OCI registry
+    participant Quadlet as Quadlet files
+    participant Systemd as systemd user manager
     participant Candidate as candidate loopback endpoint
     participant Caddy
 
-    Operator->>CLI: deploy application branch or tag
+    Requester->>CLI: deploy application branch or tag
+    CLI->>DB: load imported source and delivery configuration
     CLI->>Git: resolve revision to full commit SHA
     Git-->>CLI: commit SHA
-    CLI->>Registry: pull repository:commit-sha and inspect digest
-    Registry-->>CLI: digest-pinned image reference
-    CLI->>DB: create or reuse Release and create pending Deployment
-    Note over CLI,DB: Short transaction ends before external effects
-    CLI->>DB: reserve loopback port
-    CLI->>Quadlet: write candidate unit and reload
-    Quadlet->>Systemd: generated service
+    CLI->>Podman: pull repository:commit-sha
+    Podman->>Registry: fetch tagged artifact
+    Registry-->>Podman: OCI artifact
+    CLI->>Podman: inspect resolved digest
+    Podman-->>CLI: digest-pinned image reference
+    CLI->>Podman: pull and verify digest-pinned image
+    Podman->>Registry: fetch digest if not cached
+    Registry-->>Podman: digest-addressed artifact
+    Podman-->>CLI: verified digest
+    CLI->>DB: create or reuse Release
+    CLI->>DB: create pending Deployment
+    Note over CLI,DB: Each transaction ends before subsequent external effects
+    CLI->>DB: transition Starting and reserve loopback port
+    CLI->>Quadlet: write candidate unit
+    CLI->>Systemd: daemon-reload
+    Systemd->>Quadlet: read file and generate service
     CLI->>Systemd: start candidate service
     Systemd->>Podman: create and start container
     Podman->>Candidate: bind reserved loopback endpoint
-    Podman-->>CLI: observe deterministic container identity
-    CLI->>DB: register RuntimeInstance
+    CLI->>Podman: inspect deterministic container name
+    Podman-->>CLI: container identity, state, and endpoint
+    CLI->>DB: register RuntimeInstance, consume reservation, transition Verifying
     CLI->>Candidate: internal health against loopback endpoint
     Candidate-->>CLI: candidate health result
     alt Candidate health fails
         CLI->>DB: record failed Deployment evidence
-        CLI->>Systemd: clean resources proven to belong to candidate
+        CLI->>Systemd: stop candidate service
+        CLI->>Quadlet: remove candidate unit
+        CLI->>Systemd: daemon-reload
+        CLI->>DB: mark runtime removed and release reservation
         Note over CLI,Caddy: Prior active runtime and route remain unchanged
     else Candidate health passes
         alt Internal Application
-            CLI->>DB: promote succeeded Deployment and active runtime
+            CLI->>DB: transactionally promote Deployment and runtime
             CLI->>Systemd: best-effort retire prior runtime after promotion
         else Public Application
-            CLI->>Caddy: write fragment, validate, and reload
-            CLI->>Caddy: external health through public route
-            Caddy-->>CLI: route health result
-            alt Route health passes
-                CLI->>DB: promote Deployment, runtime, and exposure
-                CLI->>Systemd: best-effort retire prior runtime after promotion
-            else Route health fails
-                CLI->>DB: record failed Deployment evidence
+            CLI->>DB: transition Activating and persist exposure applying
+            CLI->>Caddy: write fragment, validate configuration, and reload
+            Caddy-->>CLI: materialization result
+            alt Materialization fails
+                CLI->>Caddy: attempt to restore previous route and reload
+                Caddy-->>CLI: compensation result
+                CLI->>DB: record exposure failed or diverged and Deployment failed
                 CLI->>Systemd: clean resources proven to belong to candidate
-                Note over CLI,Caddy: Prior active runtime and route remain unchanged
+                Note over CLI,Caddy: Prior runtime remains active and route can be diverged if compensation fails
+            else Materialization succeeds
+                CLI->>Caddy: external health through public route
+                Caddy->>Candidate: loopback health request
+                Candidate-->>Caddy: health response
+                Caddy-->>CLI: route health result
+                alt Route health fails
+                    CLI->>Caddy: attempt to restore previous route and reload
+                    Caddy-->>CLI: compensation result
+                    CLI->>DB: record exposure failed or diverged and Deployment failed
+                    CLI->>Systemd: clean resources proven to belong to candidate
+                else Route health passes
+                    CLI->>DB: transactionally promote Deployment, runtime, and exposure
+                    DB-->>CLI: promotion result
+                    alt Promotion succeeds
+                        CLI->>Systemd: best-effort retire prior runtime after promotion
+                    else Promotion fails
+                        CLI->>Caddy: attempt to restore previous route and reload
+                        Caddy-->>CLI: compensation result
+                        CLI->>DB: record exposure failed or diverged and Deployment failed
+                        CLI->>Systemd: clean resources proven to belong to candidate
+                    end
+                end
             end
         end
     end

@@ -89,8 +89,12 @@ flowchart LR
     end
 
     subgraph host[Pneuma host]
-        caddy[Caddy]
-        fragments[Managed Caddy fragments]
+        subgraph host_services[Host-managed services and shared configuration]
+            bootstrap[Bootstrap provisioning]
+            sshd[sshd and authorized_keys forced command]
+            caddy[Caddy]
+            fragments[Managed Caddy fragments]
+        end
 
         subgraph pneuma_account[pneuma Unix-account boundary]
             dispatcher[Restricted SSH dispatcher]
@@ -106,41 +110,72 @@ flowchart LR
         end
     end
 
-    operator -->|1. bootstrap, import, operate| cli
-    repository -->|2. source and pneuma.toml| ci
-    ci -->|3. publish repository:commit-sha| registry
-    ci -->|4. SSH deploy app revision| dispatcher
-    dispatcher -->|5. validated request| cli
-    cli -->|6. resolve branch or tag| repository
-    cli -->|7. resolve tag and pull digest| registry
-    cli -->|8. desired state, Releases, Deployments| sqlite
-    cli -->|9. write Quadlet and reload manager| quadlet
-    quadlet -->|10. generated unit| systemd
-    cli -->|11. start candidate service| systemd
-    systemd -->|12. supervise| podman
-    podman -->|13. materialize runtime| application
-    cli -->|14. write, validate, reload| fragments
-    fragments -->|15. imported configuration| caddy
-    client -->|16. public HTTP or HTTPS| caddy
-    caddy -->|17. loopback HTTP| application
-    podman -.->|18. observed runtime state| cli
-    caddy -.->|19. route and reload observation| cli
+    operator -->|S1. provision host| bootstrap
+    bootstrap -->|S2. install CLI binary and environment| cli
+    bootstrap -->|S3. install forced CI command| sshd
+    bootstrap -->|S4. configure ingress baseline| caddy
+    bootstrap -->|S5. create shared fragment directory| fragments
+    bootstrap -->|S6. enable user runtime and linger| systemd
+    operator -->|S7. import Git URL and manifest| cli
+    cli -->|S8. temporary clone and read manifest| repository
+    cli -->|S9. persist Application specification| sqlite
+
+    repository -->|1. source and pneuma.toml| ci
+    ci -->|2. publish repository:commit-sha| registry
+    ci -->|3. SSH deploy request| sshd
+    sshd -->|4. forced command| dispatcher
+    dispatcher -->|5. validated deployment request| cli
+    cli -->|6. load imported source and delivery configuration| sqlite
+    cli -->|7. resolve branch or tag| repository
+    cli -->|8. request tagged image pull| podman
+    podman -->|9. pull repository:commit-sha| registry
+    registry -->|10. tagged OCI artifact| podman
+    podman -.->|11. resolved digest| cli
+    cli -->|12. verify digest-pinned image| podman
+    cli -->|13. persist Release and pending Deployment| sqlite
+    cli -->|14. transition Starting and reserve port| sqlite
+    cli -->|15. write candidate Quadlet file| quadlet
+    cli -->|16. daemon-reload| systemd
+    systemd -->|17. read Quadlet and generate service| quadlet
+    cli -->|18. start candidate service| systemd
+    systemd -->|19. create, start, and supervise| podman
+    podman -->|20. materialize loopback runtime| application
+    cli -->|21. inspect deterministic container| podman
+    podman -.->|22. observed container identity and endpoint| cli
+    cli -->|23. register RuntimeInstance and transition Verifying| sqlite
+    cli -->|24. internal health request| application
+    application -.->|25. internal health result| cli
+    cli -->|26. for public intent, persist Activating and applying| sqlite
+    cli -->|27. write managed route| fragments
+    fragments -->|28. imported configuration| caddy
+    cli -->|29. validate, reload, and check public route| caddy
+    caddy -->|30. loopback health request| application
+    application -.->|31. health response| caddy
+    caddy -.->|32. reload and route-health result| cli
+    cli -->|33. transactional promotion| sqlite
+    cli -->|34. best-effort retire prior runtime| systemd
+
+    client -->|steady state public HTTP or HTTPS| caddy
+    caddy -->|steady state loopback HTTP| application
 
     classDef trusted fill:#dbeafe,stroke:#2563eb,color:#172554;
     classDef external fill:#ffedd5,stroke:#ea580c,color:#7c2d12;
     classDef untrusted fill:#fee2e2,stroke:#dc2626,color:#7f1d1d;
     classDef workload fill:#f3e8ff,stroke:#9333ea,color:#581c87;
-    class operator,dispatcher,cli,sqlite,quadlet,systemd,podman,fragments,caddy trusted;
+    class operator,bootstrap,sshd,dispatcher,cli,sqlite,quadlet,systemd,podman,fragments,caddy trusted;
     class repository,ci,registry external;
     class client untrusted;
     class application workload;
 ```
 
-Numbers show the normal deployment and exposure flow. Solid arrows represent
-commands, data, or materialization effects. Dashed arrows represent observation.
-Blue components are trusted host controls; orange components are trusted external
+`S1` through `S9` show one-time host and Application setup. Numbers `1` through
+`34` show the normal branch-deployment and public-exposure path. Steady-state
+traffic is intentionally unnumbered. Solid arrows represent commands, data, or
+materialization effects; dashed arrows represent observations and results. Blue
+components are trusted host controls; orange components are trusted external
 delivery dependencies; red is untrusted public traffic; purple is the
-less-trusted Application workload.
+less-trusted Application workload. Internal deployments skip public-exposure
+steps `26` through `32` and proceed to promotion at step `33`.
 
 The repository supplies an import-time specification. CI publishes an image
 whose tag equals the resolved full commit SHA. Pneuma resolves that tag to an OCI
