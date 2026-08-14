@@ -308,7 +308,7 @@ sequenceDiagram
     Git-->>CLI: commit SHA
     CLI->>Registry: pull repository:commit-sha and inspect digest
     Registry-->>CLI: digest-pinned image reference
-    CLI->>DB: create or reuse Release; create pending Deployment
+    CLI->>DB: create or reuse Release and create pending Deployment
     Note over CLI,DB: Short transaction ends before external effects
     CLI->>DB: reserve loopback port
     CLI->>Quadlet: write candidate unit and reload

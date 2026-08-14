@@ -106,24 +106,25 @@ flowchart LR
         end
     end
 
-    operator -->|bootstrap, import, operate| cli
-    repository -->|source and pneuma.toml| ci
-    ci -->|publish repository:commit-sha| registry
-    ci -->|SSH deploy app revision| dispatcher
-    dispatcher -->|validated request| cli
-    cli -->|resolve branch or tag| repository
-    cli -->|resolve tag, pull digest| registry
-    cli -->|desired state, Releases, Deployments| sqlite
-    cli -->|write, reload, start| quadlet
-    quadlet -->|generated unit| systemd
-    systemd -->|supervise| podman
-    podman -->|materialize and observe| application
-    cli -->|write, validate, reload| fragments
-    fragments -->|imported configuration| caddy
-    client -->|public HTTP or HTTPS| caddy
-    caddy -->|loopback HTTP| application
-    podman -.->|observed state| cli
-    caddy -.->|route and reload observation| cli
+    operator -->|1. bootstrap, import, operate| cli
+    repository -->|2. source and pneuma.toml| ci
+    ci -->|3. publish repository:commit-sha| registry
+    ci -->|4. SSH deploy app revision| dispatcher
+    dispatcher -->|5. validated request| cli
+    cli -->|6. resolve branch or tag| repository
+    cli -->|7. resolve tag and pull digest| registry
+    cli -->|8. desired state, Releases, Deployments| sqlite
+    cli -->|9. write Quadlet and reload manager| quadlet
+    quadlet -->|10. generated unit| systemd
+    cli -->|11. start candidate service| systemd
+    systemd -->|12. supervise| podman
+    podman -->|13. materialize runtime| application
+    cli -->|14. write, validate, reload| fragments
+    fragments -->|15. imported configuration| caddy
+    client -->|16. public HTTP or HTTPS| caddy
+    caddy -->|17. loopback HTTP| application
+    podman -.->|18. observed runtime state| cli
+    caddy -.->|19. route and reload observation| cli
 
     classDef trusted fill:#dbeafe,stroke:#2563eb,color:#172554;
     classDef external fill:#ffedd5,stroke:#ea580c,color:#7c2d12;
@@ -135,10 +136,11 @@ flowchart LR
     class application workload;
 ```
 
-Solid arrows represent commands, data, or materialization effects. Dashed arrows
-represent observation. Blue components are trusted host controls; orange
-components are trusted external delivery dependencies; red is untrusted public
-traffic; purple is the less-trusted Application workload.
+Numbers show the normal deployment and exposure flow. Solid arrows represent
+commands, data, or materialization effects. Dashed arrows represent observation.
+Blue components are trusted host controls; orange components are trusted external
+delivery dependencies; red is untrusted public traffic; purple is the
+less-trusted Application workload.
 
 The repository supplies an import-time specification. CI publishes an image
 whose tag equals the resolved full commit SHA. Pneuma resolves that tag to an OCI
