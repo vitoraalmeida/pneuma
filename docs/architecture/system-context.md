@@ -74,25 +74,71 @@ control-plane availability, or cluster consensus.
 
 ## System Context
 
-```text
-Application repository
-    | source + pneuma.toml
-    v
-CI ------------------------------> OCI registry
-                                      |
-                                      | image@digest
-                                      v
-+-------------------------- Pneuma host --------------------------+
-| Pneuma CLI --> SQLite                                           |
-|      |                                                           |
-|      +--> Podman / Quadlet / systemd --> application            |
-|                                             ^                    |
-|                                             | loopback           |
-|                                           Caddy                  |
-+--------------------------------------------|--------------------+
-                                             |
-                                          Internet
+```mermaid
+flowchart LR
+    operator[Trusted operator]
+    repository[Application repository]
+    ci[CI workflow]
+    registry[OCI registry]
+    client[Untrusted Internet client]
+
+    subgraph external[External delivery dependencies]
+        repository
+        ci
+        registry
+    end
+
+    subgraph host[Pneuma host]
+        caddy[Caddy]
+        fragments[Managed Caddy fragments]
+
+        subgraph pneuma_account[pneuma Unix-account boundary]
+            dispatcher[Restricted SSH dispatcher]
+            cli[Pneuma CLI]
+            sqlite[(SQLite intent and history)]
+            quadlet[Quadlet files]
+            systemd[systemd user manager]
+            podman[Rootless Podman]
+
+            subgraph container_boundary[Less-trusted rootless container boundary]
+                application[Application container]
+            end
+        end
+    end
+
+    operator -->|bootstrap, import, operate| cli
+    repository -->|source and pneuma.toml| ci
+    ci -->|publish repository:commit-sha| registry
+    ci -->|SSH deploy app revision| dispatcher
+    dispatcher -->|validated request| cli
+    cli -->|resolve branch or tag| repository
+    cli -->|resolve tag, pull digest| registry
+    cli -->|desired state, Releases, Deployments| sqlite
+    cli -->|write, reload, start| quadlet
+    quadlet -->|generated unit| systemd
+    systemd -->|supervise| podman
+    podman -->|materialize and observe| application
+    cli -->|write, validate, reload| fragments
+    fragments -->|imported configuration| caddy
+    client -->|public HTTP or HTTPS| caddy
+    caddy -->|loopback HTTP| application
+    podman -.->|observed state| cli
+    caddy -.->|route and reload observation| cli
+
+    classDef trusted fill:#dbeafe,stroke:#2563eb,color:#172554;
+    classDef external fill:#ffedd5,stroke:#ea580c,color:#7c2d12;
+    classDef untrusted fill:#fee2e2,stroke:#dc2626,color:#7f1d1d;
+    classDef workload fill:#f3e8ff,stroke:#9333ea,color:#581c87;
+    class operator,dispatcher,cli,sqlite,quadlet,systemd,podman,fragments,caddy trusted;
+    class repository,ci,registry external;
+    class client untrusted;
+    class application workload;
 ```
+
+Solid arrows represent commands, data, or materialization effects. Dashed arrows
+represent observation. Blue components are trusted host controls; orange
+components are trusted external delivery dependencies; red is untrusted public
+traffic; purple is the less-trusted Application workload.
 
 The repository supplies an import-time specification. CI publishes an image
 whose tag equals the resolved full commit SHA. Pneuma resolves that tag to an OCI

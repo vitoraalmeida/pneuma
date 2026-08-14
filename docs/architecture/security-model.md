@@ -26,30 +26,15 @@ not a claim that every deployment is secure against every threat.
 
 ## Trust Boundaries
 
-```text
-CI deploy private key
-    |
-    | SSH
-    v
------------------------------- host boundary ------------------------------
-restricted authorized_keys command -> pneuma ci dispatch -> Pneuma CLI
-                                                  |             |
-                                                  |             +-- SQLite
-                                                  |
-                                                  +-- rootless Podman / systemd
-                                                  |          |
-                                                  |          +-- application container
-                                                  |
-                                                  +-- Caddy
-                                                               |
------------------------------- public boundary ----------------------------
-                                                               |
-                                                            Internet
-```
+The [system and trust-boundary diagram](system-context.md#system-context) shows
+the external delivery, host, `pneuma` Unix-account, less-trusted container, and
+public-ingress boundaries together.
 
 Git and the OCI registry are external dependencies. SQLite, authorized keys,
 systemd configuration, Caddy configuration, and the local host administrator are
-trusted local boundaries. Root compromise defeats Pneuma's local controls.
+trusted local boundaries. Root compromise defeats Pneuma's local controls. The
+[authority map](architecture.md#authority-and-persistence) distinguishes
+persisted intent from external observation.
 
 ## Controls
 
@@ -89,5 +74,7 @@ operator-managed.
 
 - [`system-context.md`](system-context.md) states scope and non-goals.
 - [`architecture.md`](architecture.md) describes current effects and authorities.
+- [`threat-model.md`](threat-model.md) analyzes architecture-level abuse and
+  failure scenarios.
 - [`../decisions/0007-restricted-ssh-ci-interface.md`](../decisions/0007-restricted-ssh-ci-interface.md)
   explains the CI interface rationale.

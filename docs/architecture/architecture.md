@@ -17,8 +17,9 @@ specified separately in [`../design/reconciliation.md`](../design/reconciliation
 Read [`system-context.md`](system-context.md) for motivation, scope, and
 constraints; [`../decisions/`](../decisions/) for architectural rationale;
 [`data-model.md`](data-model.md) for persisted semantics; and
-[`security-model.md`](security-model.md) for trust boundaries. This document
-answers how the current implementation works.
+[`security-model.md`](security-model.md) for trust boundaries. Architecture-level
+abuse and failure scenarios are in [`threat-model.md`](threat-model.md). This
+document answers how the current implementation works.
 
 ## Overview
 
@@ -81,6 +82,37 @@ the Quadlet file uses `<base>.container`, and systemd controls `<base>.service`.
 | Caddy | Materialized public fragments, reload state, and route behavior. |
 | Git | Requested branch resolution to a fixed commit. |
 | OCI registry | Availability and digest of the requested artifact. |
+
+```mermaid
+flowchart LR
+    cli[Pneuma invocation]
+    sqlite[(SQLite)]
+    git[Git]
+    registry[OCI registry]
+    runtime[Podman and systemd]
+    caddy[Caddy]
+
+    cli -->|persist desired intent and confirmed results| sqlite
+    cli -->|resolve requested revision| git
+    cli -->|resolve digest and pull artifact| registry
+    cli -->|materialize and control| runtime
+    cli -->|materialize and control| caddy
+    runtime -.->|observe runtime state| cli
+    caddy -.->|observe route state| cli
+    cli -.->|persist confirmed observation| sqlite
+
+    classDef authority fill:#dbeafe,stroke:#2563eb,color:#172554;
+    classDef external fill:#ffedd5,stroke:#ea580c,color:#7c2d12;
+    classDef orchestrator fill:#f3e8ff,stroke:#9333ea,color:#581c87;
+    class sqlite authority;
+    class git,registry,runtime,caddy external;
+    class cli orchestrator;
+```
+
+SQLite owns desired intent, logical identity, history, and last confirmed
+results. Git, the registry, Podman/systemd, and Caddy remain authoritative for
+their external observations. Pneuma orchestrates those authorities; it is not a
+long-lived runtime authority.
 
 SQLite is bundled through rusqlite. Immutable migrations in `migrations/` are
 registered in `src/adapters/database.rs` and are applied when a connection opens
@@ -255,6 +287,62 @@ Release + Application specification
 Internal deployments promote after the internal health check. Public deployments
 also require Caddy materialization and external health. A failed candidate is
 never promoted, so the previously active runtime and public route remain in use.
+
+### Deployment Sequence
+
+```mermaid
+sequenceDiagram
+    actor Operator
+    participant CLI as Pneuma CLI
+    participant Git
+    participant Registry as OCI registry
+    participant DB as SQLite
+    participant Quadlet
+    participant Systemd as systemd user manager
+    participant Podman
+    participant Candidate as candidate loopback endpoint
+    participant Caddy
+
+    Operator->>CLI: deploy application branch or tag
+    CLI->>Git: resolve revision to full commit SHA
+    Git-->>CLI: commit SHA
+    CLI->>Registry: pull repository:commit-sha and inspect digest
+    Registry-->>CLI: digest-pinned image reference
+    CLI->>DB: create or reuse Release; create pending Deployment
+    Note over CLI,DB: Short transaction ends before external effects
+    CLI->>DB: reserve loopback port
+    CLI->>Quadlet: write candidate unit and reload
+    Quadlet->>Systemd: generated service
+    CLI->>Systemd: start candidate service
+    Systemd->>Podman: create and start container
+    Podman->>Candidate: bind reserved loopback endpoint
+    Podman-->>CLI: observe deterministic container identity
+    CLI->>DB: register RuntimeInstance
+    CLI->>Candidate: internal health against loopback endpoint
+    Candidate-->>CLI: candidate health result
+    alt Candidate health fails
+        CLI->>DB: record failed Deployment evidence
+        CLI->>Systemd: clean resources proven to belong to candidate
+        Note over CLI,Caddy: Prior active runtime and route remain unchanged
+    else Candidate health passes
+        alt Internal Application
+            CLI->>DB: promote succeeded Deployment and active runtime
+            CLI->>Systemd: best-effort retire prior runtime after promotion
+        else Public Application
+            CLI->>Caddy: write fragment, validate, and reload
+            CLI->>Caddy: external health through public route
+            Caddy-->>CLI: route health result
+            alt Route health passes
+                CLI->>DB: promote Deployment, runtime, and exposure
+                CLI->>Systemd: best-effort retire prior runtime after promotion
+            else Route health fails
+                CLI->>DB: record failed Deployment evidence
+                CLI->>Systemd: clean resources proven to belong to candidate
+                Note over CLI,Caddy: Prior active runtime and route remain unchanged
+            end
+        end
+    end
+```
 
 ### Runtime lifecycle and status
 
