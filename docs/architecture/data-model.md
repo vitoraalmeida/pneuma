@@ -25,7 +25,9 @@ erDiagram
     Deployment ||--o{ PortReservation : reserves
 ```
 
-An Application optionally belongs to one System and owns its persisted
+`system_id` remains nullable for Applications imported before Systems were
+introduced. Every newly imported Application resolves or creates exactly one
+System from `--system` or `[system].name`. An Application owns its persisted
 specification, Releases, and Deployment history. A Release is an immutable OCI
 artifact. A Deployment is one attempt to activate a Release. A RuntimeInstance
 is the persisted record of the concrete runtime created by that attempt.
@@ -52,7 +54,7 @@ It is logical identity, not a Podman container ID.
 | Field | Meaning |
 |---|---|
 | `id` | Stable application identifier. |
-| `system_id` | Optional System relationship. |
+| `system_id` | System relationship for every newly imported Application; nullable only for legacy persisted rows. |
 | `name` | Unique command-facing name. |
 | `desired_runtime_state` | Operator intent: `running` or `stopped`. |
 | `active_deployment_id` | Active successful Deployment, when one exists. |
