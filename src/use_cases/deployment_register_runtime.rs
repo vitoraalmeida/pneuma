@@ -2,23 +2,12 @@ use std::error::Error;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
+use rusqlite::{Connection, TransactionBehavior};
 
-use crate::adapters::local_runtime::ObservedRuntimeState;
 use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
 use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct CandidateRuntime {
-    pub id: String,
-    pub application_id: String,
-    pub deployment_id: String,
-    pub external_runtime_id: String,
-    pub endpoint: SocketAddr,
-    pub container_port: u16,
-    pub observed_state: ObservedRuntimeState,
-    pub observed_at: String,
-}
+use crate::domain::deployment::DeploymentStatus;
+use crate::domain::runtime::{RuntimeInstance, RuntimeRegistration};
 
 #[derive(Debug)]
 pub enum RegisterCandidateRuntimeError {
@@ -147,13 +136,15 @@ pub fn register_candidate_runtime(
     external_runtime_id: &str,
     endpoint: SocketAddr,
     container_port: u16,
-) -> Result<CandidateRuntime, RegisterCandidateRuntimeError> {
+) -> Result<RuntimeInstance, RegisterCandidateRuntimeError> {
     validate_runtime(external_runtime_id, endpoint, container_port)?;
 
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|source| RegisterCandidateRuntimeError::Persistence { source })?;
-    if let Some(existing) = load_by_external_id(&transaction, external_runtime_id)? {
+    if let Some(existing) =
+        runtime_store::load_runtime_by_external_id(&transaction, external_runtime_id)?
+    {
         if existing.deployment_id == deployment_id
             && existing.endpoint == endpoint
             && existing.container_port == container_port
@@ -168,15 +159,11 @@ pub fn register_candidate_runtime(
         });
     }
 
-    let deployment =
-        deployment_store::load_deployment_for_registration(&transaction, deployment_id)?
-            .ok_or_else(|| RegisterCandidateRuntimeError::DeploymentNotFound {
-                deployment_id: deployment_id.to_owned(),
-            })?;
-    if deployment.1 != "starting" {
+    let deployment = deployment_store::load_deployment(&transaction, deployment_id)?;
+    if deployment.status != DeploymentStatus::Starting {
         return Err(RegisterCandidateRuntimeError::InvalidDeploymentState {
             deployment_id: deployment_id.to_owned(),
-            actual: deployment.1,
+            actual: deployment.status.database_value().to_owned(),
         });
     }
 
@@ -187,23 +174,20 @@ pub fn register_candidate_runtime(
     }
 
     let runtime_id = runtime_store::generate_id(&transaction)?;
-    runtime_store::insert_runtime(
-        &transaction,
-        &runtime_id,
-        &deployment.0,
-        deployment_id,
-        external_runtime_id,
-        "starting",
-        "127.0.0.1",
-        endpoint.port(),
+    let registration = RuntimeRegistration {
+        id: runtime_id,
+        application_id: deployment.application_id,
+        deployment_id: deployment.id,
+        external_runtime_id: external_runtime_id.to_owned(),
+        endpoint,
         container_port,
-    )?;
+    };
+    runtime_store::insert_runtime(&transaction, &registration)?;
 
-    let runtime = load_by_external_id(&transaction, external_runtime_id)?.ok_or_else(|| {
-        RegisterCandidateRuntimeError::Persistence {
+    let runtime = runtime_store::load_runtime_by_external_id(&transaction, external_runtime_id)?
+        .ok_or_else(|| RegisterCandidateRuntimeError::Persistence {
             source: rusqlite::Error::QueryReturnedNoRows,
-        }
-    })?;
+        })?;
     transaction
         .commit()
         .map_err(|source| RegisterCandidateRuntimeError::Persistence { source })?;
@@ -231,39 +215,4 @@ fn validate_runtime(
     }
 
     Ok(())
-}
-
-fn load_by_external_id(
-    connection: &Connection,
-    external_runtime_id: &str,
-) -> Result<Option<CandidateRuntime>, RegisterCandidateRuntimeError> {
-    connection
-        .query_row(
-            "SELECT
-                id,
-                application_id,
-                deployment_id,
-                external_runtime_id,
-                host_port,
-                container_port,
-                last_observed_at
-             FROM runtime_instances
-             WHERE external_runtime_id = ?1",
-            [external_runtime_id],
-            |row| {
-                let host_port = row.get::<_, u16>(4)?;
-                Ok(CandidateRuntime {
-                    id: row.get(0)?,
-                    application_id: row.get(1)?,
-                    deployment_id: row.get(2)?,
-                    external_runtime_id: row.get(3)?,
-                    endpoint: SocketAddr::from((Ipv4Addr::LOCALHOST, host_port)),
-                    container_port: row.get(5)?,
-                    observed_state: ObservedRuntimeState::Running,
-                    observed_at: row.get(6)?,
-                })
-            },
-        )
-        .optional()
-        .map_err(|source| RegisterCandidateRuntimeError::Persistence { source })
 }

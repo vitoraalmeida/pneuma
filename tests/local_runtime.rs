@@ -8,9 +8,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use pneuma::adapters::health_check_internal::{HealthCheckResult, check_internal_health};
 use pneuma::adapters::local_runtime::{
-    ControlContainerError, CreateContainerError, ObservedRuntimeState, create_container,
-    observe_container, start_container, stop_container,
+    ControlContainerError, CreateContainerError, create_container, observe_container,
+    start_container, stop_container,
 };
+use pneuma::domain::runtime::ObservedRuntimeState;
 
 #[test]
 fn creates_a_container_without_a_stray_label_flag() {
@@ -213,7 +214,7 @@ fn main() {
 
     assert_eq!(
         observe_container(&container.id, 8080).unwrap(),
-        pneuma::adapters::local_runtime::ContainerObservation {
+        pneuma::domain::runtime::ContainerObservation {
             state: ObservedRuntimeState::Created,
             endpoint: None,
         }
@@ -240,7 +241,7 @@ fn main() {
     stop_container(&container.id).unwrap();
     assert_eq!(
         observe_container(&container.id, 8080).unwrap(),
-        pneuma::adapters::local_runtime::ContainerObservation {
+        pneuma::domain::runtime::ContainerObservation {
             state: ObservedRuntimeState::Stopped,
             endpoint: None,
         }
@@ -250,7 +251,7 @@ fn main() {
     container.remove();
     assert_eq!(
         observe_container(&container_id, 8080).unwrap(),
-        pneuma::adapters::local_runtime::ContainerObservation {
+        pneuma::domain::runtime::ContainerObservation {
             state: ObservedRuntimeState::Missing,
             endpoint: None,
         }

@@ -1,10 +1,14 @@
 use std::error::Error;
 use std::fmt;
+use std::io;
+use std::net::{Ipv4Addr, SocketAddr};
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
-use crate::adapters::local_runtime::{ContainerObservation, ObservedRuntimeState};
-use crate::domain::runtime::DesiredRuntimeState;
+use crate::domain::runtime::{
+    ContainerObservation, DesiredRuntimeState, ObservedRuntimeState, PreviousRuntime,
+    RuntimeInstance, RuntimeRegistration, RuntimeState,
+};
 
 #[derive(Debug)]
 pub enum RuntimeStoreError {
@@ -45,14 +49,6 @@ impl Error for RuntimeStoreError {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct CurrentSuccessfulRuntime {
-    pub runtime_id: String,
-    pub external_runtime_id: String,
-    pub deployment_id: String,
-    pub container_port: u16,
-}
-
 pub fn generate_id(connection: &Connection) -> Result<String, RuntimeStoreError> {
     connection
         .query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))
@@ -74,17 +70,9 @@ pub fn port_is_reserved(
         .map_err(|source| RuntimeStoreError::Persistence { source })
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn insert_runtime(
     transaction: &Transaction<'_>,
-    id: &str,
-    application_id: &str,
-    deployment_id: &str,
-    external_runtime_id: &str,
-    state: &str,
-    host_address: &str,
-    host_port: u16,
-    container_port: u16,
+    registration: &RuntimeRegistration,
 ) -> Result<(), RuntimeStoreError> {
     transaction
         .execute(
@@ -94,14 +82,14 @@ pub fn insert_runtime(
                 last_observed_state, last_observed_at, created_at, updated_at
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'running', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
             params![
-                id,
-                application_id,
-                deployment_id,
-                external_runtime_id,
-                state,
-                host_address,
-                host_port,
-                container_port
+                registration.id,
+                registration.application_id,
+                registration.deployment_id,
+                registration.external_runtime_id,
+                RuntimeState::Starting.database_value(),
+                registration.endpoint.ip().to_string(),
+                registration.endpoint.port(),
+                registration.container_port
             ],
         )
         .map_err(|source| RuntimeStoreError::Persistence { source })?;
@@ -111,14 +99,23 @@ pub fn insert_runtime(
 pub fn load_current_successful_runtime(
     connection: &Connection,
     application_id: &str,
-) -> Result<Option<CurrentSuccessfulRuntime>, RuntimeStoreError> {
+) -> Result<Option<RuntimeInstance>, RuntimeStoreError> {
     connection
         .query_row(
             "SELECT
                 runtime_instances.id,
-                runtime_instances.external_runtime_id,
+                runtime_instances.application_id,
                 runtime_instances.deployment_id,
-                runtime_instances.container_port
+                runtime_instances.external_runtime_id,
+                runtime_instances.state,
+                runtime_instances.host_address,
+                runtime_instances.host_port,
+                runtime_instances.container_port,
+                runtime_instances.last_observed_state,
+                runtime_instances.last_observed_at,
+                runtime_instances.exit_code,
+                runtime_instances.observation_reason,
+                runtime_instances.removed_at
              FROM runtime_instances
              JOIN applications
                 ON applications.active_deployment_id = runtime_instances.deployment_id
@@ -128,14 +125,7 @@ pub fn load_current_successful_runtime(
                AND runtime_instances.removed_at IS NULL
                AND deployments.status = 'succeeded'",
             [application_id],
-            |row| {
-                Ok(CurrentSuccessfulRuntime {
-                    runtime_id: row.get(0)?,
-                    external_runtime_id: row.get(1)?,
-                    deployment_id: row.get(2)?,
-                    container_port: row.get(3)?,
-                })
-            },
+            map_runtime_instance,
         )
         .optional()
         .map_err(|source| RuntimeStoreError::Persistence { source })
@@ -169,7 +159,7 @@ pub fn persist_observation(
     runtime_id: &str,
     observation: &ContainerObservation,
 ) -> Result<bool, RuntimeStoreError> {
-    let state = observed_state_database_value(&observation.state);
+    let state = observation.state.persisted_value();
     let updated = if let Some(endpoint) = observation.endpoint {
         connection.execute(
             "UPDATE runtime_instances
@@ -234,19 +224,6 @@ pub fn compare_and_set_desired_runtime_state(
     Ok(updated == 1)
 }
 
-fn observed_state_database_value(state: &ObservedRuntimeState) -> &'static str {
-    match state {
-        ObservedRuntimeState::Missing => "missing",
-        ObservedRuntimeState::Created => "created",
-        ObservedRuntimeState::Starting => "starting",
-        ObservedRuntimeState::Running => "running",
-        ObservedRuntimeState::Stopping => "stopping",
-        ObservedRuntimeState::Stopped => "stopped",
-        ObservedRuntimeState::Failed => "failed",
-        ObservedRuntimeState::Unknown { .. } => "unknown",
-    }
-}
-
 pub fn start_runtime(
     transaction: &Transaction<'_>,
     runtime_id: &str,
@@ -280,7 +257,7 @@ pub fn load_previous_runtime(
     connection: &Connection,
     application_id: &str,
     candidate_runtime_id: &str,
-) -> Result<Option<(String, String, String)>, RuntimeStoreError> {
+) -> Result<Option<PreviousRuntime>, RuntimeStoreError> {
     connection
         .query_row(
             "SELECT id, deployment_id, external_runtime_id
@@ -290,7 +267,31 @@ pub fn load_previous_runtime(
                AND removed_at IS NULL
                AND id != ?2",
             [application_id, candidate_runtime_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| {
+                Ok(PreviousRuntime {
+                    runtime_id: row.get(0)?,
+                    deployment_id: row.get(1)?,
+                    external_runtime_id: row.get(2)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|source| RuntimeStoreError::Persistence { source })
+}
+
+pub fn load_runtime_by_external_id(
+    connection: &Connection,
+    external_runtime_id: &str,
+) -> Result<Option<RuntimeInstance>, RuntimeStoreError> {
+    connection
+        .query_row(
+            "SELECT id, application_id, deployment_id, external_runtime_id,
+                    state, host_address, host_port, container_port,
+                    last_observed_state, last_observed_at, exit_code,
+                    observation_reason, removed_at
+             FROM runtime_instances WHERE external_runtime_id = ?1",
+            [external_runtime_id],
+            map_runtime_instance,
         )
         .optional()
         .map_err(|source| RuntimeStoreError::Persistence { source })
@@ -360,4 +361,41 @@ pub fn stop_runtime(
         )
         .map_err(|source| RuntimeStoreError::Persistence { source })?;
     Ok(())
+}
+
+fn map_runtime_instance(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeInstance> {
+    let state_text = row.get::<_, String>(4)?;
+    let state = RuntimeState::from_database(&state_text)
+        .ok_or_else(|| invalid_text_value(4, "runtime state", &state_text))?;
+    let host_address = row.get::<_, String>(5)?;
+    if host_address != Ipv4Addr::LOCALHOST.to_string() {
+        return Err(invalid_text_value(5, "runtime host address", &host_address));
+    }
+    let observed_state_text = row.get::<_, String>(8)?;
+
+    Ok(RuntimeInstance {
+        id: row.get(0)?,
+        application_id: row.get(1)?,
+        deployment_id: row.get(2)?,
+        external_runtime_id: row.get(3)?,
+        state,
+        endpoint: SocketAddr::from((Ipv4Addr::LOCALHOST, row.get::<_, u16>(6)?)),
+        container_port: row.get(7)?,
+        observed_state: ObservedRuntimeState::from_database(&observed_state_text),
+        observed_at: row.get(9)?,
+        exit_code: row.get(10)?,
+        observation_reason: row.get(11)?,
+        removed_at: row.get(12)?,
+    })
+}
+
+fn invalid_text_value(column: usize, field: &str, value: &str) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(
+        column,
+        rusqlite::types::Type::Text,
+        Box::new(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid {field}: {value}"),
+        )),
+    )
 }

@@ -578,23 +578,6 @@ pub fn record_exposure_change_failure(
     Ok(updated == 1)
 }
 
-pub fn load_active_runtime_for_exposure(
-    connection: &Connection,
-    application_id: &str,
-) -> Result<Option<(String, String, u16)>, ApplicationStoreError> {
-    connection
-        .query_row(
-            "SELECT ri.id, ri.external_runtime_id, ri.container_port
-             FROM runtime_instances ri
-             JOIN applications a ON a.active_deployment_id = ri.deployment_id
-             WHERE a.id = ?1 AND ri.state = 'running' AND ri.removed_at IS NULL",
-            [application_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .optional()
-        .map_err(|source| ApplicationStoreError::Persistence { source })
-}
-
 pub fn load_deployment_specification(
     connection: &Connection,
     application_id: &str,

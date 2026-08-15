@@ -1,3 +1,66 @@
+use std::net::SocketAddr;
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ObservedRuntimeState {
+    Missing,
+    Created,
+    Starting,
+    Running,
+    Stopping,
+    Stopped,
+    Failed,
+    Unknown { status: String },
+}
+
+impl ObservedRuntimeState {
+    pub fn database_value(&self) -> &str {
+        match self {
+            Self::Missing => "missing",
+            Self::Created => "created",
+            Self::Starting => "starting",
+            Self::Running => "running",
+            Self::Stopping => "stopping",
+            Self::Stopped => "stopped",
+            Self::Failed => "failed",
+            Self::Unknown { status } => status,
+        }
+    }
+
+    pub fn from_database(value: &str) -> Self {
+        match value {
+            "missing" => Self::Missing,
+            "created" => Self::Created,
+            "starting" => Self::Starting,
+            "running" => Self::Running,
+            "stopping" => Self::Stopping,
+            "stopped" => Self::Stopped,
+            "failed" => Self::Failed,
+            status => Self::Unknown {
+                status: status.to_owned(),
+            },
+        }
+    }
+
+    pub(crate) fn persisted_value(&self) -> &'static str {
+        match self {
+            Self::Missing => "missing",
+            Self::Created => "created",
+            Self::Starting => "starting",
+            Self::Running => "running",
+            Self::Stopping => "stopping",
+            Self::Stopped => "stopped",
+            Self::Failed => "failed",
+            Self::Unknown { .. } => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct ContainerObservation {
+    pub state: ObservedRuntimeState,
+    pub endpoint: Option<SocketAddr>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RuntimeState {
     Starting,
@@ -5,6 +68,39 @@ pub enum RuntimeState {
     Stopped,
     Failed,
     Removed,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct RuntimeInstance {
+    pub id: String,
+    pub application_id: String,
+    pub deployment_id: String,
+    pub external_runtime_id: String,
+    pub state: RuntimeState,
+    pub endpoint: SocketAddr,
+    pub container_port: u16,
+    pub observed_state: ObservedRuntimeState,
+    pub observed_at: String,
+    pub exit_code: Option<i32>,
+    pub observation_reason: Option<String>,
+    pub removed_at: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct RuntimeRegistration {
+    pub id: String,
+    pub application_id: String,
+    pub deployment_id: String,
+    pub external_runtime_id: String,
+    pub endpoint: SocketAddr,
+    pub container_port: u16,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct PreviousRuntime {
+    pub runtime_id: String,
+    pub deployment_id: String,
+    pub external_runtime_id: String,
 }
 
 impl RuntimeState {

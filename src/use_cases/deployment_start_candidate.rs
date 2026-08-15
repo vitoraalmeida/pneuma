@@ -3,21 +3,20 @@ use std::fmt;
 
 use rusqlite::Connection;
 
-use crate::adapters::local_runtime::{
-    ObservedRuntimeState, observe_container, resolve_container_id,
-};
+use crate::adapters::local_runtime::{observe_container, resolve_container_id};
 use crate::adapters::port_allocator::{consume_port_reservation, reserve_port};
 use crate::adapters::systemd_quadlet::{
     QuadletError, container_name, daemon_reload, start, write_unit,
 };
-use crate::use_cases::deployment_register_runtime::{CandidateRuntime, register_candidate_runtime};
+use crate::domain::runtime::{ObservedRuntimeState, RuntimeInstance};
+use crate::use_cases::deployment_register_runtime::register_candidate_runtime;
 use crate::use_cases::deployment_runtime_cleanup::CandidateResources;
 use crate::use_cases::deployment_transition::{
     DeploymentTransition, TransitionDeploymentError, advance_deployment,
 };
 
 pub(crate) struct StartedCandidate {
-    pub runtime: CandidateRuntime,
+    pub runtime: RuntimeInstance,
     pub container_name: String,
     pub unit_name: String,
     pub port: u16,

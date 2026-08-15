@@ -10,18 +10,18 @@ use crate::adapters::caddy_exposure::{
 };
 use crate::adapters::health_check_external::check_external_health;
 use crate::adapters::health_check_internal::{HealthCheckResult, check_internal_health};
+use crate::domain::runtime::RuntimeInstance;
 use crate::use_cases::deployment_progress::{DeploymentStep, ProgressReporter};
 use crate::use_cases::deployment_promote_public::{
     ExposureOutcome, PromotePublicCandidateError, begin_public_exposure, promote_public_candidate,
     record_public_exposure_failure,
 };
-use crate::use_cases::deployment_register_runtime::CandidateRuntime;
 use crate::use_cases::deployment_runtime_cleanup::CandidateResources;
 use crate::use_cases::deployment_transition::{DeploymentTransition, advance_deployment};
 
 pub(crate) struct PublicActivationInput<'a> {
     pub connection: &'a mut Connection,
-    pub runtime: &'a CandidateRuntime,
+    pub runtime: &'a RuntimeInstance,
     pub application_id: &'a str,
     pub health_path: &'a str,
     pub expected_status: u16,

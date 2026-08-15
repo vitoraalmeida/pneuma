@@ -119,6 +119,9 @@ creates a new Deployment with type `rollback`; it does not rewrite prior history
 The runtime is externally controlled through a deterministic Quadlet/container
 name, `pneuma-<application>-<deployment-id>.container`. The Podman container ID
 may change when Quadlet recreates the container; it is not the logical identity.
+The domain `RuntimeInstance` carries this logical identity, endpoint, lifecycle
+state, last typed external observation, diagnostics, and retirement evidence;
+Podman observation remains authoritative for current external state.
 
 ## Application Specification
 

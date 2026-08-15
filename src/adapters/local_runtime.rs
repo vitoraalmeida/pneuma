@@ -4,6 +4,8 @@ use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::process::Command;
 
+use crate::domain::runtime::{ContainerObservation, ObservedRuntimeState};
+
 const APPLICATION_LABEL: &str = "io.pneuma.application";
 const REVISION_LABEL: &str = "io.pneuma.revision";
 
@@ -19,54 +21,6 @@ pub struct CreatedContainer {
 pub struct ContainerCommandOutput {
     pub stdout: String,
     pub stderr: String,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum ObservedRuntimeState {
-    Missing,
-    Created,
-    Starting,
-    Running,
-    Stopping,
-    Stopped,
-    Failed,
-    Unknown { status: String },
-}
-
-impl ObservedRuntimeState {
-    pub fn database_value(&self) -> &str {
-        match self {
-            Self::Missing => "missing",
-            Self::Created => "created",
-            Self::Starting => "starting",
-            Self::Running => "running",
-            Self::Stopping => "stopping",
-            Self::Stopped => "stopped",
-            Self::Failed => "failed",
-            Self::Unknown { status } => status,
-        }
-    }
-
-    pub fn from_database(value: &str) -> Self {
-        match value {
-            "missing" => Self::Missing,
-            "created" => Self::Created,
-            "starting" => Self::Starting,
-            "running" => Self::Running,
-            "stopping" => Self::Stopping,
-            "stopped" => Self::Stopped,
-            "failed" => Self::Failed,
-            status => Self::Unknown {
-                status: status.to_owned(),
-            },
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct ContainerObservation {
-    pub state: ObservedRuntimeState,
-    pub endpoint: Option<SocketAddr>,
 }
 
 #[derive(Debug)]

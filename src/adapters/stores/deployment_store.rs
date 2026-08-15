@@ -200,20 +200,6 @@ pub fn load_status(
     })
 }
 
-pub fn load_deployment_for_registration(
-    connection: &Connection,
-    deployment_id: &str,
-) -> Result<Option<(String, String)>, DeploymentStoreError> {
-    connection
-        .query_row(
-            "SELECT application_id, status FROM deployments WHERE id = ?1",
-            [deployment_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-        )
-        .optional()
-        .map_err(|source| DeploymentStoreError::Persistence { source })
-}
-
 pub fn advance_status(
     connection: &Connection,
     deployment_id: &str,

@@ -7,13 +7,12 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
 use crate::adapters::health_check_internal::{
     HealthCheckError, HealthCheckFailure, HealthCheckResult, check_internal_health,
 };
-use crate::adapters::local_runtime::ObservedRuntimeState;
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
 use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
 use crate::domain::deployment::DeploymentStatus;
 use crate::domain::exposure::Visibility;
-use crate::domain::runtime::RuntimeState;
+use crate::domain::runtime::{ObservedRuntimeState, RuntimeState};
 use crate::use_cases::deployment_transition::{TransitionDeploymentError, fail_deployment};
 
 #[derive(Debug, PartialEq, Eq)]

@@ -7,6 +7,7 @@ use crate::adapters::local_runtime::{ControlContainerError, remove_container};
 use crate::adapters::port_allocator::{PortAllocationError, release_port};
 use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
 use crate::adapters::systemd_quadlet::{QuadletError, daemon_reload, remove_unit, stop, unit_name};
+use crate::domain::runtime::PreviousRuntime;
 
 #[derive(Debug, Clone)]
 pub(crate) struct CandidateResources {
@@ -100,31 +101,17 @@ impl Error for CandidateCleanupError {
     }
 }
 
-pub(crate) struct PreviousRuntime {
-    pub runtime_id: String,
-    pub deployment_id: String,
-    pub external_runtime_id: String,
-}
-
 pub(crate) fn load_previous_runtime(
     connection: &Connection,
     application_id: &str,
     candidate_runtime_id: &str,
 ) -> Result<Option<PreviousRuntime>, rusqlite::Error> {
-    runtime_store::load_previous_runtime(connection, application_id, candidate_runtime_id)
-        .map(|opt| {
-            opt.map(
-                |(runtime_id, deployment_id, external_runtime_id)| PreviousRuntime {
-                    runtime_id,
-                    deployment_id,
-                    external_runtime_id,
-                },
-            )
-        })
-        .map_err(|e| match e {
+    runtime_store::load_previous_runtime(connection, application_id, candidate_runtime_id).map_err(
+        |e| match e {
             RuntimeStoreError::Persistence { source } => source,
             _ => rusqlite::Error::QueryReturnedNoRows,
-        })
+        },
+    )
 }
 
 pub(crate) fn retire_previous_runtime(

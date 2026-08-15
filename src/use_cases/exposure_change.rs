@@ -10,11 +10,11 @@ use crate::adapters::caddy_exposure::{
     restore_removed_caddy_fragment,
 };
 use crate::adapters::health_check_external::{ExternalHealthCheckError, check_external_health};
-use crate::adapters::local_runtime::{
-    ContainerObservation, ObserveContainerError, ObservedRuntimeState, observe_container,
-};
+use crate::adapters::local_runtime::{ObserveContainerError, observe_container};
 use crate::adapters::stores::application_store::{self, ApplicationStoreError, ExposureStoreError};
+use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
 use crate::domain::exposure::{Exposure, ExposureMaterializationState, Visibility};
+use crate::domain::runtime::{ContainerObservation, ObservedRuntimeState};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct ExposureChange {
@@ -45,6 +45,9 @@ pub enum ExposureChangeError {
     },
     Store {
         source: ApplicationStoreError,
+    },
+    RuntimeStore {
+        source: RuntimeStoreError,
     },
     ObserveFailed {
         source: ObserveContainerError,
@@ -99,6 +102,9 @@ impl fmt::Display for ExposureChangeError {
                 )
             }
             Self::Store { source } => write!(formatter, "failed to change exposure: {source}"),
+            Self::RuntimeStore { source } => {
+                write!(formatter, "failed to change exposure: {source}")
+            }
             Self::ObserveFailed { source } => {
                 write!(formatter, "failed to observe runtime: {source}")
             }
@@ -125,6 +131,7 @@ impl Error for ExposureChangeError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Store { source } => Some(source),
+            Self::RuntimeStore { source } => Some(source),
             Self::ObserveFailed { source } => Some(source),
             Self::MaterializeFailed { source } => Some(source),
             Self::RemoveFragmentFailed { source } => Some(source),
@@ -250,9 +257,8 @@ fn make_public(
             );
         }
     };
-    let Some((runtime_id, container_name, container_port)) =
-        application_store::load_active_runtime_for_exposure(connection, application_id)
-            .map_err(|source| ExposureChangeError::Store { source })?
+    let Some(runtime) = runtime_store::load_current_successful_runtime(connection, application_id)
+        .map_err(|source| ExposureChangeError::RuntimeStore { source })?
     else {
         return fail_public(
             connection,
@@ -265,7 +271,8 @@ fn make_public(
             },
         );
     };
-    let observation = match observe_container(&container_name, container_port) {
+    let observation = match observe_container(&runtime.external_runtime_id, runtime.container_port)
+    {
         Ok(observation) => observation,
         Err(source) => {
             let message = source.to_string();
@@ -336,7 +343,7 @@ fn make_public(
     let completion = application_store::complete_public_exposure_change(
         &transaction,
         application_id,
-        &runtime_id,
+        &runtime.id,
         &configuration_version,
     );
     let completed = match completion {

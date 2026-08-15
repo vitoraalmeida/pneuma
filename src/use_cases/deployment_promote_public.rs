@@ -3,10 +3,9 @@ use std::fmt;
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
-use crate::adapters::local_runtime::ObservedRuntimeState;
 use crate::domain::deployment::DeploymentStatus;
 use crate::domain::exposure::{ExposureMaterializationState, Visibility};
-use crate::domain::runtime::RuntimeState;
+use crate::domain::runtime::{ObservedRuntimeState, RuntimeState};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct PublicExposureTarget {

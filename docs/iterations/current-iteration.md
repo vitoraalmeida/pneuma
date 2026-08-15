@@ -29,9 +29,11 @@ without selecting a new Release or making destructive changes from ambiguity.
   mapping persisted values in the store.
   Result: Exposure now carries persisted intent, route state, runtime identity,
   configuration version, and diagnostics; the store rejects invalid state text.
-- [ ] Establish RuntimeInstance and runtime observation as domain concepts,
+- [x] Establish RuntimeInstance and runtime observation as domain concepts,
   replace runtime tuples and use-case-local runtime entities, and hydrate the
   persisted observed state instead of inventing `Running` on reload.
+  Result: runtime registration, lifecycle, cleanup, and exposure share typed
+  RuntimeInstance and observation models mapped by the runtime store.
 - [ ] Represent immutable OCI artifact identity as one validated value during
   Release creation, and remove invented identifiers from Release error mapping.
 - [ ] Convert `reconciliation-e2e.md` into an executable reconciliation test

@@ -2,8 +2,8 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use pneuma::adapters::database;
-use pneuma::adapters::local_runtime::ObservedRuntimeState;
 use pneuma::domain::deployment::DeploymentType;
+use pneuma::domain::runtime::{ObservedRuntimeState, RuntimeState};
 use pneuma::use_cases::application_import::import_application;
 use pneuma::use_cases::deployment_create::create_deployment;
 use pneuma::use_cases::deployment_register_runtime::{
@@ -32,6 +32,7 @@ fn persists_a_running_candidate_linked_to_its_deployment() {
     assert_eq!(runtime.external_runtime_id, external_runtime_id);
     assert_eq!(runtime.endpoint, endpoint);
     assert_eq!(runtime.container_port, 8080);
+    assert_eq!(runtime.state, RuntimeState::Starting);
     assert_eq!(runtime.observed_state, ObservedRuntimeState::Running);
     assert!(!runtime.observed_at.is_empty());
     let state: String = connection
@@ -150,6 +151,14 @@ fn identical_retry_is_idempotent_but_conflicting_reuse_is_rejected() {
         8080,
     )
     .unwrap();
+    connection
+        .execute(
+            "UPDATE runtime_instances
+             SET last_observed_state = 'stopped'
+             WHERE external_runtime_id = ?1",
+            [&external_runtime_id],
+        )
+        .unwrap();
 
     let identical = register_candidate_runtime(
         &mut connection,
@@ -176,7 +185,8 @@ fn identical_retry_is_idempotent_but_conflicting_reuse_is_rejected() {
     )
     .unwrap_err();
 
-    assert_eq!(identical, runtime);
+    assert_eq!(identical.id, runtime.id);
+    assert_eq!(identical.observed_state, ObservedRuntimeState::Stopped);
     assert!(matches!(
         conflicting_endpoint,
         RegisterCandidateRuntimeError::EndpointConflict { endpoint }
