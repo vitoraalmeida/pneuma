@@ -51,6 +51,7 @@ impl fmt::Display for CiDispatchError {
 
 impl Error for CiDispatchError {}
 
+// Restricts application identifiers to the safe syntax accepted by the dispatcher.
 fn is_valid_application_name(name: &str) -> bool {
     !name.is_empty()
         && name
@@ -58,6 +59,7 @@ fn is_valid_application_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
 }
 
+// Rejects shell metacharacters because branch names cross the SSH command boundary.
 fn is_valid_branch_name(name: &str) -> bool {
     if name.is_empty() {
         return false;
@@ -69,6 +71,7 @@ fn is_valid_branch_name(name: &str) -> bool {
     !name.chars().any(|c| shell_metacharacters.contains(&c))
 }
 
+// Parses the small SSH command protocol and validates every value before deployment dispatch.
 pub fn parse_ci_command(input: &str) -> Result<CiCommand, CiDispatchError> {
     let input = input.trim();
     if input.is_empty() {

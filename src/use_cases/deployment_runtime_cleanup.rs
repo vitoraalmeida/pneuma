@@ -10,6 +10,7 @@ use crate::adapters::systemd_quadlet::{QuadletError, daemon_reload, remove_unit,
 use crate::domain::runtime::PreviousRuntime;
 
 #[derive(Debug, Clone)]
+// Tracks only resources proven to belong to a candidate for safe compensation.
 pub(crate) struct CandidateResources {
     pub unit_name: Option<String>,
     pub container_id: Option<String>,
@@ -18,6 +19,7 @@ pub(crate) struct CandidateResources {
 }
 
 impl CandidateResources {
+    // Starts an empty resource record before candidate effects begin.
     pub(crate) fn empty() -> Self {
         Self {
             unit_name: None,
@@ -27,6 +29,7 @@ impl CandidateResources {
         }
     }
 
+    // Records a resolved container when no persisted runtime exists yet.
     pub(crate) fn with_container(container_id: &str) -> Self {
         Self {
             container_id: Some(container_id.to_owned()),
@@ -34,6 +37,7 @@ impl CandidateResources {
         }
     }
 
+    // Records a resolved container and its registered runtime for later cleanup.
     pub(crate) fn with_container_and_runtime(container_id: &str, runtime_id: &str) -> Self {
         Self {
             container_id: Some(container_id.to_owned()),
@@ -42,21 +46,25 @@ impl CandidateResources {
         }
     }
 
+    // Adds the generated unit whose removal is safe during compensation.
     pub(crate) fn with_unit(mut self, unit_name: &str) -> Self {
         self.unit_name = Some(unit_name.to_owned());
         self
     }
 
+    // Marks that the deployment owns a port reservation that cleanup must release.
     pub(crate) fn with_port(mut self) -> Self {
         self.port_reserved = true;
         self
     }
 
+    // Updates the tracked container after the runtime is resolved.
     pub(crate) fn with_container_mut(mut self, container_id: &str) -> Self {
         self.container_id = Some(container_id.to_owned());
         self
     }
 
+    // Updates the tracked runtime after registration succeeds.
     pub(crate) fn with_runtime_mut(mut self, runtime_id: &str) -> Self {
         self.runtime_id = Some(runtime_id.to_owned());
         self
@@ -101,6 +109,7 @@ impl Error for CandidateCleanupError {
     }
 }
 
+// Loads the predecessor retained during candidate activation for post-promotion retirement.
 pub(crate) fn load_previous_runtime(
     connection: &Connection,
     application_id: &str,
@@ -114,6 +123,7 @@ pub(crate) fn load_previous_runtime(
     )
 }
 
+// Retires the prior runtime only after promotion; failures remain warnings and do not undo it.
 pub(crate) fn retire_previous_runtime(
     connection: &Connection,
     application_name: &str,
@@ -153,6 +163,7 @@ pub(crate) fn retire_previous_runtime(
     }
 }
 
+// Compensates failed candidates while refusing to remove a runtime that may already be active.
 pub(crate) fn cleanup_failed_candidate(
     connection: &Connection,
     deployment_id: &str,

@@ -68,6 +68,7 @@ impl Error for CreateDeploymentError {
     }
 }
 
+// Creates a deployment without source provenance for callers that deploy an existing release.
 pub fn create_deployment(
     connection: &mut Connection,
     application_id: &str,
@@ -83,6 +84,8 @@ pub fn create_deployment(
     )
 }
 
+// Atomically verifies deployment preconditions and records one pending deployment, preventing
+// concurrent active deployments for the same application.
 pub fn create_deployment_with_source_revision(
     connection: &mut Connection,
     application_id: &str,

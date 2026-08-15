@@ -38,6 +38,11 @@ without selecting a new Release or making destructive changes from ambiguity.
   Release creation, and remove invented identifiers from Release error mapping.
   Result: Release owns a validated OciArtifact, stores reject inconsistent
   persisted artifact parts, and errors preserve real identifiers and sources.
+- [x] Add concise reading comments to production structs and functions before
+  reconciliation work. Explain responsibility, relevant constraints, and
+  non-obvious mechanisms without changing behavior or annotating tests.
+  Result: production structs and operational functions now describe their role,
+  transaction or external-effect boundaries, and critical invariants.
 - [ ] Convert `reconciliation-e2e.md` into an executable reconciliation test
   plan before implementation: assign every scenario to a focused Rust test or
   disposable-VM E2E case, define fixtures, fault injection, persisted-state and

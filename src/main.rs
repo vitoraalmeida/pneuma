@@ -48,6 +48,7 @@ const DEFAULT_CADDYFILE_PATH: &str = "/etc/caddy/Caddyfile";
     version,
     about = "Single-host container deployment CLI"
 )]
+// Captures Clap's public syntax before it is translated into internal commands.
 struct Cli {
     #[arg(long, global = true)]
     verbose: bool,
@@ -244,6 +245,7 @@ impl From<Commands> for Command {
     }
 }
 
+// Keeps global CLI settings alongside the normalized command for dispatch.
 struct Invocation {
     verbose: bool,
     command: Command,
@@ -430,6 +432,7 @@ impl Error for CliError {
 
 const HOST_ENVIRONMENT_FILE: &str = "/etc/pneuma/environment";
 
+// Loads host defaults without overriding explicit environment supplied by the caller.
 fn load_host_environment() {
     let content = match fs::read_to_string(HOST_ENVIRONMENT_FILE) {
         Ok(c) => c,
@@ -452,6 +455,7 @@ fn load_host_environment() {
     }
 }
 
+// Initializes process-wide environment before parsing and dispatching the CLI request.
 fn main() -> ExitCode {
     load_host_environment();
     configure_runtime_environment();
@@ -472,6 +476,7 @@ fn main() -> ExitCode {
     }
 }
 
+// Routes commands so diagnostics, backup, restore, and SSH CI avoid unnecessary database work.
 fn run(invocation: Invocation) -> Result<(), CliError> {
     let Invocation { verbose, command } = invocation;
 
@@ -592,12 +597,14 @@ fn run(invocation: Invocation) -> Result<(), CliError> {
     }
 }
 
+// Emits operational detail only when the global verbose flag is enabled.
 fn log_verbose(verbose: bool, message: impl std::fmt::Display) {
     if verbose {
         eprintln!("[verbose] {message}");
     }
 }
 
+// Clones only remote repositories into an isolated checkout, then always attempts cleanup.
 fn run_import(
     connection: &mut rusqlite::Connection,
     verbose: bool,
@@ -641,6 +648,7 @@ fn run_import(
     Ok(())
 }
 
+// Avoids import-checkout collisions between concurrent CLI processes.
 fn unique_suffix() -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -649,6 +657,7 @@ fn unique_suffix() -> String {
     format!("{}-{nanos}", std::process::id())
 }
 
+// Adapts system creation results and errors to the CLI's output contract.
 fn run_system_create(
     connection: &mut rusqlite::Connection,
     verbose: bool,
@@ -662,6 +671,7 @@ fn run_system_create(
     Ok(())
 }
 
+// Renders registered systems without adding CLI-layer filtering.
 fn run_system_list(connection: &rusqlite::Connection, verbose: bool) -> Result<(), CliError> {
     log_verbose(verbose, "list registered systems");
     let systems = list_systems(connection).map_err(|source| CliError::SystemList { source })?;
@@ -671,6 +681,7 @@ fn run_system_list(connection: &rusqlite::Connection, verbose: bool) -> Result<(
     Ok(())
 }
 
+// Renders the system detail view returned by the use case.
 fn run_system_show(
     connection: &rusqlite::Connection,
     verbose: bool,
@@ -694,6 +705,7 @@ fn run_system_show(
     Ok(())
 }
 
+// Reports each registered application's persisted deployment state.
 fn run_list(connection: &rusqlite::Connection, verbose: bool) -> Result<(), CliError> {
     log_verbose(verbose, "list registered applications");
     let applications = list_applications(connection).map_err(|source| CliError::List { source })?;
@@ -711,6 +723,7 @@ fn run_list(connection: &rusqlite::Connection, verbose: bool) -> Result<(), CliE
     Ok(())
 }
 
+// Resolves the named application before listing only its deployment history.
 fn run_deployments(
     connection: &rusqlite::Connection,
     verbose: bool,
@@ -747,6 +760,7 @@ fn run_deployments(
     Ok(())
 }
 
+// Queries runtime status through the use case, which may inspect external runtime state.
 fn run_status(
     connection: &mut rusqlite::Connection,
     verbose: bool,
@@ -773,6 +787,7 @@ fn run_status(
     Ok(())
 }
 
+// Requests a runtime stop through the use case and reports its resulting observation.
 fn run_stop(
     connection: &mut rusqlite::Connection,
     verbose: bool,
@@ -796,6 +811,7 @@ fn run_stop(
     Ok(())
 }
 
+// Requests a runtime start through the use case and reports its resulting observation.
 fn run_start(
     connection: &mut rusqlite::Connection,
     verbose: bool,
@@ -819,6 +835,7 @@ fn run_start(
     Ok(())
 }
 
+// Deploys a supplied OCI reference with host-configured public exposure paths.
 fn run_deploy_oci(
     connection: &mut rusqlite::Connection,
     verbose: bool,
@@ -870,6 +887,7 @@ fn run_deploy_oci(
     Ok(())
 }
 
+// Resolves and deploys the requested branch's published OCI artifact with host-configured paths.
 fn run_deploy_branch(
     connection: &mut rusqlite::Connection,
     verbose: bool,
@@ -923,6 +941,7 @@ fn run_deploy_branch(
     Ok(())
 }
 
+// Rolls back through the use case while supplying paths needed for public exposure effects.
 fn run_rollback(
     connection: &mut rusqlite::Connection,
     verbose: bool,
@@ -960,6 +979,7 @@ fn run_rollback(
     Ok(())
 }
 
+// Changes visibility through the use case, which manages the Caddy side effects.
 fn run_visibility_set(
     connection: &mut rusqlite::Connection,
     verbose: bool,
@@ -1006,6 +1026,7 @@ fn run_visibility_set(
     Ok(())
 }
 
+// Resolves optional path overrides consistently, treating an empty value as unset.
 fn configured_path(variable: &str, default: &str) -> PathBuf {
     env::var_os(variable)
         .filter(|path| !path.is_empty())
@@ -1013,6 +1034,7 @@ fn configured_path(variable: &str, default: &str) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(default))
 }
 
+// Converts expected absence from the store-facing use case into a CLI-specific error.
 fn resolve_application(
     connection: &rusqlite::Connection,
     application_name: &str,
@@ -1024,11 +1046,13 @@ fn resolve_application(
         })
 }
 
+// Prints version information without requiring host configuration or database access.
 fn run_version() -> Result<(), CliError> {
     println!("pneuma {}", env!("CARGO_PKG_VERSION"));
     Ok(())
 }
 
+// Derives uid-scoped runtime paths so rootless systemd and Podman never use another user's bus.
 fn configure_runtime_environment() {
     let uid = unsafe { libc::getuid() };
     let runtime_dir = format!("/run/user/{}", uid);
@@ -1053,6 +1077,7 @@ fn configure_runtime_environment() {
     }
 }
 
+// Restricts SSH CI execution to the validated command carried by SSH_ORIGINAL_COMMAND.
 fn run_ci_dispatch(verbose: bool) -> Result<(), CliError> {
     let original_command = env::var("SSH_ORIGINAL_COMMAND").map_err(|_| CliError::CiDispatch {
         source: CiDispatchError::MissingSshOriginalCommand,
@@ -1082,6 +1107,7 @@ fn run_ci_dispatch(verbose: bool) -> Result<(), CliError> {
     }
 }
 
+// Performs non-mutating host readiness checks, except verifying pullability of active OCI images.
 fn run_doctor(connection: &rusqlite::Connection, verbose: bool) -> Result<(), CliError> {
     let mut all_ok = true;
 

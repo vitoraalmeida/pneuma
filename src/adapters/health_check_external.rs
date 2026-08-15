@@ -6,6 +6,7 @@ use std::process::Command;
 use crate::domain::exposure::is_valid_domain;
 
 #[derive(Debug, PartialEq, Eq)]
+// Captures the confirmed public HTTP status for exposure materialization evidence.
 pub struct ExternalHealthCheck {
     pub response_status: u16,
 }
@@ -68,9 +69,7 @@ impl Error for ExternalHealthCheckError {
     }
 }
 
-/// Checks the public HTTPS listener while forcing the domain to the local Caddy
-/// instance. This verifies TLS, host routing, and the public path without depending
-/// on external DNS propagation or sending health traffic away from the host.
+// Checks the public HTTPS listener through local Caddy, verifying TLS and routing without external DNS.
 pub fn check_external_health(
     domain: &str,
     path: &str,

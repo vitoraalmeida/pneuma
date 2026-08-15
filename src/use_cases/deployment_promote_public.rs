@@ -8,12 +8,14 @@ use crate::domain::exposure::{ExposureMaterializationState, Visibility};
 use crate::domain::runtime::{ObservedRuntimeState, RuntimeState};
 
 #[derive(Debug, PartialEq, Eq)]
+// Supplies the route identity after public exposure enters the applying state.
 pub struct PublicExposureTarget {
     pub application_id: String,
     pub domain: String,
 }
 
 #[derive(Debug, PartialEq, Eq)]
+// Identifies a candidate whose runtime, route, and deployment were atomically promoted.
 pub struct PromotedPublicCandidate {
     pub runtime_id: String,
     pub deployment_id: String,
@@ -102,6 +104,7 @@ impl Error for PromotePublicCandidateError {
     }
 }
 
+// Marks public exposure as applying before Caddy effects occur outside SQLite transactions.
 pub fn begin_public_exposure(
     connection: &Connection,
     runtime_id: &str,
@@ -153,6 +156,7 @@ pub fn begin_public_exposure(
     })
 }
 
+// Records whether failed public-route compensation left a safe or diverged state.
 pub fn record_public_exposure_failure(
     connection: &Connection,
     application_id: &str,
@@ -187,6 +191,7 @@ pub fn record_public_exposure_failure(
     Ok(())
 }
 
+// Atomically confirms a previously materialized and externally healthy public candidate.
 pub fn promote_public_candidate(
     connection: &mut Connection,
     runtime_id: &str,
@@ -304,6 +309,7 @@ pub fn promote_public_candidate(
     })
 }
 
+// Captures persisted runtime, deployment, and exposure facts for public promotion.
 struct PromotionTarget {
     runtime_id: String,
     application_id: String,
@@ -316,6 +322,7 @@ struct PromotionTarget {
     domain: Option<String>,
 }
 
+// Loads the promotion target so later checks can reject incompatible state before promotion writes.
 fn load_target(
     connection: &Connection,
     runtime_id: &str,
@@ -393,6 +400,7 @@ fn load_target(
         })
 }
 
+// Requires the candidate to remain observed running and not retired before promotion.
 fn validate_runtime(target: &PromotionTarget) -> Result<(), PromotePublicCandidateError> {
     let reason = if target.state != RuntimeState::Starting {
         Some(format!("state is `{}`", target.state.database_value()))
@@ -415,6 +423,7 @@ fn validate_runtime(target: &PromotionTarget) -> Result<(), PromotePublicCandida
     Ok(())
 }
 
+// Keeps persisted diagnostics and configuration identifiers unambiguous.
 fn is_trimmed_nonempty(value: &str) -> bool {
     !value.is_empty() && value.trim() == value
 }

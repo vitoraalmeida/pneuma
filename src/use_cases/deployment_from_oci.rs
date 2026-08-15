@@ -73,6 +73,8 @@ impl Error for DeployOciError {
     }
 }
 
+// Validates the requested artifact against delivery policy, pulls it, records a release, and
+// delegates runtime orchestration to the release deployment workflow.
 pub fn deploy_oci(
     connection: &mut Connection,
     application_id: &str,

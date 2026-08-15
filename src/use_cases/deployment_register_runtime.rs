@@ -130,6 +130,7 @@ impl From<RuntimeStoreError> for RegisterCandidateRuntimeError {
     }
 }
 
+// Registers an observed candidate in one transaction after validating loopback identity.
 pub fn register_candidate_runtime(
     connection: &mut Connection,
     deployment_id: &str,
@@ -195,6 +196,7 @@ pub fn register_candidate_runtime(
     Ok(runtime)
 }
 
+// Enforces the external-ID and loopback endpoint invariants before persistence.
 fn validate_runtime(
     external_runtime_id: &str,
     endpoint: SocketAddr,

@@ -2,6 +2,7 @@ use crate::domain::exposure::Visibility;
 use crate::domain::runtime::DesiredRuntimeState;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+// Captures durable application identity and persisted runtime intent.
 pub struct Application {
     pub id: String,
     pub system_id: Option<String>,
@@ -12,6 +13,7 @@ pub struct Application {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+// Provides catalog fields without requiring callers to load the full specification.
 pub struct ApplicationSummary {
     pub id: String,
     pub system_id: Option<String>,
@@ -30,6 +32,7 @@ pub enum RepositoryKind {
 }
 
 impl RepositoryKind {
+    // Serializes the closed repository-origin set accepted by persistence.
     pub(crate) fn database_value(self) -> &'static str {
         match self {
             Self::Local => "local",
@@ -37,6 +40,7 @@ impl RepositoryKind {
         }
     }
 
+    // Rejects persisted origin values outside the known domain set.
     pub(crate) fn from_database(value: &str) -> Option<Self> {
         match value {
             "local" => Some(Self::Local),
@@ -47,6 +51,7 @@ impl RepositoryKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+// Defines the imported repository boundary and optional branch selection.
 pub struct ApplicationSource {
     pub repository_url: String,
     pub repository_kind: RepositoryKind,
@@ -55,18 +60,21 @@ pub struct ApplicationSource {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+// Groups the HTTP response contract used to verify a runtime.
 pub struct HealthCheckSpecification {
     pub path: String,
     pub expected_status: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+// Defines the container endpoint and health contract from the specification.
 pub struct RuntimeSpecification {
     pub container_port: u16,
     pub health_check: HealthCheckSpecification,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+// Collects the application settings needed to activate a deployment.
 pub struct ApplicationDeploymentSpecification {
     pub application_id: String,
     pub application_name: String,

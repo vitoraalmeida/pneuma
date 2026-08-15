@@ -28,6 +28,7 @@ impl Error for CreateError {
     }
 }
 
+// Creates a System once and returns the existing row when its name already exists.
 pub fn create_system(
     connection: &mut Connection,
     name: &str,

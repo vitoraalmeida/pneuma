@@ -65,6 +65,7 @@ impl Error for DeployBranchError {
     }
 }
 
+// Resolves a branch to its immutable commit and image digest before delegating to OCI deployment.
 pub fn deploy_branch(
     connection: &mut Connection,
     application_id: &str,

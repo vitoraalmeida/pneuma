@@ -71,6 +71,7 @@ impl From<ReleaseStoreError> for CreateReleaseError {
     }
 }
 
+// Creates or resolves a digest-pinned release within one short persistence transaction.
 pub fn create_release(
     connection: &mut Connection,
     application_id: &str,

@@ -38,6 +38,7 @@ impl Error for ReleaseStoreError {
     }
 }
 
+// Checks that the owning Application exists before Release persistence.
 pub fn application_exists(
     connection: &Connection,
     application_id: &str,
@@ -51,6 +52,7 @@ pub fn application_exists(
         .map_err(|source| ReleaseStoreError::Persistence { source })
 }
 
+// Checks the Application-scoped immutable digest identity used to reuse Releases.
 pub fn release_exists_for_digest(
     connection: &Connection,
     application_id: &str,
@@ -65,12 +67,14 @@ pub fn release_exists_for_digest(
         .map_err(|source| ReleaseStoreError::Persistence { source })
 }
 
+// Allocates a Release ID beside its digest-uniqueness check in the same transaction.
 pub fn generate_id(connection: &Connection) -> Result<String, ReleaseStoreError> {
     connection
         .query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))
         .map_err(|source| ReleaseStoreError::Persistence { source })
 }
 
+// Inserts an immutable artifact Release and preserves the existing row for the same digest.
 pub fn insert_release(
     transaction: &Transaction<'_>,
     id: &str,
@@ -100,6 +104,7 @@ pub fn insert_release(
     Ok(())
 }
 
+// Loads a Release by immutable digest and validates its redundant persisted artifact fields.
 pub fn load_release_by_digest(
     connection: &Connection,
     application_id: &str,
@@ -140,6 +145,7 @@ pub fn load_release_by_digest(
         })
 }
 
+// Checks that a Release belongs to the specified Application before deployment work.
 pub fn release_exists(
     connection: &Connection,
     release_id: &str,

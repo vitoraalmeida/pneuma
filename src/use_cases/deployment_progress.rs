@@ -85,29 +85,35 @@ impl fmt::Display for DeploymentProgress {
     }
 }
 
+// Delivers optional deployment progress without coupling orchestration to a UI.
 pub(crate) struct ProgressReporter<'a> {
     callback: Option<&'a mut dyn FnMut(DeploymentProgress)>,
 }
 
 impl<'a> ProgressReporter<'a> {
+    // Creates a no-op reporter for callers that do not request progress events.
     pub(crate) fn disabled() -> Self {
         Self { callback: None }
     }
 
+    // Wraps the caller callback used to report synchronous orchestration events.
     pub(crate) fn enabled(callback: &'a mut dyn FnMut(DeploymentProgress)) -> Self {
         Self {
             callback: Some(callback),
         }
     }
 
+    // Reports the start of a deployment step before its side effects begin.
     pub(crate) fn started(&mut self, step: DeploymentStep, detail: String) {
         self.emit(DeploymentProgress::StepStarted { step, detail });
     }
 
+    // Reports successful completion only after the step has finished.
     pub(crate) fn completed(&mut self, step: DeploymentStep, detail: String) {
         self.emit(DeploymentProgress::StepCompleted { step, detail });
     }
 
+    // Reports a persisted deployment-state transition.
     pub(crate) fn state_changed(&mut self, deployment_id: &str, status: DeploymentStatus) {
         self.emit(DeploymentProgress::StateChanged {
             deployment_id: deployment_id.to_owned(),
@@ -115,6 +121,7 @@ impl<'a> ProgressReporter<'a> {
         });
     }
 
+    // Reports that failure evidence has been durably recorded.
     pub(crate) fn failure_persisted(&mut self, deployment_id: &str, code: &'static str) {
         self.emit(DeploymentProgress::FailurePersisted {
             deployment_id: deployment_id.to_owned(),
@@ -122,6 +129,7 @@ impl<'a> ProgressReporter<'a> {
         });
     }
 
+    // Invokes the optional callback while keeping disabled reporting side-effect free.
     fn emit(&mut self, event: DeploymentProgress) {
         if let Some(callback) = &mut self.callback {
             callback(event);

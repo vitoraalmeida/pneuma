@@ -9,6 +9,7 @@ use std::process::Command;
 use crate::domain::exposure::is_valid_domain;
 
 #[derive(Debug, PartialEq, Eq)]
+// Records a newly active fragment and the prior bytes needed to compensate a later route failure.
 pub struct MaterializedCaddyFragment {
     pub path: PathBuf,
     pub contents: String,
@@ -23,6 +24,7 @@ pub struct MaterializedCaddyFragment {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+// Retains enough state to restore a managed fragment after a caller rejects its removal.
 pub struct RemovedCaddyFragment {
     path: PathBuf,
     previous_fragment: Option<Vec<u8>>,
@@ -213,6 +215,7 @@ impl Error for MaterializeCaddyFragmentError {
 }
 
 impl MaterializeCaddyFragmentError {
+    // Signals whether recovery failed, requiring callers to record route divergence.
     pub fn recovery_failed(&self) -> bool {
         matches!(
             self,
@@ -227,6 +230,7 @@ impl MaterializeCaddyFragmentError {
     }
 }
 
+// Atomically replaces an application's managed fragment, validates the full configuration, and reloads Caddy.
 pub fn materialize_caddy_fragment(
     managed_directory: &Path,
     caddyfile_path: &Path,
@@ -329,12 +333,12 @@ pub fn materialize_caddy_fragment(
     })
 }
 
+// Produces the canonical route representation used to detect and repair fragment drift.
 pub fn canonical_fragment_contents(domain: &str, endpoint: SocketAddr) -> String {
     format!("{domain} {{\n    reverse_proxy {endpoint}\n}}\n")
 }
 
-/// Restores the fragment that was active before a successful materialization and
-/// reloads Caddy. This is used when a later external health check rejects the route.
+// Restores the fragment active before materialization when later external health rejects the route.
 pub fn restore_materialized_caddy_fragment(
     materialized: &MaterializedCaddyFragment,
     caddyfile_path: &Path,
@@ -347,7 +351,7 @@ pub fn restore_materialized_caddy_fragment(
     )
 }
 
-/// Removes the Caddy fragment for an application and reloads Caddy.
+// Removes an application's managed route and reloads Caddy, retaining the previous fragment for recovery.
 pub fn remove_caddy_fragment(
     managed_directory: &Path,
     application_id: &str,
@@ -385,6 +389,7 @@ pub fn remove_caddy_fragment(
     })
 }
 
+// Reinstates a route removed by a caller whose subsequent operation did not complete.
 pub fn restore_removed_caddy_fragment(
     removed: &RemovedCaddyFragment,
     caddyfile_path: &Path,
@@ -398,11 +403,13 @@ pub fn restore_removed_caddy_fragment(
 }
 
 impl CaddyRecoveryError {
+    // Signals whether a failed removal left the route in an unconfirmed state.
     pub fn recovery_failed(&self) -> bool {
         matches!(self, Self::ReloadRecovery { .. })
     }
 }
 
+// Rejects unsafe route identities and upstreams before any managed Caddy file is changed.
 fn validate_input(
     application_id: &str,
     domain: &str,
@@ -421,6 +428,7 @@ fn validate_input(
     Ok(())
 }
 
+// Reads the prior fragment while treating its absence as the expected first-materialization state.
 fn read_previous_fragment(
     fragment_path: &Path,
 ) -> Result<Option<Vec<u8>>, MaterializeCaddyFragmentError> {
@@ -435,6 +443,7 @@ fn read_previous_fragment(
     }
 }
 
+// Restores prior bytes atomically or removes a fragment that did not previously exist.
 fn restore_fragment(
     fragment_path: &Path,
     temporary_path: &Path,
@@ -470,6 +479,7 @@ fn restore_fragment(
     Ok(())
 }
 
+// Restores the prior fragment and reloads it so filesystem and running Caddy state converge together.
 fn recover_previous_configuration(
     fragment_path: &Path,
     temporary_path: &Path,
@@ -482,11 +492,13 @@ fn recover_previous_configuration(
     Ok(())
 }
 
+// Preserves successful Caddy diagnostics for callers that need materialization evidence.
 struct CaddyCommandOutput {
     stdout: String,
     stderr: String,
 }
 
+// Runs Caddy through its Caddyfile adapter and retains both output streams on every outcome.
 fn caddy_command(
     operation: &str,
     configuration_path: &Path,
@@ -507,6 +519,7 @@ fn caddy_command(
     Ok(CaddyCommandOutput { stdout, stderr })
 }
 
+// Prefers stderr because Caddy reports failures there, falling back to stdout when necessary.
 fn diagnostic<'a>(stdout: &'a str, stderr: &'a str) -> &'a str {
     if stderr.trim().is_empty() {
         stdout.trim()
@@ -515,6 +528,7 @@ fn diagnostic<'a>(stdout: &'a str, stderr: &'a str) -> &'a str {
     }
 }
 
+// Appends recovery details without obscuring the primary materialization failure.
 fn write_recovery(
     formatter: &mut fmt::Formatter<'_>,
     recovery: &Option<Box<CaddyRecoveryError>>,

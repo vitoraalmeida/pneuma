@@ -17,6 +17,7 @@ use crate::domain::exposure::{Exposure, ExposureMaterializationState, Visibility
 use crate::domain::runtime::{ContainerObservation, ObservedRuntimeState};
 
 #[derive(Debug, PartialEq, Eq)]
+// Returns the requested visibility after its materialization outcome is confirmed.
 pub struct ExposureChange {
     pub application_id: String,
     pub visibility: Visibility,
@@ -148,6 +149,7 @@ impl Error for ExposureChangeError {
     }
 }
 
+// Orchestrates visibility intent, external Caddy effects, and short confirmation transactions.
 pub fn change_exposure(
     connection: &mut Connection,
     application_id: &str,
@@ -209,6 +211,7 @@ pub fn change_exposure(
     }
 }
 
+// Persists applying or removing intent before any Caddy side effect begins.
 fn begin_change(
     connection: &mut Connection,
     application_id: &str,
@@ -235,6 +238,7 @@ fn begin_change(
         .map_err(|source| ExposureChangeError::Persistence { source })
 }
 
+// Publishes only an observed running runtime, compensating Caddy changes on later failure.
 fn make_public(
     connection: &mut Connection,
     application_id: &str,
@@ -396,6 +400,7 @@ fn make_public(
     })
 }
 
+// Removes the managed route without changing the application's loopback runtime.
 fn make_internal(
     connection: &mut Connection,
     application_id: &str,
@@ -470,6 +475,7 @@ fn make_internal(
     })
 }
 
+// Persists public-route failure diagnostics after attempting any required compensation.
 fn fail_public<T>(
     connection: &mut Connection,
     application_id: &str,
@@ -489,6 +495,7 @@ fn fail_public<T>(
     Err(error)
 }
 
+// Persists internal-route failure diagnostics after attempting any required compensation.
 fn fail_internal<T>(
     connection: &mut Connection,
     application_id: &str,
@@ -508,6 +515,7 @@ fn fail_internal<T>(
     Err(error)
 }
 
+// Confirms failed or diverged materialization with a compare-and-set transaction.
 fn record_failure(
     connection: &mut Connection,
     application_id: &str,

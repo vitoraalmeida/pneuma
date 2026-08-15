@@ -22,6 +22,7 @@ impl Error for ListSystemsError {
     }
 }
 
+// Lists catalog systems in stable name order without modifying persisted state.
 pub fn list_systems(connection: &Connection) -> Result<Vec<System>, ListSystemsError> {
     let mut statement = connection
         .prepare("SELECT id, name, description FROM systems ORDER BY name")

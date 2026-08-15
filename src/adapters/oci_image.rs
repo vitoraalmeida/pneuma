@@ -10,6 +10,7 @@ const DIGEST_ALGORITHM: &str = "sha256:";
 const SHA256_HEX_LENGTH: usize = 64;
 
 #[derive(Debug, PartialEq, Eq)]
+// Represents an OCI artifact that Podman pulled and verified against its immutable digest.
 pub struct PulledImage {
     pub artifact: OciArtifact,
 }
@@ -101,6 +102,7 @@ impl Error for PullImageError {
     }
 }
 
+// Pulls a digest-pinned artifact and confirms Podman resolved exactly that digest.
 pub fn pull_image(reference: &str) -> Result<PulledImage, PullImageError> {
     let artifact = OciArtifact::parse(reference)
         .map_err(|source| PullImageError::InvalidReference { source })?;
@@ -225,6 +227,7 @@ impl Error for ResolveImageDigestError {
     }
 }
 
+// Resolves a CI commit tag to a validated immutable artifact for Release creation.
 pub fn resolve_image_digest(
     repository: &str,
     commit_sha: &CommitSha,
@@ -280,21 +283,25 @@ pub fn resolve_image_digest(
     })
 }
 
+// Accepts only canonical lowercase SHA-256 digests returned by Podman inspection.
 fn is_sha256_digest(digest: &str) -> bool {
     digest
         .strip_prefix(DIGEST_ALGORITHM)
         .is_some_and(|hex| hex.len() == SHA256_HEX_LENGTH && hex.bytes().all(is_lowercase_hex))
 }
 
+// Validates one digest byte without accepting uppercase normalization variants.
 fn is_lowercase_hex(byte: u8) -> bool {
     byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')
 }
 
+// Trims command output and returns a digest only when it is safe to persist as artifact identity.
 fn normalize_digest(output: &str) -> Option<&str> {
     let digest = output.trim();
     is_sha256_digest(digest).then_some(digest)
 }
 
+// Prefers Podman's stderr failure detail, using stdout only when stderr is empty.
 fn diagnostic<'a>(stdout: &'a str, stderr: &'a str) -> &'a str {
     if stderr.trim().is_empty() {
         stdout.trim()

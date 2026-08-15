@@ -73,9 +73,11 @@ pub enum ResolveBranchError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+// Represents a validated full Git object ID so downstream delivery always uses immutable commits.
 pub struct CommitSha(String);
 
 impl CommitSha {
+    // Validates the full SHA-1 commit identifier returned or supplied at the Git boundary.
     pub fn new(sha: &str) -> Result<Self, String> {
         if !is_commit_sha(sha) {
             return Err("commit identifier must be exactly 40 hexadecimal characters".to_owned());
@@ -83,6 +85,7 @@ impl CommitSha {
         Ok(Self(sha.to_owned()))
     }
 
+    // Exposes the validated identifier for Git and OCI tag construction.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -240,6 +243,7 @@ impl Error for ResolveBranchError {
     }
 }
 
+// Resolves a local revision to a full commit while rejecting non-commit Git objects.
 pub fn resolve_commit(
     repository_path: &Path,
     revision: &str,
@@ -277,6 +281,7 @@ pub fn resolve_commit(
     Ok(commit_sha)
 }
 
+// Resolves a remote branch or tag in precedence order without cloning the repository.
 pub fn resolve_branch(url: &str, branch: &str) -> Result<CommitSha, ResolveBranchError> {
     for pattern in [
         format!("refs/heads/{branch}"),
@@ -318,6 +323,7 @@ pub fn resolve_branch(url: &str, branch: &str) -> Result<CommitSha, ResolveBranc
     })
 }
 
+// Extracts the first complete commit identifier from Git's tab-separated remote listing.
 fn parse_ls_remote_sha(stdout: &[u8]) -> Option<&str> {
     std::str::from_utf8(stdout)
         .ok()?
@@ -326,10 +332,12 @@ fn parse_ls_remote_sha(stdout: &[u8]) -> Option<&str> {
         .filter(|sha| is_commit_sha(sha))
 }
 
+// Restricts commit identifiers to complete hexadecimal SHA-1 values rather than abbreviated revisions.
 fn is_commit_sha(sha: &str) -> bool {
     sha.len() == 40 && sha.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+// Creates an isolated detached checkout so manifest reads cannot observe mutable branch state.
 pub fn create_checkout(
     repository_path: &Path,
     commit_sha: &str,
@@ -399,6 +407,7 @@ pub fn create_checkout(
     Ok(())
 }
 
+// Reuses only a clean checkout at the requested commit; stale deployment leftovers are recreated.
 pub fn ensure_checkout(
     repository_path: &Path,
     commit_sha: &str,
@@ -431,10 +440,12 @@ pub fn ensure_checkout(
     create_checkout(repository_path, commit_sha, checkout_path)
 }
 
+// Identifies supported remote URL forms before import decides whether cloning is required.
 pub fn is_remote_repository(repository: &str) -> bool {
     repository.contains("://") || repository.starts_with("git@")
 }
 
+// Clones a remote repository into a create-only destination to avoid replacing existing workspace state.
 pub fn clone_repository(url: &str, destination: &Path) -> Result<(), CloneRepositoryError> {
     if destination
         .try_exists()
@@ -468,6 +479,7 @@ pub fn clone_repository(url: &str, destination: &Path) -> Result<(), CloneReposi
     Ok(())
 }
 
+// Removes a temporary checkout when present while allowing idempotent cleanup after earlier failures.
 pub fn cleanup_checkout(path: &Path) -> Result<(), io::Error> {
     if path.try_exists().map_err(io::Error::other)? {
         fs::remove_dir_all(path)?;
@@ -475,6 +487,7 @@ pub fn cleanup_checkout(path: &Path) -> Result<(), io::Error> {
     Ok(())
 }
 
+// Confirms both the detached commit and working-tree cleanliness before a checkout may be reused.
 fn is_clean_checkout_at(
     checkout_path: &Path,
     commit_sha: &str,
@@ -504,6 +517,7 @@ fn is_clean_checkout_at(
     Ok(status.status.success() && String::from_utf8_lossy(&status.stdout).trim().is_empty())
 }
 
+// Selects Git's stderr diagnostic, preserving a useful exit status when it emits none.
 fn git_failure_message(output: &Output) -> String {
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
     if stderr.is_empty() {

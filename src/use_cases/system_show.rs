@@ -35,11 +35,13 @@ impl Error for ShowError {
     }
 }
 
+// Combines a System with its catalog applications for the details view.
 pub struct SystemDetails {
     pub system: System,
     pub applications: Vec<ApplicationSummary>,
 }
 
+// Loads one named System and its applications without making lifecycle decisions.
 pub fn show_system(connection: &Connection, system_name: &str) -> Result<SystemDetails, ShowError> {
     let system = connection
         .query_row(

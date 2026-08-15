@@ -57,6 +57,7 @@ impl fmt::Display for HealthCheckError {
 
 impl Error for HealthCheckError {}
 
+// Checks a candidate's loopback endpoint with the fixed bounded retry policy used before promotion.
 pub fn check_internal_health(
     endpoint: SocketAddr,
     path: &str,
@@ -75,12 +76,14 @@ pub fn check_internal_health(
 }
 
 #[derive(Clone, Copy)]
+// Groups retry limits so production uses fixed bounds while tests can exercise timing outcomes quickly.
 struct HealthCheckPolicy {
     attempt_timeout: Duration,
     retry_interval: Duration,
     max_attempts: u8,
 }
 
+// Performs retries and returns the final observed failure instead of exposing transient attempt errors.
 fn check_internal_health_with_policy(
     endpoint: SocketAddr,
     path: &str,
@@ -110,6 +113,7 @@ fn check_internal_health_with_policy(
     unreachable!("health check policy always performs at least one attempt")
 }
 
+// Rejects non-loopback or malformed requests before any health-check connection is attempted.
 fn validate_request(
     endpoint: SocketAddr,
     path: &str,
@@ -128,6 +132,7 @@ fn validate_request(
     Ok(())
 }
 
+// Sends one bounded HTTP request and parses only its status line to avoid reading an untrusted response body.
 fn check_once(
     endpoint: SocketAddr,
     path: &str,
@@ -179,6 +184,7 @@ fn check_once(
     Ok(response_status)
 }
 
+// Maps timeout-class I/O failures separately so retries report actionable health diagnostics.
 fn classify_io_error(error: io::Error) -> HealthCheckFailure {
     match error.kind() {
         io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock => HealthCheckFailure::TimedOut,

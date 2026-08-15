@@ -23,6 +23,7 @@ impl Error for ListError {
     }
 }
 
+// Reads application summaries in display order without mutating persisted state.
 pub fn list_applications(connection: &Connection) -> Result<Vec<ApplicationSummary>, ListError> {
     let mut statement = connection
         .prepare(
@@ -53,6 +54,7 @@ pub fn list_applications(connection: &Connection) -> Result<Vec<ApplicationSumma
     Ok(applications)
 }
 
+// Looks up the full application record by its operator-facing name.
 pub fn find_application_by_name(
     connection: &Connection,
     name: &str,
@@ -66,6 +68,7 @@ pub fn find_application_by_name(
     })
 }
 
+// Determines whether an application has ever completed a successful deployment.
 pub fn application_is_deployed(
     connection: &Connection,
     application_id: &str,

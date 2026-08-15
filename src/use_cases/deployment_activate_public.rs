@@ -19,6 +19,7 @@ use crate::use_cases::deployment_promote_public::{
 use crate::use_cases::deployment_runtime_cleanup::CandidateResources;
 use crate::use_cases::deployment_transition::{DeploymentTransition, advance_deployment};
 
+// Carries the persisted candidate and host paths needed to expose it after internal validation.
 pub(crate) struct PublicActivationInput<'a> {
     pub connection: &'a mut Connection,
     pub runtime: &'a RuntimeInstance,
@@ -29,6 +30,7 @@ pub(crate) struct PublicActivationInput<'a> {
     pub caddyfile_path: &'a Path,
 }
 
+// Returns activation data needed by the enclosing deployment finalization.
 pub(crate) struct PublicActivationOutput {
     pub finished_at: String,
 }
@@ -60,6 +62,8 @@ pub(crate) enum PublicActivationError {
     },
 }
 
+// Activates a public candidate in order: internal health, route materialization, external
+// health, then persisted promotion; failures retain resources for centralized cleanup.
 pub(crate) fn activate_public_candidate(
     input: PublicActivationInput<'_>,
     progress: &mut ProgressReporter<'_>,
@@ -254,6 +258,8 @@ pub(crate) fn activate_public_candidate(
     })
 }
 
+// Restores the prior route after activation fails and distinguishes recoverable failure from
+// externally diverged Caddy state.
 fn rollback_public_route(
     original: impl Error + 'static,
     materialized: &MaterializedCaddyFragment,

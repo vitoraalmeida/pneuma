@@ -14,6 +14,7 @@ pub enum DeploymentTransition {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+// Records durable evidence for a terminal deployment failure.
 pub struct DeploymentFailure {
     pub code: String,
     pub stage: DeploymentStatus,
@@ -132,6 +133,7 @@ impl From<DeploymentStoreError> for TransitionDeploymentError {
     }
 }
 
+// Advances one expected state with compare-and-set semantics to detect concurrent changes.
 pub fn advance_deployment(
     connection: &Connection,
     deployment_id: &str,
@@ -151,6 +153,7 @@ pub fn advance_deployment(
     })
 }
 
+// Atomically records a terminal failure only while the deployment remains non-terminal.
 pub fn fail_deployment(
     connection: &mut Connection,
     deployment_id: &str,
@@ -186,6 +189,7 @@ pub fn fail_deployment(
     })
 }
 
+// Defines the closed deployment state-machine edges accepted by this use case.
 fn transition_states(transition: DeploymentTransition) -> (DeploymentStatus, DeploymentStatus) {
     match transition {
         DeploymentTransition::Start => (DeploymentStatus::Pending, DeploymentStatus::Starting),
@@ -198,6 +202,7 @@ fn transition_states(transition: DeploymentTransition) -> (DeploymentStatus, Dep
     }
 }
 
+// Limits failure recording to states that have not reached a terminal outcome.
 fn can_fail(status: DeploymentStatus) -> bool {
     matches!(
         status,
@@ -208,6 +213,7 @@ fn can_fail(status: DeploymentStatus) -> bool {
     )
 }
 
+// Rejects ambiguous failure diagnostics before they become durable evidence.
 fn is_trimmed_nonempty(value: &str) -> bool {
     !value.is_empty() && value.trim() == value
 }

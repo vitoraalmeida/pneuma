@@ -29,6 +29,7 @@ use crate::use_cases::deployment_start_candidate::{
 use crate::use_cases::deployment_transition::{TransitionDeploymentError, fail_deployment};
 
 #[derive(Debug, PartialEq, Eq)]
+// Describes the successfully promoted runtime returned to deployment callers.
 pub struct DeploymentResult {
     pub deployment_id: String,
     pub runtime_id: String,
@@ -39,6 +40,7 @@ pub struct DeploymentResult {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+// Supplies host-managed Caddy paths required only for public application activation.
 pub struct PublicDeploymentConfiguration {
     pub managed_caddy_directory: PathBuf,
     pub caddyfile_path: PathBuf,
@@ -133,6 +135,7 @@ impl Error for DeployReleaseError {
     }
 }
 
+// Deploys a release without progress callbacks while preserving the full execution workflow.
 pub fn deploy_release(
     connection: &mut Connection,
     application_id: &str,
@@ -153,6 +156,7 @@ pub fn deploy_release(
     )
 }
 
+// Deploys a release while reporting durable lifecycle milestones to the supplied callback.
 pub fn deploy_release_with_progress(
     connection: &mut Connection,
     application_id: &str,
@@ -174,6 +178,8 @@ pub fn deploy_release_with_progress(
     )
 }
 
+// Creates the durable deployment record before external effects, then routes failures through
+// one finalizer that records failure and cleans up candidate resources.
 fn deploy_release_reporting(
     connection: &mut Connection,
     application_id: &str,
@@ -242,6 +248,7 @@ fn deploy_release_reporting(
     }
 }
 
+// Loads the complete persisted specification needed to execute a deployment.
 fn load_specification(
     connection: &Connection,
     application_id: &str,
@@ -269,6 +276,7 @@ fn load_specification(
     Ok(spec)
 }
 
+// Preserves failure provenance and every allocated candidate resource for ordered cleanup.
 struct FailedExecution {
     code: &'static str,
     source: Box<dyn Error>,
@@ -276,6 +284,8 @@ struct FailedExecution {
     resources: CandidateResources,
 }
 
+// Starts and verifies a candidate outside database transactions, promoting it only after the
+// visibility-specific health checks succeed.
 fn execute_deployment(
     connection: &mut Connection,
     deployment_id: &str,
@@ -535,6 +545,8 @@ fn execute_deployment(
     ))
 }
 
+// Records a nonterminal deployment failure before releasing candidate resources, returning
+// recovery errors separately so externally diverged state is never hidden.
 fn finish_failed_deployment(
     connection: &mut Connection,
     deployment_id: &str,
@@ -626,6 +638,7 @@ fn failure_needing_persistence(
     }
 }
 
+// Collects all resources allocated before a failure so the common finalizer can clean them up.
 fn candidate_failure(
     code: &'static str,
     source: impl Error + 'static,

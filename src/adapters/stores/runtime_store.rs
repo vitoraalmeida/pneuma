@@ -49,12 +49,14 @@ impl Error for RuntimeStoreError {
     }
 }
 
+// Allocates a runtime ID beside endpoint registration in the same SQLite transaction.
 pub fn generate_id(connection: &Connection) -> Result<String, RuntimeStoreError> {
     connection
         .query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))
         .map_err(|source| RuntimeStoreError::Persistence { source })
 }
 
+// Checks whether a non-removed runtime already owns the requested loopback endpoint.
 pub fn port_is_reserved(
     connection: &Connection,
     host_address: &str,
@@ -70,6 +72,7 @@ pub fn port_is_reserved(
         .map_err(|source| RuntimeStoreError::Persistence { source })
 }
 
+// Persists a candidate runtime and its reserved loopback endpoint after external creation.
 pub fn insert_runtime(
     transaction: &Transaction<'_>,
     registration: &RuntimeRegistration,
@@ -96,6 +99,7 @@ pub fn insert_runtime(
     Ok(())
 }
 
+// Loads the non-removed runtime belonging to the active successful Deployment.
 pub fn load_current_successful_runtime(
     connection: &Connection,
     application_id: &str,
@@ -131,6 +135,7 @@ pub fn load_current_successful_runtime(
         .map_err(|source| RuntimeStoreError::Persistence { source })
 }
 
+// Replaces an external container ID only when the logical runtime still has the expected ID.
 pub fn reconcile_external_runtime_id(
     connection: &Connection,
     runtime_id: &str,
@@ -154,6 +159,7 @@ pub fn reconcile_external_runtime_id(
     Ok(updated == 1)
 }
 
+// Records an observed runtime state without reviving a runtime that has been retired.
 pub fn persist_observation(
     connection: &Connection,
     runtime_id: &str,
@@ -184,6 +190,7 @@ pub fn persist_observation(
     Ok(updated == 1)
 }
 
+// Loads persisted runtime intent and rejects values outside the domain state set.
 pub fn load_desired_runtime_state(
     connection: &Connection,
     application_id: &str,
@@ -203,6 +210,7 @@ pub fn load_desired_runtime_state(
     })
 }
 
+// Changes runtime intent only when the prior persisted intent matches the caller's observation.
 pub fn compare_and_set_desired_runtime_state(
     connection: &Connection,
     application_id: &str,
@@ -224,6 +232,7 @@ pub fn compare_and_set_desired_runtime_state(
     Ok(updated == 1)
 }
 
+// Advances a non-removed candidate from starting to running exactly once.
 pub fn start_runtime(
     transaction: &Transaction<'_>,
     runtime_id: &str,
@@ -239,6 +248,7 @@ pub fn start_runtime(
     Ok(updated == 1)
 }
 
+// Reads the logical lifecycle state for cleanup and transition decisions.
 pub fn load_runtime_state(
     connection: &Connection,
     runtime_id: &str,
@@ -253,6 +263,7 @@ pub fn load_runtime_state(
         .map_err(|source| RuntimeStoreError::Persistence { source })
 }
 
+// Finds another live runtime that may need retirement after candidate promotion.
 pub fn load_previous_runtime(
     connection: &Connection,
     application_id: &str,
@@ -279,6 +290,7 @@ pub fn load_previous_runtime(
         .map_err(|source| RuntimeStoreError::Persistence { source })
 }
 
+// Resolves a logical runtime from the container identity observed from Podman.
 pub fn load_runtime_by_external_id(
     connection: &Connection,
     external_runtime_id: &str,
@@ -297,6 +309,7 @@ pub fn load_runtime_by_external_id(
         .map_err(|source| RuntimeStoreError::Persistence { source })
 }
 
+// Tombstones only a stopped runtime, preserving lifecycle transition ordering.
 pub fn mark_runtime_removed(
     connection: &Connection,
     runtime_id: &str,
@@ -312,6 +325,7 @@ pub fn mark_runtime_removed(
     Ok(())
 }
 
+// Records failed candidate creation as missing and removed while it is still starting.
 pub fn mark_starting_runtime_missing(
     connection: &Connection,
     runtime_id: &str,
@@ -330,6 +344,7 @@ pub fn mark_starting_runtime_missing(
     Ok(())
 }
 
+// Resolves the live runtime tied to the Application's active Deployment within a transaction.
 pub fn load_active_runtime_for_application(
     transaction: &Transaction<'_>,
     application_id: &str,
@@ -348,6 +363,7 @@ pub fn load_active_runtime_for_application(
         .map_err(|source| RuntimeStoreError::Persistence { source })
 }
 
+// Advances a running logical runtime to stopped without marking it retired.
 pub fn stop_runtime(
     transaction: &Transaction<'_>,
     runtime_id: &str,
@@ -363,6 +379,7 @@ pub fn stop_runtime(
     Ok(())
 }
 
+// Maps persisted runtime identity and enforces the loopback-only endpoint invariant.
 fn map_runtime_instance(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeInstance> {
     let state_text = row.get::<_, String>(4)?;
     let state = RuntimeState::from_database(&state_text)
@@ -389,6 +406,7 @@ fn map_runtime_instance(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeInst
     })
 }
 
+// Converts an invalid persisted text value into a row-mapping error with column context.
 fn invalid_text_value(column: usize, field: &str, value: &str) -> rusqlite::Error {
     rusqlite::Error::FromSqlConversionFailure(
         column,

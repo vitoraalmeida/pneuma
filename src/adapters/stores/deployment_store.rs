@@ -59,12 +59,14 @@ impl Error for DeploymentStoreError {
     }
 }
 
+// Allocates a deployment ID inside the transaction that reserves the Application for activation.
 pub fn generate_id(connection: &Connection) -> Result<String, DeploymentStoreError> {
     connection
         .query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))
         .map_err(|source| DeploymentStoreError::Persistence { source })
 }
 
+// Checks the Application's transactional reservation held by an in-progress Deployment.
 pub fn has_nonterminal_deployment(
     transaction: &Transaction<'_>,
     application_id: &str,
@@ -82,6 +84,7 @@ pub fn has_nonterminal_deployment(
         .map_err(|source| DeploymentStoreError::Persistence { source })
 }
 
+// Finds the Release of the active Deployment only when its runtime is still live.
 pub fn load_active_runtime_release_id(
     transaction: &Transaction<'_>,
     application_id: &str,
@@ -104,6 +107,7 @@ pub fn load_active_runtime_release_id(
         .map_err(|source| DeploymentStoreError::Persistence { source })
 }
 
+// Persists a new activation attempt in its initial pending state.
 pub fn insert_pending_deployment(
     transaction: &Transaction<'_>,
     deployment_id: &str,
@@ -129,6 +133,7 @@ pub fn insert_pending_deployment(
     Ok(())
 }
 
+// Maps a persisted Deployment and rejects unknown type or status values.
 pub fn load_deployment(
     transaction: &Transaction<'_>,
     deployment_id: &str,
@@ -179,6 +184,7 @@ pub fn load_deployment(
     })
 }
 
+// Loads the current Deployment status for transition and recovery decisions.
 pub fn load_status(
     connection: &Connection,
     deployment_id: &str,
@@ -200,6 +206,7 @@ pub fn load_status(
     })
 }
 
+// Advances Deployment status with compare-and-set semantics and timestamps its first start.
 pub fn advance_status(
     connection: &Connection,
     deployment_id: &str,
@@ -226,6 +233,7 @@ pub fn advance_status(
     Ok(updated == 1)
 }
 
+// Records terminal failure evidence only from the supplied in-progress stage.
 pub fn mark_failed(
     transaction: &Transaction<'_>,
     deployment_id: &str,
@@ -255,6 +263,7 @@ pub fn mark_failed(
         .map_err(|source| DeploymentStoreError::Persistence { source })
 }
 
+// Marks a Deployment successful only when its expected prior stage still holds.
 pub fn mark_succeeded(
     transaction: &Transaction<'_>,
     deployment_id: &str,
@@ -273,6 +282,7 @@ pub fn mark_succeeded(
     Ok(updated == 1)
 }
 
+// Reads the terminal timestamp persisted by a completed Deployment transition.
 pub fn load_finished_at(
     transaction: &Transaction<'_>,
     deployment_id: &str,

@@ -90,12 +90,14 @@ impl Error for ExposureStoreError {
     }
 }
 
+// Allocates an ID inside the import transaction so related Application records share one boundary.
 pub fn generate_id(connection: &Connection) -> Result<String, ApplicationStoreError> {
     connection
         .query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))
         .map_err(|source| ApplicationStoreError::Persistence { source })
 }
 
+// Inserts a System when absent without changing the identity of an existing named System.
 pub fn ensure_system(
     transaction: &Transaction<'_>,
     system_id: &str,
@@ -112,6 +114,7 @@ pub fn ensure_system(
     Ok(())
 }
 
+// Resolves the persisted System identity needed by the import transaction.
 pub fn load_system_id_by_name(
     transaction: &Transaction<'_>,
     system_name: &str,
@@ -125,6 +128,7 @@ pub fn load_system_id_by_name(
         .map_err(|source| ApplicationStoreError::Persistence { source })
 }
 
+// Persists an imported Application once, preserving the original specification on name conflicts.
 pub fn insert_application(
     transaction: &Transaction<'_>,
     application_id: &str,
@@ -145,6 +149,7 @@ pub fn insert_application(
     Ok(inserted == 1)
 }
 
+// Loads the import-facing Application summary with optional source metadata.
 pub fn load_application_for_import(
     transaction: &Transaction<'_>,
     name: &str,
@@ -171,6 +176,7 @@ pub fn load_application_for_import(
         .map_err(|source| ApplicationStoreError::Persistence { source })
 }
 
+// Maps persisted Application state and rejects invalid desired-runtime values.
 pub(crate) fn map_application_row(row: &Row<'_>) -> rusqlite::Result<Application> {
     let desired_runtime_state = row.get::<_, String>(3)?;
     let desired_runtime_state = DesiredRuntimeState::from_database(&desired_runtime_state)
@@ -186,6 +192,7 @@ pub(crate) fn map_application_row(row: &Row<'_>) -> rusqlite::Result<Application
     })
 }
 
+// Extends the core Application row mapping with catalog source fields.
 pub(crate) fn map_application_summary_row(row: &Row<'_>) -> rusqlite::Result<ApplicationSummary> {
     let application = map_application_row(row)?;
     Ok(ApplicationSummary {
@@ -200,6 +207,7 @@ pub(crate) fn map_application_summary_row(row: &Row<'_>) -> rusqlite::Result<App
     })
 }
 
+// Loads the core Application projection by its durable unique name.
 pub fn load_application_by_name(
     connection: &Connection,
     name: &str,
@@ -216,6 +224,7 @@ pub fn load_application_by_name(
         .map_err(|source| ApplicationStoreError::Persistence { source })
 }
 
+// Persists the immutable delivery configuration associated with an imported Application.
 pub fn insert_delivery_spec(
     transaction: &Transaction<'_>,
     application_id: &str,
@@ -238,6 +247,7 @@ pub fn insert_delivery_spec(
     Ok(())
 }
 
+// Persists source provenance and checkout defaults for an imported Application.
 pub fn insert_source_spec(
     transaction: &Transaction<'_>,
     application_id: &str,
@@ -264,6 +274,7 @@ pub fn insert_source_spec(
     Ok(())
 }
 
+// Persists the container port that defines the Application's runtime endpoint.
 pub fn insert_runtime_spec(
     transaction: &Transaction<'_>,
     application_id: &str,
@@ -280,6 +291,7 @@ pub fn insert_runtime_spec(
     Ok(())
 }
 
+// Persists the internal health-check contract used for candidate verification.
 pub fn insert_health_check_spec(
     transaction: &Transaction<'_>,
     application_id: &str,
@@ -297,6 +309,7 @@ pub fn insert_health_check_spec(
     Ok(())
 }
 
+// Persists initial visibility intent; route materialization remains unconfirmed.
 pub fn insert_exposure(
     transaction: &Transaction<'_>,
     application_id: &str,
@@ -315,6 +328,7 @@ pub fn insert_exposure(
     Ok(())
 }
 
+// Checks durable Application existence before dependent persistence work.
 pub fn application_exists(
     connection: &Connection,
     application_id: &str,
@@ -328,6 +342,7 @@ pub fn application_exists(
         .map_err(|source| ApplicationStoreError::Persistence { source })
 }
 
+// Atomically records the active Deployment and its running runtime intent.
 pub fn activate_deployment(
     transaction: &Transaction<'_>,
     application_id: &str,
@@ -346,6 +361,7 @@ pub fn activate_deployment(
     Ok(())
 }
 
+// Loads delivery configuration and maps its persisted type into the domain enum.
 pub fn load_delivery_specification(
     connection: &Connection,
     application_id: &str,
@@ -373,6 +389,7 @@ pub fn load_delivery_specification(
     }))
 }
 
+// Loads source configuration and rejects unknown persisted repository kinds.
 pub fn load_source(
     connection: &Connection,
     application_id: &str,
@@ -409,6 +426,7 @@ pub fn load_source(
     }))
 }
 
+// Loads visibility intent and confirmed route state, rejecting invalid persisted enum values.
 pub fn load_exposure(
     connection: &Connection,
     application_id: &str,
@@ -472,6 +490,7 @@ pub fn load_exposure(
     }))
 }
 
+// Begins a visibility transition with a compare-and-set on the prior intent.
 pub fn begin_exposure_change(
     transaction: &Transaction<'_>,
     application_id: &str,
@@ -502,6 +521,7 @@ pub fn begin_exposure_change(
     Ok(updated == 1)
 }
 
+// Confirms public route materialization only while the matching transition remains in progress.
 pub fn complete_public_exposure_change(
     transaction: &Transaction<'_>,
     application_id: &str,
@@ -527,6 +547,7 @@ pub fn complete_public_exposure_change(
     Ok(updated == 1)
 }
 
+// Confirms route removal only while the matching internal transition remains in progress.
 pub fn complete_internal_exposure_change(
     transaction: &Transaction<'_>,
     application_id: &str,
@@ -550,6 +571,7 @@ pub fn complete_internal_exposure_change(
     Ok(updated == 1)
 }
 
+// Records route diagnostics only when the persisted visibility still matches the attempted change.
 pub fn record_exposure_change_failure(
     transaction: &Transaction<'_>,
     application_id: &str,
@@ -578,6 +600,7 @@ pub fn record_exposure_change_failure(
     Ok(updated == 1)
 }
 
+// Joins persisted runtime, health, and visibility data into deployment input.
 pub fn load_deployment_specification(
     connection: &Connection,
     application_id: &str,
@@ -636,6 +659,7 @@ pub fn load_deployment_specification(
     }))
 }
 
+// Converts an invalid persisted text value into a row-mapping error with column context.
 fn invalid_text_value(column: usize, field: &str, value: &str) -> rusqlite::Error {
     rusqlite::Error::FromSqlConversionFailure(
         column,

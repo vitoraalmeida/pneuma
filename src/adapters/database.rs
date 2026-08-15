@@ -150,6 +150,7 @@ impl Error for DatabaseError {
     }
 }
 
+// Creates a SQLite-consistent backup without overwriting an existing operator-selected destination.
 pub fn backup(path: &Path, destination: &Path) -> Result<(), DatabaseError> {
     if destination.exists() {
         return Err(DatabaseError::BackupDestinationExists {
@@ -174,6 +175,7 @@ pub fn backup(path: &Path, destination: &Path) -> Result<(), DatabaseError> {
         .map_err(|source| DatabaseError::Backup { source })
 }
 
+// Validates a backup, serializes restoration, and returns the automatically created pre-restore backup.
 pub fn restore(path: &Path, source_path: &Path) -> Result<PathBuf, DatabaseError> {
     let source = Connection::open_with_flags(source_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|source| DatabaseError::RestoreSource {
@@ -207,6 +209,7 @@ pub fn restore(path: &Path, source_path: &Path) -> Result<PathBuf, DatabaseError
     result
 }
 
+// Replaces the database only while the create-only lock prevents concurrent restore attempts.
 fn restore_locked(path: &Path, source_path: &Path) -> Result<PathBuf, DatabaseError> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -236,6 +239,7 @@ fn restore_locked(path: &Path, source_path: &Path) -> Result<PathBuf, DatabaseEr
     Ok(pre_restore)
 }
 
+// Opens a connection with foreign keys enforced and all immutable migrations applied.
 pub fn open(path: &Path) -> Result<Connection, DatabaseError> {
     let mut connection = Connection::open(path).map_err(|source| DatabaseError::Open {
         path: path.to_path_buf(),
@@ -250,6 +254,7 @@ pub fn open(path: &Path) -> Result<Connection, DatabaseError> {
     Ok(connection)
 }
 
+// Applies each unapplied migration in its own transaction, recording it only after its SQL succeeds.
 fn migrate(connection: &mut Connection) -> Result<(), DatabaseError> {
     connection
         .execute_batch(
@@ -274,6 +279,7 @@ fn migrate(connection: &mut Connection) -> Result<(), DatabaseError> {
             continue;
         }
 
+        // Migration 7 rebuilds referenced tables, which SQLite cannot do with foreign-key checks active.
         let rebuilds_referenced_tables = version == 7;
         if rebuilds_referenced_tables {
             connection

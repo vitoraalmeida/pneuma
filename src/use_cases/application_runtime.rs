@@ -17,6 +17,7 @@ use crate::domain::runtime::{
 };
 
 #[derive(Debug, PartialEq, Eq)]
+// Combines persisted operator intent with the latest observed runtime state for status commands.
 pub struct RuntimeObservation {
     pub desired_runtime_state: DesiredRuntimeState,
     pub observed_runtime_state: ObservedRuntimeState,
@@ -126,6 +127,7 @@ impl Error for RuntimeLifecycleError {
     }
 }
 
+// Observes the current runtime and persists its state without changing the operator's intent.
 pub fn report_application_status(
     connection: &mut Connection,
     application_id: &str,
@@ -170,6 +172,7 @@ pub fn report_application_status(
     })
 }
 
+// Records stopped intent before delegating the runtime transition to the shared controller.
 pub fn stop_application(
     connection: &mut Connection,
     application_id: &str,
@@ -186,6 +189,7 @@ pub fn stop_application(
     )
 }
 
+// Records running intent before delegating the runtime transition to the shared controller.
 pub fn start_application(
     connection: &mut Connection,
     application_id: &str,
@@ -202,6 +206,8 @@ pub fn start_application(
     )
 }
 
+// Coordinates intent persistence, external control, and observation while preserving a stable
+// runtime record across Quadlet container recreation.
 fn transition_application(
     connection: &mut Connection,
     application_id: &str,
@@ -377,6 +383,7 @@ fn observe_current_runtime(
     Ok((observation, resolved))
 }
 
+// Loads the active successful runtime, rejecting lifecycle commands for undeployed applications.
 fn load_current_runtime(
     connection: &Connection,
     application_id: &str,
@@ -389,6 +396,7 @@ fn load_current_runtime(
         })
 }
 
+// Maps persisted desired state into the domain value and surfaces corrupt values explicitly.
 fn load_desired_state(
     connection: &Connection,
     application_id: &str,
@@ -402,6 +410,7 @@ fn load_desired_state(
     }
 }
 
+// Updates operator intent with compare-and-set semantics so concurrent changes are not lost.
 fn set_desired_state(
     connection: &Connection,
     application_id: &str,
@@ -423,6 +432,7 @@ fn set_desired_state(
     Ok(())
 }
 
+// Persists an observation only while the runtime record remains current.
 fn persist_observation(
     connection: &Connection,
     runtime: &RuntimeInstance,

@@ -14,6 +14,7 @@ const MANIFEST_FILE_NAME: &str = "pneuma.toml";
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+// Represents the complete versioned import specification before persistence.
 pub struct Manifest {
     pub schema_version: u32,
     pub system: Option<System>,
@@ -25,18 +26,21 @@ pub struct Manifest {
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+// Supplies the optional organizational group selected by the manifest.
 pub struct System {
     pub name: String,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+// Supplies the application identity declared by the repository.
 pub struct Application {
     pub name: String,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+// Restricts manifest delivery input to its declared mechanism and repository.
 pub struct Delivery {
     #[serde(rename = "type")]
     pub delivery_type: DeliveryType,
@@ -45,6 +49,7 @@ pub struct Delivery {
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+// Defines the container port and HTTP health requirements for activation.
 pub struct Runtime {
     pub container_port: u16,
     pub healthcheck_path: String,
@@ -53,6 +58,7 @@ pub struct Runtime {
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+// Declares route intent and the domain required for public visibility.
 pub struct Exposure {
     pub default_visibility: Visibility,
     pub domain: Option<String>,
@@ -112,10 +118,12 @@ impl Error for ManifestError {
     }
 }
 
+// Loads the manifest from Pneuma's fixed repository-relative filename.
 pub fn load_manifest(repository_path: &Path) -> Result<Manifest, ManifestError> {
     load_manifest_at(repository_path, MANIFEST_FILE_NAME)
 }
 
+// Reads and validates a caller-selected manifest path under a repository checkout.
 pub fn load_manifest_at(
     repository_path: &Path,
     manifest_path: &str,
@@ -129,12 +137,14 @@ pub fn load_manifest_at(
     parse_manifest(&contents)
 }
 
+// Parses TOML and applies all domain validation before returning a manifest.
 pub fn parse_manifest(contents: &str) -> Result<Manifest, ManifestError> {
     let manifest = toml::from_str(contents).map_err(|source| ManifestError::Parse { source })?;
     validate_manifest(&manifest)?;
     Ok(manifest)
 }
 
+// Enforces schema and cross-field constraints required before an import is persisted.
 fn validate_manifest(manifest: &Manifest) -> Result<(), ManifestError> {
     if manifest.schema_version != SUPPORTED_SCHEMA_VERSION {
         return Err(ManifestError::UnsupportedSchemaVersion {
@@ -214,10 +224,12 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), ManifestError> {
     Ok(())
 }
 
+// Reuses application-name rules so System names share the same identifier constraints.
 fn is_valid_system_name(name: &str) -> bool {
     is_valid_application_name(name)
 }
 
+// Validates stable lowercase ASCII identifiers used in application identity and paths.
 fn is_valid_application_name(name: &str) -> bool {
     let bytes = name.as_bytes();
     !bytes.is_empty()
@@ -229,10 +241,12 @@ fn is_valid_application_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
 }
 
+// Requires values to be present without accepting leading or trailing whitespace.
 fn is_trimmed_nonempty(value: &str) -> bool {
     !value.is_empty() && value.trim() == value
 }
 
+// Validates the restricted OCI repository syntax accepted in manifest input.
 fn is_valid_delivery_image(image: &str) -> bool {
     is_trimmed_nonempty(image)
         && image.bytes().all(|byte| {
@@ -240,6 +254,7 @@ fn is_valid_delivery_image(image: &str) -> bool {
         })
 }
 
+// Produces a typed validation failure without constructing an unrelated success value.
 fn invalid_field<T>(field: &'static str, reason: &'static str) -> Result<T, ManifestError> {
     // The generic success type lets validation branches return the same error
     // from functions with different `Result` success types; no `T` is created.

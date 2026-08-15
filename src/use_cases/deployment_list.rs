@@ -6,6 +6,7 @@ use rusqlite::Connection;
 use crate::domain::deployment::{DeploymentStatus, DeploymentType};
 
 #[derive(Debug)]
+// Represents the immutable release identity and lifecycle state shown in deployment history.
 pub struct DeploymentSummary {
     pub id: String,
     pub release_id: String,
@@ -50,6 +51,7 @@ impl Error for ListDeploymentsError {
     }
 }
 
+// Reads an application's deployment history and rejects invalid persisted lifecycle values.
 pub fn list_deployments(
     connection: &Connection,
     application_id: &str,

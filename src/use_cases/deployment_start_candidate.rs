@@ -15,6 +15,7 @@ use crate::use_cases::deployment_transition::{
     DeploymentTransition, TransitionDeploymentError, advance_deployment,
 };
 
+// Returns the observed candidate identity needed by verification and cleanup orchestration.
 pub(crate) struct StartedCandidate {
     pub runtime: RuntimeInstance,
     pub container_name: String,
@@ -22,6 +23,7 @@ pub(crate) struct StartedCandidate {
     pub port: u16,
 }
 
+// Groups the persisted deployment context and immutable artifact inputs for candidate startup.
 pub(crate) struct CandidateStartInput<'a> {
     pub connection: &'a mut Connection,
     pub deployment_id: &'a str,
@@ -91,6 +93,7 @@ impl fmt::Display for RuntimeObservationFailure {
 
 impl Error for RuntimeObservationFailure {}
 
+// Materializes a candidate in ordered external steps, retaining resources for compensation on failure.
 pub(crate) fn start_candidate(
     input: CandidateStartInput<'_>,
 ) -> Result<StartedCandidate, CandidateStartError> {

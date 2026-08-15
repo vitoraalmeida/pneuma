@@ -43,6 +43,7 @@ impl Error for PortAllocationError {
     }
 }
 
+// Atomically reserves the first free configured loopback port across live runtimes and candidates.
 pub fn reserve_port(
     connection: &mut Connection,
     application_id: &str,
@@ -83,6 +84,7 @@ pub fn reserve_port(
     Err(PortAllocationError::Exhausted { start, end })
 }
 
+// Releases all reservations owned by a deployment after cleanup or runtime registration.
 pub fn release_port(
     connection: &Connection,
     deployment_id: &str,
@@ -96,6 +98,7 @@ pub fn release_port(
     Ok(())
 }
 
+// Consumes a reservation once its port is recorded on a RuntimeInstance.
 pub fn consume_port_reservation(
     connection: &Connection,
     deployment_id: &str,
@@ -103,6 +106,7 @@ pub fn consume_port_reservation(
     release_port(connection, deployment_id)
 }
 
+// Parses the host-configured allocation range and rejects zero, inverted, or malformed bounds.
 fn configured_range() -> Result<(u16, u16), PortAllocationError> {
     let value = env::var(RUNTIME_PORT_RANGE_ENVIRONMENT_VARIABLE)
         .unwrap_or_else(|_| DEFAULT_RUNTIME_PORT_RANGE.to_owned());

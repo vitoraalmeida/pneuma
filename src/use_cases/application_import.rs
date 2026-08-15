@@ -74,6 +74,8 @@ impl From<ApplicationStoreError> for ImportError {
     }
 }
 
+// Imports a manifest and atomically creates its application specification, returning an
+// existing application unchanged so repeated imports remain idempotent.
 pub fn import_application(
     connection: &mut Connection,
     repository_path: &Path,
@@ -138,6 +140,8 @@ pub fn import_application(
     Ok(application)
 }
 
+// Persists every manifest-derived specification within the caller's transaction so no
+// partially imported application can become visible.
 fn persist_specification(
     transaction: &rusqlite::Transaction<'_>,
     application_id: &str,

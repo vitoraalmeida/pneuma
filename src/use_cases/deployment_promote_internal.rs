@@ -16,6 +16,7 @@ use crate::domain::runtime::{ObservedRuntimeState, RuntimeState};
 use crate::use_cases::deployment_transition::{TransitionDeploymentError, fail_deployment};
 
 #[derive(Debug, PartialEq, Eq)]
+// Identifies a candidate whose promotion was atomically confirmed.
 pub struct PromotedCandidate {
     pub runtime_id: String,
     pub deployment_id: String,
@@ -124,6 +125,7 @@ impl Error for PromoteInternalCandidateError {
     }
 }
 
+// Health-checks an internal candidate outside a transaction, then atomically promotes it.
 pub fn promote_internal_candidate(
     connection: &mut Connection,
     runtime_id: &str,
@@ -237,6 +239,7 @@ pub fn promote_internal_candidate(
     })
 }
 
+// Captures the persisted facts that must remain valid throughout promotion.
 struct PromotionTarget {
     runtime_id: String,
     application_id: String,
@@ -250,6 +253,7 @@ struct PromotionTarget {
     visibility: Visibility,
 }
 
+// Loads and validates persisted state text before making promotion decisions.
 fn load_target(
     connection: &Connection,
     runtime_id: &str,
@@ -330,6 +334,7 @@ fn load_target(
         })
 }
 
+// Recognizes an already committed promotion so retries remain idempotent.
 fn completed_promotion(target: &PromotionTarget) -> Option<PromotedCandidate> {
     if target.state != RuntimeState::Running
         || target.deployment_status != DeploymentStatus::Succeeded
@@ -346,6 +351,7 @@ fn completed_promotion(target: &PromotionTarget) -> Option<PromotedCandidate> {
         })
 }
 
+// Prevents an unobserved, removed, or public candidate from bypassing route activation.
 fn validate_target(target: &PromotionTarget) -> Result<(), PromoteInternalCandidateError> {
     if target.state != RuntimeState::Starting {
         return Err(PromoteInternalCandidateError::InvalidRuntimeState {
@@ -379,6 +385,7 @@ fn validate_target(target: &PromotionTarget) -> Result<(), PromoteInternalCandid
     Ok(())
 }
 
+// Converts structured health failures into durable deployment diagnostics.
 fn health_failure_message(failure: &HealthCheckFailure) -> String {
     match failure {
         HealthCheckFailure::TimedOut => "internal health check timed out".to_owned(),

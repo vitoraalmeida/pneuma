@@ -13,6 +13,7 @@ pub enum ObservedRuntimeState {
 }
 
 impl ObservedRuntimeState {
+    // Preserves an adapter-reported state string, including unknown future values.
     pub fn database_value(&self) -> &str {
         match self {
             Self::Missing => "missing",
@@ -26,6 +27,7 @@ impl ObservedRuntimeState {
         }
     }
 
+    // Maps persisted observations while retaining unrecognized adapter status text.
     pub fn from_database(value: &str) -> Self {
         match value {
             "missing" => Self::Missing,
@@ -41,6 +43,7 @@ impl ObservedRuntimeState {
         }
     }
 
+    // Uses a stable marker for unknown observations while retaining their diagnostic text in memory.
     pub(crate) fn persisted_value(&self) -> &'static str {
         match self {
             Self::Missing => "missing",
@@ -56,6 +59,7 @@ impl ObservedRuntimeState {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+// Captures one Podman observation and its optional loopback endpoint.
 pub struct ContainerObservation {
     pub state: ObservedRuntimeState,
     pub endpoint: Option<SocketAddr>,
@@ -71,6 +75,7 @@ pub enum RuntimeState {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+// Identifies the logical runtime materialized for a Deployment, not just its container.
 pub struct RuntimeInstance {
     pub id: String,
     pub application_id: String,
@@ -87,6 +92,7 @@ pub struct RuntimeInstance {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+// Supplies the identity and reserved endpoint required to register a runtime.
 pub struct RuntimeRegistration {
     pub id: String,
     pub application_id: String,
@@ -97,6 +103,7 @@ pub struct RuntimeRegistration {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+// Identifies the prior materialization retained during candidate replacement.
 pub struct PreviousRuntime {
     pub runtime_id: String,
     pub deployment_id: String,
@@ -104,6 +111,7 @@ pub struct PreviousRuntime {
 }
 
 impl RuntimeState {
+    // Serializes the logical runtime lifecycle state accepted by persistence.
     pub(crate) fn database_value(self) -> &'static str {
         match self {
             Self::Starting => "starting",
@@ -114,6 +122,7 @@ impl RuntimeState {
         }
     }
 
+    // Rejects persisted logical states outside the runtime lifecycle.
     pub(crate) fn from_database(value: &str) -> Option<Self> {
         match value {
             "starting" => Some(Self::Starting),
@@ -133,6 +142,7 @@ pub enum DesiredRuntimeState {
 }
 
 impl DesiredRuntimeState {
+    // Rejects persisted runtime intent outside the operator-controlled choices.
     pub(crate) fn from_database(value: &str) -> Option<Self> {
         match value {
             "running" => Some(Self::Running),
@@ -141,6 +151,7 @@ impl DesiredRuntimeState {
         }
     }
 
+    // Serializes the operator's requested runtime intent.
     pub(crate) fn database_value(self) -> &'static str {
         match self {
             Self::Running => "running",

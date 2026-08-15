@@ -10,6 +10,7 @@ const APPLICATION_LABEL: &str = "io.pneuma.application";
 const REVISION_LABEL: &str = "io.pneuma.revision";
 
 #[derive(Debug, PartialEq, Eq)]
+// Captures the identity and diagnostics returned when Podman creates a candidate container.
 pub struct CreatedContainer {
     pub id: String,
     pub name: String,
@@ -18,6 +19,7 @@ pub struct CreatedContainer {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+// Preserves Podman diagnostics from successful lifecycle commands for callers that report effects.
 pub struct ContainerCommandOutput {
     pub stdout: String,
     pub stderr: String,
@@ -241,6 +243,7 @@ impl Error for ResolveContainerError {
     }
 }
 
+// Creates a loopback-only candidate container so it cannot receive public traffic before promotion.
 pub fn create_container(
     image_reference: &str,
     application_name: &str,
@@ -293,12 +296,14 @@ pub fn create_container(
     })
 }
 
+// Starts a validated container through the shared Podman lifecycle command path.
 pub fn start_container(
     container_id: &str,
 ) -> Result<ContainerCommandOutput, ControlContainerError> {
     control_container("starting", &["start"], container_id)
 }
 
+// Resolves Podman's current container ID by stable name because recreation changes external IDs.
 pub fn resolve_container_id(name: &str) -> Result<String, ResolveContainerError> {
     if name.is_empty() {
         return Err(ResolveContainerError::EmptyName);
@@ -325,16 +330,19 @@ pub fn resolve_container_id(name: &str) -> Result<String, ResolveContainerError>
     Ok(id.to_owned())
 }
 
+// Stops a validated container through the shared Podman lifecycle command path.
 pub fn stop_container(container_id: &str) -> Result<ContainerCommandOutput, ControlContainerError> {
     control_container("stopping", &["stop"], container_id)
 }
 
+// Force-removes a validated candidate container during cleanup after a failed deployment.
 pub fn remove_container(
     container_id: &str,
 ) -> Result<ContainerCommandOutput, ControlContainerError> {
     control_container("removing", &["container", "rm", "--force"], container_id)
 }
 
+// Observes container state and exposes an endpoint only while Podman confirms it is running.
 pub fn observe_container(
     container_id: &str,
     container_port: u16,
@@ -389,6 +397,7 @@ pub fn observe_container(
     Ok(ContainerObservation { state, endpoint })
 }
 
+// Executes a lifecycle command after validating the external container ID used as its target.
 fn control_container(
     operation: &'static str,
     arguments: &[&str],
@@ -417,6 +426,7 @@ fn control_container(
     Ok(ContainerCommandOutput { stdout, stderr })
 }
 
+// Reads Podman's published endpoint and accepts only the loopback binding required by the runtime boundary.
 fn observe_endpoint(
     container_id: &str,
     container_port: u16,
@@ -450,6 +460,7 @@ fn observe_endpoint(
     Ok(endpoint)
 }
 
+// Converts a failed Podman observation into diagnostics tied to the attempted operation and container.
 fn observation_failure(
     operation: &'static str,
     container_id: &str,
@@ -463,6 +474,7 @@ fn observation_failure(
     }
 }
 
+// Maps Podman's open-ended state strings into the closed domain observation set.
 fn observed_state(status: &str) -> ObservedRuntimeState {
     match status {
         "configured" | "created" => ObservedRuntimeState::Created,
@@ -477,10 +489,12 @@ fn observed_state(status: &str) -> ObservedRuntimeState {
     }
 }
 
+// Rejects empty or non-hexadecimal values before passing a container ID to Podman.
 fn is_container_id(container_id: &str) -> bool {
     !container_id.is_empty() && container_id.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+// Prefers Podman's stderr failure detail, using stdout only when stderr is empty.
 fn diagnostic<'a>(stdout: &'a str, stderr: &'a str) -> &'a str {
     if stderr.trim().is_empty() {
         stdout.trim()
@@ -489,6 +503,7 @@ fn diagnostic<'a>(stdout: &'a str, stderr: &'a str) -> &'a str {
     }
 }
 
+// Derives the deterministic legacy container name from the application and immutable source revision.
 pub(crate) fn container_name(application_name: &str, commit_sha: &str) -> String {
     format!("pneuma-{application_name}-{commit_sha}")
 }

@@ -81,14 +81,17 @@ impl Error for QuadletError {
     }
 }
 
+// Derives the stable Quadlet unit base name from the logical application and deployment identity.
 pub fn unit_name(application_name: &str, deployment_id: &str) -> String {
     format!("pneuma-{application_name}-{deployment_id}")
 }
 
+// Keeps the generated Podman container name aligned with the Quadlet unit identity.
 pub fn container_name(application_name: &str, deployment_id: &str) -> String {
     format!("pneuma-{application_name}-{deployment_id}")
 }
 
+// Writes a rootless, loopback-bound Quadlet unit that systemd can recreate after Pneuma exits.
 pub fn write_unit(
     application_name: &str,
     deployment_id: &str,
@@ -109,6 +112,7 @@ pub fn write_unit(
     Ok(unit)
 }
 
+// Removes a generated Quadlet file idempotently so candidate cleanup can be retried safely.
 pub fn remove_unit(unit: &str) -> Result<(), QuadletError> {
     let path = quadlet_directory()?.join(format!("{unit}.container"));
     match fs::remove_file(&path) {
@@ -118,22 +122,27 @@ pub fn remove_unit(unit: &str) -> Result<(), QuadletError> {
     }
 }
 
+// Reports whether the expected Quadlet source file remains available for runtime recovery.
 pub fn unit_exists(unit: &str) -> Result<bool, QuadletError> {
     Ok(quadlet_directory()?
         .join(format!("{unit}.container"))
         .exists())
 }
 
+// Regenerates user-systemd units after a Quadlet file changes.
 pub fn daemon_reload() -> Result<(), QuadletError> {
     control("reloading units", "", &["daemon-reload"])
 }
+// Starts the generated user service for a logical Quadlet unit.
 pub fn start(unit: &str) -> Result<(), QuadletError> {
     control("starting", unit, &["start"])
 }
+// Stops the generated user service without removing its Quadlet definition.
 pub fn stop(unit: &str) -> Result<(), QuadletError> {
     control("stopping", unit, &["stop"])
 }
 
+// Resolves the configurable rootless Quadlet directory, defaulting under the current user's home.
 fn quadlet_directory() -> Result<PathBuf, QuadletError> {
     if let Some(directory) =
         env::var_os(QUADLET_DIRECTORY_ENVIRONMENT_VARIABLE).filter(|path| !path.is_empty())
@@ -144,6 +153,7 @@ fn quadlet_directory() -> Result<PathBuf, QuadletError> {
     Ok(Path::new(&home).join(".config/containers/systemd"))
 }
 
+// Invokes systemctl --user and preserves the service-specific failure diagnostic.
 fn control(operation: &'static str, unit: &str, arguments: &[&str]) -> Result<(), QuadletError> {
     let service = if unit.is_empty() {
         String::new()

@@ -8,6 +8,7 @@ pub enum Visibility {
 }
 
 impl Visibility {
+    // Serializes the requested route visibility stored as application intent.
     pub fn database_value(self) -> &'static str {
         match self {
             Self::Internal => "internal",
@@ -15,6 +16,7 @@ impl Visibility {
         }
     }
 
+    // Rejects persisted visibility values outside the supported intent set.
     pub(crate) fn from_database(value: &str) -> Option<Self> {
         match value {
             "internal" => Some(Self::Internal),
@@ -35,6 +37,7 @@ pub enum ExposureMaterializationState {
 }
 
 impl ExposureMaterializationState {
+    // Serializes the last confirmed Caddy materialization state.
     pub(crate) fn database_value(self) -> &'static str {
         match self {
             Self::NotMaterialized => "not_materialized",
@@ -46,6 +49,7 @@ impl ExposureMaterializationState {
         }
     }
 
+    // Rejects persisted route states outside the exposure lifecycle.
     pub(crate) fn from_database(value: &str) -> Option<Self> {
         match value {
             "not_materialized" => Some(Self::NotMaterialized),
@@ -60,6 +64,7 @@ impl ExposureMaterializationState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+// Tracks visibility intent separately from the confirmed Caddy route state.
 pub struct Exposure {
     pub application_id: String,
     pub desired_visibility: Visibility,
@@ -72,6 +77,7 @@ pub struct Exposure {
     pub last_error_message: Option<String>,
 }
 
+// Validates an ASCII DNS name within whole-domain and per-label limits.
 pub(crate) fn is_valid_domain(domain: &str) -> bool {
     if domain.is_empty() || domain.len() > 253 || !domain.is_ascii() {
         return false;
@@ -80,6 +86,7 @@ pub(crate) fn is_valid_domain(domain: &str) -> bool {
     domain.split('.').all(is_valid_domain_label)
 }
 
+// Enforces DNS label boundaries while permitting only alphanumerics and interior hyphens.
 fn is_valid_domain_label(label: &str) -> bool {
     let bytes = label.as_bytes();
     !bytes.is_empty()

@@ -1,4 +1,5 @@
 #[derive(Debug, PartialEq, Eq)]
+// Records one immutable attempt to activate a Release for an Application.
 pub struct Deployment {
     pub id: String,
     pub application_id: String,
@@ -16,6 +17,7 @@ pub enum DeploymentType {
 }
 
 impl DeploymentType {
+    // Serializes the closed deployment origin set accepted by persistence.
     pub(crate) fn database_value(self) -> &'static str {
         match self {
             Self::Deploy => "deploy",
@@ -23,6 +25,7 @@ impl DeploymentType {
         }
     }
 
+    // Rejects persisted deployment origins outside the known domain set.
     pub(crate) fn from_database(value: &str) -> Option<Self> {
         match value {
             "deploy" => Some(Self::Deploy),
@@ -43,6 +46,7 @@ pub enum DeploymentStatus {
 }
 
 impl DeploymentStatus {
+    // Serializes the lifecycle state recorded for an activation attempt.
     pub(crate) fn database_value(self) -> &'static str {
         match self {
             Self::Pending => "pending",
@@ -54,6 +58,7 @@ impl DeploymentStatus {
         }
     }
 
+    // Rejects persisted lifecycle states outside the deployment state machine.
     pub(crate) fn from_database(value: &str) -> Option<Self> {
         match value {
             "pending" => Some(Self::Pending),

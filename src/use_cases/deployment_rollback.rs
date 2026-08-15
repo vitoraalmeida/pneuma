@@ -51,6 +51,7 @@ impl Error for RollbackError {
     }
 }
 
+// Reuses a historical immutable artifact through the normal deployment flow, preserving history.
 pub fn rollback_deployment(
     connection: &mut Connection,
     application_id: &str,
@@ -82,6 +83,7 @@ pub fn rollback_deployment(
     .map_err(|source| RollbackError::DeployRelease { source })
 }
 
+// Selects the newest succeeded deployment that is not currently active.
 fn previous_release(
     connection: &Connection,
     application_id: &str,
