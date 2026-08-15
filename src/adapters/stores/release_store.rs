@@ -1,9 +1,10 @@
 use std::error::Error;
 use std::fmt;
+use std::io;
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
-use crate::domain::release::Release;
+use crate::domain::release::{OciArtifact, Release};
 
 #[derive(Debug)]
 pub enum ReleaseStoreError {
@@ -74,9 +75,7 @@ pub fn insert_release(
     transaction: &Transaction<'_>,
     id: &str,
     application_id: &str,
-    image_reference: &str,
-    image_repository: &str,
-    image_digest: &str,
+    artifact: &OciArtifact,
 ) -> Result<(), ReleaseStoreError> {
     transaction
         .execute(
@@ -92,9 +91,9 @@ pub fn insert_release(
             params![
                 id,
                 application_id,
-                image_reference,
-                image_repository,
-                image_digest
+                artifact.reference(),
+                artifact.repository(),
+                artifact.digest()
             ],
         )
         .map_err(|source| ReleaseStoreError::Persistence { source })?;
@@ -114,12 +113,22 @@ pub fn load_release_by_digest(
              WHERE application_id = ?1 AND image_digest = ?2",
             params![application_id, image_digest],
             |row| {
+                let image_reference = row.get::<_, String>(2)?;
+                let image_repository = row.get::<_, String>(3)?;
+                let image_digest = row.get::<_, String>(4)?;
+                let artifact =
+                    OciArtifact::from_persisted(&image_reference, &image_repository, &image_digest)
+                        .map_err(|source| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                2,
+                                rusqlite::types::Type::Text,
+                                Box::new(io::Error::new(io::ErrorKind::InvalidData, source)),
+                            )
+                        })?;
                 Ok(Release {
                     id: row.get(0)?,
                     application_id: row.get(1)?,
-                    image_reference: row.get(2)?,
-                    image_repository: row.get(3)?,
-                    image_digest: row.get(4)?,
+                    artifact,
                     created_at: row.get(5)?,
                 })
             },

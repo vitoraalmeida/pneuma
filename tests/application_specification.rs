@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use pneuma::adapters::database;
 use pneuma::adapters::stores::application_store;
 use pneuma::domain::application::RepositoryKind;
+use pneuma::domain::delivery::DeliveryType;
 use pneuma::domain::exposure::{ExposureMaterializationState, Visibility};
-use pneuma::domain::manifest::DeliveryType;
 use pneuma::use_cases::application_import::import_application;
 
 #[test]

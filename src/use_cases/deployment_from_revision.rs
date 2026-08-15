@@ -101,7 +101,7 @@ pub fn deploy_branch(
     deploy_oci(
         connection,
         application_id,
-        reference.as_str(),
+        reference.reference(),
         Some(commit_sha.as_str()),
         public_configuration,
     )

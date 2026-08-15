@@ -43,6 +43,7 @@ pub enum PromotePublicCandidateError {
         application_id: String,
         reason: String,
     },
+    InvalidConfigurationVersion,
     InvalidDiagnostic,
     Persistence {
         source: rusqlite::Error,
@@ -77,6 +78,9 @@ impl fmt::Display for PromotePublicCandidateError {
             ),
             Self::InvalidDiagnostic => formatter
                 .write_str("exposure failure code and message must be trimmed and non-empty"),
+            Self::InvalidConfigurationVersion => {
+                formatter.write_str("exposure configuration version must be non-empty")
+            }
             Self::Persistence { source } => {
                 write!(formatter, "failed to persist public promotion: {source}")
             }
@@ -92,6 +96,7 @@ impl Error for PromotePublicCandidateError {
             | Self::InvalidRuntime { .. }
             | Self::InvalidDeploymentState { .. }
             | Self::InvalidExposure { .. }
+            | Self::InvalidConfigurationVersion
             | Self::InvalidDiagnostic => None,
         }
     }
@@ -188,10 +193,7 @@ pub fn promote_public_candidate(
     configuration_version: &str,
 ) -> Result<PromotedPublicCandidate, PromotePublicCandidateError> {
     if configuration_version.is_empty() {
-        return Err(PromotePublicCandidateError::InvalidExposure {
-            application_id: "unknown".to_owned(),
-            reason: "configuration version must be non-empty".to_owned(),
-        });
+        return Err(PromotePublicCandidateError::InvalidConfigurationVersion);
     }
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)

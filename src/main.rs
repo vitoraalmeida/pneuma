@@ -11,9 +11,10 @@ use pneuma::adapters::database::{self, DatabaseError};
 use pneuma::adapters::git_source::{
     CloneRepositoryError, cleanup_checkout, clone_repository, is_remote_repository,
 };
-use pneuma::adapters::oci_image::{OciImageReference, pull_image};
+use pneuma::adapters::oci_image::pull_image;
 use pneuma::domain::application::Application;
 use pneuma::domain::exposure::Visibility;
+use pneuma::domain::release::OciArtifact;
 use pneuma::use_cases::application_import::{ImportError, import_application};
 use pneuma::use_cases::application_list::{
     ListError, application_is_deployed, find_application_by_name, list_applications,
@@ -1216,7 +1217,7 @@ fn run_doctor(connection: &rusqlite::Connection, verbose: bool) -> Result<(), Cl
             Ok(images) => {
                 for image in images {
                     match image {
-                        Ok(image) if OciImageReference::parse(&image).is_ok() => {
+                        Ok(image) if OciArtifact::parse(&image).is_ok() => {
                             match pull_image(&image) {
                                 Ok(_) => println!("✓ Active OCI image: {image} (pullable)"),
                                 Err(source) => {

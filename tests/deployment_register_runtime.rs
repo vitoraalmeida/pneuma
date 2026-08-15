@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use pneuma::adapters::database;
 use pneuma::domain::deployment::DeploymentType;
+use pneuma::domain::release::OciArtifact;
 use pneuma::domain::runtime::{ObservedRuntimeState, RuntimeState};
 use pneuma::use_cases::application_import::import_application;
 use pneuma::use_cases::deployment_create::create_deployment;
@@ -50,14 +51,7 @@ fn requires_a_starting_deployment() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
     let application =
         import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
-    let release = create_release(
-        &mut connection,
-        &application.id,
-        &format!("localhost/test:{}", "a".repeat(40)),
-        "localhost/test",
-        &"a".repeat(40),
-    )
-    .unwrap();
+    let release = create_release(&mut connection, &application.id, &artifact('a')).unwrap();
     let deployment = create_deployment(
         &mut connection,
         &application.id,
@@ -270,19 +264,12 @@ fn add_starting_deployment(
 ) -> (String, String) {
     let application =
         import_application(connection, &fixture_path(fixture), None, None, None).unwrap();
-    let commit_sha = if fixture == "valid" {
-        "a".repeat(40)
+    let artifact = if fixture == "valid" {
+        artifact('a')
     } else {
-        "b".repeat(40)
+        artifact('b')
     };
-    let release = create_release(
-        connection,
-        &application.id,
-        &format!("localhost/test:{commit_sha}"),
-        "localhost/test",
-        &commit_sha,
-    )
-    .unwrap();
+    let release = create_release(connection, &application.id, &artifact).unwrap();
     let deployment = create_deployment(
         connection,
         &application.id,
@@ -298,4 +285,12 @@ fn fixture_path(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
         .join(name)
+}
+
+fn artifact(character: char) -> OciArtifact {
+    OciArtifact::new(
+        "localhost/test",
+        &format!("sha256:{}", character.to_string().repeat(64)),
+    )
+    .unwrap()
 }

@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use pneuma::adapters::database;
 use pneuma::domain::deployment::{DeploymentStatus, DeploymentType};
+use pneuma::domain::release::OciArtifact;
 use pneuma::use_cases::application_import::import_application;
 use pneuma::use_cases::deployment_create::create_deployment;
 use pneuma::use_cases::deployment_transition::{
@@ -157,14 +158,7 @@ fn records_a_structured_failure_and_allows_a_later_attempt() {
         )
     );
 
-    let release = create_release(
-        &mut connection,
-        &application_id,
-        &format!("localhost/test:{}", "b".repeat(40)),
-        "localhost/test",
-        &"b".repeat(40),
-    )
-    .unwrap();
+    let release = create_release(&mut connection, &application_id, &artifact('b')).unwrap();
     create_deployment(
         &mut connection,
         &application_id,
@@ -236,14 +230,7 @@ fn pending_deployment() -> (rusqlite::Connection, String, String) {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
     let application =
         import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
-    let release = create_release(
-        &mut connection,
-        &application.id,
-        &format!("localhost/test:{}", "a".repeat(40)),
-        "localhost/test",
-        &"a".repeat(40),
-    )
-    .unwrap();
+    let release = create_release(&mut connection, &application.id, &artifact('a')).unwrap();
     let deployment = create_deployment(
         &mut connection,
         &application.id,
@@ -258,4 +245,12 @@ fn fixture_path(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
         .join(name)
+}
+
+fn artifact(character: char) -> OciArtifact {
+    OciArtifact::new(
+        "localhost/test",
+        &format!("sha256:{}", character.to_string().repeat(64)),
+    )
+    .unwrap()
 }

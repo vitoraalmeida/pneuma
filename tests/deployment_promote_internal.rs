@@ -5,6 +5,7 @@ use std::thread;
 
 use pneuma::adapters::database;
 use pneuma::domain::deployment::DeploymentType;
+use pneuma::domain::release::OciArtifact;
 use pneuma::use_cases::application_import::import_application;
 use pneuma::use_cases::deployment_create::create_deployment;
 use pneuma::use_cases::deployment_promote_internal::{
@@ -156,15 +157,9 @@ fn add_verifying_candidate(
 ) -> String {
     let application =
         import_application(connection, &fixture_path(fixture), None, None, None).unwrap();
-    let commit_sha = commit_character.to_string().repeat(40);
-    let release = create_release(
-        connection,
-        &application.id,
-        &format!("localhost/test:{commit_sha}"),
-        "localhost/test",
-        &commit_sha,
-    )
-    .unwrap();
+    let digest = format!("sha256:{}", commit_character.to_string().repeat(64));
+    let artifact = OciArtifact::new("localhost/test", &digest).unwrap();
+    let release = create_release(connection, &application.id, &artifact).unwrap();
     let deployment = create_deployment(
         connection,
         &application.id,

@@ -34,8 +34,10 @@ without selecting a new Release or making destructive changes from ambiguity.
   persisted observed state instead of inventing `Running` on reload.
   Result: runtime registration, lifecycle, cleanup, and exposure share typed
   RuntimeInstance and observation models mapped by the runtime store.
-- [ ] Represent immutable OCI artifact identity as one validated value during
+- [x] Represent immutable OCI artifact identity as one validated value during
   Release creation, and remove invented identifiers from Release error mapping.
+  Result: Release owns a validated OciArtifact, stores reject inconsistent
+  persisted artifact parts, and errors preserve real identifiers and sources.
 - [ ] Convert `reconciliation-e2e.md` into an executable reconciliation test
   plan before implementation: assign every scenario to a focused Rust test or
   disposable-VM E2E case, define fixtures, fault injection, persisted-state and

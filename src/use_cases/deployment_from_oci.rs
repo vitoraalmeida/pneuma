@@ -3,9 +3,10 @@ use std::fmt;
 
 use rusqlite::Connection;
 
-use crate::adapters::oci_image::{OciImageReference, PullImageError, pull_image};
+use crate::adapters::oci_image::{PullImageError, pull_image};
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::domain::deployment::DeploymentType;
+use crate::domain::release::OciArtifact;
 use crate::use_cases::deployment_execute_release::{
     DeployReleaseError, DeploymentResult, PublicDeploymentConfiguration, deploy_release,
 };
@@ -79,8 +80,8 @@ pub fn deploy_oci(
     source_revision: Option<&str>,
     public_configuration: Option<&PublicDeploymentConfiguration>,
 ) -> Result<DeploymentResult, DeployOciError> {
-    let reference =
-        OciImageReference::parse(image_reference).map_err(|source| DeployOciError::PullImage {
+    let artifact =
+        OciArtifact::parse(image_reference).map_err(|source| DeployOciError::PullImage {
             source: PullImageError::InvalidReference { source },
         })?;
     let delivery = application_store::load_delivery_specification(connection, application_id)
@@ -90,23 +91,17 @@ pub fn deploy_oci(
             application_id: application_id.to_owned(),
         });
     };
-    if reference.repository() != delivery.image_repository {
+    if artifact.repository() != delivery.image_repository {
         return Err(DeployOciError::RepositoryMismatch {
             application_id: application_id.to_owned(),
             allowed: delivery.image_repository,
-            actual: reference.repository().to_owned(),
+            actual: artifact.repository().to_owned(),
         });
     }
     let image =
-        pull_image(image_reference).map_err(|source| DeployOciError::PullImage { source })?;
-    let release = create_release(
-        connection,
-        application_id,
-        image.reference.as_str(),
-        image.reference.repository(),
-        image.reference.digest(),
-    )
-    .map_err(|source| DeployOciError::CreateRelease { source })?;
+        pull_image(artifact.reference()).map_err(|source| DeployOciError::PullImage { source })?;
+    let release = create_release(connection, application_id, &image.artifact)
+        .map_err(|source| DeployOciError::CreateRelease { source })?;
     deploy_release(
         connection,
         application_id,

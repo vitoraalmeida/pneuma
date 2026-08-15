@@ -81,6 +81,8 @@ than positional tuples.
 The unique pair `(application_id, image_digest)` prevents duplicate Releases for
 the same artifact. Source revision belongs to Deployment because the same
 artifact can be activated by different requests or branches.
+The domain `Release` carries one validated `OciArtifact`; its canonical
+digest-pinned reference, repository, and digest cannot be supplied independently.
 
 ### Deployment
 

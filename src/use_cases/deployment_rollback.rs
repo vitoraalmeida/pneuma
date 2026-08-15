@@ -3,9 +3,9 @@ use std::fmt;
 
 use rusqlite::{Connection, OptionalExtension};
 
-use crate::adapters::oci_image::{OciImageReference, PullImageError, pull_image};
+use crate::adapters::oci_image::{PullImageError, pull_image};
 use crate::domain::deployment::DeploymentType;
-use crate::domain::release::Release;
+use crate::domain::release::{OciArtifact, Release};
 use crate::use_cases::deployment_execute_release::{
     DeployReleaseError, DeploymentResult, PublicDeploymentConfiguration, deploy_release,
 };
@@ -69,10 +69,8 @@ pub fn rollback_deployment(
         });
     }
     let (release, source_revision) = previous_release(connection, application_id)?;
-    if OciImageReference::parse(&release.image_reference).is_ok() {
-        pull_image(&release.image_reference)
-            .map_err(|source| RollbackError::PullImage { source })?;
-    }
+    pull_image(release.artifact.reference())
+        .map_err(|source| RollbackError::PullImage { source })?;
     deploy_release(
         connection,
         application_id,
@@ -102,13 +100,26 @@ fn previous_release(
              LIMIT 1",
             [application_id],
             |row| {
+                let image_reference = row.get::<_, String>(2)?;
+                let image_repository = row.get::<_, String>(3)?;
+                let image_digest = row.get::<_, String>(4)?;
+                let artifact =
+                    OciArtifact::from_persisted(&image_reference, &image_repository, &image_digest)
+                        .map_err(|source| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                2,
+                                rusqlite::types::Type::Text,
+                                Box::new(std::io::Error::new(
+                                    std::io::ErrorKind::InvalidData,
+                                    source,
+                                )),
+                            )
+                        })?;
                 Ok((
                     Release {
                         id: row.get(0)?,
                         application_id: row.get(1)?,
-                        image_reference: row.get(2)?,
-                        image_repository: row.get(3)?,
-                        image_digest: row.get(4)?,
+                        artifact,
                         created_at: row.get(6)?,
                     },
                     row.get(5)?,
@@ -141,8 +152,10 @@ mod tests {
                  INSERT INTO releases (
                     id, application_id, image_repository, image_digest, image_reference, created_at
                  ) VALUES (
-                    'release-id', 'app-id', 'registry.example/app', 'sha256:artifact',
-                    'registry.example/app@sha256:artifact', 'now'
+                    'release-id', 'app-id', 'registry.example/app',
+                    'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                    'registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                    'now'
                  );
                  INSERT INTO deployments (
                     id, application_id, release_id, type, status, source_revision,
@@ -157,6 +170,7 @@ mod tests {
         let (release, source_revision) = previous_release(&connection, "app-id").unwrap();
 
         assert_eq!(release.id, "release-id");
+        assert_eq!(release.artifact.repository(), "registry.example/app");
         assert_eq!(source_revision.as_deref(), Some("historical-commit"));
     }
 }

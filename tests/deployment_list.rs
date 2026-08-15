@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use pneuma::adapters::database;
 use pneuma::domain::deployment::{DeploymentStatus, DeploymentType};
+use pneuma::domain::release::OciArtifact;
 use pneuma::use_cases::application_import::import_application;
 use pneuma::use_cases::deployment_create::create_deployment;
 use pneuma::use_cases::deployment_list::list_deployments;
@@ -23,22 +24,8 @@ fn returns_deployments_ordered_newest_first() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
     let application =
         import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
-    let first_release = create_release(
-        &mut connection,
-        &application.id,
-        &format!("localhost/test:{}", "a".repeat(40)),
-        "localhost/test",
-        &"a".repeat(40),
-    )
-    .unwrap();
-    let second_release = create_release(
-        &mut connection,
-        &application.id,
-        &format!("localhost/test:{}", "b".repeat(40)),
-        "localhost/test",
-        &"b".repeat(40),
-    )
-    .unwrap();
+    let first_release = create_release(&mut connection, &application.id, &artifact('a')).unwrap();
+    let second_release = create_release(&mut connection, &application.id, &artifact('b')).unwrap();
     let first_deployment = create_deployment(
         &mut connection,
         &application.id,
@@ -81,11 +68,11 @@ fn returns_deployments_ordered_newest_first() {
 
     assert_eq!(deployments.len(), 2);
     assert_eq!(deployments[0].id, second_deployment.id);
-    assert_eq!(deployments[0].image_digest, "b".repeat(40));
+    assert_eq!(deployments[0].image_digest, digest('b'));
     assert_eq!(deployments[0].status, DeploymentStatus::Succeeded);
     assert!(deployments[0].finished_at.is_some());
     assert_eq!(deployments[1].id, first_deployment.id);
-    assert_eq!(deployments[1].image_digest, "a".repeat(40));
+    assert_eq!(deployments[1].image_digest, digest('a'));
     assert_eq!(deployments[1].status, DeploymentStatus::Failed);
     assert!(deployments[1].finished_at.is_some());
 }
@@ -97,22 +84,8 @@ fn returns_only_deployments_for_the_given_application() {
         import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
     let second =
         import_application(&mut connection, &fixture_path("another"), None, None, None).unwrap();
-    let first_release = create_release(
-        &mut connection,
-        &first.id,
-        &format!("localhost/test:{}", "a".repeat(40)),
-        "localhost/test",
-        &"a".repeat(40),
-    )
-    .unwrap();
-    let second_release = create_release(
-        &mut connection,
-        &second.id,
-        &format!("localhost/test:{}", "b".repeat(40)),
-        "localhost/test",
-        &"b".repeat(40),
-    )
-    .unwrap();
+    let first_release = create_release(&mut connection, &first.id, &artifact('a')).unwrap();
+    let second_release = create_release(&mut connection, &second.id, &artifact('b')).unwrap();
     create_deployment(
         &mut connection,
         &first.id,
@@ -132,13 +105,21 @@ fn returns_only_deployments_for_the_given_application() {
     let second_deployments = list_deployments(&connection, &second.id).unwrap();
 
     assert_eq!(first_deployments.len(), 1);
-    assert_eq!(first_deployments[0].image_digest, "a".repeat(40));
+    assert_eq!(first_deployments[0].image_digest, digest('a'));
     assert_eq!(second_deployments.len(), 1);
-    assert_eq!(second_deployments[0].image_digest, "b".repeat(40));
+    assert_eq!(second_deployments[0].image_digest, digest('b'));
 }
 
 fn fixture_path(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
         .join(name)
+}
+
+fn artifact(character: char) -> OciArtifact {
+    OciArtifact::new("localhost/test", &digest(character)).unwrap()
+}
+
+fn digest(character: char) -> String {
+    format!("sha256:{}", character.to_string().repeat(64))
 }

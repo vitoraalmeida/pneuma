@@ -3,6 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use pneuma::adapters::database;
 use pneuma::domain::deployment::{DeploymentStatus, DeploymentType};
+use pneuma::domain::release::OciArtifact;
 use pneuma::use_cases::application_import::import_application;
 use pneuma::use_cases::deployment_create::{
     CreateDeploymentError, create_deployment, create_deployment_with_source_revision,
@@ -43,14 +44,7 @@ fn persists_a_pending_deployment_atomically() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
     let application =
         import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
-    let release = create_release(
-        &mut connection,
-        &application.id,
-        &format!("localhost/test:{}", "a".repeat(40)),
-        "localhost/test",
-        &"a".repeat(40),
-    )
-    .unwrap();
+    let release = create_release(&mut connection, &application.id, &artifact('a')).unwrap();
 
     let deployment = create_deployment(
         &mut connection,
@@ -71,22 +65,8 @@ fn rejects_a_second_active_deployment_for_the_application() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
     let application =
         import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
-    let first_release = create_release(
-        &mut connection,
-        &application.id,
-        &format!("localhost/test:{}", "a".repeat(40)),
-        "localhost/test",
-        &"a".repeat(40),
-    )
-    .unwrap();
-    let second_release = create_release(
-        &mut connection,
-        &application.id,
-        &format!("localhost/test:{}", "b".repeat(40)),
-        "localhost/test",
-        &"b".repeat(40),
-    )
-    .unwrap();
+    let first_release = create_release(&mut connection, &application.id, &artifact('a')).unwrap();
+    let second_release = create_release(&mut connection, &application.id, &artifact('b')).unwrap();
     create_deployment(
         &mut connection,
         &application.id,
@@ -119,14 +99,7 @@ fn reuses_a_release_for_a_later_deployment_attempt() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
     let application =
         import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
-    let release = create_release(
-        &mut connection,
-        &application.id,
-        &format!("localhost/test:{}", "a".repeat(40)),
-        "localhost/test",
-        &"a".repeat(40),
-    )
-    .unwrap();
+    let release = create_release(&mut connection, &application.id, &artifact('a')).unwrap();
     let first_deployment = create_deployment(
         &mut connection,
         &application.id,
@@ -167,14 +140,7 @@ fn preserves_provenance_for_each_attempt_using_the_same_release() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
     let application =
         import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
-    let release = create_release(
-        &mut connection,
-        &application.id,
-        &format!("localhost/test:{}", "a".repeat(40)),
-        "localhost/test",
-        &"a".repeat(40),
-    )
-    .unwrap();
+    let release = create_release(&mut connection, &application.id, &artifact('a')).unwrap();
 
     let first = create_deployment_with_source_revision(
         &mut connection,
@@ -326,14 +292,7 @@ fn database_rejects_a_release_from_another_application() {
         import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
     let second =
         import_application(&mut connection, &fixture_path("another"), None, None, None).unwrap();
-    let release = create_release(
-        &mut connection,
-        &first.id,
-        &format!("localhost/test:{}", "a".repeat(40)),
-        "localhost/test",
-        &"a".repeat(40),
-    )
-    .unwrap();
+    let release = create_release(&mut connection, &first.id, &artifact('a')).unwrap();
     let deployment = create_deployment(
         &mut connection,
         &first.id,
@@ -359,14 +318,7 @@ fn setup_active_runtime(
 ) -> (String, String) {
     let application =
         import_application(connection, &fixture_path("valid"), None, None, None).unwrap();
-    let release = create_release(
-        connection,
-        &application.id,
-        &format!("localhost/test:{}", "a".repeat(40)),
-        "localhost/test",
-        &"a".repeat(40),
-    )
-    .unwrap();
+    let release = create_release(connection, &application.id, &artifact('a')).unwrap();
     connection
         .execute(
             "INSERT INTO deployments (
@@ -402,6 +354,14 @@ fn fixture_path(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
         .join(name)
+}
+
+fn artifact(character: char) -> OciArtifact {
+    OciArtifact::new(
+        "localhost/test",
+        &format!("sha256:{}", character.to_string().repeat(64)),
+    )
+    .unwrap()
 }
 
 fn temporary_database_path() -> PathBuf {

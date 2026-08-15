@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use crate::domain::delivery::DeliveryType;
 use crate::domain::exposure::{Visibility, is_valid_domain};
 
 const SUPPORTED_SCHEMA_VERSION: u32 = 3;
@@ -40,27 +41,6 @@ pub struct Delivery {
     #[serde(rename = "type")]
     pub delivery_type: DeliveryType,
     pub image: String,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum DeliveryType {
-    Oci,
-}
-
-impl DeliveryType {
-    pub fn database_value(self) -> &'static str {
-        match self {
-            Self::Oci => "oci",
-        }
-    }
-
-    pub(crate) fn from_database(value: &str) -> Option<Self> {
-        match value {
-            "oci" => Some(Self::Oci),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]

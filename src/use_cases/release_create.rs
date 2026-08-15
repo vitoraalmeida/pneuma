@@ -5,11 +5,13 @@ use rusqlite::Connection;
 
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::adapters::stores::release_store::{self, ReleaseStoreError};
-use crate::domain::release::Release;
+use crate::domain::release::{OciArtifact, Release};
 
 #[derive(Debug)]
 pub enum CreateReleaseError {
     ApplicationNotFound { application_id: String },
+    ApplicationStore { source: ApplicationStoreError },
+    ReleaseStore { source: ReleaseStoreError },
     Persistence { source: rusqlite::Error },
 }
 
@@ -18,6 +20,12 @@ impl fmt::Display for CreateReleaseError {
         match self {
             Self::ApplicationNotFound { application_id } => {
                 write!(formatter, "application `{application_id}` was not found")
+            }
+            Self::ApplicationStore { source } => {
+                write!(formatter, "failed to create release: {source}")
+            }
+            Self::ReleaseStore { source } => {
+                write!(formatter, "failed to create release: {source}")
             }
             Self::Persistence { source } => {
                 write!(formatter, "failed to create release: {source}")
@@ -30,6 +38,8 @@ impl Error for CreateReleaseError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::ApplicationNotFound { .. } => None,
+            Self::ApplicationStore { source } => Some(source),
+            Self::ReleaseStore { source } => Some(source),
             Self::Persistence { source } => Some(source),
         }
     }
@@ -41,9 +51,9 @@ impl From<ApplicationStoreError> for CreateReleaseError {
             ApplicationStoreError::NotFound { application_id } => {
                 Self::ApplicationNotFound { application_id }
             }
-            ApplicationStoreError::SystemNotFound { .. } => Self::ApplicationNotFound {
-                application_id: "unknown".to_owned(),
-            },
+            ApplicationStoreError::SystemNotFound { .. } => {
+                Self::ApplicationStore { source: error }
+            }
             ApplicationStoreError::Persistence { source } => Self::Persistence { source },
         }
     }
@@ -52,9 +62,7 @@ impl From<ApplicationStoreError> for CreateReleaseError {
 impl From<ReleaseStoreError> for CreateReleaseError {
     fn from(error: ReleaseStoreError) -> Self {
         match error {
-            ReleaseStoreError::NotFound { .. } => Self::ApplicationNotFound {
-                application_id: "unknown".to_owned(),
-            },
+            ReleaseStoreError::NotFound { .. } => Self::ReleaseStore { source: error },
             ReleaseStoreError::ApplicationNotFound { application_id } => {
                 Self::ApplicationNotFound { application_id }
             }
@@ -66,9 +74,7 @@ impl From<ReleaseStoreError> for CreateReleaseError {
 pub fn create_release(
     connection: &mut Connection,
     application_id: &str,
-    image_reference: &str,
-    image_repository: &str,
-    image_digest: &str,
+    artifact: &OciArtifact,
 ) -> Result<Release, CreateReleaseError> {
     let transaction = connection
         .transaction()
@@ -83,17 +89,10 @@ pub fn create_release(
 
     let release_id = release_store::generate_id(&transaction)?;
 
-    release_store::insert_release(
-        &transaction,
-        &release_id,
-        application_id,
-        image_reference,
-        image_repository,
-        image_digest,
-    )?;
+    release_store::insert_release(&transaction, &release_id, application_id, artifact)?;
 
     let release =
-        release_store::load_release_by_digest(&transaction, application_id, image_digest)?;
+        release_store::load_release_by_digest(&transaction, application_id, artifact.digest())?;
 
     transaction
         .commit()

@@ -1,5 +1,4 @@
 use crate::domain::exposure::Visibility;
-use crate::domain::manifest::DeliveryType;
 use crate::domain::runtime::DesiredRuntimeState;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,12 +52,6 @@ pub struct ApplicationSource {
     pub repository_kind: RepositoryKind,
     pub default_branch: Option<String>,
     pub manifest_path: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeliverySpecification {
-    pub delivery_type: DeliveryType,
-    pub image_repository: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

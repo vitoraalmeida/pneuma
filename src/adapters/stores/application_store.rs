@@ -6,10 +6,10 @@ use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 
 use crate::domain::application::{
     Application, ApplicationDeploymentSpecification, ApplicationSource, ApplicationSummary,
-    DeliverySpecification, HealthCheckSpecification, RepositoryKind, RuntimeSpecification,
+    HealthCheckSpecification, RepositoryKind, RuntimeSpecification,
 };
+use crate::domain::delivery::{DeliverySpecification, DeliveryType};
 use crate::domain::exposure::{Exposure, ExposureMaterializationState, Visibility};
-use crate::domain::manifest::DeliveryType;
 use crate::domain::runtime::DesiredRuntimeState;
 
 #[derive(Debug)]

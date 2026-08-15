@@ -4,81 +4,20 @@ use std::io;
 use std::process::Command;
 
 use crate::adapters::git_source::CommitSha;
+use crate::domain::release::{InvalidOciArtifact, OciArtifact};
 
 const DIGEST_ALGORITHM: &str = "sha256:";
 const SHA256_HEX_LENGTH: usize = 64;
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct OciImageReference {
-    value: String,
-    repository: String,
-    digest: String,
-}
-
-impl OciImageReference {
-    pub fn new(repository: &str, digest: &str) -> Result<Self, InvalidImageReference> {
-        let reference = format!("{repository}@{digest}");
-        Self::parse(&reference)
-    }
-
-    pub fn parse(value: &str) -> Result<Self, InvalidImageReference> {
-        let Some((repository, digest)) = value.split_once('@') else {
-            return Err(InvalidImageReference {
-                reference: value.to_owned(),
-            });
-        };
-        if !is_repository(repository) || !is_sha256_digest(digest) {
-            return Err(InvalidImageReference {
-                reference: value.to_owned(),
-            });
-        }
-
-        Ok(Self {
-            value: value.to_owned(),
-            repository: repository.to_owned(),
-            digest: digest.to_owned(),
-        })
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.value
-    }
-
-    pub fn repository(&self) -> &str {
-        &self.repository
-    }
-
-    pub fn digest(&self) -> &str {
-        &self.digest
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct InvalidImageReference {
-    pub reference: String,
-}
-
-impl fmt::Display for InvalidImageReference {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "image reference `{}` must be <repository>@sha256:<64 lowercase hexadecimal characters>",
-            self.reference
-        )
-    }
-}
-
-impl Error for InvalidImageReference {}
-
-#[derive(Debug, PartialEq, Eq)]
 pub struct PulledImage {
-    pub reference: OciImageReference,
+    pub artifact: OciArtifact,
 }
 
 #[derive(Debug)]
 pub enum PullImageError {
     InvalidReference {
-        source: InvalidImageReference,
+        source: InvalidOciArtifact,
     },
     Execute {
         operation: &'static str,
@@ -163,10 +102,10 @@ impl Error for PullImageError {
 }
 
 pub fn pull_image(reference: &str) -> Result<PulledImage, PullImageError> {
-    let reference = OciImageReference::parse(reference)
+    let artifact = OciArtifact::parse(reference)
         .map_err(|source| PullImageError::InvalidReference { source })?;
     let pull = Command::new("podman")
-        .args(["pull", reference.as_str()])
+        .args(["pull", artifact.reference()])
         .output()
         .map_err(|source| PullImageError::Execute {
             operation: "pulling an image",
@@ -176,7 +115,7 @@ pub fn pull_image(reference: &str) -> Result<PulledImage, PullImageError> {
     let pull_stderr = String::from_utf8_lossy(&pull.stderr).into_owned();
     if !pull.status.success() {
         return Err(PullImageError::Pull {
-            reference: reference.as_str().to_owned(),
+            reference: artifact.reference().to_owned(),
             stdout: pull_stdout,
             stderr: pull_stderr,
         });
@@ -188,7 +127,7 @@ pub fn pull_image(reference: &str) -> Result<PulledImage, PullImageError> {
             "inspect",
             "--format",
             "{{.Digest}}",
-            reference.as_str(),
+            artifact.reference(),
         ])
         .output()
         .map_err(|source| PullImageError::Execute {
@@ -199,7 +138,7 @@ pub fn pull_image(reference: &str) -> Result<PulledImage, PullImageError> {
     let inspect_stderr = String::from_utf8_lossy(&inspect.stderr).into_owned();
     if !inspect.status.success() {
         return Err(PullImageError::Inspect {
-            reference: reference.as_str().to_owned(),
+            reference: artifact.reference().to_owned(),
             stdout: inspect_stdout,
             stderr: inspect_stderr,
         });
@@ -207,19 +146,19 @@ pub fn pull_image(reference: &str) -> Result<PulledImage, PullImageError> {
 
     let Some(actual) = normalize_digest(&inspect_stdout) else {
         return Err(PullImageError::InvalidInspectOutput {
-            reference: reference.as_str().to_owned(),
+            reference: artifact.reference().to_owned(),
             output: inspect_stdout,
         });
     };
-    if actual != reference.digest() {
+    if actual != artifact.digest() {
         return Err(PullImageError::DigestMismatch {
-            reference: reference.as_str().to_owned(),
-            expected: reference.digest().to_owned(),
+            reference: artifact.reference().to_owned(),
+            expected: artifact.digest().to_owned(),
             actual: actual.to_owned(),
         });
     }
 
-    Ok(PulledImage { reference })
+    Ok(PulledImage { artifact })
 }
 
 #[derive(Debug)]
@@ -289,7 +228,7 @@ impl Error for ResolveImageDigestError {
 pub fn resolve_image_digest(
     repository: &str,
     commit_sha: &CommitSha,
-) -> Result<OciImageReference, ResolveImageDigestError> {
+) -> Result<OciArtifact, ResolveImageDigestError> {
     let tagged = format!("{repository}:{}", commit_sha.as_str());
 
     let pull = Command::new("podman")
@@ -333,19 +272,12 @@ pub fn resolve_image_digest(
         });
     };
 
-    OciImageReference::new(repository, digest).map_err(|_| {
+    OciArtifact::new(repository, digest).map_err(|_| {
         ResolveImageDigestError::InvalidInspectOutput {
             reference: tagged,
             output: digest.to_owned(),
         }
     })
-}
-
-fn is_repository(repository: &str) -> bool {
-    !repository.is_empty()
-        && repository.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'/' | b'_' | b'-' | b':')
-        })
 }
 
 fn is_sha256_digest(digest: &str) -> bool {
@@ -379,7 +311,7 @@ mod tests {
     fn parses_a_digest_pinned_image_reference() {
         let digest = format!("sha256:{}", "a".repeat(64));
         let reference =
-            OciImageReference::parse(&format!("registry.example/app/image@{digest}")).unwrap();
+            OciArtifact::parse(&format!("registry.example/app/image@{digest}")).unwrap();
 
         assert_eq!(reference.repository(), "registry.example/app/image");
         assert_eq!(reference.digest(), digest);
@@ -396,7 +328,7 @@ mod tests {
         ];
 
         for reference in invalid_references {
-            assert!(OciImageReference::parse(reference).is_err());
+            assert!(OciArtifact::parse(reference).is_err());
         }
     }
 
