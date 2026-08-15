@@ -3,6 +3,7 @@ use std::fmt;
 
 use rusqlite::Connection;
 
+use crate::adapters::stores::application_store;
 use crate::domain::application::Application;
 
 #[derive(Debug)]
@@ -31,7 +32,9 @@ pub fn list_applications(connection: &Connection) -> Result<Vec<Application>, Li
                 applications.name,
                 application_sources.repository_url,
                 application_sources.default_branch,
-                applications.active_deployment_id
+                applications.desired_runtime_state,
+                applications.active_deployment_id,
+                applications.spec_version
              FROM applications
              LEFT JOIN application_sources
                 ON application_sources.application_id = applications.id
@@ -39,16 +42,7 @@ pub fn list_applications(connection: &Connection) -> Result<Vec<Application>, Li
         )
         .map_err(|source| ListError { source })?;
     let rows = statement
-        .query_map([], |row| {
-            Ok(Application {
-                id: row.get(0)?,
-                system_id: row.get(1)?,
-                name: row.get(2)?,
-                repository: row.get(3)?,
-                default_branch: row.get(4)?,
-                active_deployment_id: row.get(5)?,
-            })
-        })
+        .query_map([], application_store::map_application_row)
         .map_err(|source| ListError { source })?;
 
     let mut applications = Vec::new();

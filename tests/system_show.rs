@@ -1,0 +1,40 @@
+use std::path::{Path, PathBuf};
+
+use pneuma::adapters::database;
+use pneuma::domain::runtime::DesiredRuntimeState;
+use pneuma::use_cases::application_import::import_application;
+use pneuma::use_cases::system_show::show_system;
+
+#[test]
+fn returns_application_runtime_intent_and_specification_version() {
+    let mut connection = database::open(Path::new(":memory:")).unwrap();
+    import_application(
+        &mut connection,
+        &fixture_path("valid"),
+        None,
+        Some("https://github.com/vitoraalmeida/vitoralmeida.tech"),
+        None,
+    )
+    .unwrap();
+    connection
+        .execute(
+            "UPDATE applications SET desired_runtime_state = 'running' WHERE name = 'personal-site'",
+            [],
+        )
+        .unwrap();
+
+    let details = show_system(&connection, "personal-website").unwrap();
+
+    assert_eq!(details.applications.len(), 1);
+    assert_eq!(
+        details.applications[0].desired_runtime_state,
+        DesiredRuntimeState::Running
+    );
+    assert_eq!(details.applications[0].specification_version, 3);
+}
+
+fn fixture_path(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}

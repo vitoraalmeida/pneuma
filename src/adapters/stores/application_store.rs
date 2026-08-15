@@ -1,10 +1,12 @@
 use std::error::Error;
 use std::fmt;
+use std::io;
 
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 
 use crate::domain::application::Application;
 use crate::domain::manifest::{DeliveryType, Visibility};
+use crate::domain::runtime::DesiredRuntimeState;
 
 #[derive(Debug)]
 pub enum ApplicationStoreError {
@@ -147,25 +149,44 @@ pub fn load_application_for_import(
                 a.name,
                 s.repository_url,
                 s.default_branch,
-                a.active_deployment_id
+                a.desired_runtime_state,
+                a.active_deployment_id,
+                a.spec_version
              FROM applications AS a
              LEFT JOIN application_sources AS s
                 ON s.application_id = a.id
              WHERE a.name = ?1",
             [name],
-            |row| {
-                Ok(Application {
-                    id: row.get(0)?,
-                    system_id: row.get(1)?,
-                    name: row.get(2)?,
-                    repository: row.get(3)?,
-                    default_branch: row.get(4)?,
-                    active_deployment_id: row.get(5)?,
-                })
-            },
+            map_application_row,
         )
         .optional()
         .map_err(|source| ApplicationStoreError::Persistence { source })
+}
+
+pub(crate) fn map_application_row(row: &Row<'_>) -> rusqlite::Result<Application> {
+    let desired_runtime_state = row.get::<_, String>(5)?;
+    let desired_runtime_state = DesiredRuntimeState::from_database(&desired_runtime_state)
+        .ok_or_else(|| {
+            rusqlite::Error::FromSqlConversionFailure(
+                5,
+                rusqlite::types::Type::Text,
+                Box::new(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("invalid desired runtime state: {desired_runtime_state}"),
+                )),
+            )
+        })?;
+
+    Ok(Application {
+        id: row.get(0)?,
+        system_id: row.get(1)?,
+        name: row.get(2)?,
+        repository: row.get(3)?,
+        default_branch: row.get(4)?,
+        desired_runtime_state,
+        active_deployment_id: row.get(6)?,
+        specification_version: row.get(7)?,
+    })
 }
 
 pub fn insert_delivery_spec(

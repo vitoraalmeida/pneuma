@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use pneuma::adapters::database;
+use pneuma::domain::runtime::DesiredRuntimeState;
 use pneuma::use_cases::application_import::import_application;
 use pneuma::use_cases::application_list::list_applications;
 
@@ -32,6 +33,12 @@ fn returns_registered_applications_ordered_by_name() {
         Some("pneuma.toml"),
     )
     .unwrap();
+    connection
+        .execute(
+            "UPDATE applications SET desired_runtime_state = 'running' WHERE name = 'another-site'",
+            [],
+        )
+        .unwrap();
 
     let applications = list_applications(&connection).unwrap();
 
@@ -39,7 +46,16 @@ fn returns_registered_applications_ordered_by_name() {
     assert_eq!(applications[0].name, "another-site");
     assert_eq!(applications[0].repository.as_deref(), Some("."));
     assert_eq!(applications[0].default_branch.as_deref(), None);
+    assert_eq!(
+        applications[0].desired_runtime_state,
+        DesiredRuntimeState::Running
+    );
     assert_eq!(applications[1].name, "personal-site");
+    assert_eq!(
+        applications[1].desired_runtime_state,
+        DesiredRuntimeState::Stopped
+    );
+    assert_eq!(applications[1].specification_version, 3);
 }
 
 #[test]
@@ -58,6 +74,11 @@ fn lists_legacy_applications_without_a_system() {
     assert_eq!(applications.len(), 1);
     assert_eq!(applications[0].name, "legacy-app");
     assert_eq!(applications[0].system_id, None);
+    assert_eq!(
+        applications[0].desired_runtime_state,
+        DesiredRuntimeState::Stopped
+    );
+    assert_eq!(applications[0].specification_version, 1);
 }
 
 fn fixture_path(name: &str) -> PathBuf {

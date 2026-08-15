@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use pneuma::adapters::database;
+use pneuma::domain::runtime::DesiredRuntimeState;
 use pneuma::use_cases::application_import::{ImportError, import_application};
 use pneuma::use_cases::application_list::list_applications;
 
@@ -23,6 +24,11 @@ fn imports_and_persists_the_application_specification() {
         Some("https://github.com/vitoraalmeida/vitoralmeida.tech")
     );
     assert_eq!(application.default_branch.as_deref(), None);
+    assert_eq!(
+        application.desired_runtime_state,
+        DesiredRuntimeState::Stopped
+    );
+    assert_eq!(application.specification_version, 3);
 
     let specification = connection
         .query_row(
@@ -334,7 +340,9 @@ fn reimport_preserves_the_active_deployment_of_a_deployed_application() {
         .unwrap();
     connection
         .execute(
-            "UPDATE applications SET active_deployment_id = 'deployment-1' WHERE id = ?1",
+            "UPDATE applications
+             SET active_deployment_id = 'deployment-1', desired_runtime_state = 'running'
+             WHERE id = ?1",
             [&application_id],
         )
         .unwrap();
@@ -352,6 +360,10 @@ fn reimport_preserves_the_active_deployment_of_a_deployed_application() {
     assert_eq!(
         reimported.active_deployment_id.as_deref(),
         Some("deployment-1")
+    );
+    assert_eq!(
+        reimported.desired_runtime_state,
+        DesiredRuntimeState::Running
     );
     let (source_url, source_count): (Option<String>, i64) = connection
         .query_row(

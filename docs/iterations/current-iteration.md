@@ -13,6 +13,11 @@ without selecting a new Release or making destructive changes from ambiguity.
 
 ## Checkpoints
 
+- [x] Complete the Application domain projection with persisted runtime intent
+  and specification version in every Application read path. This establishes
+  explicit Application intent before the broader reconciliation input model.
+  Result: import, listing, and System details now hydrate typed runtime intent
+  and specification version through one store-owned row mapper.
 - [ ] Convert `reconciliation-e2e.md` into an executable reconciliation test
   plan before implementation: assign every scenario to a focused Rust test or
   disposable-VM E2E case, define fixtures, fault injection, persisted-state and
