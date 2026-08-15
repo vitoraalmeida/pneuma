@@ -52,6 +52,13 @@ impl DeliveryType {
             Self::Oci => "oci",
         }
     }
+
+    pub(crate) fn from_database(value: &str) -> Option<Self> {
+        match value {
+            "oci" => Some(Self::Oci),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]

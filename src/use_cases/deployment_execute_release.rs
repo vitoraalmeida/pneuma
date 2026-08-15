@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use rusqlite::Connection;
 
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
+use crate::domain::application::ApplicationDeploymentSpecification;
 use crate::domain::deployment::{DeploymentStatus, DeploymentType};
 use crate::domain::manifest::Visibility;
 use crate::domain::release::Release;
@@ -241,19 +242,10 @@ fn deploy_release_reporting(
     }
 }
 
-struct DeploymentSpecification {
-    application_id: String,
-    application_name: String,
-    container_port: u16,
-    health_path: String,
-    expected_status: u16,
-    visibility: Visibility,
-}
-
 fn load_specification(
     connection: &Connection,
     application_id: &str,
-) -> Result<DeploymentSpecification, DeployReleaseError> {
+) -> Result<ApplicationDeploymentSpecification, DeployReleaseError> {
     let spec = match application_store::load_deployment_specification(connection, application_id) {
         Ok(Some(spec)) => spec,
         Ok(None) => {
@@ -274,26 +266,7 @@ fn load_specification(
         }
     };
 
-    let visibility =
-        Visibility::from_database(&spec.5).ok_or_else(|| DeployReleaseError::LoadApplication {
-            source: rusqlite::Error::FromSqlConversionFailure(
-                5,
-                rusqlite::types::Type::Text,
-                Box::new(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("invalid visibility: {}", spec.5),
-                )),
-            ),
-        })?;
-
-    Ok(DeploymentSpecification {
-        application_id: spec.0,
-        application_name: spec.1,
-        container_port: spec.2,
-        health_path: spec.3,
-        expected_status: spec.4,
-        visibility,
-    })
+    Ok(spec)
 }
 
 struct FailedExecution {
@@ -306,7 +279,7 @@ struct FailedExecution {
 fn execute_deployment(
     connection: &mut Connection,
     deployment_id: &str,
-    specification: &DeploymentSpecification,
+    specification: &ApplicationDeploymentSpecification,
     image_reference: &str,
     artifact_identity: &str,
     public_configuration: Option<&PublicDeploymentConfiguration>,
@@ -324,7 +297,7 @@ fn execute_deployment(
         application_id: &specification.application_id,
         application_name: &specification.application_name,
         image_reference,
-        container_port: specification.container_port,
+        container_port: specification.runtime.container_port,
         artifact_identity,
     };
 
@@ -434,8 +407,8 @@ fn execute_deployment(
             connection,
             runtime: &candidate.runtime,
             application_id: &specification.application_id,
-            health_path: &specification.health_path,
-            expected_status: specification.expected_status,
+            health_path: &specification.runtime.health_check.path,
+            expected_status: specification.runtime.health_check.expected_status,
             managed_caddy_directory: &public_configuration.managed_caddy_directory,
             caddyfile_path: &public_configuration.caddyfile_path,
         };
@@ -511,14 +484,16 @@ fn execute_deployment(
         DeploymentStep::HealthCheckAndPromotion,
         format!(
             "runtime {}, path {}, expected status {}",
-            candidate.runtime.id, specification.health_path, specification.expected_status
+            candidate.runtime.id,
+            specification.runtime.health_check.path,
+            specification.runtime.health_check.expected_status
         ),
     );
     let promoted = promote_internal_candidate(
         connection,
         &candidate.runtime.id,
-        &specification.health_path,
-        specification.expected_status,
+        &specification.runtime.health_check.path,
+        specification.runtime.health_check.expected_status,
     )
     .map_err(|source| {
         let mut failed = if matches!(

@@ -6,7 +6,7 @@ use rusqlite::Connection;
 
 use crate::adapters::git_source::is_remote_repository;
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
-use crate::domain::application::Application;
+use crate::domain::application::{ApplicationSummary, RepositoryKind};
 use crate::domain::manifest::{Manifest, ManifestError, load_manifest_at};
 
 const DEFAULT_MANIFEST_PATH: &str = "pneuma.toml";
@@ -80,7 +80,7 @@ pub fn import_application(
     system_name: Option<&str>,
     repository_url: Option<&str>,
     manifest_path: Option<&str>,
-) -> Result<Application, ImportError> {
+) -> Result<ApplicationSummary, ImportError> {
     let manifest_path = manifest_path.unwrap_or(DEFAULT_MANIFEST_PATH);
     let manifest = load_manifest_at(repository_path, manifest_path)
         .map_err(|source| ImportError::Manifest { source })?;
@@ -154,9 +154,9 @@ fn persist_specification(
 
     if let Some(repository_url) = repository_url {
         let repository_kind = if is_remote_repository(repository_url) {
-            "remote"
+            RepositoryKind::Remote
         } else {
-            "local"
+            RepositoryKind::Local
         };
 
         application_store::insert_source_spec(

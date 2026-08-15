@@ -4,7 +4,7 @@ use std::fmt;
 use rusqlite::Connection;
 
 use crate::adapters::stores::application_store;
-use crate::domain::application::Application;
+use crate::domain::application::ApplicationSummary;
 use crate::domain::system::System;
 
 #[derive(Debug)]
@@ -37,7 +37,7 @@ impl Error for ShowError {
 
 pub struct SystemDetails {
     pub system: System,
-    pub applications: Vec<Application>,
+    pub applications: Vec<ApplicationSummary>,
 }
 
 pub fn show_system(connection: &Connection, system_name: &str) -> Result<SystemDetails, ShowError> {
@@ -66,11 +66,11 @@ pub fn show_system(connection: &Connection, system_name: &str) -> Result<SystemD
                 applications.id,
                 applications.system_id,
                 applications.name,
-                application_sources.repository_url,
-                application_sources.default_branch,
                 applications.desired_runtime_state,
                 applications.active_deployment_id,
-                applications.spec_version
+                applications.spec_version,
+                application_sources.repository_url,
+                application_sources.default_branch
              FROM applications
              LEFT JOIN application_sources
                 ON application_sources.application_id = applications.id
@@ -80,7 +80,7 @@ pub fn show_system(connection: &Connection, system_name: &str) -> Result<SystemD
         .map_err(|source| ShowError::Persistence { source })?;
 
     let rows = statement
-        .query_map([&system.id], application_store::map_application_row)
+        .query_map([&system.id], application_store::map_application_summary_row)
         .map_err(|source| ShowError::Persistence { source })?;
 
     let mut applications = Vec::new();

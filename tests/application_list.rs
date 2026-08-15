@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use pneuma::adapters::database;
 use pneuma::domain::runtime::DesiredRuntimeState;
 use pneuma::use_cases::application_import::import_application;
-use pneuma::use_cases::application_list::list_applications;
+use pneuma::use_cases::application_list::{find_application_by_name, list_applications};
 
 #[test]
 fn returns_an_empty_list_for_an_empty_catalog() {
@@ -12,6 +12,35 @@ fn returns_an_empty_list_for_an_empty_catalog() {
     let applications = list_applications(&connection).unwrap();
 
     assert!(applications.is_empty());
+}
+
+#[test]
+fn finds_a_core_application_by_name_without_loading_the_catalog() {
+    let mut connection = database::open(Path::new(":memory:")).unwrap();
+    import_application(
+        &mut connection,
+        &fixture_path("valid"),
+        None,
+        Some("https://github.com/vitoraalmeida/vitoralmeida.tech"),
+        None,
+    )
+    .unwrap();
+
+    let application = find_application_by_name(&connection, "personal-site")
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(application.name, "personal-site");
+    assert_eq!(
+        application.desired_runtime_state,
+        DesiredRuntimeState::Stopped
+    );
+    assert_eq!(application.specification_version, 3);
+    assert!(
+        find_application_by_name(&connection, "missing")
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]

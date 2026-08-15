@@ -1,9 +1,10 @@
 use std::error::Error;
 use std::fmt;
 
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::Connection;
 
 use crate::adapters::oci_image::{OciImageReference, PullImageError, pull_image};
+use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::domain::deployment::DeploymentType;
 use crate::use_cases::deployment_execute_release::{
     DeployReleaseError, DeploymentResult, PublicDeploymentConfiguration, deploy_release,
@@ -21,7 +22,7 @@ pub enum DeployOciError {
         actual: String,
     },
     DeliveryConfiguration {
-        source: rusqlite::Error,
+        source: ApplicationStoreError,
     },
     PullImage {
         source: PullImageError,
@@ -82,25 +83,17 @@ pub fn deploy_oci(
         OciImageReference::parse(image_reference).map_err(|source| DeployOciError::PullImage {
             source: PullImageError::InvalidReference { source },
         })?;
-    let allowed_repository: Option<String> = connection
-        .query_row(
-            "SELECT image_repository
-             FROM application_delivery_specs
-             WHERE application_id = ?1",
-            [application_id],
-            |row| row.get(0),
-        )
-        .optional()
+    let delivery = application_store::load_delivery_specification(connection, application_id)
         .map_err(|source| DeployOciError::DeliveryConfiguration { source })?;
-    let Some(allowed_repository) = allowed_repository else {
+    let Some(delivery) = delivery else {
         return Err(DeployOciError::NoDeliveryConfiguration {
             application_id: application_id.to_owned(),
         });
     };
-    if reference.repository() != allowed_repository {
+    if reference.repository() != delivery.image_repository {
         return Err(DeployOciError::RepositoryMismatch {
             application_id: application_id.to_owned(),
-            allowed: allowed_repository,
+            allowed: delivery.image_repository,
             actual: reference.repository().to_owned(),
         });
     }

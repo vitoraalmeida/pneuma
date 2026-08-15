@@ -60,8 +60,11 @@ It is logical identity, not a Podman container ID.
 | `active_deployment_id` | Active successful Deployment, when one exists. |
 | `spec_version` | Persisted manifest specification version. |
 
-The domain `Application` projection also exposes the imported repository URL and
-default branch when `application_sources` exists.
+The core domain `Application` represents durable identity and intent. Catalog
+queries return an `ApplicationSummary` that additionally exposes the imported
+repository URL and default branch when `application_sources` exists. Deployment
+flows use named source, delivery, runtime, and health-check projections rather
+than positional tuples.
 
 ### Release
 

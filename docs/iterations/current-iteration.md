@@ -18,6 +18,20 @@ without selecting a new Release or making destructive changes from ambiguity.
   explicit Application intent before the broader reconciliation input model.
   Result: import, listing, and System details now hydrate typed runtime intent
   and specification version through one store-owned row mapper.
+- [x] Separate the core Application from catalog summaries and represent source,
+  delivery, runtime, and health configuration with named domain projections.
+  Replace scalar and tuple specification loaders and remove direct SQL from
+  deployment use cases.
+  Result: command lookup loads a core Application directly; catalog output and
+  deployment configuration use named typed projections mapped by the store.
+- [ ] Establish Exposure as a domain concept with typed visibility and
+  materialization state, keeping manifest parsing as an input boundary and
+  mapping persisted values in the store.
+- [ ] Establish RuntimeInstance and runtime observation as domain concepts,
+  replace runtime tuples and use-case-local runtime entities, and hydrate the
+  persisted observed state instead of inventing `Running` on reload.
+- [ ] Represent immutable OCI artifact identity as one validated value during
+  Release creation, and remove invented identifiers from Release error mapping.
 - [ ] Convert `reconciliation-e2e.md` into an executable reconciliation test
   plan before implementation: assign every scenario to a focused Rust test or
   disposable-VM E2E case, define fixtures, fault injection, persisted-state and

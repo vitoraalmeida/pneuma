@@ -15,7 +15,9 @@ use pneuma::adapters::oci_image::{OciImageReference, pull_image};
 use pneuma::domain::application::Application;
 use pneuma::domain::manifest::Visibility;
 use pneuma::use_cases::application_import::{ImportError, import_application};
-use pneuma::use_cases::application_list::{ListError, application_is_deployed, list_applications};
+use pneuma::use_cases::application_list::{
+    ListError, application_is_deployed, find_application_by_name, list_applications,
+};
 use pneuma::use_cases::application_runtime::{
     RuntimeLifecycleError, report_application_status, start_application, stop_application,
 };
@@ -1014,10 +1016,8 @@ fn resolve_application(
     connection: &rusqlite::Connection,
     application_name: &str,
 ) -> Result<Application, CliError> {
-    list_applications(connection)
+    find_application_by_name(connection, application_name)
         .map_err(|source| CliError::List { source })?
-        .into_iter()
-        .find(|application| application.name == application_name)
         .ok_or_else(|| CliError::ApplicationNotFound {
             application_name: application_name.to_owned(),
         })

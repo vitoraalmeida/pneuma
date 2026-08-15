@@ -4,7 +4,10 @@ use std::io;
 
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 
-use crate::domain::application::Application;
+use crate::domain::application::{
+    Application, ApplicationDeploymentSpecification, ApplicationSource, ApplicationSummary,
+    DeliverySpecification, HealthCheckSpecification, RepositoryKind, RuntimeSpecification,
+};
 use crate::domain::manifest::{DeliveryType, Visibility};
 use crate::domain::runtime::DesiredRuntimeState;
 
@@ -140,53 +143,72 @@ pub fn insert_application(
 pub fn load_application_for_import(
     transaction: &Transaction<'_>,
     name: &str,
-) -> Result<Option<Application>, ApplicationStoreError> {
+) -> Result<Option<ApplicationSummary>, ApplicationStoreError> {
     transaction
         .query_row(
             "SELECT
                 a.id,
                 a.system_id,
                 a.name,
-                s.repository_url,
-                s.default_branch,
                 a.desired_runtime_state,
                 a.active_deployment_id,
-                a.spec_version
+                a.spec_version,
+                s.repository_url,
+                s.default_branch
              FROM applications AS a
              LEFT JOIN application_sources AS s
                 ON s.application_id = a.id
              WHERE a.name = ?1",
             [name],
-            map_application_row,
+            map_application_summary_row,
         )
         .optional()
         .map_err(|source| ApplicationStoreError::Persistence { source })
 }
 
 pub(crate) fn map_application_row(row: &Row<'_>) -> rusqlite::Result<Application> {
-    let desired_runtime_state = row.get::<_, String>(5)?;
+    let desired_runtime_state = row.get::<_, String>(3)?;
     let desired_runtime_state = DesiredRuntimeState::from_database(&desired_runtime_state)
-        .ok_or_else(|| {
-            rusqlite::Error::FromSqlConversionFailure(
-                5,
-                rusqlite::types::Type::Text,
-                Box::new(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("invalid desired runtime state: {desired_runtime_state}"),
-                )),
-            )
-        })?;
+        .ok_or_else(|| invalid_text_value(3, "desired runtime state", &desired_runtime_state))?;
 
     Ok(Application {
         id: row.get(0)?,
         system_id: row.get(1)?,
         name: row.get(2)?,
-        repository: row.get(3)?,
-        default_branch: row.get(4)?,
         desired_runtime_state,
-        active_deployment_id: row.get(6)?,
-        specification_version: row.get(7)?,
+        active_deployment_id: row.get(4)?,
+        specification_version: row.get(5)?,
     })
+}
+
+pub(crate) fn map_application_summary_row(row: &Row<'_>) -> rusqlite::Result<ApplicationSummary> {
+    let application = map_application_row(row)?;
+    Ok(ApplicationSummary {
+        id: application.id,
+        system_id: application.system_id,
+        name: application.name,
+        repository: row.get(6)?,
+        default_branch: row.get(7)?,
+        desired_runtime_state: application.desired_runtime_state,
+        active_deployment_id: application.active_deployment_id,
+        specification_version: application.specification_version,
+    })
+}
+
+pub fn load_application_by_name(
+    connection: &Connection,
+    name: &str,
+) -> Result<Option<Application>, ApplicationStoreError> {
+    connection
+        .query_row(
+            "SELECT id, system_id, name, desired_runtime_state,
+                    active_deployment_id, spec_version
+             FROM applications WHERE name = ?1",
+            [name],
+            map_application_row,
+        )
+        .optional()
+        .map_err(|source| ApplicationStoreError::Persistence { source })
 }
 
 pub fn insert_delivery_spec(
@@ -215,7 +237,7 @@ pub fn insert_source_spec(
     transaction: &Transaction<'_>,
     application_id: &str,
     repository_url: &str,
-    repository_kind: &str,
+    repository_kind: RepositoryKind,
     default_branch: Option<&str>,
     manifest_path: &str,
 ) -> Result<(), ApplicationStoreError> {
@@ -228,7 +250,7 @@ pub fn insert_source_spec(
             params![
                 application_id,
                 repository_url,
-                repository_kind,
+                repository_kind.database_value(),
                 default_branch,
                 manifest_path
             ],
@@ -319,32 +341,67 @@ pub fn activate_deployment(
     Ok(())
 }
 
-pub fn load_delivery_image_repository(
+pub fn load_delivery_specification(
     connection: &Connection,
     application_id: &str,
-) -> Result<Option<String>, ApplicationStoreError> {
-    connection
+) -> Result<Option<DeliverySpecification>, ApplicationStoreError> {
+    let specification = connection
         .query_row(
-            "SELECT image_repository FROM application_delivery_specs WHERE application_id = ?1",
+            "SELECT delivery_type, image_repository
+             FROM application_delivery_specs WHERE application_id = ?1",
             [application_id],
-            |row| row.get(0),
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
         )
         .optional()
-        .map_err(|source| ApplicationStoreError::Persistence { source })
+        .map_err(|source| ApplicationStoreError::Persistence { source })?;
+    let Some((delivery_type, image_repository)) = specification else {
+        return Ok(None);
+    };
+    let delivery_type = DeliveryType::from_database(&delivery_type).ok_or_else(|| {
+        ApplicationStoreError::Persistence {
+            source: invalid_text_value(0, "delivery type", &delivery_type),
+        }
+    })?;
+    Ok(Some(DeliverySpecification {
+        delivery_type,
+        image_repository,
+    }))
 }
 
-pub fn load_source_repository(
+pub fn load_source(
     connection: &Connection,
     application_id: &str,
-) -> Result<Option<(String, Option<String>)>, ApplicationStoreError> {
-    connection
+) -> Result<Option<ApplicationSource>, ApplicationStoreError> {
+    let source = connection
         .query_row(
-            "SELECT repository_url, default_branch FROM application_sources WHERE application_id = ?1",
+            "SELECT repository_url, repository_kind, default_branch, manifest_path
+             FROM application_sources WHERE application_id = ?1",
             [application_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            },
         )
         .optional()
-        .map_err(|source| ApplicationStoreError::Persistence { source })
+        .map_err(|source| ApplicationStoreError::Persistence { source })?;
+    let Some((repository_url, repository_kind, default_branch, manifest_path)) = source else {
+        return Ok(None);
+    };
+    let repository_kind = RepositoryKind::from_database(&repository_kind).ok_or_else(|| {
+        ApplicationStoreError::Persistence {
+            source: invalid_text_value(1, "repository kind", &repository_kind),
+        }
+    })?;
+    Ok(Some(ApplicationSource {
+        repository_url,
+        repository_kind,
+        default_branch,
+        manifest_path,
+    }))
 }
 
 pub fn load_stored_exposure(
@@ -505,12 +562,11 @@ pub fn load_active_runtime_for_exposure(
         .map_err(|source| ApplicationStoreError::Persistence { source })
 }
 
-#[allow(clippy::type_complexity)]
 pub fn load_deployment_specification(
     connection: &Connection,
     application_id: &str,
-) -> Result<Option<(String, String, u16, String, u16, String)>, ApplicationStoreError> {
-    connection
+) -> Result<Option<ApplicationDeploymentSpecification>, ApplicationStoreError> {
+    let specification = connection
         .query_row(
             "SELECT
                 applications.id,
@@ -529,15 +585,48 @@ pub fn load_deployment_specification(
             [application_id],
             |row| {
                 Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, u16>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, u16>(4)?,
+                    row.get::<_, String>(5)?,
                 ))
             },
         )
         .optional()
-        .map_err(|source| ApplicationStoreError::Persistence { source })
+        .map_err(|source| ApplicationStoreError::Persistence { source })?;
+    let Some((application_id, application_name, container_port, path, expected_status, visibility)) =
+        specification
+    else {
+        return Ok(None);
+    };
+    let visibility = Visibility::from_database(&visibility).ok_or_else(|| {
+        ApplicationStoreError::Persistence {
+            source: invalid_text_value(5, "visibility", &visibility),
+        }
+    })?;
+    Ok(Some(ApplicationDeploymentSpecification {
+        application_id,
+        application_name,
+        runtime: RuntimeSpecification {
+            container_port,
+            health_check: HealthCheckSpecification {
+                path,
+                expected_status,
+            },
+        },
+        visibility,
+    }))
+}
+
+fn invalid_text_value(column: usize, field: &str, value: &str) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(
+        column,
+        rusqlite::types::Type::Text,
+        Box::new(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid {field}: {value}"),
+        )),
+    )
 }

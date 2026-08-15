@@ -71,31 +71,31 @@ pub fn deploy_branch(
     branch: Option<&str>,
     public_configuration: Option<&PublicDeploymentConfiguration>,
 ) -> Result<DeploymentResult, DeployBranchError> {
-    let (repository_url, default_branch) =
-        application_store::load_source_repository(connection, application_id)
-            .map_err(|source| DeployBranchError::SourceConfiguration { source })?
-            .ok_or_else(|| DeployBranchError::NoSourceConfiguration {
-                application_id: application_id.to_owned(),
-            })?;
+    let source = application_store::load_source(connection, application_id)
+        .map_err(|source| DeployBranchError::SourceConfiguration { source })?
+        .ok_or_else(|| DeployBranchError::NoSourceConfiguration {
+            application_id: application_id.to_owned(),
+        })?;
 
     let branch = match branch {
         Some(branch) => branch.to_owned(),
-        None => default_branch.ok_or_else(|| DeployBranchError::NoDefaultBranch {
-            application_id: application_id.to_owned(),
-        })?,
+        None => source
+            .default_branch
+            .ok_or_else(|| DeployBranchError::NoDefaultBranch {
+                application_id: application_id.to_owned(),
+            })?,
     };
 
-    let commit_sha: CommitSha = resolve_branch(&repository_url, &branch)
+    let commit_sha: CommitSha = resolve_branch(&source.repository_url, &branch)
         .map_err(|source| DeployBranchError::ResolveBranch { source })?;
 
-    let image_repository =
-        application_store::load_delivery_image_repository(connection, application_id)
-            .map_err(|source| DeployBranchError::SourceConfiguration { source })?
-            .ok_or_else(|| DeployBranchError::NoDeliveryConfiguration {
-                application_id: application_id.to_owned(),
-            })?;
+    let delivery = application_store::load_delivery_specification(connection, application_id)
+        .map_err(|source| DeployBranchError::SourceConfiguration { source })?
+        .ok_or_else(|| DeployBranchError::NoDeliveryConfiguration {
+            application_id: application_id.to_owned(),
+        })?;
 
-    let reference = resolve_image_digest(&image_repository, &commit_sha)
+    let reference = resolve_image_digest(&delivery.image_repository, &commit_sha)
         .map_err(|source| DeployBranchError::ResolveImageDigest { source })?;
 
     deploy_oci(

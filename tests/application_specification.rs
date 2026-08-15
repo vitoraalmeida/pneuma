@@ -1,0 +1,56 @@
+use std::path::{Path, PathBuf};
+
+use pneuma::adapters::database;
+use pneuma::adapters::stores::application_store;
+use pneuma::domain::application::RepositoryKind;
+use pneuma::domain::manifest::{DeliveryType, Visibility};
+use pneuma::use_cases::application_import::import_application;
+
+#[test]
+fn loads_named_source_delivery_runtime_and_health_configuration() {
+    let mut connection = database::open(Path::new(":memory:")).unwrap();
+    let application = import_application(
+        &mut connection,
+        &fixture_path("valid"),
+        None,
+        Some("https://github.com/vitoraalmeida/vitoralmeida.tech"),
+        Some("deploy/staging/pneuma.toml"),
+    )
+    .unwrap();
+
+    let source = application_store::load_source(&connection, &application.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        source.repository_url,
+        "https://github.com/vitoraalmeida/vitoralmeida.tech"
+    );
+    assert_eq!(source.repository_kind, RepositoryKind::Remote);
+    assert_eq!(source.default_branch, None);
+    assert_eq!(source.manifest_path, "deploy/staging/pneuma.toml");
+
+    let delivery = application_store::load_delivery_specification(&connection, &application.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(delivery.delivery_type, DeliveryType::Oci);
+    assert_eq!(
+        delivery.image_repository,
+        "ghcr.io/vitoraalmeida/vitoralmeida.tech"
+    );
+
+    let deployment = application_store::load_deployment_specification(&connection, &application.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(deployment.application_id, application.id);
+    assert_eq!(deployment.application_name, "personal-site");
+    assert_eq!(deployment.runtime.container_port, 8080);
+    assert_eq!(deployment.runtime.health_check.path, "/healthz");
+    assert_eq!(deployment.runtime.health_check.expected_status, 200);
+    assert_eq!(deployment.visibility, Visibility::Public);
+}
+
+fn fixture_path(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
