@@ -7,7 +7,7 @@ use rusqlite::Connection;
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::domain::application::ApplicationDeploymentSpecification;
 use crate::domain::deployment::{DeploymentStatus, DeploymentType};
-use crate::domain::manifest::Visibility;
+use crate::domain::exposure::Visibility;
 use crate::domain::release::Release;
 use crate::use_cases::deployment_activate_public::{
     PublicActivationError, PublicActivationInput, activate_public_candidate,

@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use pneuma::adapters::database;
 use pneuma::adapters::stores::application_store;
 use pneuma::domain::application::RepositoryKind;
-use pneuma::domain::manifest::{DeliveryType, Visibility};
+use pneuma::domain::exposure::{ExposureMaterializationState, Visibility};
+use pneuma::domain::manifest::DeliveryType;
 use pneuma::use_cases::application_import::import_application;
 
 #[test]
@@ -47,6 +48,22 @@ fn loads_named_source_delivery_runtime_and_health_configuration() {
     assert_eq!(deployment.runtime.health_check.path, "/healthz");
     assert_eq!(deployment.runtime.health_check.expected_status, 200);
     assert_eq!(deployment.visibility, Visibility::Public);
+
+    let exposure = application_store::load_exposure(&connection, &application.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(exposure.application_id, application.id);
+    assert_eq!(exposure.desired_visibility, Visibility::Public);
+    assert_eq!(exposure.domain.as_deref(), Some("vitoralmeida.tech"));
+    assert_eq!(exposure.active_runtime_id, None);
+    assert_eq!(
+        exposure.materialization_state,
+        ExposureMaterializationState::NotMaterialized
+    );
+    assert_eq!(exposure.configuration_version, None);
+    assert_eq!(exposure.last_materialized_at, None);
+    assert_eq!(exposure.last_error_code, None);
+    assert_eq!(exposure.last_error_message, None);
 }
 
 fn fixture_path(name: &str) -> PathBuf {

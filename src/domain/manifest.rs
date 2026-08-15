@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use crate::domain::exposure::{Visibility, is_valid_domain};
+
 const SUPPORTED_SCHEMA_VERSION: u32 = 3;
 const MANIFEST_FILE_NAME: &str = "pneuma.toml";
 
@@ -74,30 +76,6 @@ pub struct Runtime {
 pub struct Exposure {
     pub default_visibility: Visibility,
     pub domain: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum Visibility {
-    Internal,
-    Public,
-}
-
-impl Visibility {
-    pub fn database_value(self) -> &'static str {
-        match self {
-            Self::Internal => "internal",
-            Self::Public => "public",
-        }
-    }
-
-    pub fn from_database(value: &str) -> Option<Self> {
-        match value {
-            "internal" => Some(Self::Internal),
-            "public" => Some(Self::Public),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -280,25 +258,6 @@ fn is_valid_delivery_image(image: &str) -> bool {
         && image.bytes().all(|byte| {
             byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'/' | b'_' | b'-' | b':')
         })
-}
-
-pub(crate) fn is_valid_domain(domain: &str) -> bool {
-    if domain.is_empty() || domain.len() > 253 || !domain.is_ascii() {
-        return false;
-    }
-
-    domain.split('.').all(is_valid_domain_label)
-}
-
-fn is_valid_domain_label(label: &str) -> bool {
-    let bytes = label.as_bytes();
-    !bytes.is_empty()
-        && bytes.len() <= 63
-        && bytes.first().is_some_and(u8::is_ascii_alphanumeric)
-        && bytes.last().is_some_and(u8::is_ascii_alphanumeric)
-        && bytes
-            .iter()
-            .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
 }
 
 fn invalid_field<T>(field: &'static str, reason: &'static str) -> Result<T, ManifestError> {

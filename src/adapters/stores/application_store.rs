@@ -8,7 +8,8 @@ use crate::domain::application::{
     Application, ApplicationDeploymentSpecification, ApplicationSource, ApplicationSummary,
     DeliverySpecification, HealthCheckSpecification, RepositoryKind, RuntimeSpecification,
 };
-use crate::domain::manifest::{DeliveryType, Visibility};
+use crate::domain::exposure::{Exposure, ExposureMaterializationState, Visibility};
+use crate::domain::manifest::DeliveryType;
 use crate::domain::runtime::DesiredRuntimeState;
 
 #[derive(Debug)]
@@ -43,18 +44,15 @@ impl Error for ApplicationStoreError {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct StoredExposure {
-    pub visibility: Visibility,
-    pub domain: Option<String>,
-    pub materialization_state: String,
-}
-
 #[derive(Debug)]
 pub enum ExposureStoreError {
     InvalidVisibility {
         application_id: String,
         visibility: String,
+    },
+    InvalidMaterializationState {
+        application_id: String,
+        state: String,
     },
     Persistence {
         source: rusqlite::Error,
@@ -71,6 +69,13 @@ impl fmt::Display for ExposureStoreError {
                 formatter,
                 "application `{application_id}` has invalid persisted visibility `{visibility}`"
             ),
+            Self::InvalidMaterializationState {
+                application_id,
+                state,
+            } => write!(
+                formatter,
+                "application `{application_id}` has invalid persisted exposure materialization state `{state}`"
+            ),
             Self::Persistence { source } => write!(formatter, "exposure store error: {source}"),
         }
     }
@@ -79,7 +84,7 @@ impl fmt::Display for ExposureStoreError {
 impl Error for ExposureStoreError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::InvalidVisibility { .. } => None,
+            Self::InvalidVisibility { .. } | Self::InvalidMaterializationState { .. } => None,
             Self::Persistence { source } => Some(source),
         }
     }
@@ -404,26 +409,43 @@ pub fn load_source(
     }))
 }
 
-pub fn load_stored_exposure(
+pub fn load_exposure(
     connection: &Connection,
     application_id: &str,
-) -> Result<Option<StoredExposure>, ExposureStoreError> {
+) -> Result<Option<Exposure>, ExposureStoreError> {
     let exposure = connection
         .query_row(
-            "SELECT desired_visibility, domain, materialization_state
+            "SELECT desired_visibility, domain, active_runtime_id,
+                    materialization_state, configuration_version,
+                    last_materialized_at, last_error_code, last_error_message
              FROM exposures WHERE application_id = ?1",
             [application_id],
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, Option<String>>(1)?,
-                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
                 ))
             },
         )
         .optional()
         .map_err(|source| ExposureStoreError::Persistence { source })?;
-    let Some((visibility, domain, materialization_state)) = exposure else {
+    let Some((
+        visibility,
+        domain,
+        active_runtime_id,
+        materialization_state,
+        configuration_version,
+        last_materialized_at,
+        last_error_code,
+        last_error_message,
+    )) = exposure
+    else {
         return Ok(None);
     };
     let visibility = Visibility::from_database(&visibility).ok_or_else(|| {
@@ -432,10 +454,21 @@ pub fn load_stored_exposure(
             visibility,
         }
     })?;
-    Ok(Some(StoredExposure {
-        visibility,
+    let materialization_state = ExposureMaterializationState::from_database(&materialization_state)
+        .ok_or_else(|| ExposureStoreError::InvalidMaterializationState {
+            application_id: application_id.to_owned(),
+            state: materialization_state,
+        })?;
+    Ok(Some(Exposure {
+        application_id: application_id.to_owned(),
+        desired_visibility: visibility,
         domain,
+        active_runtime_id,
         materialization_state,
+        configuration_version,
+        last_materialized_at,
+        last_error_code,
+        last_error_message,
     }))
 }
 
@@ -446,8 +479,8 @@ pub fn begin_exposure_change(
     desired_visibility: Visibility,
 ) -> Result<bool, ApplicationStoreError> {
     let materialization_state = match desired_visibility {
-        Visibility::Public => "applying",
-        Visibility::Internal => "removing",
+        Visibility::Public => ExposureMaterializationState::Applying,
+        Visibility::Internal => ExposureMaterializationState::Removing,
     };
     let updated = transaction
         .execute(
@@ -460,7 +493,7 @@ pub fn begin_exposure_change(
              WHERE application_id = ?3 AND desired_visibility = ?4",
             params![
                 desired_visibility.database_value(),
-                materialization_state,
+                materialization_state.database_value(),
                 application_id,
                 expected_visibility.database_value()
             ],
@@ -521,7 +554,7 @@ pub fn record_exposure_change_failure(
     transaction: &Transaction<'_>,
     application_id: &str,
     visibility: Visibility,
-    state: &str,
+    state: ExposureMaterializationState,
     code: &str,
     message: &str,
 ) -> Result<bool, ApplicationStoreError> {
@@ -534,7 +567,7 @@ pub fn record_exposure_change_failure(
                  updated_at = CURRENT_TIMESTAMP
              WHERE application_id = ?4 AND desired_visibility = ?5",
             params![
-                state,
+                state.database_value(),
                 code,
                 message,
                 application_id,

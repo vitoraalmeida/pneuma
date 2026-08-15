@@ -24,9 +24,11 @@ without selecting a new Release or making destructive changes from ambiguity.
   deployment use cases.
   Result: command lookup loads a core Application directly; catalog output and
   deployment configuration use named typed projections mapped by the store.
-- [ ] Establish Exposure as a domain concept with typed visibility and
+- [x] Establish Exposure as a domain concept with typed visibility and
   materialization state, keeping manifest parsing as an input boundary and
   mapping persisted values in the store.
+  Result: Exposure now carries persisted intent, route state, runtime identity,
+  configuration version, and diagnostics; the store rejects invalid state text.
 - [ ] Establish RuntimeInstance and runtime observation as domain concepts,
   replace runtime tuples and use-case-local runtime entities, and hydrate the
   persisted observed state instead of inventing `Running` on reload.

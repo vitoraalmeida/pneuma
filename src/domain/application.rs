@@ -1,4 +1,5 @@
-use crate::domain::manifest::{DeliveryType, Visibility};
+use crate::domain::exposure::Visibility;
+use crate::domain::manifest::DeliveryType;
 use crate::domain::runtime::DesiredRuntimeState;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

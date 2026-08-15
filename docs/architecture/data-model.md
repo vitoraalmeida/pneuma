@@ -151,6 +151,10 @@ persists this specification, and removes the checkout.
 | `failed` | A requested route change did not complete. |
 | `diverged` | Compensation or observation could not establish a known route state. |
 
+The domain `Exposure` represents this persisted intent, materialization state,
+active runtime relationship, configuration version, and diagnostics with typed
+visibility and materialization enums.
+
 `active_runtime_id` identifies the RuntimeInstance used for the active public
 route. `configuration_version` stores the canonical Caddy fragment content
 (domain and loopback endpoint), not a Release or Deployment ID.

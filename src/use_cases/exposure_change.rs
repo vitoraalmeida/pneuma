@@ -13,10 +13,8 @@ use crate::adapters::health_check_external::{ExternalHealthCheckError, check_ext
 use crate::adapters::local_runtime::{
     ContainerObservation, ObserveContainerError, ObservedRuntimeState, observe_container,
 };
-use crate::adapters::stores::application_store::{
-    self, ApplicationStoreError, ExposureStoreError, StoredExposure,
-};
-use crate::domain::manifest::Visibility;
+use crate::adapters::stores::application_store::{self, ApplicationStoreError, ExposureStoreError};
+use crate::domain::exposure::{Exposure, ExposureMaterializationState, Visibility};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct ExposureChange {
@@ -41,6 +39,9 @@ pub enum ExposureChangeError {
     },
     InvalidVisibility {
         visibility: String,
+    },
+    InvalidMaterializationState {
+        state: String,
     },
     Store {
         source: ApplicationStoreError,
@@ -91,6 +92,12 @@ impl fmt::Display for ExposureChangeError {
                     "application has invalid persisted visibility `{visibility}`"
                 )
             }
+            Self::InvalidMaterializationState { state } => {
+                write!(
+                    formatter,
+                    "application has invalid persisted exposure materialization state `{state}`"
+                )
+            }
             Self::Store { source } => write!(formatter, "failed to change exposure: {source}"),
             Self::ObserveFailed { source } => {
                 write!(formatter, "failed to observe runtime: {source}")
@@ -128,6 +135,7 @@ impl Error for ExposureChangeError {
             | Self::DomainRequired { .. }
             | Self::ExposureChanged { .. }
             | Self::InvalidVisibility { .. }
+            | Self::InvalidMaterializationState { .. }
             | Self::RuntimeNotRunning { .. } => None,
         }
     }
@@ -140,7 +148,7 @@ pub fn change_exposure(
     managed_directory: &Path,
     caddyfile_path: &Path,
 ) -> Result<ExposureChange, ExposureChangeError> {
-    let exposure = match application_store::load_stored_exposure(connection, application_id) {
+    let exposure = match application_store::load_exposure(connection, application_id) {
         Ok(Some(exposure)) => exposure,
         Ok(None) => {
             return Err(ExposureChangeError::ApplicationNotFound {
@@ -150,11 +158,14 @@ pub fn change_exposure(
         Err(ExposureStoreError::InvalidVisibility { visibility, .. }) => {
             return Err(ExposureChangeError::InvalidVisibility { visibility });
         }
+        Err(ExposureStoreError::InvalidMaterializationState { state, .. }) => {
+            return Err(ExposureChangeError::InvalidMaterializationState { state });
+        }
         Err(ExposureStoreError::Persistence { source }) => {
             return Err(ExposureChangeError::Persistence { source });
         }
     };
-    if exposure.visibility == visibility {
+    if exposure.desired_visibility == visibility {
         return Ok(ExposureChange {
             application_id: application_id.to_owned(),
             visibility,
@@ -167,7 +178,12 @@ pub fn change_exposure(
         });
     }
 
-    begin_change(connection, application_id, exposure.visibility, visibility)?;
+    begin_change(
+        connection,
+        application_id,
+        exposure.desired_visibility,
+        visibility,
+    )?;
     match visibility {
         Visibility::Public => make_public(
             connection,
@@ -215,7 +231,7 @@ fn begin_change(
 fn make_public(
     connection: &mut Connection,
     application_id: &str,
-    exposure: StoredExposure,
+    exposure: Exposure,
     managed_directory: &Path,
     caddyfile_path: &Path,
 ) -> Result<ExposureChange, ExposureChangeError> {
@@ -496,7 +512,11 @@ fn record_failure(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|source| ExposureChangeError::Persistence { source })?;
-    let state = if diverged { "diverged" } else { "failed" };
+    let state = if diverged {
+        ExposureMaterializationState::Diverged
+    } else {
+        ExposureMaterializationState::Failed
+    };
     let updated = application_store::record_exposure_change_failure(
         &transaction,
         application_id,

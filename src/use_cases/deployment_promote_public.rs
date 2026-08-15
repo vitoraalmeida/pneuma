@@ -5,7 +5,7 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use crate::adapters::local_runtime::ObservedRuntimeState;
 use crate::domain::deployment::DeploymentStatus;
-use crate::domain::manifest::Visibility;
+use crate::domain::exposure::{ExposureMaterializationState, Visibility};
 use crate::domain::runtime::RuntimeState;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -160,8 +160,8 @@ pub fn record_public_exposure_failure(
         return Err(PromotePublicCandidateError::InvalidDiagnostic);
     }
     let state = match outcome {
-        ExposureOutcome::Failed => "failed",
-        ExposureOutcome::Diverged => "diverged",
+        ExposureOutcome::Failed => ExposureMaterializationState::Failed,
+        ExposureOutcome::Diverged => ExposureMaterializationState::Diverged,
     };
     let updated = connection
         .execute(
@@ -171,7 +171,7 @@ pub fn record_public_exposure_failure(
                  last_error_message = ?3,
                  updated_at = CURRENT_TIMESTAMP
              WHERE application_id = ?4 AND desired_visibility = 'public'",
-            params![state, code, message, application_id],
+            params![state.database_value(), code, message, application_id],
         )
         .map_err(|source| PromotePublicCandidateError::Persistence { source })?;
     if updated != 1 {

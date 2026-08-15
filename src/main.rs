@@ -13,7 +13,7 @@ use pneuma::adapters::git_source::{
 };
 use pneuma::adapters::oci_image::{OciImageReference, pull_image};
 use pneuma::domain::application::Application;
-use pneuma::domain::manifest::Visibility;
+use pneuma::domain::exposure::Visibility;
 use pneuma::use_cases::application_import::{ImportError, import_application};
 use pneuma::use_cases::application_list::{
     ListError, application_is_deployed, find_application_by_name, list_applications,

@@ -1,8 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use pneuma::domain::manifest::{
-    DeliveryType, ManifestError, Visibility, load_manifest, parse_manifest,
-};
+use pneuma::domain::exposure::Visibility;
+use pneuma::domain::manifest::{DeliveryType, ManifestError, load_manifest, parse_manifest};
 
 const VALID_MANIFEST: &str = include_str!("fixtures/valid/pneuma.toml");
 

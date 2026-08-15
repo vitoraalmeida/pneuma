@@ -12,7 +12,7 @@ use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
 use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
 use crate::domain::deployment::DeploymentStatus;
-use crate::domain::manifest::Visibility;
+use crate::domain::exposure::Visibility;
 use crate::domain::runtime::RuntimeState;
 use crate::use_cases::deployment_transition::{TransitionDeploymentError, fail_deployment};
 
