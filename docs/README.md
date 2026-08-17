@@ -66,7 +66,8 @@ behavior (`CHANGELOG.md`), or product direction (`roadmap.md`).
 | [`design/documentation-architecture-refactor.md`](design/documentation-architecture-refactor.md) | Approved design | Current documentation-refactor design |
 | [`design/reconciliation.md`](design/reconciliation.md) | Approved design | Queued v0.4 reconciliation semantics |
 | [`design/reconciliation-e2e.md`](design/reconciliation-e2e.md) | Approved design | Queued v0.4 E2E catalog |
+| [`design/tui.md`](design/tui.md) | Approved design | Appended v0.4 Ratatui terminal interface |
 | [`design/caddy-unmatched-host-fallback.md`](design/caddy-unmatched-host-fallback.md) | Historical record | Completed v0.3.1 design |
-| [`iterations/current-iteration.md`](iterations/current-iteration.md) | Active planning | v0.4 reconciliation tracker |
+| [`iterations/current-iteration.md`](iterations/current-iteration.md) | Active planning | v0.4 reconciliation and terminal-interface tracker |
 | [`iterations/next-iteration.md`](iterations/next-iteration.md) | Queued planning | v0.5 topology planning reminder |
 | [`roadmap.md`](roadmap.md) | Living | v0.1 → v0.8 evolution and direction |

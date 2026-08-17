@@ -81,6 +81,8 @@ without selecting a new Release or creating a Deployment from drift.
 - [ ] Candidate and activation improvements.
 - [ ] Deployment mutual exclusion per Application.
 - [ ] Non-interactive CLI with structured output and exit codes.
+- [ ] Local Ratatui terminal interface for approved operator workflows after
+  reconciliation and its required VM regression.
 
 Already implemented, not v0.4 work: CI validation and image publishing under the
 full commit-SHA tag; restricted SSH deployment through `pneuma ci dispatch`.
@@ -116,7 +118,7 @@ automatic rollback after promotion.
 
 ## Out of Scope Beyond v0.8
 
-TUI, HTTP API, webhooks, centralized observability, multiple hosts, scheduler,
-remote agents, distributed reconciliation, managed builds, canary or gradual
+HTTP API, webhooks, centralized observability, multiple hosts, scheduler, remote
+agents, distributed reconciliation, managed builds, canary or gradual
 rollout, autoscaling, Kubernetes, RBAC, and multi-user support remain out of
 scope until a future version explicitly revisits them.

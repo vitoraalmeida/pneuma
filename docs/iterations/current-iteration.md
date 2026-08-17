@@ -4,7 +4,8 @@
 
 **Base:** `49b9476` (`docs: refactor documentation architecture`)
 
-**Approved design:** [`reconciliation.md`](../design/reconciliation.md)
+**Approved designs:** [`reconciliation.md`](../design/reconciliation.md) and
+[`tui.md`](../design/tui.md)
 
 ## Iteration - v0.4 Reconciliation
 
@@ -68,10 +69,18 @@ without selecting a new Release or making destructive changes from ambiguity.
 - [ ] Complete the approved VM E2E catalog and final regression. Record actual
   PASS/FAIL/SKIP evidence for bootstrap and reconciliation scenarios; destroy
   every disposable clone.
+- [ ] Add TUI dashboard read projections for Systems, Applications, details,
+  Deployments, Releases, RuntimeInstances, and read-only runtime observation.
+- [ ] Extract shared remote import, diagnostics, database, and progress-enabled
+  deployment orchestration from `main.rs` without changing CLI behavior.
+- [ ] Add `pneuma tui` with Ratatui/Crossterm terminal safety, self-contained
+  tabs, read-only navigation, and renderer/reducer coverage.
+- [ ] Add confirmed forms and serialized background jobs for approved operator
+  actions, then complete TUI terminal and fake-command regression evidence.
 
 ## Scope and Non-goals
 
-- DNS, certificate lifecycle, registry watching, auto-deploy, API, TUI, OIDC,
+- DNS, certificate lifecycle, registry watching, auto-deploy, API, OIDC,
   RBAC, multiple hosts, and precompiled binary download are out of scope.
 - Reconciliation never creates a Release, selects a registry artifact, or
   changes desired runtime state or visibility.
@@ -85,6 +94,8 @@ without selecting a new Release or making destructive changes from ambiguity.
 - Reconciliation does not create a Release or Deployment, change intent, or
   destructively repair ambiguous drift.
 - Required VM E2E coverage proves the approved reconciliation scenarios.
+- The TUI preserves non-interactive CLI behavior, does not expose CI dispatch,
+  and verifies terminal restoration and approved operator workflows.
 - The exact CI gates and all required VM evidence are green before this
   iteration is closed.
 
