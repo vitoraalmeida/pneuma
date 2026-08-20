@@ -10,6 +10,7 @@ use crate::adapters::caddy_exposure::{
 };
 use crate::adapters::health_check_external::check_external_health;
 use crate::adapters::health_check_internal::{HealthCheckResult, check_internal_health};
+use crate::domain::exposure::{ExposureConfigurationVersion, ExposureDiagnostic};
 use crate::domain::runtime::RuntimeInstance;
 use crate::use_cases::deployment_progress::{DeploymentStep, ProgressReporter};
 use crate::use_cases::deployment_promote_public::{
@@ -135,13 +136,20 @@ pub(crate) fn activate_public_candidate(
         DeploymentStep::ApplyPublicRoute,
         format!("{} -> {endpoint}", exposure.domain),
     );
-    let configuration_version = canonical_fragment_contents(&exposure.domain, endpoint);
+    let configuration_version = ExposureConfigurationVersion::new(&canonical_fragment_contents(
+        exposure.domain.as_str(),
+        endpoint,
+    ))
+    .map_err(|source| PublicActivationError::PublicPromotion {
+        source: Box::new(source),
+        resources: Box::new(resources.clone()),
+    })?;
 
     let materialized = materialize_caddy_fragment(
         managed_caddy_directory,
         caddyfile_path,
         application_id,
-        &exposure.domain,
+        exposure.domain.as_str(),
         endpoint,
     )
     .map_err(|source| {
@@ -157,8 +165,8 @@ pub(crate) fn activate_public_candidate(
         let source = match record_public_exposure_failure(
             connection,
             application_id,
-            "caddy_materialization_failed",
-            &message,
+            &ExposureDiagnostic::new("caddy_materialization_failed", &message)
+                .expect("static diagnostic code and adapter error messages are valid"),
             outcome,
         ) {
             Ok(()) => source,
@@ -184,14 +192,16 @@ pub(crate) fn activate_public_candidate(
         format!("https://{}{}", exposure.domain, health_path),
     );
 
-    if let Err(source) = check_external_health(&exposure.domain, health_path, expected_status) {
+    if let Err(source) =
+        check_external_health(exposure.domain.as_str(), health_path, expected_status)
+    {
         let (source, outcome) = rollback_public_route(source, &materialized, caddyfile_path);
 
         let source = match record_public_exposure_failure(
             connection,
             application_id,
-            "external_health_check_failed",
-            &source.to_string(),
+            &ExposureDiagnostic::new("external_health_check_failed", &source.to_string())
+                .expect("static diagnostic code and adapter error messages are valid"),
             outcome,
         ) {
             Ok(()) => source,
@@ -225,8 +235,8 @@ pub(crate) fn activate_public_candidate(
             let source = match record_public_exposure_failure(
                 connection,
                 application_id,
-                "candidate_promotion_failed",
-                &source.to_string(),
+                &ExposureDiagnostic::new("candidate_promotion_failed", &source.to_string())
+                    .expect("static diagnostic code and promotion error messages are valid"),
                 outcome,
             ) {
                 Ok(()) => source,

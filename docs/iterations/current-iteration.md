@@ -57,8 +57,10 @@ without selecting a new Release or making destructive changes from ambiguity.
   Result: expected loopback endpoints remain reserved identity, observations
   preserve Missing and drift, status is read-only for container identity, and
   retirement derives from explicit removal evidence.
-- [ ] Make Exposure intent, confirmed route evidence, and diagnostics valid by
+- [x] Make Exposure intent, confirmed route evidence, and diagnostics valid by
   construction while retaining compensation-relevant evidence.
+  Result: typed exposure intent, route evidence, and diagnostics reject invalid
+  persisted combinations while preserving confirmed routes through transitions.
 - [ ] Add Deployment lifecycle evidence and replace scalar or tuple operation
   results with cohesive domain values.
 - [ ] Move persisted-value conversion into stores and require explicit stale

@@ -13,7 +13,10 @@ use crate::adapters::health_check_external::{ExternalHealthCheckError, check_ext
 use crate::adapters::local_runtime::{ObserveContainerError, observe_container};
 use crate::adapters::stores::application_store::{self, ApplicationStoreError, ExposureStoreError};
 use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
-use crate::domain::exposure::{Exposure, ExposureMaterializationState, Visibility};
+use crate::domain::exposure::{
+    Exposure, ExposureConfigurationVersion, ExposureDiagnostic, ExposureMaterializationState,
+    Visibility,
+};
 use crate::domain::runtime::{ContainerObservation, ObservedRuntimeState};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -44,6 +47,10 @@ pub enum ExposureChangeError {
     InvalidMaterializationState {
         state: String,
     },
+    InvalidExposure {
+        reason: String,
+    },
+    InvalidConfigurationVersion,
     Store {
         source: ApplicationStoreError,
     },
@@ -102,6 +109,15 @@ impl fmt::Display for ExposureChangeError {
                     "application has invalid persisted exposure materialization state `{state}`"
                 )
             }
+            Self::InvalidExposure { reason } => {
+                write!(
+                    formatter,
+                    "application has invalid persisted exposure: {reason}"
+                )
+            }
+            Self::InvalidConfigurationVersion => {
+                formatter.write_str("generated exposure configuration version is invalid")
+            }
             Self::Store { source } => write!(formatter, "failed to change exposure: {source}"),
             Self::RuntimeStore { source } => {
                 write!(formatter, "failed to change exposure: {source}")
@@ -144,6 +160,8 @@ impl Error for ExposureChangeError {
             | Self::ExposureChanged { .. }
             | Self::InvalidVisibility { .. }
             | Self::InvalidMaterializationState { .. }
+            | Self::InvalidExposure { .. }
+            | Self::InvalidConfigurationVersion
             | Self::RuntimeNotRunning { .. } => None,
         }
     }
@@ -170,27 +188,29 @@ pub fn change_exposure(
         Err(ExposureStoreError::InvalidMaterializationState { state, .. }) => {
             return Err(ExposureChangeError::InvalidMaterializationState { state });
         }
+        Err(ExposureStoreError::InvalidExposure { reason, .. }) => {
+            return Err(ExposureChangeError::InvalidExposure { reason });
+        }
         Err(ExposureStoreError::Persistence { source }) => {
             return Err(ExposureChangeError::Persistence { source });
         }
     };
-    if exposure.desired_visibility == visibility {
+    if exposure.intent().visibility() == visibility {
         return Ok(ExposureChange {
             application_id: application_id.to_owned(),
             visibility,
-            domain: exposure.domain.map(|domain| domain.to_string()),
+            domain: exposure.intent().domain().map(ToString::to_string),
         });
     }
-    if visibility == Visibility::Public && exposure.domain.is_none() {
+    if visibility == Visibility::Public && exposure.intent().domain().is_none() {
         return Err(ExposureChangeError::DomainRequired {
             application_id: application_id.to_owned(),
         });
     }
-
     begin_change(
         connection,
         application_id,
-        exposure.desired_visibility,
+        exposure.intent().visibility(),
         visibility,
     )?;
     match visibility {
@@ -204,7 +224,7 @@ pub fn change_exposure(
         Visibility::Internal => make_internal(
             connection,
             application_id,
-            exposure.domain.map(|domain| domain.to_string()),
+            exposure.intent().domain().map(ToString::to_string),
             managed_directory,
             caddyfile_path,
         ),
@@ -246,7 +266,7 @@ fn make_public(
     managed_directory: &Path,
     caddyfile_path: &Path,
 ) -> Result<ExposureChange, ExposureChangeError> {
-    let domain = match exposure.domain {
+    let domain = match exposure.intent().domain().cloned() {
         Some(domain) => domain,
         None => {
             return fail_public(
@@ -337,14 +357,16 @@ fn make_public(
             ExposureChangeError::ExternalHealthFailed { source },
         );
     }
-    let configuration_version = canonical_fragment_contents(domain.as_str(), endpoint);
+    let configuration_version =
+        ExposureConfigurationVersion::new(&canonical_fragment_contents(domain.as_str(), endpoint))
+            .map_err(|_| ExposureChangeError::InvalidConfigurationVersion)?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|source| ExposureChangeError::Persistence { source })?;
     let completion = application_store::complete_public_exposure_change(
         &transaction,
         application_id,
-        runtime.id.as_str(),
+        &runtime.id,
         &configuration_version,
     );
     let completed = match completion {
@@ -529,13 +551,14 @@ fn record_failure(
     } else {
         ExposureMaterializationState::Failed
     };
+    let diagnostic = ExposureDiagnostic::new(code, message)
+        .map_err(|_| ExposureChangeError::InvalidConfigurationVersion)?;
     let updated = application_store::record_exposure_change_failure(
         &transaction,
         application_id,
         visibility,
         state,
-        code,
-        message,
+        &diagnostic,
     )
     .map_err(|source| ExposureChangeError::Store { source })?;
     if !updated {

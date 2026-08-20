@@ -10,7 +10,7 @@ use crate::domain::application::{
     ApplicationName, ApplicationSource, ApplicationSummary, ContainerPort, HealthCheckPath,
     HealthCheckStatus, RelativeManifestPath, RepositoryKind, SystemName,
 };
-use crate::domain::exposure::DomainName;
+use crate::domain::exposure::{DomainName, ExposureIntent};
 use crate::domain::manifest::{Manifest, ManifestError, load_manifest_at};
 use crate::domain::release::OciRepository;
 
@@ -226,24 +226,26 @@ fn persist_specification(
             }
         })?,
     )?;
-    application_store::insert_exposure(
-        transaction,
-        application_id,
-        manifest.exposure.default_visibility,
-        manifest
-            .exposure
-            .domain
-            .as_deref()
-            .map(DomainName::new)
-            .transpose()
-            .map_err(|_| ImportError::Manifest {
-                source: ManifestError::InvalidField {
-                    field: "exposure.domain",
-                    reason: "must be a valid domain name",
-                },
-            })?
-            .as_ref(),
-    )?;
+    let domain = manifest
+        .exposure
+        .domain
+        .as_deref()
+        .map(DomainName::new)
+        .transpose()
+        .map_err(|_| ImportError::Manifest {
+            source: ManifestError::InvalidField {
+                field: "exposure.domain",
+                reason: "must be a valid domain name",
+            },
+        })?;
+    let exposure_intent = ExposureIntent::new(manifest.exposure.default_visibility, domain)
+        .map_err(|_| ImportError::Manifest {
+            source: ManifestError::InvalidField {
+                field: "exposure.domain",
+                reason: "is required for public visibility",
+            },
+        })?;
+    application_store::insert_exposure(transaction, application_id, &exposure_intent)?;
 
     Ok(())
 }

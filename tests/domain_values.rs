@@ -2,7 +2,11 @@ use pneuma::domain::application::{
     ApplicationName, ApplicationSource, ContainerPort, HealthCheckPath, HealthCheckSpecification,
     HealthCheckStatus, RelativeManifestPath, RepositoryKind, RuntimeSpecification, SystemName,
 };
-use pneuma::domain::exposure::DomainName;
+use pneuma::domain::exposure::{
+    ConfirmedRoute, DomainName, ExposureConfigurationVersion, ExposureDiagnostic, ExposureIntent,
+    ExposureMaterialization, ExposureMaterializationState, Visibility,
+};
+use pneuma::domain::identity::RuntimeInstanceId;
 use pneuma::domain::release::{OciArtifact, OciRepository};
 use pneuma::domain::runtime::{
     ContainerObservation, ExpectedRuntimeEndpoint, ObservedRuntimeState,
@@ -25,6 +29,91 @@ fn validates_application_specification_value_objects() {
         ),
     );
     assert_eq!(runtime.container_port().get(), 8080);
+}
+
+#[test]
+fn exposure_values_require_complete_intent_route_and_diagnostic_evidence() {
+    let domain = DomainName::new("example.test").unwrap();
+    assert!(ExposureIntent::new(Visibility::Public, None).is_err());
+    assert!(matches!(
+        ExposureIntent::new(Visibility::Internal, Some(domain.clone())),
+        Ok(ExposureIntent::Internal { .. })
+    ));
+    assert!(ExposureConfigurationVersion::new(" \n ").is_err());
+    assert!(ExposureDiagnostic::new("failed", " ").is_err());
+
+    let route = ConfirmedRoute::new(
+        RuntimeInstanceId::from("runtime-id"),
+        ExposureConfigurationVersion::new("example.test {\n}\n").unwrap(),
+        "2026-08-20 00:00:00".to_owned(),
+    )
+    .unwrap();
+    let diagnostic = ExposureDiagnostic::new("failed", "route failed").unwrap();
+    assert!(
+        ExposureMaterialization::hydrate(ExposureMaterializationState::Active, None, None,)
+            .is_err()
+    );
+    assert!(
+        ExposureMaterialization::hydrate(
+            ExposureMaterializationState::Failed,
+            Some(route.clone()),
+            None,
+        )
+        .is_err()
+    );
+    assert!(matches!(
+        ExposureMaterialization::hydrate(
+            ExposureMaterializationState::Removing,
+            Some(route.clone()),
+            None,
+        ),
+        Ok(ExposureMaterialization::Removing {
+            confirmed_route: Some(_)
+        })
+    ));
+    for materialization in [
+        ExposureMaterialization::hydrate(ExposureMaterializationState::NotMaterialized, None, None),
+        ExposureMaterialization::hydrate(ExposureMaterializationState::Applying, None, None),
+        ExposureMaterialization::hydrate(
+            ExposureMaterializationState::Applying,
+            Some(route.clone()),
+            None,
+        ),
+        ExposureMaterialization::hydrate(
+            ExposureMaterializationState::Active,
+            Some(route.clone()),
+            None,
+        ),
+        ExposureMaterialization::hydrate(ExposureMaterializationState::Removing, None, None),
+        ExposureMaterialization::hydrate(
+            ExposureMaterializationState::Failed,
+            None,
+            Some(diagnostic.clone()),
+        ),
+        ExposureMaterialization::hydrate(
+            ExposureMaterializationState::Failed,
+            Some(route.clone()),
+            Some(diagnostic.clone()),
+        ),
+        ExposureMaterialization::hydrate(
+            ExposureMaterializationState::Diverged,
+            None,
+            Some(diagnostic.clone()),
+        ),
+    ] {
+        assert!(materialization.is_ok());
+    }
+    assert!(matches!(
+        ExposureMaterialization::hydrate(
+            ExposureMaterializationState::Diverged,
+            Some(route),
+            Some(diagnostic),
+        ),
+        Ok(ExposureMaterialization::Diverged {
+            confirmed_route: Some(_),
+            ..
+        })
+    ));
 }
 
 #[test]

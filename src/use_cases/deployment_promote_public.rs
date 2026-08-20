@@ -4,14 +4,17 @@ use std::fmt;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use crate::domain::deployment::DeploymentStatus;
-use crate::domain::exposure::{ExposureMaterializationState, Visibility};
+use crate::domain::exposure::{
+    DomainName, ExposureConfigurationVersion, ExposureDiagnostic, ExposureMaterializationState,
+    Visibility,
+};
 use crate::domain::runtime::{ObservedRuntimeState, RuntimeState};
 
 #[derive(Debug, PartialEq, Eq)]
 // Supplies the route identity after public exposure enters the applying state.
 pub struct PublicExposureTarget {
     pub application_id: String,
-    pub domain: String,
+    pub domain: DomainName,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -125,6 +128,11 @@ pub fn begin_public_exposure(
                 application_id: target.application_id.clone(),
                 reason: "public visibility requires a domain".to_owned(),
             })?;
+    let domain =
+        DomainName::new(&domain).map_err(|_| PromotePublicCandidateError::InvalidExposure {
+            application_id: target.application_id.clone(),
+            reason: "public visibility has an invalid domain".to_owned(),
+        })?;
     if target.visibility != Visibility::Public {
         return Err(PromotePublicCandidateError::InvalidExposure {
             application_id: target.application_id,
@@ -160,13 +168,9 @@ pub fn begin_public_exposure(
 pub fn record_public_exposure_failure(
     connection: &Connection,
     application_id: &str,
-    code: &str,
-    message: &str,
+    diagnostic: &ExposureDiagnostic,
     outcome: ExposureOutcome,
 ) -> Result<(), PromotePublicCandidateError> {
-    if !is_trimmed_nonempty(code) || !is_trimmed_nonempty(message) {
-        return Err(PromotePublicCandidateError::InvalidDiagnostic);
-    }
     let state = match outcome {
         ExposureOutcome::Failed => ExposureMaterializationState::Failed,
         ExposureOutcome::Diverged => ExposureMaterializationState::Diverged,
@@ -179,7 +183,12 @@ pub fn record_public_exposure_failure(
                  last_error_message = ?3,
                  updated_at = CURRENT_TIMESTAMP
              WHERE application_id = ?4 AND desired_visibility = 'public'",
-            params![state.database_value(), code, message, application_id],
+            params![
+                state.database_value(),
+                diagnostic.code(),
+                diagnostic.message(),
+                application_id
+            ],
         )
         .map_err(|source| PromotePublicCandidateError::Persistence { source })?;
     if updated != 1 {
@@ -195,11 +204,8 @@ pub fn record_public_exposure_failure(
 pub fn promote_public_candidate(
     connection: &mut Connection,
     runtime_id: &str,
-    configuration_version: &str,
+    configuration_version: &ExposureConfigurationVersion,
 ) -> Result<PromotedPublicCandidate, PromotePublicCandidateError> {
-    if configuration_version.is_empty() {
-        return Err(PromotePublicCandidateError::InvalidConfigurationVersion);
-    }
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|source| PromotePublicCandidateError::Persistence { source })?;
@@ -211,7 +217,12 @@ pub fn promote_public_candidate(
             actual: target.deployment_status.database_value().to_owned(),
         });
     }
-    if target.visibility != Visibility::Public || target.domain.is_none() {
+    if target.visibility != Visibility::Public
+        || !target
+            .domain
+            .as_deref()
+            .is_some_and(|domain| DomainName::new(domain).is_ok())
+    {
         return Err(PromotePublicCandidateError::InvalidExposure {
             application_id: target.application_id,
             reason: "visibility or domain changed during deployment".to_owned(),
@@ -256,7 +267,11 @@ pub fn promote_public_candidate(
              WHERE application_id = ?3
                AND desired_visibility = 'public'
                AND materialization_state = 'applying'",
-            params![runtime_id, configuration_version, target.application_id],
+            params![
+                runtime_id,
+                configuration_version.as_str(),
+                target.application_id
+            ],
         )
         .map_err(|source| PromotePublicCandidateError::Persistence { source })?;
     if exposure_updated != 1 {
@@ -421,9 +436,4 @@ fn validate_runtime(target: &PromotionTarget) -> Result<(), PromotePublicCandida
         });
     }
     Ok(())
-}
-
-// Keeps persisted diagnostics and configuration identifiers unambiguous.
-fn is_trimmed_nonempty(value: &str) -> bool {
-    !value.is_empty() && value.trim() == value
 }

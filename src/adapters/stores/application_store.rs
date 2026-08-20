@@ -10,7 +10,10 @@ use crate::domain::application::{
     HealthCheckStatus, RelativeManifestPath, RepositoryKind, RuntimeSpecification,
 };
 use crate::domain::delivery::{DeliverySpecification, DeliveryType};
-use crate::domain::exposure::{DomainName, Exposure, ExposureMaterializationState, Visibility};
+use crate::domain::exposure::{
+    ConfirmedRoute, DomainName, Exposure, ExposureConfigurationVersion, ExposureDiagnostic,
+    ExposureIntent, ExposureMaterialization, ExposureMaterializationState, Visibility,
+};
 use crate::domain::identity::{ApplicationId, DeploymentId, RuntimeInstanceId, SystemId};
 use crate::domain::release::OciRepository;
 use crate::domain::runtime::DesiredRuntimeState;
@@ -57,6 +60,10 @@ pub enum ExposureStoreError {
         application_id: String,
         state: String,
     },
+    InvalidExposure {
+        application_id: String,
+        reason: String,
+    },
     Persistence {
         source: rusqlite::Error,
     },
@@ -79,6 +86,13 @@ impl fmt::Display for ExposureStoreError {
                 formatter,
                 "application `{application_id}` has invalid persisted exposure materialization state `{state}`"
             ),
+            Self::InvalidExposure {
+                application_id,
+                reason,
+            } => write!(
+                formatter,
+                "application `{application_id}` has invalid persisted exposure: {reason}"
+            ),
             Self::Persistence { source } => write!(formatter, "exposure store error: {source}"),
         }
     }
@@ -87,7 +101,9 @@ impl fmt::Display for ExposureStoreError {
 impl Error for ExposureStoreError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::InvalidVisibility { .. } | Self::InvalidMaterializationState { .. } => None,
+            Self::InvalidVisibility { .. }
+            | Self::InvalidMaterializationState { .. }
+            | Self::InvalidExposure { .. } => None,
             Self::Persistence { source } => Some(source),
         }
     }
@@ -318,8 +334,7 @@ pub fn insert_health_check_spec(
 pub fn insert_exposure(
     transaction: &Transaction<'_>,
     application_id: &str,
-    visibility: Visibility,
-    domain: Option<&DomainName>,
+    intent: &ExposureIntent,
 ) -> Result<(), ApplicationStoreError> {
     transaction
         .execute(
@@ -329,8 +344,8 @@ pub fn insert_exposure(
             ) VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
             params![
                 application_id,
-                visibility.database_value(),
-                domain.map(DomainName::as_str)
+                intent.visibility().database_value(),
+                intent.domain().map(DomainName::as_str)
             ],
         )
         .map_err(|source| ApplicationStoreError::Persistence { source })?;
@@ -507,17 +522,73 @@ pub fn load_exposure(
             })
         })
         .transpose()?;
-    Ok(Some(Exposure {
-        application_id: ApplicationId::from(application_id),
-        desired_visibility: visibility,
-        domain,
-        active_runtime_id: active_runtime_id.map(RuntimeInstanceId::from),
-        materialization_state,
+    let intent = ExposureIntent::new(visibility, domain).map_err(|error| {
+        ExposureStoreError::InvalidExposure {
+            application_id: application_id.to_owned(),
+            reason: error.reason,
+        }
+    })?;
+    let confirmed_route = match (
+        active_runtime_id,
         configuration_version,
         last_materialized_at,
-        last_error_code,
-        last_error_message,
-    }))
+    ) {
+        // Earlier internal-route removal recorded its completion timestamp after
+        // clearing the runtime and configuration. It is not confirmed route evidence.
+        (None, None, None | Some(_)) => None,
+        (Some(runtime_id), Some(configuration_version), Some(materialized_at)) => {
+            let configuration_version = ExposureConfigurationVersion::new(&configuration_version)
+                .map_err(|error| ExposureStoreError::InvalidExposure {
+                application_id: application_id.to_owned(),
+                reason: format!("invalid configuration version `{}`", error.value),
+            })?;
+            Some(
+                ConfirmedRoute::new(
+                    RuntimeInstanceId::from(runtime_id),
+                    configuration_version,
+                    materialized_at,
+                )
+                .map_err(|error| ExposureStoreError::InvalidExposure {
+                    application_id: application_id.to_owned(),
+                    reason: error.reason,
+                })?,
+            )
+        }
+        _ => {
+            return Err(ExposureStoreError::InvalidExposure {
+                application_id: application_id.to_owned(),
+                reason: "confirmed route fields must be all present or all absent".to_owned(),
+            });
+        }
+    };
+    let diagnostic = match (last_error_code, last_error_message) {
+        (None, None) => None,
+        (Some(code), Some(message)) => {
+            Some(ExposureDiagnostic::new(&code, &message).map_err(|_| {
+                ExposureStoreError::InvalidExposure {
+                    application_id: application_id.to_owned(),
+                    reason: "diagnostic code and message must be trimmed and non-empty".to_owned(),
+                }
+            })?)
+        }
+        _ => {
+            return Err(ExposureStoreError::InvalidExposure {
+                application_id: application_id.to_owned(),
+                reason: "diagnostic code and message must be present together".to_owned(),
+            });
+        }
+    };
+    let materialization =
+        ExposureMaterialization::hydrate(materialization_state, confirmed_route, diagnostic)
+            .map_err(|error| ExposureStoreError::InvalidExposure {
+                application_id: application_id.to_owned(),
+                reason: error.reason,
+            })?;
+    Ok(Some(Exposure::new(
+        ApplicationId::from(application_id),
+        intent,
+        materialization,
+    )))
 }
 
 // Begins a visibility transition with a compare-and-set on the prior intent.
@@ -555,8 +626,8 @@ pub fn begin_exposure_change(
 pub fn complete_public_exposure_change(
     transaction: &Transaction<'_>,
     application_id: &str,
-    runtime_id: &str,
-    configuration_version: &str,
+    runtime_id: &RuntimeInstanceId,
+    configuration_version: &ExposureConfigurationVersion,
 ) -> Result<bool, ApplicationStoreError> {
     let updated = transaction
         .execute(
@@ -564,14 +635,18 @@ pub fn complete_public_exposure_change(
              SET active_runtime_id = ?1,
                  materialization_state = 'active',
                  configuration_version = ?2,
-                 last_materialized_at = CURRENT_TIMESTAMP,
+                  last_materialized_at = NULL,
                  last_error_code = NULL,
                  last_error_message = NULL,
                  updated_at = CURRENT_TIMESTAMP
              WHERE application_id = ?3
                AND desired_visibility = 'public'
                AND materialization_state = 'applying'",
-            params![runtime_id, configuration_version, application_id],
+            params![
+                runtime_id.as_str(),
+                configuration_version.as_str(),
+                application_id
+            ],
         )
         .map_err(|source| ApplicationStoreError::Persistence { source })?;
     Ok(updated == 1)
@@ -585,13 +660,13 @@ pub fn complete_internal_exposure_change(
     let updated = transaction
         .execute(
             "UPDATE exposures
-             SET active_runtime_id = NULL,
-                 materialization_state = 'not_materialized',
-                 configuration_version = NULL,
-                 last_error_code = NULL,
-                 last_error_message = NULL,
-                 last_materialized_at = CURRENT_TIMESTAMP,
-                 updated_at = CURRENT_TIMESTAMP
+              SET active_runtime_id = NULL,
+                  materialization_state = 'not_materialized',
+                  configuration_version = NULL,
+                  last_materialized_at = NULL,
+                  last_error_code = NULL,
+                  last_error_message = NULL,
+                  updated_at = CURRENT_TIMESTAMP
              WHERE application_id = ?1
                AND desired_visibility = 'internal'
                AND materialization_state = 'removing'",
@@ -607,8 +682,7 @@ pub fn record_exposure_change_failure(
     application_id: &str,
     visibility: Visibility,
     state: ExposureMaterializationState,
-    code: &str,
-    message: &str,
+    diagnostic: &ExposureDiagnostic,
 ) -> Result<bool, ApplicationStoreError> {
     let updated = transaction
         .execute(
@@ -620,8 +694,8 @@ pub fn record_exposure_change_failure(
              WHERE application_id = ?4 AND desired_visibility = ?5",
             params![
                 state.database_value(),
-                code,
-                message,
+                diagnostic.code(),
+                diagnostic.message(),
                 application_id,
                 visibility.database_value()
             ],
