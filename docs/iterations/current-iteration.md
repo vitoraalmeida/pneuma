@@ -84,9 +84,12 @@ without selecting a new Release or making destructive changes from ambiguity.
   Result: a short SQLite snapshot now loads Application, blocker, active
   Deployment, Release, RuntimeInstance, Exposure, and specification before
   read-only container, Quadlet, and Caddy fragment observation.
-- [ ] Add `pneuma reconcile <application>` with observable `no-op` and
+- [x] Add `pneuma reconcile <application>` with observable `no-op` and
   `deferred` results. A non-terminal Deployment must defer reconciliation before
   any external effect.
+  Result: the top-level command returns `deferred` before external observation
+  for a non-terminal Deployment and reports `no-op` for stopped internal intent
+  with absent runtime and route; runtime repair remains a later checkpoint.
 - [ ] Reconcile confirmed runtime drift: recover a missing container only when
   the persisted RuntimeInstance, deterministic unit/container identity, image
   digest, labels, and loopback endpoint are unambiguous. Preserve the persisted

@@ -102,9 +102,11 @@ The library now has a read-only reconciliation input path. It loads the
 persisted Application, any non-terminal Deployment, active Deployment and
 Release, RuntimeInstance, Exposure, and specification in a short SQLite
 transaction, then closes that transaction before observing Podman, Quadlet, and
-Caddy fragment state. This path does not expose a CLI command, change SQLite,
-or control external resources; future reconciliation use cases classify these
-facts before performing any effect.
+Caddy fragment state. The library input path does not change SQLite or control
+external resources. `pneuma reconcile <application>` currently
+reports only `no-op` for stopped internal intent with absent runtime and route,
+or `deferred` when a non-terminal Deployment holds the Application reservation;
+future use cases classify and repair additional materialization states.
 
 ## Domain Roles
 

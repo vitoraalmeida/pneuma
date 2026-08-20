@@ -11,9 +11,20 @@ use crate::adapters::stores::{application_store, deployment_store, release_store
 use crate::adapters::systemd_quadlet::{
     QuadletError, container_name, observe_generated_unit, observe_unit_source, unit_name,
 };
+use crate::domain::deployment::Deployment;
 use crate::domain::reconciliation::{
-    ActiveRuntime, ReconciliationInput, ReconciliationObservation,
+    ActiveRuntime, CaddyFragmentObservation, NamedContainerObservation, ReconciliationInput,
+    ReconciliationObservation,
 };
+use crate::domain::runtime::{DesiredRuntimeState, ObservedRuntimeState};
+
+#[derive(Debug)]
+pub enum ReconciliationResult {
+    NoOp,
+    Deferred {
+        blocking_deployment: Box<Deployment>,
+    },
+}
 
 #[derive(Debug)]
 pub enum ReconciliationReadError {
@@ -46,6 +57,9 @@ pub enum ReconciliationReadError {
     },
     ObserveCaddy {
         source: ObserveCaddyFragmentError,
+    },
+    NotConverged {
+        reason: String,
     },
 }
 
@@ -85,6 +99,9 @@ impl fmt::Display for ReconciliationReadError {
             Self::ObserveCaddy { source } => {
                 write!(formatter, "failed to observe Caddy fragment: {source}")
             }
+            Self::NotConverged { reason } => {
+                write!(formatter, "reconciliation is not yet converged: {reason}")
+            }
         }
     }
 }
@@ -101,9 +118,39 @@ impl Error for ReconciliationReadError {
             Self::ObserveNamedContainer { source } => Some(source),
             Self::ObserveQuadlet { source } => Some(source),
             Self::ObserveCaddy { source } => Some(source),
-            Self::ApplicationNotFound { .. } => None,
+            Self::ApplicationNotFound { .. } | Self::NotConverged { .. } => None,
         }
     }
+}
+
+// Returns a read-only result for states that already satisfy persisted intent; later checkpoints repair drift.
+pub fn reconcile_application(
+    connection: &mut Connection,
+    application_name: &str,
+    managed_caddy_directory: &std::path::Path,
+) -> Result<ReconciliationResult, ReconciliationReadError> {
+    let input = load_reconciliation_input(connection, application_name)?;
+    if let Some(blocking_deployment) = input.blocking_deployment {
+        return Ok(ReconciliationResult::Deferred {
+            blocking_deployment: Box::new(blocking_deployment),
+        });
+    }
+    let observation = observe_reconciliation_input(&input, managed_caddy_directory)?;
+    let Some(observation) = observation else {
+        return Err(ReconciliationReadError::NotConverged {
+            reason: "application has no active runtime".to_owned(),
+        });
+    };
+    if input.application.desired_runtime_state == DesiredRuntimeState::Stopped
+        && *observation.recorded_container.state() == ObservedRuntimeState::Missing
+        && observation.named_container == NamedContainerObservation::Missing
+        && observation.caddy_fragment == CaddyFragmentObservation::Missing
+    {
+        return Ok(ReconciliationResult::NoOp);
+    }
+    Err(ReconciliationReadError::NotConverged {
+        reason: "runtime repair and public-route confirmation are not implemented".to_owned(),
+    })
 }
 
 // Loads all persisted reconciliation authorities in a short read transaction before external observation.

@@ -910,6 +910,92 @@ fn status_preserves_missing_after_stop_when_container_was_removed() {
 }
 
 #[test]
+fn reconcile_reports_no_op_for_stopped_intent_with_missing_resources() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    environment.deploy_current_revision();
+    let connection = database::open(&environment.database_path).unwrap();
+    connection
+        .execute(
+            "UPDATE applications SET desired_runtime_state = 'stopped' WHERE name = ?1",
+            [&environment.application_name],
+        )
+        .unwrap();
+    let before: (String, String) = connection
+        .query_row(
+            "SELECT desired_runtime_state, external_runtime_id
+             FROM applications JOIN runtime_instances ON runtime_instances.application_id = applications.id
+             WHERE applications.name = ?1",
+            [&environment.application_name],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    drop(connection);
+    fs::write(environment.root.join("podman-removed"), "removed").unwrap();
+
+    let output = environment.run_reconcile();
+
+    assert_command_succeeded(&output);
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "Application: another-site\nResult: no-op\n"
+    );
+    let connection = database::open(&environment.database_path).unwrap();
+    let after: (String, String) = connection
+        .query_row(
+            "SELECT desired_runtime_state, external_runtime_id
+             FROM applications JOIN runtime_instances ON runtime_instances.application_id = applications.id
+             WHERE applications.name = ?1",
+            [&environment.application_name],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(after, before);
+}
+
+#[test]
+fn reconcile_defers_before_external_observation_for_a_nonterminal_deployment() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    environment.deploy_current_revision();
+    let connection = database::open(&environment.database_path).unwrap();
+    let (application_id, release_id): (String, String) = connection
+        .query_row(
+            "SELECT applications.id, releases.id
+             FROM applications JOIN releases ON releases.application_id = applications.id
+             WHERE applications.name = ?1",
+            [&environment.application_name],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    let blocking_id = "d".repeat(32);
+    connection
+        .execute(
+            "INSERT INTO deployments (id, application_id, release_id, type, status, requested_at)
+             VALUES (?1, ?2, ?3, 'deploy', 'pending', CURRENT_TIMESTAMP)",
+            [&blocking_id, &application_id, &release_id],
+        )
+        .unwrap();
+    drop(connection);
+    let podman_log = environment.root.join("podman.log");
+    fs::remove_file(&podman_log).unwrap();
+
+    let output = environment.run_reconcile();
+
+    assert_command_succeeded(&output);
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!(
+            "Application: another-site\nResult: deferred\nBlocking deployment: {blocking_id} (pending)\n"
+        )
+    );
+    assert!(
+        !podman_log.exists(),
+        "reconcile observed Podman while deferred"
+    );
+}
+
+#[test]
 fn starts_a_verified_oci_image_after_its_container_is_removed() {
     let environment = DeploymentEnvironment::new();
     assert_command_succeeded(&environment.import());
@@ -1725,6 +1811,25 @@ impl DeploymentEnvironment {
             .unwrap()
     }
 
+    fn run_reconcile(&self) -> Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_pneuma"));
+        command
+            .env("PNEUMA_DATABASE_PATH", &self.database_path)
+            .env("PNEUMA_WORKSPACE_PATH", &self.workspace_path)
+            .env("PNEUMA_CADDY_MANAGED_PATH", &self.managed_caddy_directory)
+            .env("PNEUMA_CADDYFILE_PATH", &self.caddyfile_path)
+            .env("PNEUMA_QUADLET_DIR", self.root.join("quadlets"))
+            .env("PATH", executable_path(&self.fake_bin))
+            .env("PNEUMA_FAKE_PORT", "30000")
+            .env("PNEUMA_FAKE_PODMAN_LOG", self.root.join("podman.log"))
+            .env(
+                "PNEUMA_FAKE_PODMAN_REMOVED",
+                self.root.join("podman-removed"),
+            )
+            .args(["reconcile", &self.application_name]);
+        command.output().unwrap()
+    }
+
     fn deploy_with_external_status(
         &self,
         port: u16,
@@ -1990,6 +2095,10 @@ if [ "$1" = "--user" ]; then
     shift
 fi
 case "$1" in
+    is-active)
+        printf 'inactive\n'
+        exit 3
+        ;;
     daemon-reload|start|stop|enable|disable)
         if [ "$1" = "start" ] && [ -f "${PNEUMA_FAKE_SYSTEMCTL_START_FAILURE:-}" ]; then
             printf 'start failed\n' >&2

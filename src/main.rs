@@ -30,6 +30,9 @@ use pneuma::use_cases::deployment_from_revision::{DeployBranchError, deploy_bran
 use pneuma::use_cases::deployment_list::{ListDeploymentsError, list_deployments};
 use pneuma::use_cases::deployment_rollback::{RollbackError, rollback_deployment};
 use pneuma::use_cases::exposure_change::{ExposureChangeError, change_exposure};
+use pneuma::use_cases::reconciliation::{
+    ReconciliationReadError, ReconciliationResult, reconcile_application,
+};
 use pneuma::use_cases::system_create::create_system;
 use pneuma::use_cases::system_list::list_systems;
 use pneuma::use_cases::system_show::show_system;
@@ -84,6 +87,8 @@ enum Commands {
     Version,
     /// Run diagnostic checks
     Doctor,
+    /// Reconcile an application with its persisted intent
+    Reconcile { application_name: String },
     /// CI dispatch (internal, via SSH)
     Ci {
         #[command(subcommand)]
@@ -241,6 +246,7 @@ impl From<Commands> for Command {
             },
             Commands::Version => Command::Version,
             Commands::Doctor => Command::Doctor,
+            Commands::Reconcile { application_name } => Command::Reconcile { application_name },
             Commands::Ci { .. } => Command::CiDispatch,
         }
     }
@@ -298,6 +304,9 @@ enum Command {
     },
     DatabaseRestore {
         path: PathBuf,
+    },
+    Reconcile {
+        application_name: String,
     },
     CiDispatch,
 }
@@ -359,6 +368,9 @@ enum CliError {
     CiDispatch {
         source: CiDispatchError,
     },
+    Reconcile {
+        source: ReconciliationReadError,
+    },
     Doctor,
     MissingDeployOption,
 }
@@ -398,6 +410,7 @@ impl fmt::Display for CliError {
             Self::SystemList { source } => write!(formatter, "{source}"),
             Self::SystemShow { source } => write!(formatter, "{source}"),
             Self::CiDispatch { source } => write!(formatter, "{source}"),
+            Self::Reconcile { source } => write!(formatter, "{source}"),
             Self::Doctor => formatter.write_str("one or more diagnostic checks failed"),
             Self::MissingDeployOption => {
                 formatter.write_str("either --image or --branch must be specified")
@@ -426,6 +439,7 @@ impl Error for CliError {
             Self::SystemList { source } => Some(source),
             Self::SystemShow { source } => Some(source),
             Self::CiDispatch { source } => Some(source),
+            Self::Reconcile { source } => Some(source),
             Self::Doctor | Self::MissingDeployOption | Self::InvalidImportRepository => None,
         }
     }
@@ -590,6 +604,9 @@ fn run(invocation: Invocation) -> Result<(), CliError> {
             application_name,
             visibility,
         } => run_visibility_set(&mut connection, verbose, &application_name, visibility),
+        Command::Reconcile { application_name } => {
+            run_reconcile(&mut connection, verbose, &application_name)
+        }
         Command::Doctor
         | Command::Version
         | Command::DatabaseBackup { .. }
@@ -813,6 +830,42 @@ fn run_status(
     println!("Observed state: {:?}", observation.observed_runtime_state);
     println!("Runtime: {}", observation.runtime_id);
     println!("Container: {}", observation.container_id);
+    Ok(())
+}
+
+// Classifies persisted intent and observed materialization without adding deployment or repair effects.
+fn run_reconcile(
+    connection: &mut rusqlite::Connection,
+    verbose: bool,
+    application_name: &str,
+) -> Result<(), CliError> {
+    log_verbose(
+        verbose,
+        format!("reconcile application: {application_name}"),
+    );
+    let managed_caddy_directory = configured_path(
+        CADDY_MANAGED_PATH_ENVIRONMENT_VARIABLE,
+        DEFAULT_CADDY_MANAGED_PATH,
+    );
+    match reconcile_application(connection, application_name, &managed_caddy_directory)
+        .map_err(|source| CliError::Reconcile { source })?
+    {
+        ReconciliationResult::NoOp => {
+            println!("Application: {application_name}");
+            println!("Result: no-op");
+        }
+        ReconciliationResult::Deferred {
+            blocking_deployment,
+        } => {
+            println!("Application: {application_name}");
+            println!("Result: deferred");
+            println!(
+                "Blocking deployment: {} ({})",
+                blocking_deployment.id,
+                blocking_deployment.status()
+            );
+        }
+    }
     Ok(())
 }
 
