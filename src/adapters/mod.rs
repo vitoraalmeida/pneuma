@@ -9,3 +9,4 @@ pub mod oci_image;
 pub mod port_allocator;
 pub mod stores;
 pub mod systemd_quadlet;
+pub mod test_gate;

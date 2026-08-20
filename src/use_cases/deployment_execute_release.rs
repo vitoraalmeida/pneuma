@@ -7,6 +7,7 @@ use rusqlite::Connection;
 use crate::adapters::application_lock::{ApplicationLock, ApplicationLockError};
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::adapters::stores::operation_store;
+use crate::adapters::test_gate::wait_for_test_gate;
 use crate::domain::application::ApplicationDeploymentSpecification;
 use crate::domain::deployment::{DeploymentStatus, DeploymentType, SourceRevision};
 use crate::domain::exposure::Visibility;
@@ -360,6 +361,8 @@ fn execute_deployment(
     public_configuration: Option<&PublicDeploymentConfiguration>,
     progress: &mut ProgressReporter<'_>,
 ) -> Result<CompletedDeploymentExecution, FailedExecution> {
+    wait_for_test_gate("deployment.pending")
+        .map_err(|source| failure_needing_persistence("test_gate_failed", source, None, None))?;
     progress.state_changed(deployment_id, DeploymentStatus::Starting);
     progress.started(
         DeploymentStep::CreateContainer,
@@ -452,7 +455,27 @@ fn execute_deployment(
         DeploymentStep::RegisterCandidate,
         format!("runtime {}", candidate.runtime.id),
     );
+    wait_for_test_gate("deployment.starting-registered").map_err(|source| {
+        candidate_failure(
+            "test_gate_failed",
+            source,
+            Some(candidate.runtime.external_runtime_id.as_str()),
+            Some(candidate.runtime.id.as_str()),
+            Some(&candidate.unit_name),
+            true,
+        )
+    })?;
     progress.state_changed(deployment_id, DeploymentStatus::Verifying);
+    wait_for_test_gate("deployment.verifying").map_err(|source| {
+        candidate_failure(
+            "test_gate_failed",
+            source,
+            Some(candidate.runtime.external_runtime_id.as_str()),
+            Some(candidate.runtime.id.as_str()),
+            Some(&candidate.unit_name),
+            true,
+        )
+    })?;
 
     let previous_runtime = load_previous_runtime(
         connection,
@@ -514,6 +537,12 @@ fn execute_deployment(
                         resources: *resources,
                     }
                 }
+                PublicActivationError::TestGate { source, resources } => FailedExecution {
+                    code: "test_gate_failed",
+                    source,
+                    failure_persisted: false,
+                    resources: *resources,
+                },
                 PublicActivationError::CaddyMaterialization {
                     source, resources, ..
                 } => FailedExecution {

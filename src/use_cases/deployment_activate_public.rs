@@ -10,6 +10,7 @@ use crate::adapters::caddy_exposure::{
 };
 use crate::adapters::health_check_external::check_external_health;
 use crate::adapters::health_check_internal::{HealthCheckResult, check_internal_health};
+use crate::adapters::test_gate::wait_for_test_gate;
 use crate::domain::exposure::{ExposureConfigurationVersion, ExposureDiagnostic};
 use crate::domain::runtime::RuntimeInstance;
 use crate::use_cases::deployment_progress::{DeploymentStep, ProgressReporter};
@@ -46,6 +47,10 @@ pub(crate) enum PublicActivationError {
         resources: Box<CandidateResources>,
     },
     ExposurePreparation {
+        source: Box<dyn Error>,
+        resources: Box<CandidateResources>,
+    },
+    TestGate {
         source: Box<dyn Error>,
         resources: Box<CandidateResources>,
     },
@@ -124,6 +129,12 @@ pub(crate) fn activate_public_candidate(
         deployment_id,
         crate::domain::deployment::DeploymentStatus::Activating,
     );
+    wait_for_test_gate("deployment.activating").map_err(|source| {
+        PublicActivationError::TestGate {
+            source: Box::new(source),
+            resources: Box::new(resources.clone()),
+        }
+    })?;
 
     let exposure = begin_public_exposure(connection, runtime_id).map_err(|source| {
         PublicActivationError::ExposurePreparation {
