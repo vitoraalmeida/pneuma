@@ -5,6 +5,7 @@ use rusqlite::{Connection, TransactionBehavior};
 
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
+use crate::adapters::stores::operation_store::{self, OperationStoreError};
 use crate::adapters::stores::release_store::{self, ReleaseStoreError};
 use crate::domain::deployment::{Deployment, DeploymentType, SourceRevision};
 use crate::domain::identity::{ApplicationId, ReleaseId};
@@ -18,6 +19,7 @@ pub enum CreateDeploymentError {
     ApplicationStore { source: ApplicationStoreError },
     ReleaseStore { source: ReleaseStoreError },
     DeploymentStore { source: DeploymentStoreError },
+    OperationStore { source: OperationStoreError },
     Persistence { source: rusqlite::Error },
 }
 
@@ -48,6 +50,9 @@ impl fmt::Display for CreateDeploymentError {
             Self::DeploymentStore { source } => {
                 write!(formatter, "failed to create deployment: {source}")
             }
+            Self::OperationStore { source } => {
+                write!(formatter, "failed to create deployment: {source}")
+            }
             Self::Persistence { source } => {
                 write!(formatter, "failed to create deployment: {source}")
             }
@@ -61,6 +66,7 @@ impl Error for CreateDeploymentError {
             Self::ApplicationStore { source } => Some(source),
             Self::ReleaseStore { source } => Some(source),
             Self::DeploymentStore { source } => Some(source),
+            Self::OperationStore { source } => Some(source),
             Self::Persistence { source } => Some(source),
             Self::ReleaseNotFound { .. }
             | Self::ApplicationNotFound { .. }
@@ -86,6 +92,33 @@ pub fn create_deployment(
     )
 }
 
+// Creates the pending deployment and replaces operation ownership in one transaction.
+pub fn create_deployment_with_source_revision_and_ownership(
+    connection: &mut Connection,
+    application_id: &ApplicationId,
+    release_id: &ReleaseId,
+    deployment_type: DeploymentType,
+    source_revision: Option<&SourceRevision>,
+    owner_token: Option<&str>,
+) -> Result<Deployment, CreateDeploymentError> {
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|source| CreateDeploymentError::Persistence { source })?;
+
+    let deployment = create_deployment_in_transaction(
+        &transaction,
+        application_id,
+        release_id,
+        deployment_type,
+        source_revision,
+        owner_token,
+    )?;
+    transaction
+        .commit()
+        .map_err(|source| CreateDeploymentError::Persistence { source })?;
+    Ok(deployment)
+}
+
 // Atomically verifies deployment preconditions and records one pending deployment, preventing
 // concurrent active deployments for the same application.
 pub fn create_deployment_with_source_revision(
@@ -95,12 +128,26 @@ pub fn create_deployment_with_source_revision(
     deployment_type: DeploymentType,
     source_revision: Option<&SourceRevision>,
 ) -> Result<Deployment, CreateDeploymentError> {
-    let transaction = connection
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|source| CreateDeploymentError::Persistence { source })?;
+    create_deployment_with_source_revision_and_ownership(
+        connection,
+        application_id,
+        release_id,
+        deployment_type,
+        source_revision,
+        None,
+    )
+}
 
+fn create_deployment_in_transaction(
+    transaction: &rusqlite::Transaction<'_>,
+    application_id: &ApplicationId,
+    release_id: &ReleaseId,
+    deployment_type: DeploymentType,
+    source_revision: Option<&SourceRevision>,
+    owner_token: Option<&str>,
+) -> Result<Deployment, CreateDeploymentError> {
     let application_exists =
-        application_store::application_exists(&transaction, application_id.as_str())
+        application_store::application_exists(transaction, application_id.as_str())
             .map_err(|source| CreateDeploymentError::ApplicationStore { source })?;
     if !application_exists {
         return Err(CreateDeploymentError::ApplicationNotFound {
@@ -108,7 +155,7 @@ pub fn create_deployment_with_source_revision(
         });
     }
     let release_exists =
-        release_store::release_exists(&transaction, release_id.as_str(), application_id.as_str())
+        release_store::release_exists(transaction, release_id.as_str(), application_id.as_str())
             .map_err(|source| CreateDeploymentError::ReleaseStore { source })?;
     if !release_exists {
         return Err(CreateDeploymentError::ReleaseNotFound {
@@ -116,7 +163,7 @@ pub fn create_deployment_with_source_revision(
         });
     }
     let blocker =
-        deployment_store::load_nonterminal_deployment(&transaction, application_id.as_str())
+        deployment_store::load_nonterminal_deployment(transaction, application_id.as_str())
             .map_err(|source| CreateDeploymentError::DeploymentStore { source })?;
     if let Some(deployment) = blocker {
         return Err(CreateDeploymentError::ActiveDeployment {
@@ -124,7 +171,7 @@ pub fn create_deployment_with_source_revision(
         });
     }
     let active_release_id =
-        deployment_store::load_active_runtime_release_id(&transaction, application_id.as_str())
+        deployment_store::load_active_runtime_release_id(transaction, application_id.as_str())
             .map_err(|source| CreateDeploymentError::DeploymentStore { source })?;
     if active_release_id.as_deref() == Some(release_id.as_str())
         && deployment_type == DeploymentType::Deploy
@@ -134,10 +181,10 @@ pub fn create_deployment_with_source_revision(
         });
     }
 
-    let deployment_id = deployment_store::generate_id(&transaction)
+    let deployment_id = deployment_store::generate_id(transaction)
         .map_err(|source| CreateDeploymentError::DeploymentStore { source })?;
     deployment_store::insert_pending_deployment(
-        &transaction,
+        transaction,
         &deployment_id,
         application_id.as_str(),
         release_id.as_str(),
@@ -145,11 +192,12 @@ pub fn create_deployment_with_source_revision(
         source_revision,
     )
     .map_err(|source| CreateDeploymentError::DeploymentStore { source })?;
-    let deployment = deployment_store::load_deployment(&transaction, &deployment_id)
+    if let Some(owner_token) = owner_token {
+        operation_store::take_ownership(transaction, application_id.as_str(), owner_token)
+            .map_err(|source| CreateDeploymentError::OperationStore { source })?;
+    }
+    let deployment = deployment_store::load_deployment(transaction, &deployment_id)
         .map_err(|source| CreateDeploymentError::DeploymentStore { source })?;
 
-    transaction
-        .commit()
-        .map_err(|source| CreateDeploymentError::Persistence { source })?;
     Ok(deployment)
 }

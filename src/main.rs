@@ -866,11 +866,13 @@ fn run_reconcile(
         } => {
             println!("Application: {application_name}");
             println!("Result: deferred");
-            println!(
-                "Blocking deployment: {} ({})",
-                blocking_deployment.id,
-                blocking_deployment.status()
-            );
+            if let Some(blocking_deployment) = blocking_deployment {
+                println!(
+                    "Blocking deployment: {} ({})",
+                    blocking_deployment.id,
+                    blocking_deployment.status()
+                );
+            }
         }
         ReconciliationResult::Repaired {
             runtime_id,

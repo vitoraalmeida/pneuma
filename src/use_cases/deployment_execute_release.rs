@@ -4,7 +4,9 @@ use std::path::PathBuf;
 
 use rusqlite::Connection;
 
+use crate::adapters::application_lock::{ApplicationLock, ApplicationLockError};
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
+use crate::adapters::stores::operation_store;
 use crate::domain::application::ApplicationDeploymentSpecification;
 use crate::domain::deployment::{DeploymentStatus, DeploymentType, SourceRevision};
 use crate::domain::exposure::Visibility;
@@ -14,7 +16,7 @@ use crate::use_cases::deployment_activate_public::{
     PublicActivationError, PublicActivationInput, activate_public_candidate,
 };
 use crate::use_cases::deployment_create::{
-    CreateDeploymentError, create_deployment_with_source_revision,
+    CreateDeploymentError, create_deployment_with_source_revision_and_ownership,
 };
 use crate::use_cases::deployment_progress::{DeploymentProgress, DeploymentStep, ProgressReporter};
 use crate::use_cases::deployment_promote_internal::{
@@ -79,6 +81,15 @@ pub enum DeployReleaseError {
         failure: String,
         source: Box<CandidateCleanupError>,
     },
+    OperationLock {
+        source: ApplicationLockError,
+    },
+    OperationToken {
+        source: operation_store::OperationStoreError,
+    },
+    OperationInProgress {
+        application_id: String,
+    },
 }
 
 impl fmt::Display for DeployReleaseError {
@@ -125,6 +136,16 @@ impl fmt::Display for DeployReleaseError {
                 formatter,
                 "deployment `{deployment_id}` encountered `{failure}` and its candidate could not be cleaned up: {source}"
             ),
+            Self::OperationLock { source } => {
+                write!(formatter, "failed to serialize deployment: {source}")
+            }
+            Self::OperationToken { source } => {
+                write!(formatter, "failed to create deployment ownership: {source}")
+            }
+            Self::OperationInProgress { application_id } => write!(
+                formatter,
+                "application `{application_id}` already has an operation in progress"
+            ),
         }
     }
 }
@@ -137,9 +158,12 @@ impl Error for DeployReleaseError {
             Self::DeploymentFailed { source, .. } => Some(source.as_ref()),
             Self::RecordFailure { source, .. } => Some(source),
             Self::Cleanup { source, .. } => Some(source.as_ref()),
+            Self::OperationLock { source } => Some(source),
+            Self::OperationToken { source } => Some(source),
             Self::ApplicationNotFound { .. }
             | Self::PublicApplication { .. }
-            | Self::InvalidSourceRevision { .. } => None,
+            | Self::InvalidSourceRevision { .. }
+            | Self::OperationInProgress { .. } => None,
         }
     }
 }
@@ -216,6 +240,23 @@ fn deploy_release_reporting(
         });
     }
 
+    let database_path =
+        connection
+            .path()
+            .map(std::path::Path::new)
+            .ok_or(DeployReleaseError::OperationLock {
+                source: ApplicationLockError::DatabasePathUnavailable,
+            })?;
+    let Some(_lock) = ApplicationLock::try_acquire(database_path, application_id.as_str())
+        .map_err(|source| DeployReleaseError::OperationLock { source })?
+    else {
+        return Err(DeployReleaseError::OperationInProgress {
+            application_id: application_id.to_string(),
+        });
+    };
+    let owner_token = operation_store::generate_token(connection)
+        .map_err(|source| DeployReleaseError::OperationToken { source })?;
+
     progress.started(
         DeploymentStep::CreateDeployment,
         format!("release {}", release.id),
@@ -224,12 +265,13 @@ fn deploy_release_reporting(
         .map(SourceRevision::new)
         .transpose()
         .map_err(|error| DeployReleaseError::InvalidSourceRevision { value: error.value })?;
-    let deployment = create_deployment_with_source_revision(
+    let deployment = create_deployment_with_source_revision_and_ownership(
         connection,
         application_id,
         &release.id,
         deployment_type,
         source_revision.as_ref(),
+        Some(&owner_token),
     )
     .map_err(|source| DeployReleaseError::CreateDeployment { source })?;
     progress.completed(

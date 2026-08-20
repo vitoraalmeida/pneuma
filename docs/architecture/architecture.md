@@ -104,11 +104,13 @@ Release, RuntimeInstance, Exposure, and specification in a short SQLite
 transaction, then closes that transaction before observing Podman, Quadlet, and
 Caddy fragment state. The library input path does not change SQLite or control
 external resources. `pneuma reconcile <application>` defers while a non-terminal
-Deployment holds the Application reservation, repairs a confirmed Quadlet
-container recreation by compare-and-set, and reconciles managed Caddy fragments
-only after reserving the persisted Exposure state. Caddy validation, reload, and
-external health checks occur outside SQLite transactions; failed compensation is
-recorded as exposure divergence for manual intervention.
+Deployment is held by a live per-Application kernel lock. After the lock holder
+exits, reconcile records an interrupted deployment as failed and cleans only a
+candidate whose persisted and external identity can be proven. It repairs a
+confirmed Quadlet container recreation by compare-and-set and reconciles managed
+Caddy fragments only after reserving the persisted Exposure state. Caddy
+validation, reload, and external health checks occur outside SQLite transactions;
+failed compensation is recorded as exposure divergence for manual intervention.
 
 ## Domain Roles
 

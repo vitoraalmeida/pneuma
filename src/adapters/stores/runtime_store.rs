@@ -301,6 +301,25 @@ pub fn load_runtime_by_external_id(
         .map_err(|source| RuntimeStoreError::Persistence { source })
 }
 
+// Finds the candidate runtime registered by one deployment without confusing it with an active runtime.
+pub fn load_runtime_by_deployment(
+    connection: &Connection,
+    deployment_id: &str,
+) -> Result<Option<RuntimeInstance>, RuntimeStoreError> {
+    connection
+        .query_row(
+            "SELECT id, application_id, deployment_id, external_runtime_id,
+                    state, host_address, host_port, container_port,
+                    last_observed_state, last_observed_at, exit_code,
+                    observation_reason, removed_at
+             FROM runtime_instances WHERE deployment_id = ?1 AND removed_at IS NULL",
+            [deployment_id],
+            map_runtime_instance,
+        )
+        .optional()
+        .map_err(|source| RuntimeStoreError::Persistence { source })
+}
+
 // Tombstones only a stopped runtime, preserving lifecycle transition ordering.
 pub fn mark_runtime_removed(
     connection: &Connection,

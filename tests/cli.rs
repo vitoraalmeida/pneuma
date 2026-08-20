@@ -9,6 +9,7 @@ use std::process::{Child, Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use pneuma::adapters::application_lock::ApplicationLock;
 use pneuma::adapters::database;
 
 use rusqlite::OptionalExtension;
@@ -979,15 +980,16 @@ fn reconcile_defers_before_external_observation_for_a_nonterminal_deployment() {
     drop(connection);
     let podman_log = environment.root.join("podman.log");
     fs::remove_file(&podman_log).unwrap();
+    let _lock = ApplicationLock::try_acquire(&environment.database_path, &application_id)
+        .unwrap()
+        .unwrap();
 
     let output = environment.run_reconcile();
 
     assert_command_succeeded(&output);
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        format!(
-            "Application: another-site\nResult: deferred\nBlocking deployment: {blocking_id} (pending)\n"
-        )
+        "Application: another-site\nResult: deferred\n"
     );
     assert!(
         !podman_log.exists(),
@@ -1697,7 +1699,7 @@ fn a_second_deploy_is_rejected_while_the_first_is_starting() {
     assert!(!second.status.success());
     let stderr = String::from_utf8_lossy(&second.stderr);
     assert!(
-        stderr.contains("already has an active deployment"),
+        stderr.contains("already has an operation in progress"),
         "{stderr}"
     );
     assert!(!stderr.contains("database is locked"), "{stderr}");

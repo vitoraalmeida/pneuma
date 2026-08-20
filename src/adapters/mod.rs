@@ -1,3 +1,4 @@
+pub mod application_lock;
 pub mod caddy_exposure;
 pub mod database;
 pub mod git_source;

@@ -103,9 +103,12 @@ without selecting a new Release or making destructive changes from ambiguity.
   Result: reconcile CAS-reserves exposure intent, repairs canonical public routes
   through configured Caddy validation/reload and external health, removes internal
   fragments after validation/reload, and records failed, diverged, or manual outcomes.
-- [ ] Handle interrupted Deployments and concurrency: clean only resources with
+- [x] Handle interrupted Deployments and concurrency: clean only resources with
   proven identity, preserve the active healthy runtime and route, and serialize
   reconcile against reconcile and deployment effects per Application.
+  Result: a free per-Application lock recovers interrupted deployments by stage;
+  pending work fails without effects, proven candidates are cleaned, and uncertain
+  activation routes are retained as diverged without promotion.
 - [ ] Complete the approved VM E2E catalog and final regression. Record actual
   PASS/FAIL/SKIP evidence for bootstrap and reconciliation scenarios; destroy
   every disposable clone.

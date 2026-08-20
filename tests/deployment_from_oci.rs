@@ -16,7 +16,8 @@ use pneuma::use_cases::deployment_from_oci::{DeployOciError, deploy_oci};
 
 #[test]
 fn deploys_a_verified_oci_image_and_persists_its_exact_reference() {
-    let mut connection = database::open(Path::new(":memory:")).unwrap();
+    let database_path = temporary_database_path();
+    let mut connection = database::open(&database_path).unwrap();
     let application =
         import_application(&mut connection, &fixture_path("another"), None, None, None).unwrap();
     let digest = format!("sha256:{}", "a".repeat(64));
@@ -67,6 +68,8 @@ fn deploys_a_verified_oci_image_and_persists_its_exact_reference() {
             .log()
             .contains("pull registry.example/team/service@sha256:")
     );
+    drop(connection);
+    fs::remove_file(database_path).unwrap();
 }
 
 #[test]
@@ -197,6 +200,16 @@ fn fixture_path(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
         .join(name)
+}
+
+fn temporary_database_path() -> PathBuf {
+    env::temp_dir().join(format!(
+        "pneuma-deploy-oci-{}.sqlite3",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ))
 }
 
 fn respond_once(listener: &TcpListener) {
