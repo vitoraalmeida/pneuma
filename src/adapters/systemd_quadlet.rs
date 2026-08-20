@@ -112,6 +112,21 @@ pub fn container_name(application_name: &str, deployment_id: &str) -> String {
     format!("pneuma-{application_name}-{deployment_id}")
 }
 
+// Renders the exact unit representation used for both materialization and reconciliation checks.
+pub fn canonical_unit_contents(
+    application_name: &str,
+    deployment_id: &str,
+    image_reference: &str,
+    container_port: u16,
+    host_port: u16,
+    image_digest: &str,
+) -> String {
+    format!(
+        "[Unit]\nDescription=Pneuma application {application_name}\n\n[Container]\nContainerName={}\nImage={image_reference}\nPublishPort=127.0.0.1:{host_port}:{container_port}\nLabel=io.pneuma.application={application_name}\nLabel=io.pneuma.image-digest={image_digest}\n\n[Service]\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n",
+        container_name(application_name, deployment_id),
+    )
+}
+
 // Writes a rootless, loopback-bound Quadlet unit that systemd can recreate after Pneuma exits.
 pub fn write_unit(
     application_name: &str,
@@ -125,9 +140,13 @@ pub fn write_unit(
     let directory = quadlet_directory()?;
     fs::create_dir_all(&directory).map_err(|source| QuadletError::CreateDirectory { source })?;
     let path = directory.join(format!("{unit}.container"));
-    let content = format!(
-        "[Unit]\nDescription=Pneuma application {application_name}\n\n[Container]\nContainerName={}\nImage={image_reference}\nPublishPort=127.0.0.1:{host_port}:{container_port}\nLabel=io.pneuma.application={application_name}\nLabel=io.pneuma.image-digest={image_digest}\n\n[Service]\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n",
-        container_name(application_name, deployment_id),
+    let content = canonical_unit_contents(
+        application_name,
+        deployment_id,
+        image_reference,
+        container_port,
+        host_port,
+        image_digest,
     );
     fs::write(&path, content).map_err(|source| QuadletError::WriteUnit { path, source })?;
     Ok(unit)

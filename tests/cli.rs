@@ -996,6 +996,98 @@ fn reconcile_defers_before_external_observation_for_a_nonterminal_deployment() {
 }
 
 #[test]
+fn reconcile_repairs_a_confirmed_quadlet_container_recreation() {
+    let mut environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || respond_once(&listener, 200));
+    assert_command_succeeded(&environment.deploy(port, false));
+    server.join().unwrap();
+    environment.reconciliation_port = Some(port);
+    let connection = database::open(&environment.database_path).unwrap();
+    let (runtime_id, recorded_id, deployment_id, host_port): (String, String, String, u16) =
+        connection
+            .query_row(
+                "SELECT runtime_instances.id, runtime_instances.external_runtime_id,
+                    runtime_instances.deployment_id, runtime_instances.host_port
+             FROM runtime_instances",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+    drop(connection);
+    let replacement_id = "c".repeat(64);
+    environment.stale_container_id = Some(recorded_id.clone());
+    environment.replacement_container_id = Some(replacement_id.clone());
+
+    let output = environment.run_reconcile();
+
+    assert_command_succeeded(&output);
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!(
+            "Application: another-site\nResult: repaired\nRuntime: {runtime_id}\nContainer: {replacement_id}\n"
+        )
+    );
+    let connection = database::open(&environment.database_path).unwrap();
+    let (persisted_id, persisted_deployment, persisted_port, removed_at):
+        (String, String, u16, Option<String>) = connection
+        .query_row(
+            "SELECT external_runtime_id, deployment_id, host_port, removed_at FROM runtime_instances",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(persisted_id, replacement_id);
+    assert_eq!(persisted_deployment, deployment_id);
+    assert_eq!(persisted_port, host_port);
+    assert!(removed_at.is_none());
+}
+
+#[test]
+fn reconcile_reports_manual_intervention_for_a_divergent_recreated_container() {
+    let mut environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || respond_once(&listener, 200));
+    assert_command_succeeded(&environment.deploy(port, false));
+    server.join().unwrap();
+    environment.reconciliation_port = Some(port);
+    let connection = database::open(&environment.database_path).unwrap();
+    let recorded_id: String = connection
+        .query_row(
+            "SELECT external_runtime_id FROM runtime_instances",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    drop(connection);
+    environment.stale_container_id = Some(recorded_id.clone());
+    environment.replacement_container_id = Some("c".repeat(64));
+    environment.replacement_application_label = Some("other-app".to_owned());
+
+    let output = environment.run_reconcile();
+
+    assert_command_succeeded(&output);
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("Result: manual-intervention")
+    );
+    let connection = database::open(&environment.database_path).unwrap();
+    let persisted_id: String = connection
+        .query_row(
+            "SELECT external_runtime_id FROM runtime_instances",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(persisted_id, recorded_id);
+}
+
+#[test]
 fn starts_a_verified_oci_image_after_its_container_is_removed() {
     let environment = DeploymentEnvironment::new();
     assert_command_succeeded(&environment.import());
@@ -1648,6 +1740,8 @@ struct DeploymentEnvironment {
     image_repository: String,
     stale_container_id: Option<String>,
     replacement_container_id: Option<String>,
+    replacement_application_label: Option<String>,
+    reconciliation_port: Option<u16>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1718,6 +1812,8 @@ impl DeploymentEnvironment {
             image_repository,
             stale_container_id: None,
             replacement_container_id: None,
+            replacement_application_label: None,
+            reconciliation_port: None,
         }
     }
 
@@ -1812,6 +1908,8 @@ impl DeploymentEnvironment {
     }
 
     fn run_reconcile(&self) -> Output {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let image_reference = format!("{}@{digest}", self.image_repository);
         let mut command = Command::new(env!("CARGO_BIN_EXE_pneuma"));
         command
             .env("PNEUMA_DATABASE_PATH", &self.database_path)
@@ -1820,13 +1918,30 @@ impl DeploymentEnvironment {
             .env("PNEUMA_CADDYFILE_PATH", &self.caddyfile_path)
             .env("PNEUMA_QUADLET_DIR", self.root.join("quadlets"))
             .env("PATH", executable_path(&self.fake_bin))
-            .env("PNEUMA_FAKE_PORT", "30000")
+            .env(
+                "PNEUMA_FAKE_PORT",
+                self.reconciliation_port.unwrap_or(30000).to_string(),
+            )
             .env("PNEUMA_FAKE_PODMAN_LOG", self.root.join("podman.log"))
+            .env("PNEUMA_FAKE_PODMAN_IMAGE", image_reference)
+            .env(
+                "PNEUMA_FAKE_APPLICATION_LABEL",
+                self.replacement_application_label
+                    .as_deref()
+                    .unwrap_or(&self.application_name),
+            )
+            .env("PNEUMA_FAKE_IMAGE_DIGEST_LABEL", digest)
             .env(
                 "PNEUMA_FAKE_PODMAN_REMOVED",
                 self.root.join("podman-removed"),
             )
             .args(["reconcile", &self.application_name]);
+        if let Some(stale) = &self.stale_container_id {
+            command.env("PNEUMA_FAKE_PODMAN_STALE_ID", stale);
+        }
+        if let Some(replacement) = &self.replacement_container_id {
+            command.env("PNEUMA_FAKE_PODMAN_ID", replacement);
+        }
         command.output().unwrap()
     }
 
@@ -2053,6 +2168,9 @@ case "$1" in
                     printf 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n'
                 fi
             fi
+        elif printf '%s' "$3" | grep -q '.Config.Image'; then
+            container_id="${PNEUMA_FAKE_PODMAN_ID:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"
+            printf '%s\t/%s\t%s\t%s\t%s\n' "$container_id" "$4" "$PNEUMA_FAKE_PODMAN_IMAGE" "$PNEUMA_FAKE_APPLICATION_LABEL" "$PNEUMA_FAKE_IMAGE_DIGEST_LABEL"
         elif [ -n "${PNEUMA_FAKE_CONTAINER_STATE:-}" ] && [ -f "$PNEUMA_FAKE_CONTAINER_STATE" ]; then
             sed -n '1p' "$PNEUMA_FAKE_CONTAINER_STATE"
         else

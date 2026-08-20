@@ -90,10 +90,12 @@ without selecting a new Release or making destructive changes from ambiguity.
   Result: the top-level command returns `deferred` before external observation
   for a non-terminal Deployment and reports `no-op` for stopped internal intent
   with absent runtime and route; runtime repair remains a later checkpoint.
-- [ ] Reconcile confirmed runtime drift: recover a missing container only when
+- [x] Reconcile confirmed runtime drift: recover a missing container only when
   the persisted RuntimeInstance, deterministic unit/container identity, image
   digest, labels, and loopback endpoint are unambiguous. Preserve the persisted
   port and reconcile `external_runtime_id` by compare-and-set.
+  Result: reconcile now CAS-updates only a confirmed recreated Quadlet container
+  and reports divergent runtime identity or configuration for manual intervention.
 - [ ] Reconcile Caddy exposure drift: repair missing or divergent public
   fragments only with a healthy confirmed runtime; remove an internal route;
   validate, reload, externally health-check, and preserve `failed` or `diverged`

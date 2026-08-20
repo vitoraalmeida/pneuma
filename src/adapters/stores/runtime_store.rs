@@ -147,7 +147,10 @@ pub fn reconcile_external_runtime_id(
     let updated = connection
         .execute(
             "UPDATE runtime_instances
-             SET external_runtime_id = ?1, updated_at = CURRENT_TIMESTAMP
+              SET external_runtime_id = ?1,
+                  last_observed_state = 'running',
+                  last_observed_at = CURRENT_TIMESTAMP,
+                  updated_at = CURRENT_TIMESTAMP
              WHERE id = ?2
                AND external_runtime_id = ?3
                AND removed_at IS NULL",

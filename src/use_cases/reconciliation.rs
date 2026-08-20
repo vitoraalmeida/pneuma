@@ -9,7 +9,8 @@ use crate::adapters::local_runtime::{
 };
 use crate::adapters::stores::{application_store, deployment_store, release_store, runtime_store};
 use crate::adapters::systemd_quadlet::{
-    QuadletError, container_name, observe_generated_unit, observe_unit_source, unit_name,
+    QuadletError, canonical_unit_contents, container_name, observe_generated_unit,
+    observe_unit_source, unit_name,
 };
 use crate::domain::deployment::Deployment;
 use crate::domain::reconciliation::{
@@ -23,6 +24,13 @@ pub enum ReconciliationResult {
     NoOp,
     Deferred {
         blocking_deployment: Box<Deployment>,
+    },
+    Repaired {
+        runtime_id: String,
+        container_id: String,
+    },
+    ManualIntervention {
+        reason: String,
     },
 }
 
@@ -148,9 +156,96 @@ pub fn reconcile_application(
     {
         return Ok(ReconciliationResult::NoOp);
     }
+    if let Some(repaired) = repair_recreated_runtime(connection, &input, &observation)? {
+        return Ok(repaired);
+    }
+    if input.application.desired_runtime_state == DesiredRuntimeState::Running {
+        return Ok(ReconciliationResult::ManualIntervention {
+            reason: "runtime identity or configuration differs from persisted intent".to_owned(),
+        });
+    }
     Err(ReconciliationReadError::NotConverged {
         reason: "runtime repair and public-route confirmation are not implemented".to_owned(),
     })
+}
+
+// Reconciles only a fully confirmed Quadlet recreation; all other drift remains non-destructive.
+fn repair_recreated_runtime(
+    connection: &Connection,
+    input: &ReconciliationInput,
+    observation: &ReconciliationObservation,
+) -> Result<Option<ReconciliationResult>, ReconciliationReadError> {
+    if input.application.desired_runtime_state != DesiredRuntimeState::Running
+        || observation.caddy_fragment != CaddyFragmentObservation::Missing
+    {
+        return Ok(None);
+    }
+    let (
+        Some(active),
+        NamedContainerObservation::Present {
+            id,
+            name,
+            image_reference,
+            application_label,
+            image_digest_label,
+            observation: container_observation,
+        },
+    ) = (&input.active, &observation.named_container)
+    else {
+        return Ok(None);
+    };
+    let Some(runtime) = &active.runtime else {
+        return Ok(None);
+    };
+    if *observation.recorded_container.state() != ObservedRuntimeState::Missing
+        || *container_observation.state() != ObservedRuntimeState::Running
+        || name.trim_start_matches('/')
+            != container_name(
+                input.application.name.as_str(),
+                active.deployment.id.as_str(),
+            )
+        || image_reference != active.release.artifact.reference()
+        || application_label.as_deref() != Some(input.application.name.as_str())
+        || image_digest_label.as_deref() != Some(active.release.artifact.digest())
+        || container_observation.observed_endpoint()
+            != Some(runtime.expected_endpoint.socket_addr())
+    {
+        return Ok(None);
+    }
+    let expected_unit = canonical_unit_contents(
+        input.application.name.as_str(),
+        active.deployment.id.as_str(),
+        active.release.artifact.reference(),
+        runtime.container_port,
+        runtime.expected_endpoint.socket_addr().port(),
+        active.release.artifact.digest(),
+    );
+    if observation.quadlet_source
+        != (crate::domain::reconciliation::QuadletSourceObservation::Present {
+            contents: expected_unit,
+        })
+    {
+        return Ok(None);
+    }
+    let outcome = runtime_store::reconcile_external_runtime_id(
+        connection,
+        runtime.id.as_str(),
+        runtime.external_runtime_id.as_str(),
+        id.as_str(),
+    )
+    .map_err(|source| ReconciliationReadError::Runtime { source })?;
+    if outcome == crate::adapters::stores::PersistenceOutcome::Stale {
+        return Err(ReconciliationReadError::NotConverged {
+            reason: format!(
+                "runtime `{}` changed before identity reconciliation",
+                runtime.id
+            ),
+        });
+    }
+    Ok(Some(ReconciliationResult::Repaired {
+        runtime_id: runtime.id.to_string(),
+        container_id: id.to_string(),
+    }))
 }
 
 // Loads all persisted reconciliation authorities in a short read transaction before external observation.

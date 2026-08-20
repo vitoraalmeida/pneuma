@@ -865,6 +865,20 @@ fn run_reconcile(
                 blocking_deployment.status()
             );
         }
+        ReconciliationResult::Repaired {
+            runtime_id,
+            container_id,
+        } => {
+            println!("Application: {application_name}");
+            println!("Result: repaired");
+            println!("Runtime: {runtime_id}");
+            println!("Container: {container_id}");
+        }
+        ReconciliationResult::ManualIntervention { reason } => {
+            println!("Application: {application_name}");
+            println!("Result: manual-intervention");
+            println!("Diagnostic: {reason}");
+        }
     }
     Ok(())
 }
