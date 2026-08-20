@@ -137,9 +137,10 @@ fn restores_the_fragment_when_removal_reload_fails() {
 
     assert_eq!(environment.active_fragment(), "known good route\n");
     let commands = environment.caddy_commands();
-    assert_eq!(commands.len(), 2);
-    assert!(commands[0].starts_with("reload "));
+    assert_eq!(commands.len(), 3);
+    assert!(commands[0].starts_with("validate "));
     assert!(commands[1].starts_with("reload "));
+    assert!(commands[2].starts_with("reload "));
 }
 
 #[test]

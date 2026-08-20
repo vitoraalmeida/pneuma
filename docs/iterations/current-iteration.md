@@ -96,10 +96,13 @@ without selecting a new Release or making destructive changes from ambiguity.
   port and reconcile `external_runtime_id` by compare-and-set.
   Result: reconcile now CAS-updates only a confirmed recreated Quadlet container
   and reports divergent runtime identity or configuration for manual intervention.
-- [ ] Reconcile Caddy exposure drift: repair missing or divergent public
+- [x] Reconcile Caddy exposure drift: repair missing or divergent public
   fragments only with a healthy confirmed runtime; remove an internal route;
   validate, reload, externally health-check, and preserve `failed` or `diverged`
   diagnostics when convergence cannot be confirmed.
+  Result: reconcile CAS-reserves exposure intent, repairs canonical public routes
+  through configured Caddy validation/reload and external health, removes internal
+  fragments after validation/reload, and records failed, diverged, or manual outcomes.
 - [ ] Handle interrupted Deployments and concurrency: clean only resources with
   proven identity, preserve the active healthy runtime and route, and serialize
   reconcile against reconcile and deployment effects per Application.

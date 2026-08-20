@@ -47,6 +47,10 @@ pub enum CaddyRecoveryError {
     Reload {
         failure: CaddyCommandError,
     },
+    ValidateConfiguration {
+        failure: CaddyCommandError,
+        recovery: Option<Box<CaddyRecoveryError>>,
+    },
     ReloadRecovery {
         failure: CaddyCommandError,
         recovery: Box<CaddyRecoveryError>,
@@ -170,6 +174,16 @@ impl fmt::Display for CaddyRecoveryError {
                     "failed to reload the restored configuration: {failure}"
                 )
             }
+            Self::ValidateConfiguration { failure, recovery } => {
+                write!(
+                    formatter,
+                    "failed to validate Caddy after removal: {failure}"
+                )?;
+                if let Some(recovery) = recovery {
+                    write!(formatter, "; recovery also failed: {recovery}")?;
+                }
+                Ok(())
+            }
             Self::ReloadRecovery { failure, recovery } => write!(
                 formatter,
                 "failed to reload Caddy after removal: {failure}; recovery also failed: {recovery}"
@@ -183,6 +197,7 @@ impl Error for CaddyRecoveryError {
         match self {
             Self::RestoreFragment { source, .. } => Some(source),
             Self::Reload { failure } => Some(failure),
+            Self::ValidateConfiguration { failure, .. } => Some(failure),
             Self::ReloadRecovery { failure, .. } => Some(failure),
         }
     }
@@ -416,6 +431,12 @@ pub fn remove_caddy_fragment(
             _ => unreachable!(),
         })?;
     restore_fragment(&fragment_path, &temporary_path, &None)?;
+    if let Err(failure) = caddy_command("validate", caddyfile_path) {
+        let recovery = restore_fragment(&fragment_path, &temporary_path, &previous_fragment)
+            .err()
+            .map(Box::new);
+        return Err(CaddyRecoveryError::ValidateConfiguration { failure, recovery });
+    }
     if let Err(failure) = caddy_command("reload", caddyfile_path) {
         let recovery = recover_previous_configuration(
             &fragment_path,
@@ -454,7 +475,14 @@ pub fn restore_removed_caddy_fragment(
 impl CaddyRecoveryError {
     // Signals whether a failed removal left the route in an unconfirmed state.
     pub fn recovery_failed(&self) -> bool {
-        matches!(self, Self::ReloadRecovery { .. })
+        matches!(
+            self,
+            Self::ReloadRecovery { .. }
+                | Self::ValidateConfiguration {
+                    recovery: Some(_),
+                    ..
+                }
+        )
     }
 }
 

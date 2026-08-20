@@ -833,7 +833,7 @@ fn run_status(
     Ok(())
 }
 
-// Classifies persisted intent and observed materialization without adding deployment or repair effects.
+// Reconciles persisted runtime and exposure intent through configured host integrations.
 fn run_reconcile(
     connection: &mut rusqlite::Connection,
     verbose: bool,
@@ -847,8 +847,15 @@ fn run_reconcile(
         CADDY_MANAGED_PATH_ENVIRONMENT_VARIABLE,
         DEFAULT_CADDY_MANAGED_PATH,
     );
-    match reconcile_application(connection, application_name, &managed_caddy_directory)
-        .map_err(|source| CliError::Reconcile { source })?
+    let caddyfile_path =
+        configured_path(CADDYFILE_PATH_ENVIRONMENT_VARIABLE, DEFAULT_CADDYFILE_PATH);
+    match reconcile_application(
+        connection,
+        application_name,
+        &managed_caddy_directory,
+        &caddyfile_path,
+    )
+    .map_err(|source| CliError::Reconcile { source })?
     {
         ReconciliationResult::NoOp => {
             println!("Application: {application_name}");
@@ -877,6 +884,20 @@ fn run_reconcile(
         ReconciliationResult::ManualIntervention { reason } => {
             println!("Application: {application_name}");
             println!("Result: manual-intervention");
+            println!("Diagnostic: {reason}");
+        }
+        ReconciliationResult::ExposureRepaired => {
+            println!("Application: {application_name}");
+            println!("Result: repaired");
+        }
+        ReconciliationResult::Failed { reason } => {
+            println!("Application: {application_name}");
+            println!("Result: failed");
+            println!("Diagnostic: {reason}");
+        }
+        ReconciliationResult::Diverged { reason } => {
+            println!("Application: {application_name}");
+            println!("Result: diverged");
             println!("Diagnostic: {reason}");
         }
     }

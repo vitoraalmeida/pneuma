@@ -3,7 +3,11 @@ use std::fmt;
 
 use rusqlite::Connection;
 
-use crate::adapters::caddy_exposure::{ObserveCaddyFragmentError, observe_caddy_fragment};
+use crate::adapters::caddy_exposure::{
+    ObserveCaddyFragmentError, materialize_caddy_fragment, observe_caddy_fragment,
+    remove_caddy_fragment, restore_materialized_caddy_fragment, restore_removed_caddy_fragment,
+};
+use crate::adapters::health_check_external::check_external_health;
 use crate::adapters::local_runtime::{
     ObserveContainerError, ObserveNamedContainerError, observe_container, observe_named_container,
 };
@@ -13,6 +17,9 @@ use crate::adapters::systemd_quadlet::{
     observe_unit_source, unit_name,
 };
 use crate::domain::deployment::Deployment;
+use crate::domain::exposure::{
+    ExposureConfigurationVersion, ExposureDiagnostic, ExposureMaterializationState, Visibility,
+};
 use crate::domain::reconciliation::{
     ActiveRuntime, CaddyFragmentObservation, NamedContainerObservation, ReconciliationInput,
     ReconciliationObservation,
@@ -30,6 +37,13 @@ pub enum ReconciliationResult {
         container_id: String,
     },
     ManualIntervention {
+        reason: String,
+    },
+    ExposureRepaired,
+    Failed {
+        reason: String,
+    },
+    Diverged {
         reason: String,
     },
 }
@@ -131,11 +145,12 @@ impl Error for ReconciliationReadError {
     }
 }
 
-// Returns a read-only result for states that already satisfy persisted intent; later checkpoints repair drift.
+// Reconciles only confirmed runtime and route drift, leaving ambiguous materialization untouched.
 pub fn reconcile_application(
     connection: &mut Connection,
     application_name: &str,
     managed_caddy_directory: &std::path::Path,
+    caddyfile_path: &std::path::Path,
 ) -> Result<ReconciliationResult, ReconciliationReadError> {
     let input = load_reconciliation_input(connection, application_name)?;
     if let Some(blocking_deployment) = input.blocking_deployment {
@@ -159,6 +174,15 @@ pub fn reconcile_application(
     if let Some(repaired) = repair_recreated_runtime(connection, &input, &observation)? {
         return Ok(repaired);
     }
+    if let Some(result) = reconcile_exposure(
+        connection,
+        &input,
+        &observation,
+        managed_caddy_directory,
+        caddyfile_path,
+    )? {
+        return Ok(result);
+    }
     if input.application.desired_runtime_state == DesiredRuntimeState::Running {
         return Ok(ReconciliationResult::ManualIntervention {
             reason: "runtime identity or configuration differs from persisted intent".to_owned(),
@@ -167,6 +191,319 @@ pub fn reconcile_application(
     Err(ReconciliationReadError::NotConverged {
         reason: "runtime repair and public-route confirmation are not implemented".to_owned(),
     })
+}
+
+// Reconciles a managed route only after the persisted snapshot has been CAS-reserved.
+fn reconcile_exposure(
+    connection: &mut Connection,
+    input: &ReconciliationInput,
+    observation: &ReconciliationObservation,
+    managed_caddy_directory: &std::path::Path,
+    caddyfile_path: &std::path::Path,
+) -> Result<Option<ReconciliationResult>, ReconciliationReadError> {
+    let Some(exposure) = &input.exposure else {
+        return Ok(None);
+    };
+    let state = exposure.materialization().state();
+    if state == ExposureMaterializationState::Diverged {
+        return Ok(Some(ReconciliationResult::ManualIntervention {
+            reason: "exposure materialization diverged and requires manual intervention".to_owned(),
+        }));
+    }
+    match exposure.intent().visibility() {
+        Visibility::Internal => {
+            if observation.caddy_fragment == CaddyFragmentObservation::Missing {
+                return Ok(None);
+            }
+            reserve_exposure(
+                connection,
+                input.application.id.as_str(),
+                Visibility::Internal,
+                state,
+            )?;
+            let removed = match remove_caddy_fragment(
+                managed_caddy_directory,
+                input.application.id.as_str(),
+                caddyfile_path,
+            ) {
+                Ok(removed) => removed,
+                Err(source) => {
+                    return record_exposure_failure(
+                        connection,
+                        input.application.id.as_str(),
+                        Visibility::Internal,
+                        ExposureMaterializationState::Removing,
+                        "caddy_removal_failed",
+                        &source.to_string(),
+                        source.recovery_failed(),
+                    );
+                }
+            };
+            let transaction = connection.transaction().map_err(persistence_error)?;
+            let completed = application_store::complete_internal_exposure_change(
+                &transaction,
+                input.application.id.as_str(),
+            )
+            .map_err(|source| ReconciliationReadError::Application { source })?;
+            if completed == crate::adapters::stores::PersistenceOutcome::Stale {
+                drop(transaction);
+                let recovery_failed =
+                    restore_removed_caddy_fragment(&removed, caddyfile_path).is_err();
+                return record_exposure_failure(
+                    connection,
+                    input.application.id.as_str(),
+                    Visibility::Internal,
+                    ExposureMaterializationState::Removing,
+                    "exposure_changed",
+                    "exposure changed while Caddy route removal was being confirmed",
+                    recovery_failed,
+                );
+            }
+            transaction.commit().map_err(persistence_error)?;
+            Ok(Some(ReconciliationResult::ExposureRepaired))
+        }
+        Visibility::Public => reconcile_public_exposure(
+            connection,
+            input,
+            observation,
+            managed_caddy_directory,
+            caddyfile_path,
+            state,
+        ),
+    }
+}
+
+fn reconcile_public_exposure(
+    connection: &mut Connection,
+    input: &ReconciliationInput,
+    observation: &ReconciliationObservation,
+    managed_caddy_directory: &std::path::Path,
+    caddyfile_path: &std::path::Path,
+    state: ExposureMaterializationState,
+) -> Result<Option<ReconciliationResult>, ReconciliationReadError> {
+    let Some(exposure) = &input.exposure else {
+        return Ok(None);
+    };
+    let Some(domain) = exposure.intent().domain() else {
+        return record_exposure_failure(
+            connection,
+            input.application.id.as_str(),
+            Visibility::Public,
+            state,
+            "domain_missing",
+            "public exposure has no configured domain",
+            false,
+        );
+    };
+    let Some(active) = &input.active else {
+        return record_exposure_failure(
+            connection,
+            input.application.id.as_str(),
+            Visibility::Public,
+            state,
+            "runtime_missing",
+            "public exposure has no active runtime",
+            false,
+        );
+    };
+    let Some(runtime) = &active.runtime else {
+        return record_exposure_failure(
+            connection,
+            input.application.id.as_str(),
+            Visibility::Public,
+            state,
+            "runtime_missing",
+            "public exposure has no active runtime",
+            false,
+        );
+    };
+    let endpoint = runtime.expected_endpoint.socket_addr();
+    if input.application.desired_runtime_state != DesiredRuntimeState::Running
+        || *observation.recorded_container.state() != ObservedRuntimeState::Running
+        || observation.recorded_container.observed_endpoint() != Some(endpoint)
+    {
+        return record_exposure_failure(
+            connection,
+            input.application.id.as_str(),
+            Visibility::Public,
+            state,
+            "runtime_not_healthy",
+            "public exposure requires a confirmed healthy running runtime",
+            false,
+        );
+    }
+    let contents =
+        crate::adapters::caddy_exposure::canonical_fragment_contents(domain.as_str(), endpoint);
+    let configuration_version = ExposureConfigurationVersion::new(&contents).map_err(|source| {
+        ReconciliationReadError::NotConverged {
+            reason: source.to_string(),
+        }
+    })?;
+    let route_is_confirmed = exposure
+        .materialization()
+        .confirmed_route()
+        .is_some_and(|route| {
+            route.runtime_id() == &runtime.id
+                && route.configuration_version() == &configuration_version
+        });
+    if observation.caddy_fragment == (CaddyFragmentObservation::Present { contents })
+        && state == ExposureMaterializationState::Active
+        && route_is_confirmed
+    {
+        return Ok(Some(ReconciliationResult::NoOp));
+    }
+    reserve_exposure(
+        connection,
+        input.application.id.as_str(),
+        Visibility::Public,
+        state,
+    )?;
+    let materialized = match materialize_caddy_fragment(
+        managed_caddy_directory,
+        caddyfile_path,
+        input.application.id.as_str(),
+        domain.as_str(),
+        endpoint,
+    ) {
+        Ok(materialized) => materialized,
+        Err(source) => {
+            return record_exposure_failure(
+                connection,
+                input.application.id.as_str(),
+                Visibility::Public,
+                ExposureMaterializationState::Applying,
+                "caddy_materialization_failed",
+                &source.to_string(),
+                source.recovery_failed(),
+            );
+        }
+    };
+    let specification =
+        input
+            .specification
+            .as_ref()
+            .ok_or_else(|| ReconciliationReadError::NotConverged {
+                reason: "application has no deployment specification for public health".to_owned(),
+            })?;
+    if let Err(source) = check_external_health(
+        domain.as_str(),
+        specification.runtime.health_check().path().as_str(),
+        specification.runtime.health_check().expected_status().get(),
+    ) {
+        let recovery_failed =
+            restore_materialized_caddy_fragment(&materialized, caddyfile_path).is_err();
+        return record_exposure_failure(
+            connection,
+            input.application.id.as_str(),
+            Visibility::Public,
+            ExposureMaterializationState::Applying,
+            "external_health_check_failed",
+            &source.to_string(),
+            recovery_failed,
+        );
+    }
+    let transaction = connection.transaction().map_err(persistence_error)?;
+    let completed = application_store::complete_public_exposure_change(
+        &transaction,
+        input.application.id.as_str(),
+        &runtime.id,
+        &configuration_version,
+    )
+    .map_err(|source| ReconciliationReadError::Application { source })?;
+    if completed == crate::adapters::stores::PersistenceOutcome::Stale {
+        drop(transaction);
+        let recovery_failed =
+            restore_materialized_caddy_fragment(&materialized, caddyfile_path).is_err();
+        return record_exposure_failure(
+            connection,
+            input.application.id.as_str(),
+            Visibility::Public,
+            ExposureMaterializationState::Applying,
+            "exposure_changed",
+            "exposure changed while Caddy route materialization was being confirmed",
+            recovery_failed,
+        );
+    }
+    transaction.commit().map_err(persistence_error)?;
+    Ok(Some(ReconciliationResult::ExposureRepaired))
+}
+
+fn reserve_exposure(
+    connection: &Connection,
+    application_id: &str,
+    visibility: Visibility,
+    state: ExposureMaterializationState,
+) -> Result<(), ReconciliationReadError> {
+    let outcome = match visibility {
+        Visibility::Public => application_store::begin_public_exposure_reconciliation(
+            connection,
+            application_id,
+            state,
+        ),
+        Visibility::Internal => application_store::begin_internal_exposure_reconciliation(
+            connection,
+            application_id,
+            state,
+        ),
+    }
+    .map_err(|source| ReconciliationReadError::Application { source })?;
+    if outcome == crate::adapters::stores::PersistenceOutcome::Stale {
+        return Err(ReconciliationReadError::NotConverged {
+            reason: "exposure changed before reconciliation could reserve it".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn record_exposure_failure(
+    connection: &Connection,
+    application_id: &str,
+    visibility: Visibility,
+    expected_state: ExposureMaterializationState,
+    code: &str,
+    message: &str,
+    diverged: bool,
+) -> Result<Option<ReconciliationResult>, ReconciliationReadError> {
+    let diagnostic = ExposureDiagnostic::new(code, message).map_err(|_| {
+        ReconciliationReadError::NotConverged {
+            reason: "reconciliation produced an invalid exposure diagnostic".to_owned(),
+        }
+    })?;
+    let state = if diverged {
+        ExposureMaterializationState::Diverged
+    } else {
+        ExposureMaterializationState::Failed
+    };
+    let outcome = application_store::record_reconciliation_exposure_failure(
+        connection,
+        application_id,
+        visibility,
+        expected_state,
+        state,
+        &diagnostic,
+    )
+    .map_err(|source| ReconciliationReadError::Application { source })?;
+    if outcome == crate::adapters::stores::PersistenceOutcome::Stale {
+        return Err(ReconciliationReadError::NotConverged {
+            reason: "exposure changed before reconciliation failure could be recorded".to_owned(),
+        });
+    }
+    let result = if diverged {
+        ReconciliationResult::Diverged {
+            reason: message.to_owned(),
+        }
+    } else {
+        ReconciliationResult::Failed {
+            reason: message.to_owned(),
+        }
+    };
+    Ok(Some(result))
+}
+
+fn persistence_error(source: rusqlite::Error) -> ReconciliationReadError {
+    ReconciliationReadError::Application {
+        source: application_store::ApplicationStoreError::Persistence { source },
+    }
 }
 
 // Reconciles only a fully confirmed Quadlet recreation; all other drift remains non-destructive.

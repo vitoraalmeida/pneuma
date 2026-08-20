@@ -103,10 +103,12 @@ persisted Application, any non-terminal Deployment, active Deployment and
 Release, RuntimeInstance, Exposure, and specification in a short SQLite
 transaction, then closes that transaction before observing Podman, Quadlet, and
 Caddy fragment state. The library input path does not change SQLite or control
-external resources. `pneuma reconcile <application>` currently
-reports only `no-op` for stopped internal intent with absent runtime and route,
-or `deferred` when a non-terminal Deployment holds the Application reservation;
-future use cases classify and repair additional materialization states.
+external resources. `pneuma reconcile <application>` defers while a non-terminal
+Deployment holds the Application reservation, repairs a confirmed Quadlet
+container recreation by compare-and-set, and reconciles managed Caddy fragments
+only after reserving the persisted Exposure state. Caddy validation, reload, and
+external health checks occur outside SQLite transactions; failed compensation is
+recorded as exposure divergence for manual intervention.
 
 ## Domain Roles
 

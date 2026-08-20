@@ -749,6 +749,48 @@ pub fn begin_public_exposure(
     Ok(outcome(updated))
 }
 
+// Reserves a known public exposure snapshot for reconciliation before Caddy effects begin.
+pub fn begin_public_exposure_reconciliation(
+    connection: &Connection,
+    application_id: &str,
+    expected_state: ExposureMaterializationState,
+) -> Result<PersistenceOutcome, ApplicationStoreError> {
+    let updated = connection.execute(
+        "UPDATE exposures SET materialization_state = 'applying', last_error_code = NULL, last_error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?1 AND desired_visibility = 'public' AND materialization_state = ?2",
+        params![application_id, exposure_materialization_state_value(expected_state)],
+    ).map_err(|source| ApplicationStoreError::Persistence { source })?;
+    Ok(outcome(updated))
+}
+
+// Reserves a known internal exposure snapshot for reconciliation before Caddy effects begin.
+pub fn begin_internal_exposure_reconciliation(
+    connection: &Connection,
+    application_id: &str,
+    expected_state: ExposureMaterializationState,
+) -> Result<PersistenceOutcome, ApplicationStoreError> {
+    let updated = connection.execute(
+        "UPDATE exposures SET materialization_state = 'removing', last_error_code = NULL, last_error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?1 AND desired_visibility = 'internal' AND materialization_state = ?2",
+        params![application_id, exposure_materialization_state_value(expected_state)],
+    ).map_err(|source| ApplicationStoreError::Persistence { source })?;
+    Ok(outcome(updated))
+}
+
+// Records reconciliation diagnostics only while its external-effect reservation remains current.
+pub fn record_reconciliation_exposure_failure(
+    connection: &Connection,
+    application_id: &str,
+    visibility: Visibility,
+    expected_state: ExposureMaterializationState,
+    state: ExposureMaterializationState,
+    diagnostic: &ExposureDiagnostic,
+) -> Result<PersistenceOutcome, ApplicationStoreError> {
+    let updated = connection.execute(
+        "UPDATE exposures SET materialization_state = ?1, last_error_code = ?2, last_error_message = ?3, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?4 AND desired_visibility = ?5 AND materialization_state = ?6",
+        params![exposure_materialization_state_value(state), diagnostic.code(), diagnostic.message(), application_id, visibility_value(visibility), exposure_materialization_state_value(expected_state)],
+    ).map_err(|source| ApplicationStoreError::Persistence { source })?;
+    Ok(outcome(updated))
+}
+
 // Persists the result of public-route compensation without treating a missing row as success.
 pub fn record_public_exposure_failure(
     connection: &Connection,

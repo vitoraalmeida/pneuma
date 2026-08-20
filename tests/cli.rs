@@ -1088,6 +1088,148 @@ fn reconcile_reports_manual_intervention_for_a_divergent_recreated_container() {
 }
 
 #[test]
+fn reconcile_repairs_a_missing_public_caddy_fragment_with_configured_caddyfile() {
+    let mut environment = DeploymentEnvironment::public();
+    assert_command_succeeded(&environment.import());
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || respond_once(&listener, 200));
+    assert_command_succeeded(&environment.deploy(port, false));
+    server.join().unwrap();
+    environment.reconciliation_port = Some(port);
+    let fragment = environment.managed_caddy_directory.join(
+        database::open(&environment.database_path)
+            .unwrap()
+            .query_row("SELECT id FROM applications", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .unwrap()
+            + ".caddy",
+    );
+    fs::remove_file(&fragment).unwrap();
+
+    let output = environment.run_reconcile();
+
+    assert_command_succeeded(&output);
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "Application: personal-site\nResult: repaired\n"
+    );
+    assert!(fragment.exists());
+    let connection = database::open(&environment.database_path).unwrap();
+    let state: String = connection
+        .query_row("SELECT materialization_state FROM exposures", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(state, "active");
+}
+
+#[test]
+fn reconcile_records_failed_public_exposure_when_external_health_cannot_confirm_it() {
+    let mut environment = DeploymentEnvironment::public();
+    assert_command_succeeded(&environment.import());
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || respond_once(&listener, 200));
+    assert_command_succeeded(&environment.deploy(port, false));
+    server.join().unwrap();
+    environment.reconciliation_port = Some(port);
+    environment.reconciliation_curl_status = Some(503);
+    let application_id: String = database::open(&environment.database_path)
+        .unwrap()
+        .query_row("SELECT id FROM applications", [], |row| row.get(0))
+        .unwrap();
+    let fragment = environment
+        .managed_caddy_directory
+        .join(format!("{application_id}.caddy"));
+    fs::remove_file(&fragment).unwrap();
+
+    let output = environment.run_reconcile();
+
+    assert_command_succeeded(&output);
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("Result: failed")
+    );
+    assert!(
+        !fragment.exists(),
+        "failed repair must restore the missing fragment"
+    );
+    let connection = database::open(&environment.database_path).unwrap();
+    let state: String = connection
+        .query_row("SELECT materialization_state FROM exposures", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(state, "failed");
+}
+
+#[test]
+fn reconcile_removes_an_internal_caddy_fragment() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    environment.deploy_current_revision();
+    let application_id: String = database::open(&environment.database_path)
+        .unwrap()
+        .query_row("SELECT id FROM applications", [], |row| row.get(0))
+        .unwrap();
+    fs::create_dir_all(&environment.managed_caddy_directory).unwrap();
+    fs::write(
+        environment
+            .managed_caddy_directory
+            .join(format!("{application_id}.caddy")),
+        "unexpected route\n",
+    )
+    .unwrap();
+
+    let output = environment.run_reconcile();
+
+    assert_command_succeeded(&output);
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "Application: another-site\nResult: repaired\n"
+    );
+    assert!(
+        !environment
+            .managed_caddy_directory
+            .join(format!("{application_id}.caddy"))
+            .exists()
+    );
+    let connection = database::open(&environment.database_path).unwrap();
+    let state: String = connection
+        .query_row("SELECT materialization_state FROM exposures", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(state, "not_materialized");
+}
+
+#[test]
+fn reconcile_reports_manual_intervention_for_diverged_exposure_intent() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    environment.deploy_current_revision();
+    let connection = database::open(&environment.database_path).unwrap();
+    connection
+        .execute(
+            "UPDATE exposures SET materialization_state = 'diverged', last_error_code = 'recovery_failed', last_error_message = 'route origin is unknown'",
+            [],
+        )
+        .unwrap();
+
+    let output = environment.run_reconcile();
+
+    assert_command_succeeded(&output);
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("Result: manual-intervention")
+    );
+}
+
+#[test]
 fn starts_a_verified_oci_image_after_its_container_is_removed() {
     let environment = DeploymentEnvironment::new();
     assert_command_succeeded(&environment.import());
@@ -1742,6 +1884,7 @@ struct DeploymentEnvironment {
     replacement_container_id: Option<String>,
     replacement_application_label: Option<String>,
     reconciliation_port: Option<u16>,
+    reconciliation_curl_status: Option<u16>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1814,6 +1957,7 @@ impl DeploymentEnvironment {
             replacement_container_id: None,
             replacement_application_label: None,
             reconciliation_port: None,
+            reconciliation_curl_status: None,
         }
     }
 
@@ -1923,6 +2067,11 @@ impl DeploymentEnvironment {
                 self.reconciliation_port.unwrap_or(30000).to_string(),
             )
             .env("PNEUMA_FAKE_PODMAN_LOG", self.root.join("podman.log"))
+            .env("PNEUMA_FAKE_CURL_LOG", self.root.join("curl.log"))
+            .env(
+                "PNEUMA_FAKE_CURL_STATUS",
+                self.reconciliation_curl_status.unwrap_or(200).to_string(),
+            )
             .env("PNEUMA_FAKE_PODMAN_IMAGE", image_reference)
             .env(
                 "PNEUMA_FAKE_APPLICATION_LABEL",
