@@ -200,8 +200,12 @@ if ! ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && podman ps --fo
 	echo "  ERROR: healthy-http container is not active after reboot"
 	exit 1
 fi
+if ! ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma reconcile healthy-http"' | grep -Eq "Result: (no-op|repaired)"; then
+	echo "  ERROR: healthy-http did not reconcile after reboot"
+	exit 1
+fi
 if ! ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma app status healthy-http"' | grep -q "Observed state: Running"; then
-	echo "  ERROR: healthy-http is not Running after reboot"
+	echo "  ERROR: healthy-http is not Running after reboot reconciliation"
 	exit 1
 fi
 PORT=$(ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && podman ps --format \"{{.Ports}}\" --filter name=pneuma-healthy-http | cut -d: -f2 | cut -d- -f1"')
@@ -210,7 +214,7 @@ if [[ "$BODY" != "healthy-http v1.0" ]]; then
 	echo "  ERROR: expected healthy-http v1.0 after reboot, got: $BODY"
 	exit 1
 fi
-echo "  OK: user manager, Quadlet, container, status, and $BODY recovered"
+echo "  OK: user manager, Quadlet, container, reconciliation, status, and $BODY recovered"
 
 echo
 echo "=========================================="

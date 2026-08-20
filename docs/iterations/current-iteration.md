@@ -146,4 +146,11 @@ without selecting a new Release or making destructive changes from ambiguity.
 
 ## Blockers
 
-None.
+- Checkpoint: complete the approved VM E2E catalog and final regression.
+  Category: code. `scripts/dev-vm/reconciliation-e2e.sh` does not exist, and
+  scenario R4 requires safe rematerialization when both the Quadlet unit and
+  container are absent; current reconciliation does not implement that behavior.
+  Last green evidence: the disposable clone passed `scripts/dev-vm/test-all.sh`
+  with 45 PASS, 0 FAIL, and 0 SKIP after reboot reconciliation on 2026-08-20.
+  Next safe action: reopen runtime reconciliation for R4, then implement the
+  named VM catalog runner and execute every R/E/I/C case on a new clone.
