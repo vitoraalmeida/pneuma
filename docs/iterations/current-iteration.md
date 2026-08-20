@@ -114,6 +114,9 @@ without selecting a new Release or making destructive changes from ambiguity.
 - [ ] Complete the approved VM E2E catalog and final regression. Record actual
   PASS/FAIL/SKIP evidence for bootstrap and reconciliation scenarios; destroy
   every disposable clone.
+  Result: `reconciliation-e2e.sh` passed R1-R7, E1-E6, I1-I4, C1, C3, and C4
+  (20 PASS, 0 FAIL) on 2026-08-20; C2 is explicitly skipped pending a
+  deterministic post-lock reconciliation gate. The disposable clone was removed.
 - [ ] Add TUI dashboard read projections for Systems, Applications, details,
   Deployments, Releases, RuntimeInstances, and read-only runtime observation.
 - [ ] Extract shared remote import, diagnostics, database, and progress-enabled
@@ -149,9 +152,10 @@ without selecting a new Release or making destructive changes from ambiguity.
 ## Blockers
 
 - Checkpoint: complete the approved VM E2E catalog and final regression.
-  Category: code. `scripts/dev-vm/reconciliation-e2e.sh` does not exist, so the
-  approved R/E/I/C cases still lack deterministic VM gates and evidence.
-  Last green evidence: the disposable clone passed `scripts/dev-vm/test-all.sh`
-  with 45 PASS, 0 FAIL, and 0 SKIP after reboot reconciliation on 2026-08-20.
-  Next safe action: implement the named VM catalog runner and execute every
-  R/E/I/C case on a new clone.
+  Category: code. C2 requires a deterministic gate after `reconcile` acquires
+  its Application lock; no such gate exists, and polling cannot prove ownership.
+  Last green evidence: the disposable clone ran the named catalog with 20 PASS,
+  0 FAIL, and 1 SKIP (C2) on 2026-08-20; its logs are under
+  `/tmp/pneuma-reconciliation-e2e-20260820-190136` on the development host.
+  Next safe action: add the opt-in post-lock reconciliation gate, execute C2 on
+  a new clone, then rerun the full catalog and final regression.

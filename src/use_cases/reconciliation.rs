@@ -19,6 +19,7 @@ use crate::adapters::systemd_quadlet::{
     QuadletError, canonical_unit_contents, container_name, daemon_reload, observe_generated_unit,
     observe_unit_source, start, unit_name, write_unit,
 };
+use crate::adapters::test_gate::wait_for_test_gate;
 use crate::domain::deployment::{Deployment, DeploymentStatus};
 use crate::domain::exposure::{
     ExposureConfigurationVersion, ExposureDiagnostic, ExposureMaterializationState, Visibility,
@@ -197,6 +198,11 @@ pub fn reconcile_application(
     operation_store::take_ownership(&transaction, application.id.as_str(), &token)
         .map_err(|source| ReconciliationReadError::Operation { source })?;
     transaction.commit().map_err(persistence_error)?;
+    wait_for_test_gate("reconciliation.ownership-acquired").map_err(|source| {
+        ReconciliationReadError::NotConverged {
+            reason: format!("reconciliation test gate failed: {source}"),
+        }
+    })?;
 
     let input = load_reconciliation_input(connection, application_name)?;
     if let Some(blocking_deployment) = input.blocking_deployment {
