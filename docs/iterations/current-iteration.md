@@ -95,7 +95,8 @@ without selecting a new Release or making destructive changes from ambiguity.
   digest, labels, and loopback endpoint are unambiguous. Preserve the persisted
   port and reconcile `external_runtime_id` by compare-and-set.
   Result: reconcile now CAS-updates only a confirmed recreated Quadlet container
-  and reports divergent runtime identity or configuration for manual intervention.
+  and rematerializes an absent canonical Quadlet from the persisted runtime port;
+  divergent runtime identity or configuration remains manual intervention.
 - [x] Reconcile Caddy exposure drift: repair missing or divergent public
   fragments only with a healthy confirmed runtime; remove an internal route;
   validate, reload, externally health-check, and preserve `failed` or `diverged`
@@ -147,10 +148,9 @@ without selecting a new Release or making destructive changes from ambiguity.
 ## Blockers
 
 - Checkpoint: complete the approved VM E2E catalog and final regression.
-  Category: code. `scripts/dev-vm/reconciliation-e2e.sh` does not exist, and
-  scenario R4 requires safe rematerialization when both the Quadlet unit and
-  container are absent; current reconciliation does not implement that behavior.
+  Category: code. `scripts/dev-vm/reconciliation-e2e.sh` does not exist, so the
+  approved R/E/I/C cases still lack deterministic VM gates and evidence.
   Last green evidence: the disposable clone passed `scripts/dev-vm/test-all.sh`
   with 45 PASS, 0 FAIL, and 0 SKIP after reboot reconciliation on 2026-08-20.
-  Next safe action: reopen runtime reconciliation for R4, then implement the
-  named VM catalog runner and execute every R/E/I/C case on a new clone.
+  Next safe action: implement the named VM catalog runner and execute every
+  R/E/I/C case on a new clone.

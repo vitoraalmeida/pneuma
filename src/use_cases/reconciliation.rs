@@ -9,14 +9,15 @@ use crate::adapters::caddy_exposure::{
     remove_caddy_fragment, restore_materialized_caddy_fragment, restore_removed_caddy_fragment,
 };
 use crate::adapters::health_check_external::check_external_health;
+use crate::adapters::health_check_internal::{HealthCheckResult, check_internal_health};
 use crate::adapters::local_runtime::{
     ObserveContainerError, ObserveNamedContainerError, observe_container, observe_named_container,
 };
 use crate::adapters::stores::operation_store::{self, OperationStoreError};
 use crate::adapters::stores::{application_store, deployment_store, release_store, runtime_store};
 use crate::adapters::systemd_quadlet::{
-    QuadletError, canonical_unit_contents, container_name, observe_generated_unit,
-    observe_unit_source, unit_name,
+    QuadletError, canonical_unit_contents, container_name, daemon_reload, observe_generated_unit,
+    observe_unit_source, start, unit_name, write_unit,
 };
 use crate::domain::deployment::{Deployment, DeploymentStatus};
 use crate::domain::exposure::{
@@ -224,6 +225,9 @@ pub fn reconcile_application(
     if let Some(repaired) = repair_recreated_runtime(connection, &input, &observation)? {
         return Ok(repaired);
     }
+    if let Some(repaired) = rematerialize_missing_runtime(connection, &input, &observation)? {
+        return Ok(repaired);
+    }
     if let Some(result) = reconcile_exposure(
         connection,
         &input,
@@ -241,6 +245,119 @@ pub fn reconcile_application(
     Err(ReconciliationReadError::NotConverged {
         reason: "runtime repair and public-route confirmation are not implemented".to_owned(),
     })
+}
+
+// Recreates an absent canonical Quadlet only from the active runtime's persisted identity.
+fn rematerialize_missing_runtime(
+    connection: &Connection,
+    input: &ReconciliationInput,
+    observation: &ReconciliationObservation,
+) -> Result<Option<ReconciliationResult>, ReconciliationReadError> {
+    let generated_unit_is_absent = match &observation.systemd_unit {
+        crate::domain::reconciliation::SystemdUnitObservation::Missing => true,
+        crate::domain::reconciliation::SystemdUnitObservation::Present { active_state } => {
+            active_state == "inactive"
+        }
+    };
+    if input.application.desired_runtime_state != DesiredRuntimeState::Running
+        || *observation.recorded_container.state() != ObservedRuntimeState::Missing
+        || observation.named_container != NamedContainerObservation::Missing
+        || observation.quadlet_source
+            != crate::domain::reconciliation::QuadletSourceObservation::Missing
+        || !generated_unit_is_absent
+    {
+        return Ok(None);
+    }
+    let (Some(active), Some(specification)) = (&input.active, &input.specification) else {
+        return Ok(None);
+    };
+    let Some(runtime) = &active.runtime else {
+        return Ok(None);
+    };
+    let unit = write_unit(
+        input.application.name.as_str(),
+        active.deployment.id.as_str(),
+        active.release.artifact.reference(),
+        runtime.container_port,
+        runtime.expected_endpoint.socket_addr().port(),
+        active.release.artifact.digest(),
+    )
+    .map_err(|source| ReconciliationReadError::ObserveQuadlet { source })?;
+    daemon_reload().map_err(|source| ReconciliationReadError::ObserveQuadlet { source })?;
+    start(&unit).map_err(|source| ReconciliationReadError::ObserveQuadlet { source })?;
+    let NamedContainerObservation::Present {
+        id,
+        name,
+        image_reference,
+        application_label,
+        image_digest_label,
+        observation: container_observation,
+    } = observe_named_container(
+        &container_name(
+            input.application.name.as_str(),
+            active.deployment.id.as_str(),
+        ),
+        runtime.container_port,
+    )
+    .map_err(|source| ReconciliationReadError::ObserveNamedContainer { source })?
+    else {
+        return Ok(Some(ReconciliationResult::Failed {
+            reason: "rematerialized Quadlet did not create its expected container".to_owned(),
+        }));
+    };
+    if *container_observation.state() != ObservedRuntimeState::Running
+        || name.trim_start_matches('/')
+            != container_name(
+                input.application.name.as_str(),
+                active.deployment.id.as_str(),
+            )
+        || image_reference != active.release.artifact.reference()
+        || application_label.as_deref() != Some(input.application.name.as_str())
+        || image_digest_label.as_deref() != Some(active.release.artifact.digest())
+        || container_observation.observed_endpoint()
+            != Some(runtime.expected_endpoint.socket_addr())
+    {
+        return Ok(Some(ReconciliationResult::ManualIntervention {
+            reason: "rematerialized container identity or endpoint differs from persisted intent"
+                .to_owned(),
+        }));
+    }
+    match check_internal_health(
+        runtime.expected_endpoint.socket_addr(),
+        specification.runtime.health_check().path().as_str(),
+        specification.runtime.health_check().expected_status().get(),
+    )
+    .map_err(|source| ReconciliationReadError::NotConverged {
+        reason: source.to_string(),
+    })? {
+        HealthCheckResult::Healthy { .. } => {}
+        HealthCheckResult::Unhealthy { failure, .. } => {
+            return Ok(Some(ReconciliationResult::Failed {
+                reason: format!(
+                    "rematerialized runtime failed its internal health check: {failure:?}"
+                ),
+            }));
+        }
+    }
+    let outcome = runtime_store::reconcile_external_runtime_id(
+        connection,
+        runtime.id.as_str(),
+        runtime.external_runtime_id.as_str(),
+        id.as_str(),
+    )
+    .map_err(|source| ReconciliationReadError::Runtime { source })?;
+    if outcome == crate::adapters::stores::PersistenceOutcome::Stale {
+        return Err(ReconciliationReadError::NotConverged {
+            reason: format!(
+                "runtime `{}` changed before rematerialization could be confirmed",
+                runtime.id
+            ),
+        });
+    }
+    Ok(Some(ReconciliationResult::Repaired {
+        runtime_id: runtime.id.to_string(),
+        container_id: id.to_string(),
+    }))
 }
 
 // Terminates work left by a dead lock holder without treating an incomplete candidate as promotable.
