@@ -95,7 +95,8 @@ without selecting a new Release or making destructive changes from ambiguity.
   digest, labels, and loopback endpoint are unambiguous. Preserve the persisted
   port and reconcile `external_runtime_id` by compare-and-set.
   Result: reconcile now CAS-updates only a confirmed recreated Quadlet container
-  and rematerializes an absent canonical Quadlet from the persisted runtime port;
+  restarts an existing canonical Quadlet or rematerializes an absent one from the
+  persisted runtime port;
   divergent runtime identity or configuration remains manual intervention.
 - [x] Reconcile Caddy exposure drift: repair missing or divergent public
   fragments only with a healthy confirmed runtime; remove an internal route;

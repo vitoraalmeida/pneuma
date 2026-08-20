@@ -253,37 +253,56 @@ fn rematerialize_missing_runtime(
     input: &ReconciliationInput,
     observation: &ReconciliationObservation,
 ) -> Result<Option<ReconciliationResult>, ReconciliationReadError> {
-    let generated_unit_is_absent = match &observation.systemd_unit {
-        crate::domain::reconciliation::SystemdUnitObservation::Missing => true,
-        crate::domain::reconciliation::SystemdUnitObservation::Present { active_state } => {
-            active_state == "inactive"
-        }
-    };
-    if input.application.desired_runtime_state != DesiredRuntimeState::Running
-        || *observation.recorded_container.state() != ObservedRuntimeState::Missing
-        || observation.named_container != NamedContainerObservation::Missing
-        || observation.quadlet_source
-            != crate::domain::reconciliation::QuadletSourceObservation::Missing
-        || !generated_unit_is_absent
-    {
-        return Ok(None);
-    }
     let (Some(active), Some(specification)) = (&input.active, &input.specification) else {
         return Ok(None);
     };
     let Some(runtime) = &active.runtime else {
         return Ok(None);
     };
-    let unit = write_unit(
+    let expected_unit = canonical_unit_contents(
         input.application.name.as_str(),
         active.deployment.id.as_str(),
         active.release.artifact.reference(),
         runtime.container_port,
         runtime.expected_endpoint.socket_addr().port(),
         active.release.artifact.digest(),
-    )
-    .map_err(|source| ReconciliationReadError::ObserveQuadlet { source })?;
-    daemon_reload().map_err(|source| ReconciliationReadError::ObserveQuadlet { source })?;
+    );
+    let canonical_source_is_present = observation.quadlet_source
+        == (crate::domain::reconciliation::QuadletSourceObservation::Present {
+            contents: expected_unit,
+        });
+    let generated_unit_can_start = match &observation.systemd_unit {
+        crate::domain::reconciliation::SystemdUnitObservation::Missing => true,
+        crate::domain::reconciliation::SystemdUnitObservation::Present { active_state } => {
+            active_state != "active"
+        }
+    };
+    if input.application.desired_runtime_state != DesiredRuntimeState::Running
+        || *observation.recorded_container.state() != ObservedRuntimeState::Missing
+        || observation.named_container != NamedContainerObservation::Missing
+        || (observation.quadlet_source
+            != crate::domain::reconciliation::QuadletSourceObservation::Missing
+            && !canonical_source_is_present)
+        || !generated_unit_can_start
+    {
+        return Ok(None);
+    }
+    let unit = unit_name(
+        input.application.name.as_str(),
+        active.deployment.id.as_str(),
+    );
+    if !canonical_source_is_present {
+        write_unit(
+            input.application.name.as_str(),
+            active.deployment.id.as_str(),
+            active.release.artifact.reference(),
+            runtime.container_port,
+            runtime.expected_endpoint.socket_addr().port(),
+            active.release.artifact.digest(),
+        )
+        .map_err(|source| ReconciliationReadError::ObserveQuadlet { source })?;
+        daemon_reload().map_err(|source| ReconciliationReadError::ObserveQuadlet { source })?;
+    }
     start(&unit).map_err(|source| ReconciliationReadError::ObserveQuadlet { source })?;
     let NamedContainerObservation::Present {
         id,

@@ -1100,6 +1100,57 @@ fn reconcile_rematerializes_a_missing_quadlet_and_container() {
 }
 
 #[test]
+fn reconcile_restarts_a_canonical_quadlet_after_its_container_is_removed() {
+    let mut environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || respond_once(&listener, 200));
+    assert_command_succeeded(&environment.deploy(port, false));
+    server.join().unwrap();
+    environment.reconciliation_port = Some(port);
+    let connection = database::open(&environment.database_path).unwrap();
+    let (runtime_id, deployment_id, host_port): (String, String, u16) = connection
+        .query_row(
+            "SELECT id, deployment_id, host_port FROM runtime_instances",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    drop(connection);
+    let quadlet_path = environment
+        .root
+        .join("quadlets")
+        .join(format!("pneuma-another-site-{deployment_id}.container"));
+    let original_unit = fs::read(&quadlet_path).unwrap();
+    fs::write(environment.root.join("podman-removed"), "removed\n").unwrap();
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, host_port)).unwrap();
+    let server = thread::spawn(move || respond_once(&listener, 200));
+
+    let output = environment.run_reconcile();
+
+    server.join().unwrap();
+    assert_command_succeeded(&output);
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("Result: repaired")
+    );
+    assert_eq!(fs::read(quadlet_path).unwrap(), original_unit);
+    let connection = database::open(&environment.database_path).unwrap();
+    let (persisted_runtime, persisted_port, removed_at): (String, u16, Option<String>) = connection
+        .query_row(
+            "SELECT id, host_port, removed_at FROM runtime_instances",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(persisted_runtime, runtime_id);
+    assert_eq!(persisted_port, host_port);
+    assert!(removed_at.is_none());
+}
+
+#[test]
 fn reconcile_reports_manual_intervention_for_a_divergent_recreated_container() {
     let mut environment = DeploymentEnvironment::new();
     assert_command_succeeded(&environment.import());
