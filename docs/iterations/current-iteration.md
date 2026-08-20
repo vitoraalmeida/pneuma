@@ -115,7 +115,8 @@ without selecting a new Release or making destructive changes from ambiguity.
   PASS/FAIL/SKIP evidence for bootstrap and reconciliation scenarios; destroy
   every disposable clone.
   Result: `reconciliation-e2e.sh` passed all R1-R7, E1-E6, I1-I4, and C1-C4
-  cases (21 PASS, 0 FAIL, 0 SKIP) on 2026-08-20. The disposable clone was removed.
+  cases (21 PASS, 0 FAIL, 0 SKIP) in 383 seconds on 2026-08-20 after preparing
+  shared fixture inputs once. The disposable clone was removed.
 - [ ] Add TUI dashboard read projections for Systems, Applications, details,
   Deployments, Releases, RuntimeInstances, and read-only runtime observation.
 - [ ] Extract shared remote import, diagnostics, database, and progress-enabled
