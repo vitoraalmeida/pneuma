@@ -1,15 +1,12 @@
 use std::error::Error;
 use std::fmt;
-use std::net::{Ipv4Addr, SocketAddr};
 
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
+use rusqlite::{Connection, TransactionBehavior};
 
 use crate::adapters::health_check_internal::{
     HealthCheckError, HealthCheckFailure, HealthCheckResult, check_internal_health,
 };
-use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
-use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
 use crate::domain::deployment::DeploymentStatus;
 use crate::domain::exposure::Visibility;
 use crate::domain::runtime::{ObservedRuntimeState, RuntimeState};
@@ -167,60 +164,20 @@ pub fn promote_internal_candidate(
     }
     validate_target(&target)?;
 
-    let previous_runtime_id =
-        runtime_store::load_active_runtime_for_application(&transaction, &target.application_id)
-            .map_err(|source| PromoteInternalCandidateError::Persistence {
-                source: match source {
-                    RuntimeStoreError::Persistence { source } => source,
-                    _ => rusqlite::Error::QueryReturnedNoRows,
-                },
-            })?;
-    if let Some(previous_runtime_id) = previous_runtime_id {
-        runtime_store::stop_runtime(&transaction, &previous_runtime_id).map_err(|source| {
-            PromoteInternalCandidateError::Persistence {
-                source: match source {
-                    RuntimeStoreError::Persistence { source } => source,
-                    _ => rusqlite::Error::QueryReturnedNoRows,
-                },
-            }
-        })?;
-    }
-    runtime_store::start_runtime(&transaction, runtime_id).map_err(|source| {
+    let updated = deployment_store::promote_internal(&transaction, &target).map_err(|source| {
         PromoteInternalCandidateError::Persistence {
             source: match source {
-                RuntimeStoreError::Persistence { source } => source,
+                DeploymentStoreError::Persistence { source } => source,
                 _ => rusqlite::Error::QueryReturnedNoRows,
             },
         }
     })?;
-    let updated = deployment_store::mark_succeeded(
-        &transaction,
-        &target.deployment_id,
-        DeploymentStatus::Verifying,
-    )
-    .map_err(|source| PromoteInternalCandidateError::Persistence {
-        source: match source {
-            DeploymentStoreError::Persistence { source } => source,
-            _ => rusqlite::Error::QueryReturnedNoRows,
-        },
-    })?;
-    if !updated {
+    if updated == crate::adapters::stores::PersistenceOutcome::Stale {
         return Err(PromoteInternalCandidateError::InvalidDeploymentState {
             deployment_id: target.deployment_id,
             actual: "changed during promotion".to_owned(),
         });
     }
-    application_store::activate_deployment(
-        &transaction,
-        &target.application_id,
-        &target.deployment_id,
-    )
-    .map_err(|source| PromoteInternalCandidateError::Persistence {
-        source: match source {
-            ApplicationStoreError::Persistence { source } => source,
-            _ => rusqlite::Error::QueryReturnedNoRows,
-        },
-    })?;
     let finished_at = deployment_store::load_finished_at(&transaction, &target.deployment_id)
         .map_err(|source| PromoteInternalCandidateError::Persistence {
             source: match source {
@@ -240,95 +197,20 @@ pub fn promote_internal_candidate(
 }
 
 // Captures the persisted facts that must remain valid throughout promotion.
-struct PromotionTarget {
-    runtime_id: String,
-    application_id: String,
-    deployment_id: String,
-    endpoint: SocketAddr,
-    state: RuntimeState,
-    observed_state: ObservedRuntimeState,
-    removed_at: Option<String>,
-    deployment_status: DeploymentStatus,
-    deployment_finished_at: Option<String>,
-    visibility: Visibility,
-}
+type PromotionTarget = deployment_store::PromotionTarget;
 
 // Loads and validates persisted state text before making promotion decisions.
 fn load_target(
     connection: &Connection,
     runtime_id: &str,
 ) -> Result<PromotionTarget, PromoteInternalCandidateError> {
-    connection
-        .query_row(
-            "SELECT
-                runtime_instances.application_id,
-                runtime_instances.deployment_id,
-                runtime_instances.host_port,
-                runtime_instances.state,
-                runtime_instances.last_observed_state,
-                runtime_instances.removed_at,
-                deployments.status,
-                deployments.finished_at,
-                exposures.desired_visibility
-             FROM runtime_instances
-             JOIN deployments ON deployments.id = runtime_instances.deployment_id
-             JOIN exposures ON exposures.application_id = runtime_instances.application_id
-             WHERE runtime_instances.id = ?1",
-            [runtime_id],
-            |row| {
-                let host_port = row.get::<_, u16>(2)?;
-                let state_text: String = row.get(3)?;
-                let state = RuntimeState::from_database(&state_text).ok_or_else(|| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        3,
-                        rusqlite::types::Type::Text,
-                        Box::new(std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            format!("invalid runtime state: {state_text}"),
-                        )),
-                    )
-                })?;
-                let observed_state_text: String = row.get(4)?;
-                let observed_state = ObservedRuntimeState::from_database(&observed_state_text);
-                let status_text: String = row.get(6)?;
-                let deployment_status =
-                    DeploymentStatus::from_database(&status_text).ok_or_else(|| {
-                        rusqlite::Error::FromSqlConversionFailure(
-                            6,
-                            rusqlite::types::Type::Text,
-                            Box::new(std::io::Error::new(
-                                std::io::ErrorKind::InvalidData,
-                                format!("invalid deployment status: {status_text}"),
-                            )),
-                        )
-                    })?;
-                let visibility_text: String = row.get(8)?;
-                let visibility = Visibility::from_database(&visibility_text).ok_or_else(|| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        8,
-                        rusqlite::types::Type::Text,
-                        Box::new(std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            format!("invalid visibility: {visibility_text}"),
-                        )),
-                    )
-                })?;
-                Ok(PromotionTarget {
-                    runtime_id: runtime_id.to_owned(),
-                    application_id: row.get(0)?,
-                    deployment_id: row.get(1)?,
-                    endpoint: SocketAddr::from((Ipv4Addr::LOCALHOST, host_port)),
-                    state,
-                    observed_state,
-                    removed_at: row.get(5)?,
-                    deployment_status,
-                    deployment_finished_at: row.get(7)?,
-                    visibility,
-                })
+    deployment_store::load_promotion_target(connection, runtime_id)
+        .map_err(|source| PromoteInternalCandidateError::Persistence {
+            source: match source {
+                DeploymentStoreError::Persistence { source } => source,
+                _ => rusqlite::Error::QueryReturnedNoRows,
             },
-        )
-        .optional()
-        .map_err(|source| PromoteInternalCandidateError::Persistence { source })?
+        })?
         .ok_or_else(|| PromoteInternalCandidateError::RuntimeNotFound {
             runtime_id: runtime_id.to_owned(),
         })
@@ -356,13 +238,13 @@ fn validate_target(target: &PromotionTarget) -> Result<(), PromoteInternalCandid
     if target.state != RuntimeState::Starting {
         return Err(PromoteInternalCandidateError::InvalidRuntimeState {
             runtime_id: target.runtime_id.clone(),
-            actual: target.state.database_value().to_owned(),
+            actual: target.state.to_string(),
         });
     }
     if target.observed_state != ObservedRuntimeState::Running {
         return Err(PromoteInternalCandidateError::RuntimeNotRunning {
             runtime_id: target.runtime_id.clone(),
-            actual: target.observed_state.database_value().to_owned(),
+            actual: target.observed_state.to_string(),
         });
     }
     if target.removed_at.is_some() {
@@ -373,7 +255,7 @@ fn validate_target(target: &PromotionTarget) -> Result<(), PromoteInternalCandid
     if target.deployment_status != DeploymentStatus::Verifying {
         return Err(PromoteInternalCandidateError::InvalidDeploymentState {
             deployment_id: target.deployment_id.clone(),
-            actual: target.deployment_status.database_value().to_owned(),
+            actual: target.deployment_status.to_string(),
         });
     }
     if target.visibility != Visibility::Internal {

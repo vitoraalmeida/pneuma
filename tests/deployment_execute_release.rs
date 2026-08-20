@@ -10,6 +10,8 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use pneuma::adapters::database;
+use pneuma::adapters::stores::application_store;
+use pneuma::domain::exposure::ExposureMaterialization;
 
 #[test]
 fn internal_deploy_succeeds_when_candidate_is_healthy() {
@@ -337,6 +339,13 @@ fn public_deploy_succeeds_with_caddy_and_external_health() {
         configuration_version,
         format!("vitoralmeida.tech {{\n    reverse_proxy 127.0.0.1:{port}\n}}\n")
     );
+    assert!(matches!(
+        application_store::load_exposure(&connection, &app_id),
+        Ok(Some(exposure)) if matches!(
+            exposure.materialization(),
+            ExposureMaterialization::Active { .. }
+        )
+    ));
 
     let caddy_fragments: Vec<_> = fs::read_dir(&environment.managed_caddy_directory)
         .unwrap()

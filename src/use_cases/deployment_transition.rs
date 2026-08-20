@@ -3,6 +3,7 @@ use std::fmt;
 
 use rusqlite::{Connection, TransactionBehavior};
 
+use crate::adapters::stores::PersistenceOutcome;
 use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
 use crate::domain::deployment::{DeploymentFailure, DeploymentStatus, InvalidDeploymentFailure};
 
@@ -106,6 +107,10 @@ impl From<DeploymentStoreError> for TransitionDeploymentError {
             DeploymentStoreError::NotFound { deployment_id } => {
                 Self::DeploymentNotFound { deployment_id }
             }
+            DeploymentStoreError::Stale { deployment_id } => Self::InvalidPersistedStatus {
+                deployment_id,
+                status: "changed before persistence".to_owned(),
+            },
             DeploymentStoreError::InvalidStatus {
                 deployment_id,
                 status,
@@ -140,8 +145,9 @@ pub fn advance_deployment(
 ) -> Result<DeploymentStatus, TransitionDeploymentError> {
     let (expected, next) = transition_states(transition);
     let advanced = deployment_store::advance_status(connection, deployment_id, expected, next)?;
-    if advanced {
-        return Ok(next);
+    match advanced {
+        PersistenceOutcome::Updated => return Ok(next),
+        PersistenceOutcome::Stale => {}
     }
 
     let actual = deployment_store::load_status(connection, deployment_id)?;

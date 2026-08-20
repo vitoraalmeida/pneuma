@@ -104,22 +104,6 @@ pub enum RepositoryKind {
     Remote,
 }
 
-impl RepositoryKind {
-    pub(crate) fn database_value(self) -> &'static str {
-        match self {
-            Self::Local => "local",
-            Self::Remote => "remote",
-        }
-    }
-    pub(crate) fn from_database(value: &str) -> Option<Self> {
-        match value {
-            "local" => Some(Self::Local),
-            "remote" => Some(Self::Remote),
-            _ => None,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 // Couples the persisted kind with the only location form valid for that kind.
 pub enum ApplicationSource {

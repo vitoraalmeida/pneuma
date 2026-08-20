@@ -4,6 +4,7 @@ use std::io;
 
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 
+use crate::adapters::stores::PersistenceOutcome;
 use crate::domain::application::{
     Application, ApplicationDeploymentSpecification, ApplicationName, ApplicationSource,
     ApplicationSummary, ContainerPort, HealthCheckPath, HealthCheckSpecification,
@@ -198,7 +199,7 @@ pub fn load_application_for_import(
 // Maps persisted Application state and rejects invalid desired-runtime values.
 pub(crate) fn map_application_row(row: &Row<'_>) -> rusqlite::Result<Application> {
     let desired_runtime_state = row.get::<_, String>(3)?;
-    let desired_runtime_state = DesiredRuntimeState::from_database(&desired_runtime_state)
+    let desired_runtime_state = desired_runtime_state_from_value(&desired_runtime_state)
         .ok_or_else(|| invalid_text_value(3, "desired runtime state", &desired_runtime_state))?;
 
     Ok(Application {
@@ -244,6 +245,38 @@ pub fn load_application_by_name(
         .map_err(|source| ApplicationStoreError::Persistence { source })
 }
 
+// Lists catalog summaries in stable display order.
+pub fn list_application_summaries(
+    connection: &Connection,
+) -> Result<Vec<ApplicationSummary>, ApplicationStoreError> {
+    let mut statement = connection.prepare("SELECT a.id, a.system_id, a.name, a.desired_runtime_state, a.active_deployment_id, a.spec_version, s.repository_url, s.default_branch FROM applications a LEFT JOIN application_sources s ON s.application_id = a.id ORDER BY a.name").map_err(|source| ApplicationStoreError::Persistence { source })?;
+    statement
+        .query_map([], map_application_summary_row)
+        .map_err(|source| ApplicationStoreError::Persistence { source })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|source| ApplicationStoreError::Persistence { source })
+}
+
+// Lists catalog summaries belonging to one System.
+pub fn list_application_summaries_for_system(
+    connection: &Connection,
+    system_id: &SystemId,
+) -> Result<Vec<ApplicationSummary>, ApplicationStoreError> {
+    let mut statement = connection.prepare("SELECT a.id, a.system_id, a.name, a.desired_runtime_state, a.active_deployment_id, a.spec_version, s.repository_url, s.default_branch FROM applications a LEFT JOIN application_sources s ON s.application_id = a.id WHERE a.system_id = ?1 ORDER BY a.name").map_err(|source| ApplicationStoreError::Persistence { source })?;
+    statement
+        .query_map([system_id.as_str()], map_application_summary_row)
+        .map_err(|source| ApplicationStoreError::Persistence { source })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|source| ApplicationStoreError::Persistence { source })
+}
+
+pub fn application_has_successful_deployment(
+    connection: &Connection,
+    application_id: &str,
+) -> Result<bool, ApplicationStoreError> {
+    connection.query_row("SELECT EXISTS(SELECT 1 FROM deployments WHERE application_id = ?1 AND status = 'succeeded')", [application_id], |row| row.get(0)).map_err(|source| ApplicationStoreError::Persistence { source })
+}
+
 // Persists the immutable delivery configuration associated with an imported Application.
 pub fn insert_delivery_spec(
     transaction: &Transaction<'_>,
@@ -259,7 +292,7 @@ pub fn insert_delivery_spec(
             ) VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
             params![
                 application_id,
-                delivery_type.database_value(),
+                delivery_type_value(delivery_type),
                 image_repository.as_str()
             ],
         )
@@ -282,7 +315,7 @@ pub fn insert_source_spec(
             params![
                 application_id,
                 source.repository_location(),
-                source.repository_kind().database_value(),
+                repository_kind_value(source.repository_kind()),
                 source.default_branch(),
                 source.manifest_path().as_str()
             ],
@@ -344,7 +377,7 @@ pub fn insert_exposure(
             ) VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
             params![
                 application_id,
-                intent.visibility().database_value(),
+                visibility_value(intent.visibility()),
                 intent.domain().map(DomainName::as_str)
             ],
         )
@@ -402,7 +435,7 @@ pub fn load_delivery_specification(
     let Some((delivery_type, image_repository)) = specification else {
         return Ok(None);
     };
-    let delivery_type = DeliveryType::from_database(&delivery_type).ok_or_else(|| {
+    let delivery_type = delivery_type_from_value(&delivery_type).ok_or_else(|| {
         ApplicationStoreError::Persistence {
             source: invalid_text_value(0, "delivery type", &delivery_type),
         }
@@ -442,7 +475,7 @@ pub fn load_source(
     let Some((repository_url, repository_kind, default_branch, manifest_path)) = source else {
         return Ok(None);
     };
-    let repository_kind = RepositoryKind::from_database(&repository_kind).ok_or_else(|| {
+    let repository_kind = repository_kind_from_value(&repository_kind).ok_or_else(|| {
         ApplicationStoreError::Persistence {
             source: invalid_text_value(1, "repository kind", &repository_kind),
         }
@@ -504,17 +537,17 @@ pub fn load_exposure(
     else {
         return Ok(None);
     };
-    let visibility = Visibility::from_database(&visibility).ok_or_else(|| {
+    let visibility = visibility_from_value(&visibility).ok_or_else(|| {
         ExposureStoreError::InvalidVisibility {
             application_id: application_id.to_owned(),
             visibility,
         }
     })?;
-    let materialization_state = ExposureMaterializationState::from_database(&materialization_state)
+    let materialization_state = exposure_materialization_state_from_value(&materialization_state)
         .ok_or_else(|| ExposureStoreError::InvalidMaterializationState {
-            application_id: application_id.to_owned(),
-            state: materialization_state,
-        })?;
+        application_id: application_id.to_owned(),
+        state: materialization_state,
+    })?;
     let domain = domain
         .map(|domain| {
             DomainName::new(&domain).map_err(|error| ExposureStoreError::Persistence {
@@ -597,7 +630,7 @@ pub fn begin_exposure_change(
     application_id: &str,
     expected_visibility: Visibility,
     desired_visibility: Visibility,
-) -> Result<bool, ApplicationStoreError> {
+) -> Result<PersistenceOutcome, ApplicationStoreError> {
     let materialization_state = match desired_visibility {
         Visibility::Public => ExposureMaterializationState::Applying,
         Visibility::Internal => ExposureMaterializationState::Removing,
@@ -612,14 +645,14 @@ pub fn begin_exposure_change(
                  updated_at = CURRENT_TIMESTAMP
              WHERE application_id = ?3 AND desired_visibility = ?4",
             params![
-                desired_visibility.database_value(),
-                materialization_state.database_value(),
+                visibility_value(desired_visibility),
+                exposure_materialization_state_value(materialization_state),
                 application_id,
-                expected_visibility.database_value()
+                visibility_value(expected_visibility)
             ],
         )
         .map_err(|source| ApplicationStoreError::Persistence { source })?;
-    Ok(updated == 1)
+    Ok(outcome(updated))
 }
 
 // Confirms public route materialization only while the matching transition remains in progress.
@@ -628,14 +661,14 @@ pub fn complete_public_exposure_change(
     application_id: &str,
     runtime_id: &RuntimeInstanceId,
     configuration_version: &ExposureConfigurationVersion,
-) -> Result<bool, ApplicationStoreError> {
+) -> Result<PersistenceOutcome, ApplicationStoreError> {
     let updated = transaction
         .execute(
             "UPDATE exposures
              SET active_runtime_id = ?1,
                  materialization_state = 'active',
                  configuration_version = ?2,
-                  last_materialized_at = NULL,
+                  last_materialized_at = CURRENT_TIMESTAMP,
                  last_error_code = NULL,
                  last_error_message = NULL,
                  updated_at = CURRENT_TIMESTAMP
@@ -649,14 +682,14 @@ pub fn complete_public_exposure_change(
             ],
         )
         .map_err(|source| ApplicationStoreError::Persistence { source })?;
-    Ok(updated == 1)
+    Ok(outcome(updated))
 }
 
 // Confirms route removal only while the matching internal transition remains in progress.
 pub fn complete_internal_exposure_change(
     transaction: &Transaction<'_>,
     application_id: &str,
-) -> Result<bool, ApplicationStoreError> {
+) -> Result<PersistenceOutcome, ApplicationStoreError> {
     let updated = transaction
         .execute(
             "UPDATE exposures
@@ -673,7 +706,7 @@ pub fn complete_internal_exposure_change(
             [application_id],
         )
         .map_err(|source| ApplicationStoreError::Persistence { source })?;
-    Ok(updated == 1)
+    Ok(outcome(updated))
 }
 
 // Records route diagnostics only when the persisted visibility still matches the attempted change.
@@ -683,7 +716,7 @@ pub fn record_exposure_change_failure(
     visibility: Visibility,
     state: ExposureMaterializationState,
     diagnostic: &ExposureDiagnostic,
-) -> Result<bool, ApplicationStoreError> {
+) -> Result<PersistenceOutcome, ApplicationStoreError> {
     let updated = transaction
         .execute(
             "UPDATE exposures
@@ -693,15 +726,41 @@ pub fn record_exposure_change_failure(
                  updated_at = CURRENT_TIMESTAMP
              WHERE application_id = ?4 AND desired_visibility = ?5",
             params![
-                state.database_value(),
+                exposure_materialization_state_value(state),
                 diagnostic.code(),
                 diagnostic.message(),
                 application_id,
-                visibility.database_value()
+                visibility_value(visibility)
             ],
         )
         .map_err(|source| ApplicationStoreError::Persistence { source })?;
-    Ok(updated == 1)
+    Ok(outcome(updated))
+}
+
+// Marks a public route as applying before its external materialization begins.
+pub fn begin_public_exposure(
+    connection: &Connection,
+    application_id: &str,
+) -> Result<PersistenceOutcome, ApplicationStoreError> {
+    let updated = connection.execute(
+        "UPDATE exposures SET materialization_state = 'applying', last_error_code = NULL, last_error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?1 AND desired_visibility = 'public'",
+        [application_id],
+    ).map_err(|source| ApplicationStoreError::Persistence { source })?;
+    Ok(outcome(updated))
+}
+
+// Persists the result of public-route compensation without treating a missing row as success.
+pub fn record_public_exposure_failure(
+    connection: &Connection,
+    application_id: &str,
+    diagnostic: &ExposureDiagnostic,
+    state: ExposureMaterializationState,
+) -> Result<PersistenceOutcome, ApplicationStoreError> {
+    let updated = connection.execute(
+        "UPDATE exposures SET materialization_state = ?1, last_error_code = ?2, last_error_message = ?3, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?4 AND desired_visibility = 'public'",
+        params![exposure_materialization_state_value(state), diagnostic.code(), diagnostic.message(), application_id],
+    ).map_err(|source| ApplicationStoreError::Persistence { source })?;
+    Ok(outcome(updated))
 }
 
 // Joins persisted runtime, health, and visibility data into deployment input.
@@ -744,11 +803,10 @@ pub fn load_deployment_specification(
     else {
         return Ok(None);
     };
-    let visibility = Visibility::from_database(&visibility).ok_or_else(|| {
-        ApplicationStoreError::Persistence {
+    let visibility =
+        visibility_from_value(&visibility).ok_or_else(|| ApplicationStoreError::Persistence {
             source: invalid_text_value(5, "visibility", &visibility),
-        }
-    })?;
+        })?;
     Ok(Some(ApplicationDeploymentSpecification {
         application_id: ApplicationId::from(application_id),
         application_name: ApplicationName::new(&application_name).map_err(|error| {
@@ -793,4 +851,76 @@ fn invalid_text_value(column: usize, field: &str, value: &str) -> rusqlite::Erro
             format!("invalid {field}: {value}"),
         )),
     )
+}
+fn outcome(updated: usize) -> PersistenceOutcome {
+    if updated == 1 {
+        PersistenceOutcome::Updated
+    } else {
+        PersistenceOutcome::Stale
+    }
+}
+fn delivery_type_value(value: DeliveryType) -> &'static str {
+    match value {
+        DeliveryType::Oci => "oci",
+    }
+}
+fn delivery_type_from_value(value: &str) -> Option<DeliveryType> {
+    match value {
+        "oci" => Some(DeliveryType::Oci),
+        _ => None,
+    }
+}
+fn repository_kind_value(value: RepositoryKind) -> &'static str {
+    match value {
+        RepositoryKind::Local => "local",
+        RepositoryKind::Remote => "remote",
+    }
+}
+fn repository_kind_from_value(value: &str) -> Option<RepositoryKind> {
+    match value {
+        "local" => Some(RepositoryKind::Local),
+        "remote" => Some(RepositoryKind::Remote),
+        _ => None,
+    }
+}
+fn visibility_value(value: Visibility) -> &'static str {
+    match value {
+        Visibility::Internal => "internal",
+        Visibility::Public => "public",
+    }
+}
+fn visibility_from_value(value: &str) -> Option<Visibility> {
+    match value {
+        "internal" => Some(Visibility::Internal),
+        "public" => Some(Visibility::Public),
+        _ => None,
+    }
+}
+fn exposure_materialization_state_value(value: ExposureMaterializationState) -> &'static str {
+    match value {
+        ExposureMaterializationState::NotMaterialized => "not_materialized",
+        ExposureMaterializationState::Applying => "applying",
+        ExposureMaterializationState::Active => "active",
+        ExposureMaterializationState::Removing => "removing",
+        ExposureMaterializationState::Failed => "failed",
+        ExposureMaterializationState::Diverged => "diverged",
+    }
+}
+fn exposure_materialization_state_from_value(value: &str) -> Option<ExposureMaterializationState> {
+    match value {
+        "not_materialized" => Some(ExposureMaterializationState::NotMaterialized),
+        "applying" => Some(ExposureMaterializationState::Applying),
+        "active" => Some(ExposureMaterializationState::Active),
+        "removing" => Some(ExposureMaterializationState::Removing),
+        "failed" => Some(ExposureMaterializationState::Failed),
+        "diverged" => Some(ExposureMaterializationState::Diverged),
+        _ => None,
+    }
+}
+fn desired_runtime_state_from_value(value: &str) -> Option<DesiredRuntimeState> {
+    match value {
+        "running" => Some(DesiredRuntimeState::Running),
+        "stopped" => Some(DesiredRuntimeState::Stopped),
+        _ => None,
+    }
 }

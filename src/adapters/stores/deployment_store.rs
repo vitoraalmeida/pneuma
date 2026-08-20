@@ -3,16 +3,24 @@ use std::fmt;
 
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 
+use crate::adapters::stores::PersistenceOutcome;
+use crate::adapters::stores::release_store::artifact_from_values;
 use crate::domain::deployment::{
     Deployment, DeploymentFailure, DeploymentFailureEvidence, DeploymentHistory,
     DeploymentLifecycle, DeploymentStatus, DeploymentType, SourceRevision,
 };
+use crate::domain::exposure::{ExposureConfigurationVersion, Visibility};
 use crate::domain::identity::{ApplicationId, DeploymentId, ReleaseId};
-use crate::domain::release::{OciArtifact, Release};
+use crate::domain::release::Release;
+use crate::domain::runtime::{ObservedRuntimeState, RuntimeState};
+use std::net::{Ipv4Addr, SocketAddr};
 
 #[derive(Debug)]
 pub enum DeploymentStoreError {
     NotFound {
+        deployment_id: String,
+    },
+    Stale {
         deployment_id: String,
     },
     InvalidStatus {
@@ -32,11 +40,39 @@ pub enum DeploymentStoreError {
     },
 }
 
+#[derive(Debug)]
+// Combines the persisted facts a promotion must validate before changing its state.
+pub struct PromotionTarget {
+    pub runtime_id: String,
+    pub application_id: String,
+    pub deployment_id: String,
+    pub endpoint: SocketAddr,
+    pub state: RuntimeState,
+    pub observed_state: ObservedRuntimeState,
+    pub removed_at: Option<String>,
+    pub deployment_status: DeploymentStatus,
+    pub deployment_finished_at: Option<String>,
+    pub visibility: Visibility,
+    pub domain: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct RollbackTarget {
+    pub release: Release,
+    pub source_revision: Option<SourceRevision>,
+}
+
 impl fmt::Display for DeploymentStoreError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NotFound { deployment_id } => {
                 write!(formatter, "deployment `{deployment_id}` not found")
+            }
+            Self::Stale { deployment_id } => {
+                write!(
+                    formatter,
+                    "deployment `{deployment_id}` changed before persistence"
+                )
             }
             Self::InvalidStatus {
                 deployment_id,
@@ -121,7 +157,7 @@ pub fn insert_pending_deployment(
     transaction.execute(
         "INSERT INTO deployments (id, application_id, release_id, type, status, source_revision)
          VALUES (?1, ?2, ?3, ?4, 'pending', ?5)",
-        params![deployment_id, application_id, release_id, deployment_type.database_value(), source_revision.map(SourceRevision::as_str)],
+        params![deployment_id, application_id, release_id, deployment_type_value(deployment_type), source_revision.map(SourceRevision::as_str)],
     ).map_err(persistence)?;
     Ok(())
 }
@@ -159,7 +195,7 @@ pub fn list_deployment_history(
             let image_reference: String = row.get(13)?;
             let repository: String = row.get(14)?;
             let digest: String = row.get(15)?;
-            let artifact = OciArtifact::from_persisted(&image_reference, &repository, &digest)
+            let artifact = artifact_from_values(&image_reference, &repository, &digest)
                 .map_err(|error| conversion_error(13, error))?;
             Ok(DeploymentHistory {
                 release: Release {
@@ -192,7 +228,7 @@ pub fn load_status(
         .ok_or_else(|| DeploymentStoreError::NotFound {
             deployment_id: deployment_id.to_owned(),
         })?;
-    DeploymentStatus::from_database(&status).ok_or_else(|| DeploymentStoreError::InvalidStatus {
+    deployment_status_from_value(&status).ok_or_else(|| DeploymentStoreError::InvalidStatus {
         deployment_id: deployment_id.to_owned(),
         status,
     })
@@ -204,13 +240,13 @@ pub fn advance_status(
     deployment_id: &str,
     expected: DeploymentStatus,
     next: DeploymentStatus,
-) -> Result<bool, DeploymentStoreError> {
+) -> Result<PersistenceOutcome, DeploymentStoreError> {
     let updated = connection.execute(
         "UPDATE deployments SET status = ?1, started_at = CASE WHEN status = 'pending' THEN CURRENT_TIMESTAMP ELSE started_at END,
          updated_at = CURRENT_TIMESTAMP WHERE id = ?2 AND status = ?3",
-        params![next.database_value(), deployment_id, expected.database_value()],
+        params![deployment_status_value(next), deployment_id, deployment_status_value(expected)],
     ).map_err(persistence)?;
-    Ok(updated == 1)
+    Ok(outcome(updated))
 }
 
 // Records complete terminal failure evidence only from the supplied in-progress stage.
@@ -221,11 +257,16 @@ pub fn mark_failed(
     code: &str,
     message: &str,
 ) -> Result<DeploymentFailure, DeploymentStoreError> {
-    transaction.execute(
+    let updated = transaction.execute(
         "UPDATE deployments SET status = 'failed', finished_at = CURRENT_TIMESTAMP, failure_code = ?1,
          failure_stage = ?2, failure_message = ?3, updated_at = CURRENT_TIMESTAMP WHERE id = ?4 AND status = ?2",
-        params![code, stage.database_value(), message, deployment_id],
+        params![code, deployment_status_value(stage), message, deployment_id],
     ).map_err(persistence)?;
+    if outcome(updated) == PersistenceOutcome::Stale {
+        return Err(DeploymentStoreError::Stale {
+            deployment_id: deployment_id.to_owned(),
+        });
+    }
     let finished_at: String = transaction
         .query_row(
             "SELECT finished_at FROM deployments WHERE id = ?1",
@@ -246,12 +287,12 @@ pub fn mark_succeeded(
     transaction: &Transaction<'_>,
     deployment_id: &str,
     expected_status: DeploymentStatus,
-) -> Result<bool, DeploymentStoreError> {
+) -> Result<PersistenceOutcome, DeploymentStoreError> {
     let updated = transaction.execute(
         "UPDATE deployments SET status = 'succeeded', finished_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-         WHERE id = ?1 AND status = ?2", params![deployment_id, expected_status.database_value()],
+          WHERE id = ?1 AND status = ?2", params![deployment_id, deployment_status_value(expected_status)],
     ).map_err(persistence)?;
-    Ok(updated == 1)
+    Ok(outcome(updated))
 }
 
 // Reads the terminal timestamp persisted by a completed Deployment transition.
@@ -266,6 +307,97 @@ pub fn load_finished_at(
             |row| row.get(0),
         )
         .map_err(persistence)
+}
+
+// Loads all runtime, deployment, and exposure facts required by either promotion path.
+pub fn load_promotion_target(
+    connection: &Connection,
+    runtime_id: &str,
+) -> Result<Option<PromotionTarget>, DeploymentStoreError> {
+    connection.query_row(
+        "SELECT ri.application_id, ri.deployment_id, ri.host_port, ri.state, ri.last_observed_state,
+                ri.removed_at, d.status, d.finished_at, e.desired_visibility, e.domain
+         FROM runtime_instances ri JOIN deployments d ON d.id = ri.deployment_id
+         JOIN exposures e ON e.application_id = ri.application_id WHERE ri.id = ?1",
+        [runtime_id],
+        |row| {
+            let state_text: String = row.get(3)?;
+            let status_text: String = row.get(6)?;
+            let visibility_text: String = row.get(8)?;
+            Ok(PromotionTarget {
+                runtime_id: runtime_id.to_owned(), application_id: row.get(0)?, deployment_id: row.get(1)?,
+                endpoint: SocketAddr::from((Ipv4Addr::LOCALHOST, row.get::<_, u16>(2)?)),
+                state: runtime_state_from_value(&state_text).ok_or_else(|| conversion_error(3, std::io::Error::new(std::io::ErrorKind::InvalidData, format!("invalid runtime state: {state_text}"))))?,
+                observed_state: observed_runtime_state_from_value(&row.get::<_, String>(4)?),
+                removed_at: row.get(5)?,
+                deployment_status: deployment_status_from_value(&status_text).ok_or_else(|| conversion_error(6, std::io::Error::new(std::io::ErrorKind::InvalidData, format!("invalid deployment status: {status_text}"))))?,
+                deployment_finished_at: row.get(7)?,
+                visibility: visibility_from_value(&visibility_text).ok_or_else(|| conversion_error(8, std::io::Error::new(std::io::ErrorKind::InvalidData, format!("invalid visibility: {visibility_text}"))))?,
+                domain: row.get(9)?,
+            })
+        },
+    ).optional().map_err(persistence)
+}
+
+// Selects the most recent succeeded deployment that is no longer active for rollback.
+pub fn load_rollback_target(
+    connection: &Connection,
+    application_id: &str,
+) -> Result<Option<RollbackTarget>, DeploymentStoreError> {
+    connection.query_row(
+        "SELECT r.id, r.application_id, r.image_reference, r.image_repository, r.image_digest, d.source_revision, r.created_at
+         FROM deployments d JOIN releases r ON r.id = d.release_id LEFT JOIN applications a ON a.active_deployment_id = d.id
+         WHERE d.application_id = ?1 AND d.status = 'succeeded' AND a.id IS NULL ORDER BY d.finished_at DESC LIMIT 1",
+        [application_id],
+        |row| {
+            let reference: String = row.get(2)?;
+            let repository: String = row.get(3)?;
+            let digest: String = row.get(4)?;
+            let artifact = artifact_from_values(&reference, &repository, &digest).map_err(|error| conversion_error(2, std::io::Error::new(std::io::ErrorKind::InvalidData, error)))?;
+            let source_revision = row.get::<_, Option<String>>(5)?.map(|value| source_revision_from_value(&value).map_err(|error| conversion_error(5, error))).transpose()?;
+            Ok(RollbackTarget { release: Release { id: ReleaseId::from(row.get::<_, String>(0)?), application_id: ApplicationId::from(row.get::<_, String>(1)?), artifact, created_at: row.get(6)? }, source_revision })
+        },
+    ).optional().map_err(persistence)
+}
+
+// Applies every internal promotion write atomically, reporting a lost state race explicitly.
+pub fn promote_internal(
+    transaction: &Transaction<'_>,
+    target: &PromotionTarget,
+) -> Result<PersistenceOutcome, DeploymentStoreError> {
+    transaction.execute("UPDATE runtime_instances SET state = 'stopped', updated_at = CURRENT_TIMESTAMP WHERE application_id = ?1 AND state = 'running' AND removed_at IS NULL AND id != ?2", params![target.application_id, target.runtime_id]).map_err(persistence)?;
+    if outcome(transaction.execute("UPDATE runtime_instances SET state = 'running', updated_at = CURRENT_TIMESTAMP WHERE id = ?1 AND state = 'starting' AND removed_at IS NULL", [&target.runtime_id]).map_err(persistence)?) == PersistenceOutcome::Stale { return Ok(PersistenceOutcome::Stale); }
+    if mark_succeeded(
+        transaction,
+        &target.deployment_id,
+        DeploymentStatus::Verifying,
+    )? == PersistenceOutcome::Stale
+    {
+        return Ok(PersistenceOutcome::Stale);
+    }
+    if outcome(transaction.execute("UPDATE applications SET active_deployment_id = ?1, desired_runtime_state = 'running', updated_at = CURRENT_TIMESTAMP WHERE id = ?2", params![target.deployment_id, target.application_id]).map_err(persistence)?) == PersistenceOutcome::Stale { return Ok(PersistenceOutcome::Stale); }
+    Ok(PersistenceOutcome::Updated)
+}
+
+// Applies every public promotion write atomically, rolling back the transaction on a stale state.
+pub fn promote_public(
+    transaction: &Transaction<'_>,
+    target: &PromotionTarget,
+    configuration_version: &ExposureConfigurationVersion,
+) -> Result<PersistenceOutcome, DeploymentStoreError> {
+    transaction.execute("UPDATE runtime_instances SET state = 'stopped', updated_at = CURRENT_TIMESTAMP WHERE application_id = ?1 AND state = 'running' AND removed_at IS NULL AND id != ?2", params![target.application_id, target.runtime_id]).map_err(persistence)?;
+    if outcome(transaction.execute("UPDATE runtime_instances SET state = 'running', updated_at = CURRENT_TIMESTAMP WHERE id = ?1 AND state = 'starting' AND removed_at IS NULL", [&target.runtime_id]).map_err(persistence)?) == PersistenceOutcome::Stale { return Ok(PersistenceOutcome::Stale); }
+    if outcome(transaction.execute("UPDATE exposures SET active_runtime_id = ?1, materialization_state = 'active', configuration_version = ?2, last_materialized_at = CURRENT_TIMESTAMP, last_error_code = NULL, last_error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?3 AND desired_visibility = 'public' AND materialization_state = 'applying'", params![target.runtime_id, configuration_version.as_str(), target.application_id]).map_err(persistence)?) == PersistenceOutcome::Stale { return Ok(PersistenceOutcome::Stale); }
+    if mark_succeeded(
+        transaction,
+        &target.deployment_id,
+        DeploymentStatus::Activating,
+    )? == PersistenceOutcome::Stale
+    {
+        return Ok(PersistenceOutcome::Stale);
+    }
+    if outcome(transaction.execute("UPDATE applications SET active_deployment_id = ?1, desired_runtime_state = 'running', updated_at = CURRENT_TIMESTAMP WHERE id = ?2", params![target.deployment_id, target.application_id]).map_err(persistence)?) == PersistenceOutcome::Stale { return Ok(PersistenceOutcome::Stale); }
+    Ok(PersistenceOutcome::Updated)
 }
 
 fn deployment_from_row(row: &Row<'_>) -> rusqlite::Result<Deployment> {
@@ -309,13 +441,13 @@ fn raw_deployment_from_row(row: &Row<'_>) -> rusqlite::Result<RawDeployment> {
 impl RawDeployment {
     fn into_deployment(self) -> Result<Deployment, DeploymentStoreError> {
         let deployment_type =
-            DeploymentType::from_database(&self.deployment_type).ok_or_else(|| {
+            deployment_type_from_value(&self.deployment_type).ok_or_else(|| {
                 DeploymentStoreError::InvalidType {
                     deployment_id: self.id.clone(),
                     deployment_type: self.deployment_type,
                 }
             })?;
-        let status = DeploymentStatus::from_database(&self.status).ok_or_else(|| {
+        let status = deployment_status_from_value(&self.status).ok_or_else(|| {
             DeploymentStoreError::InvalidStatus {
                 deployment_id: self.id.clone(),
                 status: self.status,
@@ -324,7 +456,7 @@ impl RawDeployment {
         let source_revision = self
             .source_revision
             .map(|value| {
-                SourceRevision::from_persisted(&value).map_err(|error| {
+                source_revision_from_value(&value).map_err(|error| {
                     invalid_evidence(&self.id, &format!("invalid source revision: {error}"))
                 })
             })
@@ -388,7 +520,7 @@ fn lifecycle_from_values(
         }
         DeploymentStatus::Failed => match (finished_at, code, stage, message) {
             (Some(finished_at), Some(code), Some(stage), Some(message)) => {
-                let stage = DeploymentStatus::from_database(&stage)
+                let stage = deployment_status_from_value(&stage)
                     .ok_or_else(|| invalid_evidence(id, "failure stage is invalid"))?;
                 let failure = DeploymentFailure::new(&code, stage, &message, finished_at)
                     .map_err(|error| invalid_evidence(id, &error.to_string()))?;
@@ -416,6 +548,92 @@ fn invalid_evidence(deployment_id: &str, reason: &str) -> DeploymentStoreError {
 fn persistence(source: rusqlite::Error) -> DeploymentStoreError {
     DeploymentStoreError::Persistence { source }
 }
+fn outcome(updated: usize) -> PersistenceOutcome {
+    if updated == 1 {
+        PersistenceOutcome::Updated
+    } else {
+        PersistenceOutcome::Stale
+    }
+}
+fn deployment_type_value(value: DeploymentType) -> &'static str {
+    match value {
+        DeploymentType::Deploy => "deploy",
+        DeploymentType::Rollback => "rollback",
+    }
+}
+fn deployment_type_from_value(value: &str) -> Option<DeploymentType> {
+    match value {
+        "deploy" => Some(DeploymentType::Deploy),
+        "rollback" => Some(DeploymentType::Rollback),
+        _ => None,
+    }
+}
+pub(crate) fn deployment_status_value(value: DeploymentStatus) -> &'static str {
+    match value {
+        DeploymentStatus::Pending => "pending",
+        DeploymentStatus::Starting => "starting",
+        DeploymentStatus::Verifying => "verifying",
+        DeploymentStatus::Activating => "activating",
+        DeploymentStatus::Succeeded => "succeeded",
+        DeploymentStatus::Failed => "failed",
+    }
+}
+fn deployment_status_from_value(value: &str) -> Option<DeploymentStatus> {
+    match value {
+        "pending" => Some(DeploymentStatus::Pending),
+        "starting" => Some(DeploymentStatus::Starting),
+        "verifying" => Some(DeploymentStatus::Verifying),
+        "activating" => Some(DeploymentStatus::Activating),
+        "succeeded" => Some(DeploymentStatus::Succeeded),
+        "failed" => Some(DeploymentStatus::Failed),
+        _ => None,
+    }
+}
+fn source_revision_from_value(
+    value: &str,
+) -> Result<SourceRevision, crate::domain::deployment::InvalidSourceRevision> {
+    match SourceRevision::new(value) {
+        Ok(revision) => Ok(revision),
+        Err(_)
+            if !value.is_empty()
+                && value.trim() == value
+                && !value.chars().any(char::is_control) =>
+        {
+            Ok(SourceRevision::Legacy(value.to_owned()))
+        }
+        Err(error) => Err(error),
+    }
+}
+fn runtime_state_from_value(value: &str) -> Option<RuntimeState> {
+    match value {
+        "starting" => Some(RuntimeState::Starting),
+        "running" => Some(RuntimeState::Running),
+        "stopped" => Some(RuntimeState::Stopped),
+        "failed" => Some(RuntimeState::Failed),
+        _ => None,
+    }
+}
+fn observed_runtime_state_from_value(value: &str) -> ObservedRuntimeState {
+    match value {
+        "missing" => ObservedRuntimeState::Missing,
+        "created" => ObservedRuntimeState::Created,
+        "starting" => ObservedRuntimeState::Starting,
+        "running" => ObservedRuntimeState::Running,
+        "stopping" => ObservedRuntimeState::Stopping,
+        "stopped" => ObservedRuntimeState::Stopped,
+        "failed" => ObservedRuntimeState::Failed,
+        status => ObservedRuntimeState::Unknown {
+            status: status.to_owned(),
+        },
+    }
+}
+fn visibility_from_value(value: &str) -> Option<Visibility> {
+    match value {
+        "internal" => Some(Visibility::Internal),
+        "public" => Some(Visibility::Public),
+        _ => None,
+    }
+}
 fn conversion_error(index: usize, error: impl Error + Send + Sync + 'static) -> rusqlite::Error {
     rusqlite::Error::FromSqlConversionFailure(index, rusqlite::types::Type::Text, Box::new(error))
 }
@@ -427,9 +645,12 @@ mod tests {
     use rusqlite::{TransactionBehavior, params};
 
     use crate::adapters::database;
-    use crate::domain::deployment::{DeploymentFailureEvidence, DeploymentLifecycle};
+    use crate::adapters::stores::PersistenceOutcome;
+    use crate::domain::deployment::{
+        DeploymentFailureEvidence, DeploymentLifecycle, DeploymentStatus,
+    };
 
-    use super::{DeploymentStoreError, load_deployment};
+    use super::{DeploymentStoreError, advance_status, load_deployment};
 
     #[test]
     fn hydrates_complete_failed_evidence() {
@@ -501,6 +722,33 @@ mod tests {
 
         assert!(
             matches!(error, DeploymentStoreError::InvalidEvidence { deployment_id, .. } if deployment_id == "deployment")
+        );
+    }
+
+    #[test]
+    fn compare_and_set_reports_updated_then_stale() {
+        let connection = database::open(Path::new(":memory:")).unwrap();
+        seed(&connection, "pending", None, None, None, None, None);
+
+        assert_eq!(
+            advance_status(
+                &connection,
+                "deployment",
+                DeploymentStatus::Pending,
+                DeploymentStatus::Starting,
+            )
+            .unwrap(),
+            PersistenceOutcome::Updated
+        );
+        assert_eq!(
+            advance_status(
+                &connection,
+                "deployment",
+                DeploymentStatus::Pending,
+                DeploymentStatus::Starting,
+            )
+            .unwrap(),
+            PersistenceOutcome::Stale
         );
     }
 

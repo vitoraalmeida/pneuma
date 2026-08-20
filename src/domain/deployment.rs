@@ -147,19 +147,6 @@ impl SourceRevision {
             })
         }
     }
-    pub(crate) fn from_persisted(value: &str) -> Result<Self, InvalidSourceRevision> {
-        match Self::new(value) {
-            Ok(revision) => Ok(revision),
-            Err(_)
-                if !value.is_empty()
-                    && value.trim() == value
-                    && !value.chars().any(char::is_control) =>
-            {
-                Ok(Self::Legacy(value.to_owned()))
-            }
-            Err(error) => Err(error),
-        }
-    }
     pub fn as_str(&self) -> &str {
         match self {
             Self::CommitSha(value) | Self::Legacy(value) => value,
@@ -188,25 +175,6 @@ pub enum DeploymentType {
     Rollback,
 }
 
-impl DeploymentType {
-    // Serializes the closed deployment origin set accepted by persistence.
-    pub(crate) fn database_value(self) -> &'static str {
-        match self {
-            Self::Deploy => "deploy",
-            Self::Rollback => "rollback",
-        }
-    }
-
-    // Rejects persisted deployment origins outside the known domain set.
-    pub(crate) fn from_database(value: &str) -> Option<Self> {
-        match value {
-            "deploy" => Some(Self::Deploy),
-            "rollback" => Some(Self::Rollback),
-            _ => None,
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeploymentStatus {
     Pending,
@@ -217,35 +185,24 @@ pub enum DeploymentStatus {
     Failed,
 }
 
+impl fmt::Display for DeploymentStatus {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Pending => formatter.write_str("pending"),
+            Self::Starting => formatter.write_str("starting"),
+            Self::Verifying => formatter.write_str("verifying"),
+            Self::Activating => formatter.write_str("activating"),
+            Self::Succeeded => formatter.write_str("succeeded"),
+            Self::Failed => formatter.write_str("failed"),
+        }
+    }
+}
+
 impl DeploymentStatus {
     pub fn is_nonterminal(self) -> bool {
         matches!(
             self,
             Self::Pending | Self::Starting | Self::Verifying | Self::Activating
         )
-    }
-    // Serializes the lifecycle state recorded for an activation attempt.
-    pub fn database_value(self) -> &'static str {
-        match self {
-            Self::Pending => "pending",
-            Self::Starting => "starting",
-            Self::Verifying => "verifying",
-            Self::Activating => "activating",
-            Self::Succeeded => "succeeded",
-            Self::Failed => "failed",
-        }
-    }
-
-    // Rejects persisted lifecycle states outside the deployment state machine.
-    pub(crate) fn from_database(value: &str) -> Option<Self> {
-        match value {
-            "pending" => Some(Self::Pending),
-            "starting" => Some(Self::Starting),
-            "verifying" => Some(Self::Verifying),
-            "activating" => Some(Self::Activating),
-            "succeeded" => Some(Self::Succeeded),
-            "failed" => Some(Self::Failed),
-            _ => None,
-        }
     }
 }

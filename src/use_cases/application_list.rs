@@ -25,33 +25,12 @@ impl Error for ListError {
 
 // Reads application summaries in display order without mutating persisted state.
 pub fn list_applications(connection: &Connection) -> Result<Vec<ApplicationSummary>, ListError> {
-    let mut statement = connection
-        .prepare(
-            "SELECT
-                applications.id,
-                applications.system_id,
-                applications.name,
-                applications.desired_runtime_state,
-                applications.active_deployment_id,
-                applications.spec_version,
-                application_sources.repository_url,
-                application_sources.default_branch
-             FROM applications
-             LEFT JOIN application_sources
-                ON application_sources.application_id = applications.id
-             ORDER BY applications.name",
-        )
-        .map_err(|source| ListError { source })?;
-    let rows = statement
-        .query_map([], application_store::map_application_summary_row)
-        .map_err(|source| ListError { source })?;
-
-    let mut applications = Vec::new();
-    for row in rows {
-        applications.push(row.map_err(|source| ListError { source })?);
-    }
-
-    Ok(applications)
+    application_store::list_application_summaries(connection).map_err(|error| match error {
+        application_store::ApplicationStoreError::Persistence { source } => ListError { source },
+        _ => ListError {
+            source: rusqlite::Error::QueryReturnedNoRows,
+        },
+    })
 }
 
 // Looks up the full application record by its operator-facing name.
@@ -73,16 +52,14 @@ pub fn application_is_deployed(
     connection: &Connection,
     application_id: &str,
 ) -> Result<bool, ListError> {
-    connection
-        .query_row(
-            "SELECT EXISTS(
-                SELECT 1
-                FROM deployments
-                WHERE application_id = ?1
-                AND status = 'succeeded'
-            )",
-            [application_id],
-            |row| row.get(0),
-        )
-        .map_err(|source| ListError { source })
+    application_store::application_has_successful_deployment(connection, application_id).map_err(
+        |error| match error {
+            application_store::ApplicationStoreError::Persistence { source } => {
+                ListError { source }
+            }
+            _ => ListError {
+                source: rusqlite::Error::QueryReturnedNoRows,
+            },
+        },
+    )
 }

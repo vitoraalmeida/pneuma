@@ -363,7 +363,7 @@ fn observe_current_runtime(
         &resolved,
     )
     .map_err(|source| RuntimeLifecycleError::Store { source })?;
-    if !reconciled {
+    if reconciled == crate::adapters::stores::PersistenceOutcome::Stale {
         return Err(RuntimeLifecycleError::RuntimeChanged {
             runtime_id: runtime.id.to_string(),
         });
@@ -418,7 +418,7 @@ fn set_desired_state(
         desired_runtime_state,
     )
     .map_err(|source| RuntimeLifecycleError::Store { source })?;
-    if !updated {
+    if updated == crate::adapters::stores::PersistenceOutcome::Stale {
         return Err(RuntimeLifecycleError::RuntimeChanged {
             runtime_id: application_id.to_string(),
         });
@@ -434,7 +434,7 @@ fn persist_observation(
 ) -> Result<(), RuntimeLifecycleError> {
     let updated = runtime_store::persist_observation(connection, runtime.id.as_str(), observation)
         .map_err(|source| RuntimeLifecycleError::Store { source })?;
-    if !updated {
+    if updated == crate::adapters::stores::PersistenceOutcome::Stale {
         return Err(RuntimeLifecycleError::RuntimeChanged {
             runtime_id: runtime.id.to_string(),
         });

@@ -1,12 +1,13 @@
 use std::error::Error;
 use std::fmt;
 
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::Connection;
 
 use crate::adapters::oci_image::{PullImageError, pull_image};
+use crate::adapters::stores::application_store;
+use crate::adapters::stores::deployment_store;
 use crate::domain::deployment::{DeploymentType, SourceRevision};
-use crate::domain::identity::{ApplicationId, ReleaseId};
-use crate::domain::release::{OciArtifact, Release};
+use crate::domain::identity::ApplicationId;
 use crate::use_cases::deployment_execute_release::{
     DeployReleaseError, DeploymentResult, PublicDeploymentConfiguration, deploy_release,
 };
@@ -58,13 +59,15 @@ pub fn rollback_deployment(
     application_id: &ApplicationId,
     public_configuration: Option<&PublicDeploymentConfiguration>,
 ) -> Result<DeploymentResult, RollbackError> {
-    let exists = connection
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM applications WHERE id = ?1)",
-            [application_id.as_str()],
-            |row| row.get::<_, bool>(0),
-        )
-        .map_err(|source| RollbackError::Persistence { source })?;
+    let exists = application_store::application_exists(connection, application_id.as_str())
+        .map_err(|error| match error {
+            application_store::ApplicationStoreError::Persistence { source } => {
+                RollbackError::Persistence { source }
+            }
+            _ => RollbackError::Persistence {
+                source: rusqlite::Error::QueryReturnedNoRows,
+            },
+        })?;
     if !exists {
         return Err(RollbackError::ApplicationNotFound {
             application_id: application_id.to_string(),
@@ -85,69 +88,21 @@ pub fn rollback_deployment(
 }
 
 // Selects the newest succeeded deployment that is not currently active.
-struct RollbackTarget {
-    release: Release,
-    source_revision: Option<SourceRevision>,
-}
+type RollbackTarget = deployment_store::RollbackTarget;
 
 fn previous_release(
     connection: &Connection,
     application_id: &str,
 ) -> Result<RollbackTarget, RollbackError> {
-    connection
-        .query_row(
-            "SELECT r.id, r.application_id, r.image_reference, r.image_repository,
-                    r.image_digest, d.source_revision, r.created_at
-             FROM deployments d
-             JOIN releases r ON r.id = d.release_id
-             LEFT JOIN applications a ON a.active_deployment_id = d.id
-             WHERE d.application_id = ?1
-               AND d.status = 'succeeded'
-               AND a.id IS NULL
-             ORDER BY d.finished_at DESC
-             LIMIT 1",
-            [application_id],
-            |row| {
-                let image_reference = row.get::<_, String>(2)?;
-                let image_repository = row.get::<_, String>(3)?;
-                let image_digest = row.get::<_, String>(4)?;
-                let artifact =
-                    OciArtifact::from_persisted(&image_reference, &image_repository, &image_digest)
-                        .map_err(|source| {
-                            rusqlite::Error::FromSqlConversionFailure(
-                                2,
-                                rusqlite::types::Type::Text,
-                                Box::new(std::io::Error::new(
-                                    std::io::ErrorKind::InvalidData,
-                                    source,
-                                )),
-                            )
-                        })?;
-                let source_revision = row
-                    .get::<_, Option<String>>(5)?
-                    .map(|value| {
-                        SourceRevision::from_persisted(&value).map_err(|error| {
-                            rusqlite::Error::FromSqlConversionFailure(
-                                5,
-                                rusqlite::types::Type::Text,
-                                Box::new(error),
-                            )
-                        })
-                    })
-                    .transpose()?;
-                Ok(RollbackTarget {
-                    release: Release {
-                        id: ReleaseId::from(row.get::<_, String>(0)?),
-                        application_id: ApplicationId::from(row.get::<_, String>(1)?),
-                        artifact,
-                        created_at: row.get(6)?,
-                    },
-                    source_revision,
-                })
+    deployment_store::load_rollback_target(connection, application_id)
+        .map_err(|error| match error {
+            deployment_store::DeploymentStoreError::Persistence { source } => {
+                RollbackError::Persistence { source }
+            }
+            _ => RollbackError::Persistence {
+                source: rusqlite::Error::QueryReturnedNoRows,
             },
-        )
-        .optional()
-        .map_err(|source| RollbackError::Persistence { source })?
+        })?
         .ok_or_else(|| RollbackError::NoPreviousDeployment {
             application_id: application_id.to_owned(),
         })

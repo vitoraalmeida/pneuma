@@ -11,19 +11,11 @@ pub enum Visibility {
     Public,
 }
 
-impl Visibility {
-    pub fn database_value(self) -> &'static str {
+impl fmt::Display for Visibility {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Internal => "internal",
-            Self::Public => "public",
-        }
-    }
-
-    pub(crate) fn from_database(value: &str) -> Option<Self> {
-        match value {
-            "internal" => Some(Self::Internal),
-            "public" => Some(Self::Public),
-            _ => None,
+            Self::Internal => formatter.write_str("internal"),
+            Self::Public => formatter.write_str("public"),
         }
     }
 }
@@ -36,31 +28,6 @@ pub enum ExposureMaterializationState {
     Removing,
     Failed,
     Diverged,
-}
-
-impl ExposureMaterializationState {
-    pub(crate) fn database_value(self) -> &'static str {
-        match self {
-            Self::NotMaterialized => "not_materialized",
-            Self::Applying => "applying",
-            Self::Active => "active",
-            Self::Removing => "removing",
-            Self::Failed => "failed",
-            Self::Diverged => "diverged",
-        }
-    }
-
-    pub(crate) fn from_database(value: &str) -> Option<Self> {
-        match value {
-            "not_materialized" => Some(Self::NotMaterialized),
-            "applying" => Some(Self::Applying),
-            "active" => Some(Self::Active),
-            "removing" => Some(Self::Removing),
-            "failed" => Some(Self::Failed),
-            "diverged" => Some(Self::Diverged),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -273,8 +240,7 @@ impl ExposureMaterialization {
                 })
             }
             (state, _, _) => Err(InvalidExposure::new(&format!(
-                "invalid evidence for {}",
-                state.database_value()
+                "invalid evidence for {state:?}"
             ))),
         }
     }

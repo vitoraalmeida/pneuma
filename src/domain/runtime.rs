@@ -14,48 +14,17 @@ pub enum ObservedRuntimeState {
     Unknown { status: String },
 }
 
-impl ObservedRuntimeState {
-    // Preserves an adapter-reported state string, including unknown future values.
-    pub fn database_value(&self) -> &str {
+impl std::fmt::Display for ObservedRuntimeState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Missing => "missing",
-            Self::Created => "created",
-            Self::Starting => "starting",
-            Self::Running => "running",
-            Self::Stopping => "stopping",
-            Self::Stopped => "stopped",
-            Self::Failed => "failed",
-            Self::Unknown { status } => status,
-        }
-    }
-
-    // Maps persisted observations while retaining unrecognized adapter status text.
-    pub fn from_database(value: &str) -> Self {
-        match value {
-            "missing" => Self::Missing,
-            "created" => Self::Created,
-            "starting" => Self::Starting,
-            "running" => Self::Running,
-            "stopping" => Self::Stopping,
-            "stopped" => Self::Stopped,
-            "failed" => Self::Failed,
-            status => Self::Unknown {
-                status: status.to_owned(),
-            },
-        }
-    }
-
-    // Uses a stable marker for unknown observations while retaining their diagnostic text in memory.
-    pub(crate) fn persisted_value(&self) -> &'static str {
-        match self {
-            Self::Missing => "missing",
-            Self::Created => "created",
-            Self::Starting => "starting",
-            Self::Running => "running",
-            Self::Stopping => "stopping",
-            Self::Stopped => "stopped",
-            Self::Failed => "failed",
-            Self::Unknown { .. } => "unknown",
+            Self::Missing => formatter.write_str("missing"),
+            Self::Created => formatter.write_str("created"),
+            Self::Starting => formatter.write_str("starting"),
+            Self::Running => formatter.write_str("running"),
+            Self::Stopping => formatter.write_str("stopping"),
+            Self::Stopped => formatter.write_str("stopped"),
+            Self::Failed => formatter.write_str("failed"),
+            Self::Unknown { status } => formatter.write_str(status),
         }
     }
 }
@@ -142,6 +111,17 @@ pub enum RuntimeState {
     Failed,
 }
 
+impl std::fmt::Display for RuntimeState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Starting => formatter.write_str("starting"),
+            Self::Running => formatter.write_str("running"),
+            Self::Stopped => formatter.write_str("stopped"),
+            Self::Failed => formatter.write_str("failed"),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 // Records explicit retirement evidence; absence means the runtime remains logically active.
 pub struct RuntimeRetirement {
@@ -184,29 +164,6 @@ pub struct PreviousRuntime {
     pub external_runtime_id: ContainerId,
 }
 
-impl RuntimeState {
-    // Serializes the logical runtime lifecycle state accepted by persistence.
-    pub(crate) fn database_value(self) -> &'static str {
-        match self {
-            Self::Starting => "starting",
-            Self::Running => "running",
-            Self::Stopped => "stopped",
-            Self::Failed => "failed",
-        }
-    }
-
-    // Rejects persisted logical states outside the runtime lifecycle.
-    pub(crate) fn from_database(value: &str) -> Option<Self> {
-        match value {
-            "starting" => Some(Self::Starting),
-            "running" => Some(Self::Running),
-            "stopped" => Some(Self::Stopped),
-            "failed" => Some(Self::Failed),
-            _ => None,
-        }
-    }
-}
-
 fn validate_loopback_endpoint(endpoint: SocketAddr) -> Result<(), RuntimeEndpointError> {
     if endpoint.ip() != IpAddr::V4(Ipv4Addr::LOCALHOST) || endpoint.port() == 0 {
         return Err(RuntimeEndpointError::NotIpv4Loopback { endpoint });
@@ -218,23 +175,4 @@ fn validate_loopback_endpoint(endpoint: SocketAddr) -> Result<(), RuntimeEndpoin
 pub enum DesiredRuntimeState {
     Running,
     Stopped,
-}
-
-impl DesiredRuntimeState {
-    // Rejects persisted runtime intent outside the operator-controlled choices.
-    pub(crate) fn from_database(value: &str) -> Option<Self> {
-        match value {
-            "running" => Some(Self::Running),
-            "stopped" => Some(Self::Stopped),
-            _ => None,
-        }
-    }
-
-    // Serializes the operator's requested runtime intent.
-    pub(crate) fn database_value(self) -> &'static str {
-        match self {
-            Self::Running => "running",
-            Self::Stopped => "stopped",
-        }
-    }
 }

@@ -760,12 +760,7 @@ fn run_deployments(
                     evidence: DeploymentFailureEvidence::Complete(failure),
                 } => (
                     failure.finished_at.as_str(),
-                    format!(
-                        "{}:{}:{}",
-                        failure.code,
-                        failure.stage.database_value(),
-                        failure.message
-                    ),
+                    format!("{}:{}:{}", failure.code, failure.stage, failure.message),
                 ),
                 DeploymentLifecycle::Failed {
                     evidence: DeploymentFailureEvidence::Incomplete,

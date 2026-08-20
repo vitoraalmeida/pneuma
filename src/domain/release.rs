@@ -43,21 +43,6 @@ impl OciArtifact {
         })
     }
 
-    // Revalidates persisted components to detect inconsistent historical rows.
-    pub(crate) fn from_persisted(
-        reference: &str,
-        repository: &str,
-        digest: &str,
-    ) -> Result<Self, InvalidOciArtifact> {
-        let artifact = Self::parse(reference)?;
-        if artifact.repository.as_str() != repository || artifact.digest != digest {
-            return Err(InvalidOciArtifact {
-                reference: reference.to_owned(),
-            });
-        }
-        Ok(artifact)
-    }
-
     // Returns the canonical digest-pinned reference preserved during validation.
     pub fn reference(&self) -> &str {
         &self.reference

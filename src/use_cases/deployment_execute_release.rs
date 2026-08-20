@@ -207,8 +207,7 @@ fn deploy_release_reporting(
         DeploymentStep::LoadSpecification,
         format!(
             "application {}, visibility {}",
-            specification.application_name,
-            specification.visibility.database_value()
+            specification.application_name, specification.visibility
         ),
     );
     if specification.visibility == Visibility::Public && public_configuration.is_none() {

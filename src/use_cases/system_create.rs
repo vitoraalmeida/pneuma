@@ -1,10 +1,9 @@
 use std::error::Error;
 use std::fmt;
 
-use rusqlite::{Connection, params};
+use rusqlite::Connection;
 
-use crate::domain::application::SystemName;
-use crate::domain::identity::SystemId;
+use crate::adapters::stores::system_store;
 use crate::domain::system::System;
 
 #[derive(Debug)]
@@ -40,40 +39,13 @@ pub fn create_system(
         .transaction()
         .map_err(|source| CreateError::Persistence { source })?;
 
-    let system_id = transaction
-        .query_row("SELECT lower(hex(randomblob(16)))", [], |row| {
-            row.get::<_, String>(0)
-        })
-        .map_err(|source| CreateError::Persistence { source })?;
-
-    transaction
-        .execute(
-            "INSERT INTO systems (id, name, description, created_at)
-             VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP)
-             ON CONFLICT(name) DO NOTHING",
-            params![system_id, name, description],
-        )
-        .map_err(|source| CreateError::Persistence { source })?;
-
-    let system = transaction
-        .query_row(
-            "SELECT id, name, description FROM systems WHERE name = ?1",
-            [name],
-            |row| {
-                Ok(System {
-                    id: SystemId::from(row.get::<_, String>(0)?),
-                    name: SystemName::new(&row.get::<_, String>(1)?).map_err(|error| {
-                        rusqlite::Error::FromSqlConversionFailure(
-                            1,
-                            rusqlite::types::Type::Text,
-                            Box::new(error),
-                        )
-                    })?,
-                    description: row.get(2)?,
-                })
-            },
-        )
-        .map_err(|source| CreateError::Persistence { source })?;
+    let system = system_store::create_or_load(&transaction, name, description).map_err(
+        |error| match error {
+            system_store::SystemStoreError::Persistence { source } => {
+                CreateError::Persistence { source }
+            }
+        },
+    )?;
 
     transaction
         .commit()

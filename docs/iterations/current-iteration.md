@@ -66,8 +66,10 @@ without selecting a new Release or making destructive changes from ambiguity.
   Result: Deployment hydration now validates lifecycle evidence, preserves incomplete
   historical failures, exposes typed blockers and history, and uses named execution
   and rollback targets.
-- [ ] Move persisted-value conversion into stores and require explicit stale
+- [x] Move persisted-value conversion into stores and require explicit stale
   outcomes from compare-and-set persistence primitives.
+  Result: stores own SQLite mapping and CAS writes return explicit updated or
+  stale outcomes; promotion, catalog, and rollback use typed store values.
 - [ ] Convert `reconciliation-e2e.md` into an executable reconciliation test
   plan before implementation: assign every scenario to a focused Rust test or
   disposable-VM E2E case, define fixtures, fault injection, persisted-state and

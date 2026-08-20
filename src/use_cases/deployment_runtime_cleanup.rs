@@ -155,11 +155,12 @@ pub(crate) fn retire_previous_runtime(
         );
         return;
     }
-    if let Err(source) =
-        runtime_store::mark_runtime_removed(connection, previous.runtime_id.as_str())
-    {
+    if !matches!(
+        runtime_store::mark_runtime_removed(connection, previous.runtime_id.as_str()),
+        Ok(crate::adapters::stores::PersistenceOutcome::Updated)
+    ) {
         eprintln!(
-            "warning: previous runtime {} was retired but could not be marked removed: {source}",
+            "warning: previous runtime {} was retired but could not be marked removed",
             previous.runtime_id
         );
     }
@@ -200,14 +201,18 @@ pub(crate) fn cleanup_failed_candidate(
             .map_err(|source| CandidateCleanupError::RemoveContainer { source })?;
     }
     if let Some(runtime_id) = runtime_id {
-        runtime_store::mark_starting_runtime_missing(connection, runtime_id).map_err(|source| {
-            CandidateCleanupError::Persistence {
+        let outcome = runtime_store::mark_starting_runtime_missing(connection, runtime_id)
+            .map_err(|source| CandidateCleanupError::Persistence {
                 source: match source {
                     RuntimeStoreError::Persistence { source } => source,
                     _ => rusqlite::Error::QueryReturnedNoRows,
                 },
-            }
-        })?;
+            })?;
+        if outcome == crate::adapters::stores::PersistenceOutcome::Stale {
+            return Err(CandidateCleanupError::Persistence {
+                source: rusqlite::Error::QueryReturnedNoRows,
+            });
+        }
     }
     release_port(connection, deployment_id)
         .map_err(|source| CandidateCleanupError::ReleasePort { source })?;

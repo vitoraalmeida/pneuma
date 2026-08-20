@@ -5,6 +5,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
+use crate::adapters::stores::PersistenceOutcome;
 use crate::domain::identity::{ApplicationId, ContainerId, DeploymentId, RuntimeInstanceId};
 use crate::domain::runtime::{
     ContainerObservation, DesiredRuntimeState, ExpectedRuntimeEndpoint, ObservedRuntimeState,
@@ -90,7 +91,7 @@ pub fn insert_runtime(
                 registration.application_id.as_str(),
                 registration.deployment_id.as_str(),
                 registration.external_runtime_id.as_str(),
-                RuntimeState::Starting.database_value(),
+                runtime_state_value(RuntimeState::Starting),
                 registration.expected_endpoint.socket_addr().ip().to_string(),
                 registration.expected_endpoint.socket_addr().port(),
                 registration.container_port
@@ -142,7 +143,7 @@ pub fn reconcile_external_runtime_id(
     runtime_id: &str,
     expected_external_runtime_id: &str,
     replacement_external_runtime_id: &str,
-) -> Result<bool, RuntimeStoreError> {
+) -> Result<PersistenceOutcome, RuntimeStoreError> {
     let updated = connection
         .execute(
             "UPDATE runtime_instances
@@ -157,7 +158,7 @@ pub fn reconcile_external_runtime_id(
             ],
         )
         .map_err(|source| RuntimeStoreError::Persistence { source })?;
-    Ok(updated == 1)
+    Ok(outcome(updated))
 }
 
 // Records an observed runtime state without reviving a runtime that has been retired.
@@ -165,8 +166,8 @@ pub fn persist_observation(
     connection: &Connection,
     runtime_id: &str,
     observation: &ContainerObservation,
-) -> Result<bool, RuntimeStoreError> {
-    let state = observation.state().persisted_value();
+) -> Result<PersistenceOutcome, RuntimeStoreError> {
+    let state = observed_runtime_state_value(observation.state());
     let updated = connection
         .execute(
             "UPDATE runtime_instances
@@ -177,7 +178,7 @@ pub fn persist_observation(
             params![runtime_id, state],
         )
         .map_err(|source| RuntimeStoreError::Persistence { source })?;
-    Ok(updated == 1)
+    Ok(outcome(updated))
 }
 
 // Loads persisted runtime intent and rejects values outside the domain state set.
@@ -192,11 +193,9 @@ pub fn load_desired_runtime_state(
             |row| row.get::<_, String>(0),
         )
         .map_err(|source| RuntimeStoreError::Persistence { source })?;
-    DesiredRuntimeState::from_database(&value).ok_or_else(|| {
-        RuntimeStoreError::InvalidDesiredState {
-            application_id: application_id.to_owned(),
-            state: value,
-        }
+    desired_runtime_state_from_value(&value).ok_or_else(|| RuntimeStoreError::InvalidDesiredState {
+        application_id: application_id.to_owned(),
+        state: value,
     })
 }
 
@@ -206,27 +205,27 @@ pub fn compare_and_set_desired_runtime_state(
     application_id: &str,
     expected: DesiredRuntimeState,
     desired: DesiredRuntimeState,
-) -> Result<bool, RuntimeStoreError> {
+) -> Result<PersistenceOutcome, RuntimeStoreError> {
     let updated = connection
         .execute(
             "UPDATE applications
              SET desired_runtime_state = ?1, updated_at = CURRENT_TIMESTAMP
              WHERE id = ?2 AND desired_runtime_state = ?3",
             params![
-                desired.database_value(),
+                desired_runtime_state_value(desired),
                 application_id,
-                expected.database_value()
+                desired_runtime_state_value(expected)
             ],
         )
         .map_err(|source| RuntimeStoreError::Persistence { source })?;
-    Ok(updated == 1)
+    Ok(outcome(updated))
 }
 
 // Advances a non-removed candidate from starting to running exactly once.
 pub fn start_runtime(
     transaction: &Transaction<'_>,
     runtime_id: &str,
-) -> Result<bool, RuntimeStoreError> {
+) -> Result<PersistenceOutcome, RuntimeStoreError> {
     let updated = transaction
         .execute(
             "UPDATE runtime_instances
@@ -235,7 +234,7 @@ pub fn start_runtime(
             [runtime_id],
         )
         .map_err(|source| RuntimeStoreError::Persistence { source })?;
-    Ok(updated == 1)
+    Ok(outcome(updated))
 }
 
 // Reads the logical lifecycle state for cleanup and transition decisions.
@@ -303,8 +302,8 @@ pub fn load_runtime_by_external_id(
 pub fn mark_runtime_removed(
     connection: &Connection,
     runtime_id: &str,
-) -> Result<(), RuntimeStoreError> {
-    connection
+) -> Result<PersistenceOutcome, RuntimeStoreError> {
+    let updated = connection
         .execute(
             "UPDATE runtime_instances
               SET state = 'stopped', removed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
@@ -312,15 +311,15 @@ pub fn mark_runtime_removed(
             [runtime_id],
         )
         .map_err(|source| RuntimeStoreError::Persistence { source })?;
-    Ok(())
+    Ok(outcome(updated))
 }
 
 // Records failed candidate creation as missing and explicitly retired while it is still starting.
 pub fn mark_starting_runtime_missing(
     connection: &Connection,
     runtime_id: &str,
-) -> Result<(), RuntimeStoreError> {
-    connection
+) -> Result<PersistenceOutcome, RuntimeStoreError> {
+    let updated = connection
         .execute(
             "UPDATE runtime_instances
               SET state = 'stopped',
@@ -332,7 +331,7 @@ pub fn mark_starting_runtime_missing(
             [runtime_id],
         )
         .map_err(|source| RuntimeStoreError::Persistence { source })?;
-    Ok(())
+    Ok(outcome(updated))
 }
 
 // Resolves the live runtime tied to the Application's active Deployment within a transaction.
@@ -358,8 +357,8 @@ pub fn load_active_runtime_for_application(
 pub fn stop_runtime(
     transaction: &Transaction<'_>,
     runtime_id: &str,
-) -> Result<(), RuntimeStoreError> {
-    transaction
+) -> Result<PersistenceOutcome, RuntimeStoreError> {
+    let updated = transaction
         .execute(
             "UPDATE runtime_instances
              SET state = 'stopped', updated_at = CURRENT_TIMESTAMP
@@ -367,7 +366,7 @@ pub fn stop_runtime(
             [runtime_id],
         )
         .map_err(|source| RuntimeStoreError::Persistence { source })?;
-    Ok(())
+    Ok(outcome(updated))
 }
 
 // Maps persisted runtime identity and enforces the loopback-only endpoint invariant.
@@ -394,7 +393,7 @@ fn map_runtime_instance(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeInst
             ));
         }
         (state_text, None) => (
-            RuntimeState::from_database(state_text)
+            runtime_state_from_value(state_text)
                 .ok_or_else(|| invalid_text_value(4, "runtime state", state_text))?,
             None,
         ),
@@ -417,7 +416,7 @@ fn map_runtime_instance(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeInst
         )))
         .map_err(|error| invalid_text_value(6, "runtime endpoint", &error.to_string()))?,
         container_port: row.get(7)?,
-        observed_state: ObservedRuntimeState::from_database(&observed_state_text),
+        observed_state: observed_runtime_state_from_value(&observed_state_text),
         observed_at: row.get(9)?,
         exit_code: row.get(10)?,
         observation_reason: row.get(11)?,
@@ -435,4 +434,67 @@ fn invalid_text_value(column: usize, field: &str, value: &str) -> rusqlite::Erro
             format!("invalid {field}: {value}"),
         )),
     )
+}
+fn outcome(updated: usize) -> PersistenceOutcome {
+    if updated == 1 {
+        PersistenceOutcome::Updated
+    } else {
+        PersistenceOutcome::Stale
+    }
+}
+fn runtime_state_value(value: RuntimeState) -> &'static str {
+    match value {
+        RuntimeState::Starting => "starting",
+        RuntimeState::Running => "running",
+        RuntimeState::Stopped => "stopped",
+        RuntimeState::Failed => "failed",
+    }
+}
+fn runtime_state_from_value(value: &str) -> Option<RuntimeState> {
+    match value {
+        "starting" => Some(RuntimeState::Starting),
+        "running" => Some(RuntimeState::Running),
+        "stopped" => Some(RuntimeState::Stopped),
+        "failed" => Some(RuntimeState::Failed),
+        _ => None,
+    }
+}
+fn desired_runtime_state_value(value: DesiredRuntimeState) -> &'static str {
+    match value {
+        DesiredRuntimeState::Running => "running",
+        DesiredRuntimeState::Stopped => "stopped",
+    }
+}
+fn desired_runtime_state_from_value(value: &str) -> Option<DesiredRuntimeState> {
+    match value {
+        "running" => Some(DesiredRuntimeState::Running),
+        "stopped" => Some(DesiredRuntimeState::Stopped),
+        _ => None,
+    }
+}
+fn observed_runtime_state_value(value: &ObservedRuntimeState) -> &'static str {
+    match value {
+        ObservedRuntimeState::Missing => "missing",
+        ObservedRuntimeState::Created => "created",
+        ObservedRuntimeState::Starting => "starting",
+        ObservedRuntimeState::Running => "running",
+        ObservedRuntimeState::Stopping => "stopping",
+        ObservedRuntimeState::Stopped => "stopped",
+        ObservedRuntimeState::Failed => "failed",
+        ObservedRuntimeState::Unknown { .. } => "unknown",
+    }
+}
+fn observed_runtime_state_from_value(value: &str) -> ObservedRuntimeState {
+    match value {
+        "missing" => ObservedRuntimeState::Missing,
+        "created" => ObservedRuntimeState::Created,
+        "starting" => ObservedRuntimeState::Starting,
+        "running" => ObservedRuntimeState::Running,
+        "stopping" => ObservedRuntimeState::Stopping,
+        "stopped" => ObservedRuntimeState::Stopped,
+        "failed" => ObservedRuntimeState::Failed,
+        status => ObservedRuntimeState::Unknown {
+            status: status.to_owned(),
+        },
+    }
 }

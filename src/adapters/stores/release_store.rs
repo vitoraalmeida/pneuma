@@ -123,7 +123,7 @@ pub fn load_release_by_digest(
                 let image_repository = row.get::<_, String>(3)?;
                 let image_digest = row.get::<_, String>(4)?;
                 let artifact =
-                    OciArtifact::from_persisted(&image_reference, &image_repository, &image_digest)
+                    artifact_from_values(&image_reference, &image_repository, &image_digest)
                         .map_err(|source| {
                             rusqlite::Error::FromSqlConversionFailure(
                                 2,
@@ -144,6 +144,20 @@ pub fn load_release_by_digest(
         .ok_or_else(|| ReleaseStoreError::NotFound {
             release_id: format!("{application_id}@{image_digest}"),
         })
+}
+
+pub(crate) fn artifact_from_values(
+    reference: &str,
+    repository: &str,
+    digest: &str,
+) -> Result<OciArtifact, crate::domain::release::InvalidOciArtifact> {
+    let artifact = OciArtifact::parse(reference)?;
+    if artifact.repository() != repository || artifact.digest() != digest {
+        return Err(crate::domain::release::InvalidOciArtifact {
+            reference: reference.to_owned(),
+        });
+    }
+    Ok(artifact)
 }
 
 // Checks that a Release belongs to the specified Application before deployment work.

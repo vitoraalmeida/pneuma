@@ -248,7 +248,7 @@ fn begin_change(
         desired_visibility,
     )
     .map_err(|source| ExposureChangeError::Store { source })?;
-    if !updated {
+    if updated == crate::adapters::stores::PersistenceOutcome::Stale {
         return Err(ExposureChangeError::ExposureChanged {
             application_id: application_id.to_owned(),
         });
@@ -385,7 +385,7 @@ fn make_public(
             );
         }
     };
-    if !completed {
+    if completed == crate::adapters::stores::PersistenceOutcome::Stale {
         drop(transaction);
         let recovery_failed =
             restore_materialized_caddy_fragment(&materialized, caddyfile_path).is_err();
@@ -462,7 +462,7 @@ fn make_internal(
             );
         }
     };
-    if !completed {
+    if completed == crate::adapters::stores::PersistenceOutcome::Stale {
         drop(transaction);
         let recovery_failed = restore_removed_caddy_fragment(&removed, caddyfile_path).is_err();
         return fail_internal(
@@ -561,7 +561,7 @@ fn record_failure(
         &diagnostic,
     )
     .map_err(|source| ExposureChangeError::Store { source })?;
-    if !updated {
+    if updated == crate::adapters::stores::PersistenceOutcome::Stale {
         return Err(ExposureChangeError::ExposureChanged {
             application_id: application_id.to_owned(),
         });

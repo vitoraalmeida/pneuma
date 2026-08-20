@@ -109,6 +109,10 @@ impl From<DeploymentStoreError> for RegisterCandidateRuntimeError {
             DeploymentStoreError::NotFound { deployment_id } => {
                 Self::DeploymentNotFound { deployment_id }
             }
+            DeploymentStoreError::Stale { deployment_id } => Self::InvalidDeploymentState {
+                deployment_id,
+                actual: "changed before persistence".to_owned(),
+            },
             DeploymentStoreError::InvalidStatus {
                 deployment_id,
                 status,
@@ -166,7 +170,7 @@ pub fn register_candidate_runtime(
     if deployment.status() != DeploymentStatus::Starting {
         return Err(RegisterCandidateRuntimeError::InvalidDeploymentState {
             deployment_id: deployment_id.to_owned(),
-            actual: deployment.status().database_value().to_owned(),
+            actual: deployment.status().to_string(),
         });
     }
 
