@@ -1,8 +1,8 @@
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use crate::domain::identity::{ApplicationId, ContainerId, DeploymentId, RuntimeInstanceId};
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ObservedRuntimeState {
     Missing,
     Created,
@@ -61,10 +61,77 @@ impl ObservedRuntimeState {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-// Captures one Podman observation and its optional loopback endpoint.
-pub struct ContainerObservation {
-    pub state: ObservedRuntimeState,
-    pub endpoint: Option<SocketAddr>,
+pub enum RuntimeEndpointError {
+    NotIpv4Loopback { endpoint: SocketAddr },
+}
+
+impl std::fmt::Display for RuntimeEndpointError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotIpv4Loopback { endpoint } => write!(
+                formatter,
+                "runtime endpoint must be IPv4 loopback with a nonzero port: {endpoint}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RuntimeEndpointError {}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+// Identifies the loopback endpoint reserved for a logical runtime before external effects.
+pub struct ExpectedRuntimeEndpoint(SocketAddr);
+
+impl ExpectedRuntimeEndpoint {
+    pub fn new(endpoint: SocketAddr) -> Result<Self, RuntimeEndpointError> {
+        validate_loopback_endpoint(endpoint)?;
+        Ok(Self(endpoint))
+    }
+
+    pub fn socket_addr(self) -> SocketAddr {
+        self.0
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+// Captures one Podman observation. Only a confirmed running container carries an endpoint.
+pub enum ContainerObservation {
+    Running { observed_endpoint: SocketAddr },
+    NotRunning { state: ObservedRuntimeState },
+}
+
+impl ContainerObservation {
+    pub fn running(observed_endpoint: SocketAddr) -> Result<Self, RuntimeEndpointError> {
+        validate_loopback_endpoint(observed_endpoint)?;
+        Ok(Self::Running { observed_endpoint })
+    }
+
+    pub fn not_running(state: ObservedRuntimeState) -> Result<Self, ObservedRuntimeState> {
+        if state == ObservedRuntimeState::Running {
+            return Err(state);
+        }
+        Ok(Self::NotRunning { state })
+    }
+
+    pub fn missing() -> Self {
+        Self::NotRunning {
+            state: ObservedRuntimeState::Missing,
+        }
+    }
+
+    pub fn state(&self) -> &ObservedRuntimeState {
+        match self {
+            Self::Running { .. } => &ObservedRuntimeState::Running,
+            Self::NotRunning { state } => state,
+        }
+    }
+
+    pub fn observed_endpoint(&self) -> Option<SocketAddr> {
+        match self {
+            Self::Running { observed_endpoint } => Some(*observed_endpoint),
+            Self::NotRunning { .. } => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,7 +140,12 @@ pub enum RuntimeState {
     Running,
     Stopped,
     Failed,
-    Removed,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+// Records explicit retirement evidence; absence means the runtime remains logically active.
+pub struct RuntimeRetirement {
+    pub removed_at: String,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -84,13 +156,13 @@ pub struct RuntimeInstance {
     pub deployment_id: DeploymentId,
     pub external_runtime_id: ContainerId,
     pub state: RuntimeState,
-    pub endpoint: SocketAddr,
+    pub expected_endpoint: ExpectedRuntimeEndpoint,
     pub container_port: u16,
     pub observed_state: ObservedRuntimeState,
     pub observed_at: String,
     pub exit_code: Option<i32>,
     pub observation_reason: Option<String>,
-    pub removed_at: Option<String>,
+    pub retirement: Option<RuntimeRetirement>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -100,7 +172,7 @@ pub struct RuntimeRegistration {
     pub application_id: ApplicationId,
     pub deployment_id: DeploymentId,
     pub external_runtime_id: ContainerId,
-    pub endpoint: SocketAddr,
+    pub expected_endpoint: ExpectedRuntimeEndpoint,
     pub container_port: u16,
 }
 
@@ -120,7 +192,6 @@ impl RuntimeState {
             Self::Running => "running",
             Self::Stopped => "stopped",
             Self::Failed => "failed",
-            Self::Removed => "removed",
         }
     }
 
@@ -131,10 +202,16 @@ impl RuntimeState {
             "running" => Some(Self::Running),
             "stopped" => Some(Self::Stopped),
             "failed" => Some(Self::Failed),
-            "removed" => Some(Self::Removed),
             _ => None,
         }
     }
+}
+
+fn validate_loopback_endpoint(endpoint: SocketAddr) -> Result<(), RuntimeEndpointError> {
+    if endpoint.ip() != IpAddr::V4(Ipv4Addr::LOCALHOST) || endpoint.port() == 0 {
+        return Err(RuntimeEndpointError::NotIpv4Loopback { endpoint });
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

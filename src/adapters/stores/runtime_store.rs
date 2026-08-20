@@ -7,8 +7,8 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::domain::identity::{ApplicationId, ContainerId, DeploymentId, RuntimeInstanceId};
 use crate::domain::runtime::{
-    ContainerObservation, DesiredRuntimeState, ObservedRuntimeState, PreviousRuntime,
-    RuntimeInstance, RuntimeRegistration, RuntimeState,
+    ContainerObservation, DesiredRuntimeState, ExpectedRuntimeEndpoint, ObservedRuntimeState,
+    PreviousRuntime, RuntimeInstance, RuntimeRegistration, RuntimeRetirement, RuntimeState,
 };
 
 #[derive(Debug)]
@@ -91,8 +91,8 @@ pub fn insert_runtime(
                 registration.deployment_id.as_str(),
                 registration.external_runtime_id.as_str(),
                 RuntimeState::Starting.database_value(),
-                registration.endpoint.ip().to_string(),
-                registration.endpoint.port(),
+                registration.expected_endpoint.socket_addr().ip().to_string(),
+                registration.expected_endpoint.socket_addr().port(),
                 registration.container_port
             ],
         )
@@ -166,28 +166,17 @@ pub fn persist_observation(
     runtime_id: &str,
     observation: &ContainerObservation,
 ) -> Result<bool, RuntimeStoreError> {
-    let state = observation.state.persisted_value();
-    let updated = if let Some(endpoint) = observation.endpoint {
-        connection.execute(
+    let state = observation.state().persisted_value();
+    let updated = connection
+        .execute(
             "UPDATE runtime_instances
-             SET last_observed_state = ?2,
-                 host_port = ?3,
-                 last_observed_at = CURRENT_TIMESTAMP,
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?1 AND removed_at IS NULL",
-            params![runtime_id, state, endpoint.port()],
-        )
-    } else {
-        connection.execute(
-            "UPDATE runtime_instances
-             SET last_observed_state = ?2,
-                 last_observed_at = CURRENT_TIMESTAMP,
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?1 AND removed_at IS NULL",
+         SET last_observed_state = ?2,
+              last_observed_at = CURRENT_TIMESTAMP,
+              updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?1 AND removed_at IS NULL",
             params![runtime_id, state],
         )
-    }
-    .map_err(|source| RuntimeStoreError::Persistence { source })?;
+        .map_err(|source| RuntimeStoreError::Persistence { source })?;
     Ok(updated == 1)
 }
 
@@ -318,7 +307,7 @@ pub fn mark_runtime_removed(
     connection
         .execute(
             "UPDATE runtime_instances
-             SET state = 'removed', removed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+              SET state = 'stopped', removed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
              WHERE id = ?1 AND state = 'stopped' AND removed_at IS NULL",
             [runtime_id],
         )
@@ -326,7 +315,7 @@ pub fn mark_runtime_removed(
     Ok(())
 }
 
-// Records failed candidate creation as missing and removed while it is still starting.
+// Records failed candidate creation as missing and explicitly retired while it is still starting.
 pub fn mark_starting_runtime_missing(
     connection: &Connection,
     runtime_id: &str,
@@ -334,7 +323,8 @@ pub fn mark_starting_runtime_missing(
     connection
         .execute(
             "UPDATE runtime_instances
-             SET last_observed_state = 'missing',
+              SET state = 'stopped',
+                  last_observed_state = 'missing',
                  last_observed_at = CURRENT_TIMESTAMP,
                  removed_at = CURRENT_TIMESTAMP,
                  updated_at = CURRENT_TIMESTAMP
@@ -383,8 +373,32 @@ pub fn stop_runtime(
 // Maps persisted runtime identity and enforces the loopback-only endpoint invariant.
 fn map_runtime_instance(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeInstance> {
     let state_text = row.get::<_, String>(4)?;
-    let state = RuntimeState::from_database(&state_text)
-        .ok_or_else(|| invalid_text_value(4, "runtime state", &state_text))?;
+    let removed_at = row.get::<_, Option<String>>(12)?;
+    let (state, retirement) = match (state_text.as_str(), removed_at) {
+        ("removed", Some(removed_at)) => (
+            RuntimeState::Stopped,
+            Some(RuntimeRetirement { removed_at }),
+        ),
+        ("removed", None) => {
+            return Err(invalid_text_value(
+                4,
+                "retired runtime without removed_at",
+                &state_text,
+            ));
+        }
+        (state_text, Some(removed_at)) => {
+            return Err(invalid_text_value(
+                12,
+                "active runtime with removed_at",
+                &format!("{state_text} ({removed_at})"),
+            ));
+        }
+        (state_text, None) => (
+            RuntimeState::from_database(state_text)
+                .ok_or_else(|| invalid_text_value(4, "runtime state", state_text))?,
+            None,
+        ),
+    };
     let host_address = row.get::<_, String>(5)?;
     if host_address != Ipv4Addr::LOCALHOST.to_string() {
         return Err(invalid_text_value(5, "runtime host address", &host_address));
@@ -397,13 +411,17 @@ fn map_runtime_instance(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeInst
         deployment_id: DeploymentId::from(row.get::<_, String>(2)?),
         external_runtime_id: ContainerId::from(row.get::<_, String>(3)?),
         state,
-        endpoint: SocketAddr::from((Ipv4Addr::LOCALHOST, row.get::<_, u16>(6)?)),
+        expected_endpoint: ExpectedRuntimeEndpoint::new(SocketAddr::from((
+            Ipv4Addr::LOCALHOST,
+            row.get::<_, u16>(6)?,
+        )))
+        .map_err(|error| invalid_text_value(6, "runtime endpoint", &error.to_string()))?,
         container_port: row.get(7)?,
         observed_state: ObservedRuntimeState::from_database(&observed_state_text),
         observed_at: row.get(9)?,
         exit_code: row.get(10)?,
         observation_reason: row.get(11)?,
-        removed_at: row.get(12)?,
+        retirement,
     })
 }
 

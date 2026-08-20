@@ -31,7 +31,7 @@ fn persists_a_running_candidate_linked_to_its_deployment() {
     assert_eq!(runtime.application_id.as_str(), application_id);
     assert_eq!(runtime.deployment_id.as_str(), deployment_id);
     assert_eq!(runtime.external_runtime_id.as_str(), external_runtime_id);
-    assert_eq!(runtime.endpoint, endpoint);
+    assert_eq!(runtime.expected_endpoint.socket_addr(), endpoint);
     assert_eq!(runtime.container_port, 8080);
     assert_eq!(runtime.state, RuntimeState::Starting);
     assert_eq!(runtime.observed_state, ObservedRuntimeState::Running);
@@ -44,6 +44,68 @@ fn persists_a_running_candidate_linked_to_its_deployment() {
         )
         .unwrap();
     assert_eq!(state, "starting");
+}
+
+#[test]
+fn maps_historical_removed_rows_to_explicit_retirement() {
+    let (mut connection, _, deployment_id) = starting_deployment("valid");
+    let runtime = register_candidate_runtime(
+        &mut connection,
+        &deployment_id,
+        &"a".repeat(64),
+        "127.0.0.1:30001".parse().unwrap(),
+        8080,
+    )
+    .unwrap();
+    connection
+        .execute(
+            "UPDATE runtime_instances
+             SET state = 'removed', removed_at = '2026-08-20 12:00:00'
+             WHERE id = ?1",
+            [runtime.id.as_str()],
+        )
+        .unwrap();
+
+    let mapped = pneuma::adapters::stores::runtime_store::load_runtime_by_external_id(
+        &connection,
+        runtime.external_runtime_id.as_str(),
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(mapped.state, RuntimeState::Stopped);
+    assert_eq!(mapped.retirement.unwrap().removed_at, "2026-08-20 12:00:00");
+}
+
+#[test]
+fn rejects_persisted_retirement_without_a_removed_timestamp() {
+    let (mut connection, _, deployment_id) = starting_deployment("valid");
+    let runtime = register_candidate_runtime(
+        &mut connection,
+        &deployment_id,
+        &"a".repeat(64),
+        "127.0.0.1:30001".parse().unwrap(),
+        8080,
+    )
+    .unwrap();
+    connection
+        .execute(
+            "UPDATE runtime_instances SET state = 'removed' WHERE id = ?1",
+            [runtime.id.as_str()],
+        )
+        .unwrap();
+
+    let error = pneuma::adapters::stores::runtime_store::load_runtime_by_external_id(
+        &connection,
+        runtime.external_runtime_id.as_str(),
+    )
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("retired runtime without removed_at")
+    );
 }
 
 #[test]

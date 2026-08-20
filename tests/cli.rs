@@ -824,7 +824,7 @@ fn a_removed_container_guides_a_new_deployment() {
         )
         .unwrap();
     drop(connection);
-    assert_eq!(observed, "stopped");
+    assert_eq!(observed, "missing");
     assert!(
         removed_at.is_none(),
         "removed_at must remain NULL after stop with missing container"
@@ -855,7 +855,7 @@ fn stop_and_start_cycle_after_container_removal_by_quadlet() {
         .unwrap();
     drop(connection);
     assert_eq!(desired, "stopped");
-    assert_eq!(observed, "stopped");
+    assert_eq!(observed, "missing");
     assert!(
         removed_at.is_none(),
         "removed_at must remain NULL after stop with missing container"
@@ -878,7 +878,7 @@ fn stop_and_start_cycle_after_container_removal_by_quadlet() {
 }
 
 #[test]
-fn status_reports_stopped_after_stop_when_container_was_removed() {
+fn status_preserves_missing_after_stop_when_container_was_removed() {
     let environment = DeploymentEnvironment::new();
     assert_command_succeeded(&environment.import());
     environment.deploy_current_revision();
@@ -891,7 +891,7 @@ fn status_reports_stopped_after_stop_when_container_was_removed() {
     assert_command_succeeded(&status);
     let stdout = String::from_utf8_lossy(&status.stdout);
     assert!(stdout.contains("Desired state: Stopped"), "{stdout}");
-    assert!(stdout.contains("Observed state: Stopped"), "{stdout}");
+    assert!(stdout.contains("Observed state: Missing"), "{stdout}");
 
     let connection = database::open(&environment.database_path).unwrap();
     let removed_at: Option<String> = connection
@@ -936,7 +936,7 @@ fn starts_a_verified_oci_image_after_its_container_is_removed() {
 }
 
 #[test]
-fn status_reconciles_a_container_recreated_under_the_stable_name() {
+fn status_does_not_reconcile_a_container_recreated_under_the_stable_name() {
     let mut environment = DeploymentEnvironment::new();
     assert_command_succeeded(&environment.import());
     let reference = format!("registry.example/team/service@sha256:{}", "a".repeat(64));
@@ -960,22 +960,20 @@ fn status_reconciles_a_container_recreated_under_the_stable_name() {
     environment.replacement_container_id = Some(replacement.clone());
 
     let status = environment.run_lifecycle("status");
-    assert_command_succeeded(&status);
-    let stdout = String::from_utf8(status.stdout).unwrap();
-    assert!(stdout.contains(&format!("Container: {replacement}")));
+    assert!(!status.status.success());
     let connection = database::open(&environment.database_path).unwrap();
-    let reconciled: String = connection
+    let persisted: String = connection
         .query_row(
             "SELECT external_runtime_id FROM runtime_instances",
             [],
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(reconciled, replacement);
+    assert_eq!(persisted, recorded);
 }
 
 #[test]
-fn status_reports_runtime_changed_when_external_id_cas_is_lost() {
+fn status_does_not_attempt_external_id_cas() {
     let mut environment = DeploymentEnvironment::new();
     assert_command_succeeded(&environment.import());
     environment.deploy_current_revision();
@@ -1004,15 +1002,11 @@ fn status_reports_runtime_changed_when_external_id_cas_is_lost() {
     let status = environment.run_lifecycle("status");
 
     assert!(!status.status.success());
-    assert!(
-        String::from_utf8_lossy(&status.stderr).contains("changed while it was being controlled"),
-        "unexpected stderr: {}",
-        String::from_utf8_lossy(&status.stderr)
-    );
+    assert!(String::from_utf8_lossy(&status.stderr).contains("is missing"));
 }
 
 #[test]
-fn status_updates_the_running_runtime_endpoint_and_observation_timestamp() {
+fn status_preserves_the_expected_endpoint_and_updates_observation_timestamp() {
     let environment = DeploymentEnvironment::new();
     assert_command_succeeded(&environment.import());
     environment.deploy_current_revision();
@@ -1037,7 +1031,7 @@ fn status_updates_the_running_runtime_endpoint_and_observation_timestamp() {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
-    assert_eq!(host_port, 30000);
+    assert_eq!(host_port, 30001);
     assert_ne!(observed_at, "2000-01-01 00:00:00");
 }
 

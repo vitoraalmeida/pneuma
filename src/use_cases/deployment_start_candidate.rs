@@ -157,22 +157,21 @@ pub(crate) fn start_candidate(
         }
     })?;
 
-    if observation.state != ObservedRuntimeState::Running {
+    if *observation.state() != ObservedRuntimeState::Running {
         return Err(CandidateStartError::ContainerObservation {
             source: Box::new(RuntimeObservationFailure::NotRunning {
-                actual: observation.state,
+                actual: observation.state().clone(),
             }),
             resources: Box::new(resources.clone()),
         });
     }
 
-    let endpoint =
-        observation
-            .endpoint
-            .ok_or_else(|| CandidateStartError::ContainerObservation {
-                source: Box::new(RuntimeObservationFailure::MissingEndpoint),
-                resources: Box::new(resources.clone()),
-            })?;
+    let endpoint = observation.observed_endpoint().ok_or_else(|| {
+        CandidateStartError::ContainerObservation {
+            source: Box::new(RuntimeObservationFailure::MissingEndpoint),
+            resources: Box::new(resources.clone()),
+        }
+    })?;
 
     let runtime = register_candidate_runtime(
         connection,

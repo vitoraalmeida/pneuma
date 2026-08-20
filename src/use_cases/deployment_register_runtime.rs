@@ -8,7 +8,7 @@ use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
 use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
 use crate::domain::deployment::DeploymentStatus;
 use crate::domain::identity::{ContainerId, RuntimeInstanceId};
-use crate::domain::runtime::{RuntimeInstance, RuntimeRegistration};
+use crate::domain::runtime::{ExpectedRuntimeEndpoint, RuntimeInstance, RuntimeRegistration};
 
 #[derive(Debug)]
 pub enum RegisterCandidateRuntimeError {
@@ -148,7 +148,7 @@ pub fn register_candidate_runtime(
         runtime_store::load_runtime_by_external_id(&transaction, external_runtime_id)?
     {
         if existing.deployment_id.as_str() == deployment_id
-            && existing.endpoint == endpoint
+            && existing.expected_endpoint.socket_addr() == endpoint
             && existing.container_port == container_port
         {
             transaction
@@ -181,7 +181,8 @@ pub fn register_candidate_runtime(
         application_id: deployment.application_id,
         deployment_id: deployment.id,
         external_runtime_id: ContainerId::from(external_runtime_id),
-        endpoint,
+        expected_endpoint: ExpectedRuntimeEndpoint::new(endpoint)
+            .map_err(|_| RegisterCandidateRuntimeError::InvalidEndpoint { endpoint })?,
         container_port,
     };
     runtime_store::insert_runtime(&transaction, &registration)?;

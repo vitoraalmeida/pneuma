@@ -362,10 +362,7 @@ pub fn observe_container(
             source,
         })?;
     if exists.status.code() == Some(1) {
-        return Ok(ContainerObservation {
-            state: ObservedRuntimeState::Missing,
-            endpoint: None,
-        });
+        return Ok(ContainerObservation::missing());
     }
     if !exists.status.success() {
         return Err(observation_failure("checking for", container_id, exists));
@@ -388,13 +385,18 @@ pub fn observe_container(
         });
     }
     let state = observed_state(&status);
-    let endpoint = if state == ObservedRuntimeState::Running {
-        Some(observe_endpoint(container_id, container_port)?)
+    if state == ObservedRuntimeState::Running {
+        ContainerObservation::running(observe_endpoint(container_id, container_port)?).map_err(
+            |_| ObserveContainerError::InvalidEndpoint {
+                container_id: container_id.to_owned(),
+                output: "Podman returned a non-loopback endpoint".to_owned(),
+            },
+        )
     } else {
-        None
-    };
-
-    Ok(ContainerObservation { state, endpoint })
+        ContainerObservation::not_running(state).map_err(|_| ObserveContainerError::InvalidState {
+            container_id: container_id.to_owned(),
+        })
+    }
 }
 
 // Executes a lifecycle command after validating the external container ID used as its target.

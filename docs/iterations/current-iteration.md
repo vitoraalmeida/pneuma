@@ -52,8 +52,11 @@ without selecting a new Release or making destructive changes from ambiguity.
   including shared repository identity and cohesive source representation.
   Result: validated specification values and cohesive sources now reject invalid
   input and persisted malformed text maps to contextual store errors.
-- [ ] Separate expected runtime identity from external observation, preserve
+- [x] Separate expected runtime identity from external observation, preserve
   `Missing`, and model retirement explicitly.
+  Result: expected loopback endpoints remain reserved identity, observations
+  preserve Missing and drift, status is read-only for container identity, and
+  retirement derives from explicit removal evidence.
 - [ ] Make Exposure intent, confirmed route evidence, and diagnostics valid by
   construction while retaining compensation-relevant evidence.
 - [ ] Add Deployment lifecycle evidence and replace scalar or tuple operation

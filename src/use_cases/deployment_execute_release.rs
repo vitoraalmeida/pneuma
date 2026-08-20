@@ -396,7 +396,10 @@ fn execute_deployment(
     );
     progress.completed(
         DeploymentStep::ObserveContainer,
-        format!("state Running, endpoint {}", candidate.runtime.endpoint),
+        format!(
+            "state Running, expected endpoint {}",
+            candidate.runtime.expected_endpoint.socket_addr()
+        ),
     );
     progress.completed(
         DeploymentStep::RegisterCandidate,

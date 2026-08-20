@@ -291,11 +291,8 @@ fn make_public(
             }
         };
     let endpoint = match observation {
-        ContainerObservation {
-            state: ObservedRuntimeState::Running,
-            endpoint: Some(endpoint),
-        } => endpoint,
-        ContainerObservation { state, .. } => {
+        ContainerObservation::Running { observed_endpoint } => observed_endpoint,
+        ContainerObservation::NotRunning { state } => {
             return fail_public(
                 connection,
                 application_id,

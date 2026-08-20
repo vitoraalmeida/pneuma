@@ -4,6 +4,9 @@ use pneuma::domain::application::{
 };
 use pneuma::domain::exposure::DomainName;
 use pneuma::domain::release::{OciArtifact, OciRepository};
+use pneuma::domain::runtime::{
+    ContainerObservation, ExpectedRuntimeEndpoint, ObservedRuntimeState,
+};
 
 #[test]
 fn validates_application_specification_value_objects() {
@@ -22,6 +25,21 @@ fn validates_application_specification_value_objects() {
         ),
     );
     assert_eq!(runtime.container_port().get(), 8080);
+}
+
+#[test]
+fn runtime_observations_require_a_running_loopback_endpoint() {
+    let endpoint = "127.0.0.1:30000".parse().unwrap();
+    assert!(ExpectedRuntimeEndpoint::new(endpoint).is_ok());
+    assert!(ExpectedRuntimeEndpoint::new("0.0.0.0:30000".parse().unwrap()).is_err());
+    assert!(ContainerObservation::running(endpoint).is_ok());
+    assert!(ContainerObservation::running("127.0.0.1:0".parse().unwrap()).is_err());
+    assert!(ContainerObservation::not_running(ObservedRuntimeState::Running).is_err());
+    assert_eq!(
+        ContainerObservation::missing().observed_endpoint(),
+        None,
+        "missing observations cannot carry endpoints"
+    );
 }
 
 #[test]

@@ -214,18 +214,16 @@ fn main() {
 
     assert_eq!(
         observe_container(&container.id, 8080).unwrap(),
-        pneuma::domain::runtime::ContainerObservation {
-            state: ObservedRuntimeState::Created,
-            endpoint: None,
-        }
+        pneuma::domain::runtime::ContainerObservation::not_running(ObservedRuntimeState::Created,)
+            .unwrap()
     );
 
     start_container(&container.id).unwrap();
     start_container(&container.id).unwrap();
     let running = observe_container(&container.id, 8080).unwrap();
-    assert_eq!(running.state, ObservedRuntimeState::Running);
+    assert_eq!(running.state(), &ObservedRuntimeState::Running);
     let endpoint = running
-        .endpoint
+        .observed_endpoint()
         .expect("running container needs an endpoint");
     assert!(endpoint.ip().is_loopback());
     assert_ne!(endpoint.port(), 0);
@@ -241,20 +239,15 @@ fn main() {
     stop_container(&container.id).unwrap();
     assert_eq!(
         observe_container(&container.id, 8080).unwrap(),
-        pneuma::domain::runtime::ContainerObservation {
-            state: ObservedRuntimeState::Stopped,
-            endpoint: None,
-        }
+        pneuma::domain::runtime::ContainerObservation::not_running(ObservedRuntimeState::Stopped,)
+            .unwrap()
     );
 
     let container_id = container.id.clone();
     container.remove();
     assert_eq!(
         observe_container(&container_id, 8080).unwrap(),
-        pneuma::domain::runtime::ContainerObservation {
-            state: ObservedRuntimeState::Missing,
-            endpoint: None,
-        }
+        pneuma::domain::runtime::ContainerObservation::missing()
     );
     let error = start_container(&container_id).unwrap_err();
     assert!(matches!(
