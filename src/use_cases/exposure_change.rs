@@ -178,7 +178,7 @@ pub fn change_exposure(
         return Ok(ExposureChange {
             application_id: application_id.to_owned(),
             visibility,
-            domain: exposure.domain,
+            domain: exposure.domain.map(|domain| domain.to_string()),
         });
     }
     if visibility == Visibility::Public && exposure.domain.is_none() {
@@ -204,7 +204,7 @@ pub fn change_exposure(
         Visibility::Internal => make_internal(
             connection,
             application_id,
-            exposure.domain,
+            exposure.domain.map(|domain| domain.to_string()),
             managed_directory,
             caddyfile_path,
         ),
@@ -310,7 +310,7 @@ fn make_public(
         managed_directory,
         caddyfile_path,
         application_id,
-        &domain,
+        domain.as_str(),
         endpoint,
     ) {
         Ok(materialized) => materialized,
@@ -327,7 +327,7 @@ fn make_public(
             );
         }
     };
-    if let Err(source) = check_external_health(&domain, "/", 200) {
+    if let Err(source) = check_external_health(domain.as_str(), "/", 200) {
         let recovery_failed =
             restore_materialized_caddy_fragment(&materialized, caddyfile_path).is_err();
         let message = source.to_string();
@@ -340,7 +340,7 @@ fn make_public(
             ExposureChangeError::ExternalHealthFailed { source },
         );
     }
-    let configuration_version = canonical_fragment_contents(&domain, endpoint);
+    let configuration_version = canonical_fragment_contents(domain.as_str(), endpoint);
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|source| ExposureChangeError::Persistence { source })?;
@@ -396,7 +396,7 @@ fn make_public(
     Ok(ExposureChange {
         application_id: application_id.to_owned(),
         visibility: Visibility::Public,
-        domain: Some(domain),
+        domain: Some(domain.to_string()),
     })
 }
 

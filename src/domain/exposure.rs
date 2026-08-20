@@ -1,4 +1,6 @@
 use serde::Deserialize;
+use std::error::Error;
+use std::fmt;
 
 use crate::domain::identity::{ApplicationId, RuntimeInstanceId};
 
@@ -70,7 +72,7 @@ impl ExposureMaterializationState {
 pub struct Exposure {
     pub application_id: ApplicationId,
     pub desired_visibility: Visibility,
-    pub domain: Option<String>,
+    pub domain: Option<DomainName>,
     pub active_runtime_id: Option<RuntimeInstanceId>,
     pub materialization_state: ExposureMaterializationState,
     pub configuration_version: Option<String>,
@@ -78,6 +80,40 @@ pub struct Exposure {
     pub last_error_code: Option<String>,
     pub last_error_message: Option<String>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DomainName(String);
+
+impl DomainName {
+    pub fn new(value: &str) -> Result<Self, InvalidDomainName> {
+        if !is_valid_domain(value) {
+            return Err(InvalidDomainName {
+                value: value.to_owned(),
+            });
+        }
+        Ok(Self(value.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for DomainName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+#[derive(Debug, PartialEq, Eq)]
+pub struct InvalidDomainName {
+    pub value: String,
+}
+impl fmt::Display for InvalidDomainName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "invalid domain name `{}`", self.value)
+    }
+}
+impl Error for InvalidDomainName {}
 
 // Validates an ASCII DNS name within whole-domain and per-label limits.
 pub(crate) fn is_valid_domain(domain: &str) -> bool {

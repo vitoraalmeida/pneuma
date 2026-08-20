@@ -5,12 +5,14 @@ use std::io;
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 
 use crate::domain::application::{
-    Application, ApplicationDeploymentSpecification, ApplicationSource, ApplicationSummary,
-    HealthCheckSpecification, RepositoryKind, RuntimeSpecification,
+    Application, ApplicationDeploymentSpecification, ApplicationName, ApplicationSource,
+    ApplicationSummary, ContainerPort, HealthCheckPath, HealthCheckSpecification,
+    HealthCheckStatus, RelativeManifestPath, RepositoryKind, RuntimeSpecification,
 };
 use crate::domain::delivery::{DeliverySpecification, DeliveryType};
-use crate::domain::exposure::{Exposure, ExposureMaterializationState, Visibility};
+use crate::domain::exposure::{DomainName, Exposure, ExposureMaterializationState, Visibility};
 use crate::domain::identity::{ApplicationId, DeploymentId, RuntimeInstanceId, SystemId};
+use crate::domain::release::OciRepository;
 use crate::domain::runtime::DesiredRuntimeState;
 
 #[derive(Debug)]
@@ -186,7 +188,8 @@ pub(crate) fn map_application_row(row: &Row<'_>) -> rusqlite::Result<Application
     Ok(Application {
         id: ApplicationId::from(row.get::<_, String>(0)?),
         system_id: row.get::<_, Option<String>>(1)?.map(SystemId::from),
-        name: row.get(2)?,
+        name: ApplicationName::new(&row.get::<_, String>(2)?)
+            .map_err(|error| invalid_text_value(2, "application name", &error.value))?,
         desired_runtime_state,
         active_deployment_id: row.get::<_, Option<String>>(4)?.map(DeploymentId::from),
         specification_version: row.get(5)?,
@@ -230,7 +233,7 @@ pub fn insert_delivery_spec(
     transaction: &Transaction<'_>,
     application_id: &str,
     delivery_type: DeliveryType,
-    image_repository: &str,
+    image_repository: &OciRepository,
 ) -> Result<(), ApplicationStoreError> {
     transaction
         .execute(
@@ -241,7 +244,7 @@ pub fn insert_delivery_spec(
             params![
                 application_id,
                 delivery_type.database_value(),
-                image_repository
+                image_repository.as_str()
             ],
         )
         .map_err(|source| ApplicationStoreError::Persistence { source })?;
@@ -252,10 +255,7 @@ pub fn insert_delivery_spec(
 pub fn insert_source_spec(
     transaction: &Transaction<'_>,
     application_id: &str,
-    repository_url: &str,
-    repository_kind: RepositoryKind,
-    default_branch: Option<&str>,
-    manifest_path: &str,
+    source: &ApplicationSource,
 ) -> Result<(), ApplicationStoreError> {
     transaction
         .execute(
@@ -265,10 +265,10 @@ pub fn insert_source_spec(
             ) VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
             params![
                 application_id,
-                repository_url,
-                repository_kind.database_value(),
-                default_branch,
-                manifest_path
+                source.repository_location(),
+                source.repository_kind().database_value(),
+                source.default_branch(),
+                source.manifest_path().as_str()
             ],
         )
         .map_err(|source| ApplicationStoreError::Persistence { source })?;
@@ -279,14 +279,14 @@ pub fn insert_source_spec(
 pub fn insert_runtime_spec(
     transaction: &Transaction<'_>,
     application_id: &str,
-    container_port: u16,
+    container_port: ContainerPort,
 ) -> Result<(), ApplicationStoreError> {
     transaction
         .execute(
             "INSERT INTO application_runtime_specs (
                 application_id, container_port, created_at, updated_at
             ) VALUES (?1, ?2, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-            params![application_id, i64::from(container_port)],
+            params![application_id, i64::from(container_port.get())],
         )
         .map_err(|source| ApplicationStoreError::Persistence { source })?;
     Ok(())
@@ -296,15 +296,19 @@ pub fn insert_runtime_spec(
 pub fn insert_health_check_spec(
     transaction: &Transaction<'_>,
     application_id: &str,
-    path: &str,
-    expected_status: u16,
+    path: &HealthCheckPath,
+    expected_status: HealthCheckStatus,
 ) -> Result<(), ApplicationStoreError> {
     transaction
         .execute(
             "INSERT INTO health_check_specs (
                 application_id, path, expected_status, created_at, updated_at
             ) VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-            params![application_id, path, i64::from(expected_status)],
+            params![
+                application_id,
+                path.as_str(),
+                i64::from(expected_status.get())
+            ],
         )
         .map_err(|source| ApplicationStoreError::Persistence { source })?;
     Ok(())
@@ -315,7 +319,7 @@ pub fn insert_exposure(
     transaction: &Transaction<'_>,
     application_id: &str,
     visibility: Visibility,
-    domain: Option<&str>,
+    domain: Option<&DomainName>,
 ) -> Result<(), ApplicationStoreError> {
     transaction
         .execute(
@@ -323,7 +327,11 @@ pub fn insert_exposure(
                 application_id, desired_visibility, domain,
                 created_at, updated_at
             ) VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-            params![application_id, visibility.database_value(), domain],
+            params![
+                application_id,
+                visibility.database_value(),
+                domain.map(DomainName::as_str)
+            ],
         )
         .map_err(|source| ApplicationStoreError::Persistence { source })?;
     Ok(())
@@ -384,10 +392,15 @@ pub fn load_delivery_specification(
             source: invalid_text_value(0, "delivery type", &delivery_type),
         }
     })?;
-    Ok(Some(DeliverySpecification {
+    let image_repository = OciRepository::new(&image_repository).map_err(|error| {
+        ApplicationStoreError::Persistence {
+            source: invalid_text_value(1, "OCI repository", &error.repository),
+        }
+    })?;
+    Ok(Some(DeliverySpecification::new(
         delivery_type,
         image_repository,
-    }))
+    )))
 }
 
 // Loads source configuration and rejects unknown persisted repository kinds.
@@ -419,12 +432,21 @@ pub fn load_source(
             source: invalid_text_value(1, "repository kind", &repository_kind),
         }
     })?;
-    Ok(Some(ApplicationSource {
-        repository_url,
+    let manifest_path = RelativeManifestPath::new(&manifest_path).map_err(|error| {
+        ApplicationStoreError::Persistence {
+            source: invalid_text_value(3, "manifest path", &error.path),
+        }
+    })?;
+    ApplicationSource::new(
         repository_kind,
+        &repository_url,
         default_branch,
         manifest_path,
-    }))
+    )
+    .map(Some)
+    .map_err(|_| ApplicationStoreError::Persistence {
+        source: invalid_text_value(0, "repository location", &repository_url),
+    })
 }
 
 // Loads visibility intent and confirmed route state, rejecting invalid persisted enum values.
@@ -478,6 +500,13 @@ pub fn load_exposure(
             application_id: application_id.to_owned(),
             state: materialization_state,
         })?;
+    let domain = domain
+        .map(|domain| {
+            DomainName::new(&domain).map_err(|error| ExposureStoreError::Persistence {
+                source: invalid_text_value(1, "domain", &error.value),
+            })
+        })
+        .transpose()?;
     Ok(Some(Exposure {
         application_id: ApplicationId::from(application_id),
         desired_visibility: visibility,
@@ -648,14 +677,34 @@ pub fn load_deployment_specification(
     })?;
     Ok(Some(ApplicationDeploymentSpecification {
         application_id: ApplicationId::from(application_id),
-        application_name,
-        runtime: RuntimeSpecification {
-            container_port,
-            health_check: HealthCheckSpecification {
-                path,
-                expected_status,
-            },
-        },
+        application_name: ApplicationName::new(&application_name).map_err(|error| {
+            ApplicationStoreError::Persistence {
+                source: invalid_text_value(1, "application name", &error.value),
+            }
+        })?,
+        runtime: RuntimeSpecification::new(
+            ContainerPort::new(container_port).map_err(|error| {
+                ApplicationStoreError::Persistence {
+                    source: invalid_text_value(2, "container port", &error.value.to_string()),
+                }
+            })?,
+            HealthCheckSpecification::new(
+                HealthCheckPath::new(&path).map_err(|error| {
+                    ApplicationStoreError::Persistence {
+                        source: invalid_text_value(3, "health check path", &error.value),
+                    }
+                })?,
+                HealthCheckStatus::new(expected_status).map_err(|error| {
+                    ApplicationStoreError::Persistence {
+                        source: invalid_text_value(
+                            4,
+                            "health check status",
+                            &error.value.to_string(),
+                        ),
+                    }
+                })?,
+            ),
+        ),
         visibility,
     }))
 }

@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use pneuma::domain::delivery::DeliveryType;
 use pneuma::domain::exposure::Visibility;
-use pneuma::domain::manifest::{ManifestError, load_manifest, parse_manifest};
+use pneuma::domain::manifest::{ManifestError, load_manifest, load_manifest_at, parse_manifest};
 
 const VALID_MANIFEST: &str = include_str!("fixtures/valid/pneuma.toml");
 
@@ -36,6 +36,18 @@ fn reports_a_missing_manifest_with_its_path() {
 
     assert!(matches!(error, ManifestError::Read { .. }));
     assert!(error.to_string().contains("missing/pneuma.toml"));
+}
+
+#[test]
+fn rejects_manifest_paths_outside_the_checkout() {
+    let error = load_manifest_at(&fixture_path("valid"), "../pneuma.toml").unwrap_err();
+    assert!(matches!(
+        error,
+        ManifestError::InvalidField {
+            field: "manifest_path",
+            ..
+        }
+    ));
 }
 
 #[test]

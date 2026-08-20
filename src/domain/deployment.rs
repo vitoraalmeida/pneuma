@@ -1,4 +1,6 @@
 use crate::domain::identity::{ApplicationId, DeploymentId, ReleaseId};
+use std::error::Error;
+use std::fmt;
 
 #[derive(Debug, PartialEq, Eq)]
 // Records one immutable attempt to activate a Release for an Application.
@@ -8,9 +10,65 @@ pub struct Deployment {
     pub release_id: ReleaseId,
     pub deployment_type: DeploymentType,
     pub status: DeploymentStatus,
-    pub source_revision: Option<String>,
+    pub source_revision: Option<SourceRevision>,
     pub requested_at: String,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+// Preserves readable historical revisions while requiring new revisions to be full commit SHAs.
+pub enum SourceRevision {
+    CommitSha(String),
+    Legacy(String),
+}
+
+impl SourceRevision {
+    pub fn new(value: &str) -> Result<Self, InvalidSourceRevision> {
+        if value.len() == 40
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        {
+            Ok(Self::CommitSha(value.to_owned()))
+        } else {
+            Err(InvalidSourceRevision {
+                value: value.to_owned(),
+            })
+        }
+    }
+    pub(crate) fn from_persisted(value: &str) -> Result<Self, InvalidSourceRevision> {
+        match Self::new(value) {
+            Ok(revision) => Ok(revision),
+            Err(_)
+                if !value.is_empty()
+                    && value.trim() == value
+                    && !value.chars().any(char::is_control) =>
+            {
+                Ok(Self::Legacy(value.to_owned()))
+            }
+            Err(error) => Err(error),
+        }
+    }
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::CommitSha(value) | Self::Legacy(value) => value,
+        }
+    }
+}
+impl fmt::Display for SourceRevision {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+#[derive(Debug, PartialEq, Eq)]
+pub struct InvalidSourceRevision {
+    pub value: String,
+}
+impl fmt::Display for InvalidSourceRevision {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "invalid source revision `{}`", self.value)
+    }
+}
+impl Error for InvalidSourceRevision {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeploymentType {

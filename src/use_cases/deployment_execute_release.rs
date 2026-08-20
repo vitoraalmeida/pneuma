@@ -6,6 +6,7 @@ use rusqlite::Connection;
 
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::domain::application::ApplicationDeploymentSpecification;
+use crate::domain::deployment::SourceRevision;
 use crate::domain::deployment::{DeploymentStatus, DeploymentType};
 use crate::domain::exposure::Visibility;
 use crate::domain::identity::ApplicationId;
@@ -61,6 +62,9 @@ pub enum DeployReleaseError {
     CreateDeployment {
         source: CreateDeploymentError,
     },
+    InvalidSourceRevision {
+        value: String,
+    },
     DeploymentFailed {
         deployment_id: String,
         code: &'static str,
@@ -95,6 +99,9 @@ impl fmt::Display for DeployReleaseError {
                 )
             }
             Self::CreateDeployment { source } => write!(formatter, "{source}"),
+            Self::InvalidSourceRevision { value } => {
+                write!(formatter, "invalid source revision `{value}`")
+            }
             Self::DeploymentFailed {
                 deployment_id,
                 code,
@@ -131,7 +138,9 @@ impl Error for DeployReleaseError {
             Self::DeploymentFailed { source, .. } => Some(source.as_ref()),
             Self::RecordFailure { source, .. } => Some(source),
             Self::Cleanup { source, .. } => Some(source.as_ref()),
-            Self::ApplicationNotFound { .. } | Self::PublicApplication { .. } => None,
+            Self::ApplicationNotFound { .. }
+            | Self::PublicApplication { .. }
+            | Self::InvalidSourceRevision { .. } => None,
         }
     }
 }
@@ -213,12 +222,16 @@ fn deploy_release_reporting(
         DeploymentStep::CreateDeployment,
         format!("release {}", release.id),
     );
+    let source_revision = source_revision
+        .map(SourceRevision::new)
+        .transpose()
+        .map_err(|error| DeployReleaseError::InvalidSourceRevision { value: error.value })?;
     let deployment = create_deployment_with_source_revision(
         connection,
         application_id,
         &release.id,
         deployment_type,
-        source_revision,
+        source_revision.as_ref(),
     )
     .map_err(|source| DeployReleaseError::CreateDeployment { source })?;
     progress.completed(
@@ -242,7 +255,7 @@ fn deploy_release_reporting(
             runtime_id,
             container_name,
             image_reference: release.artifact.reference().to_owned(),
-            source_revision: deployment.source_revision,
+            source_revision: deployment.source_revision.map(|value| value.to_string()),
             finished_at,
         }),
         Err(failed) => {
@@ -310,9 +323,9 @@ fn execute_deployment(
         connection,
         deployment_id,
         application_id: specification.application_id.as_str(),
-        application_name: &specification.application_name,
+        application_name: specification.application_name.as_str(),
         image_reference,
-        container_port: specification.runtime.container_port,
+        container_port: specification.runtime.container_port().get(),
         artifact_identity,
     };
 
@@ -422,8 +435,8 @@ fn execute_deployment(
             connection,
             runtime: &candidate.runtime,
             application_id: specification.application_id.as_str(),
-            health_path: &specification.runtime.health_check.path,
-            expected_status: specification.runtime.health_check.expected_status,
+            health_path: specification.runtime.health_check().path().as_str(),
+            expected_status: specification.runtime.health_check().expected_status().get(),
             managed_caddy_directory: &public_configuration.managed_caddy_directory,
             caddyfile_path: &public_configuration.caddyfile_path,
         };
@@ -482,7 +495,7 @@ fn execute_deployment(
         if completed.is_ok() {
             retire_previous_runtime(
                 connection,
-                &specification.application_name,
+                specification.application_name.as_str(),
                 previous_runtime.as_ref(),
             );
         }
@@ -500,15 +513,15 @@ fn execute_deployment(
         format!(
             "runtime {}, path {}, expected status {}",
             candidate.runtime.id,
-            specification.runtime.health_check.path,
-            specification.runtime.health_check.expected_status
+            specification.runtime.health_check().path().as_str(),
+            specification.runtime.health_check().expected_status().get()
         ),
     );
     let promoted = promote_internal_candidate(
         connection,
         candidate.runtime.id.as_str(),
-        &specification.runtime.health_check.path,
-        specification.runtime.health_check.expected_status,
+        specification.runtime.health_check().path().as_str(),
+        specification.runtime.health_check().expected_status().get(),
     )
     .map_err(|source| {
         let mut failed = if matches!(
@@ -539,7 +552,7 @@ fn execute_deployment(
     progress.state_changed(deployment_id, DeploymentStatus::Succeeded);
     retire_previous_runtime(
         connection,
-        &specification.application_name,
+        specification.application_name.as_str(),
         previous_runtime.as_ref(),
     );
 

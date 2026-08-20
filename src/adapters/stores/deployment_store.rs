@@ -3,7 +3,7 @@ use std::fmt;
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
-use crate::domain::deployment::{Deployment, DeploymentStatus, DeploymentType};
+use crate::domain::deployment::{Deployment, DeploymentStatus, DeploymentType, SourceRevision};
 use crate::domain::identity::{ApplicationId, DeploymentId, ReleaseId};
 
 #[derive(Debug)]
@@ -115,7 +115,7 @@ pub fn insert_pending_deployment(
     application_id: &str,
     release_id: &str,
     deployment_type: DeploymentType,
-    source_revision: Option<&str>,
+    source_revision: Option<&SourceRevision>,
 ) -> Result<(), DeploymentStoreError> {
     transaction
         .execute(
@@ -127,7 +127,7 @@ pub fn insert_pending_deployment(
                 application_id,
                 release_id,
                 deployment_type.database_value(),
-                source_revision
+                source_revision.map(SourceRevision::as_str)
             ],
         )
         .map_err(|source| DeploymentStoreError::Persistence { source })?;
@@ -180,7 +180,19 @@ pub fn load_deployment(
         release_id: ReleaseId::from(release_id),
         deployment_type,
         status,
-        source_revision,
+        source_revision: source_revision
+            .map(|value| {
+                SourceRevision::from_persisted(&value).map_err(|error| {
+                    DeploymentStoreError::Persistence {
+                        source: rusqlite::Error::FromSqlConversionFailure(
+                            5,
+                            rusqlite::types::Type::Text,
+                            Box::new(error),
+                        ),
+                    }
+                })
+            })
+            .transpose()?,
         requested_at,
     })
 }

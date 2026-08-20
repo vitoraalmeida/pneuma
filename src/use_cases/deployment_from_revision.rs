@@ -81,14 +81,14 @@ pub fn deploy_branch(
 
     let branch = match branch {
         Some(branch) => branch.to_owned(),
-        None => source
-            .default_branch
-            .ok_or_else(|| DeployBranchError::NoDefaultBranch {
+        None => source.default_branch().map(str::to_owned).ok_or_else(|| {
+            DeployBranchError::NoDefaultBranch {
                 application_id: application_id.to_string(),
-            })?,
+            }
+        })?,
     };
 
-    let commit_sha: CommitSha = resolve_branch(&source.repository_url, &branch)
+    let commit_sha: CommitSha = resolve_branch(source.repository_location(), &branch)
         .map_err(|source| DeployBranchError::ResolveBranch { source })?;
 
     let delivery =
@@ -98,7 +98,7 @@ pub fn deploy_branch(
                 application_id: application_id.to_string(),
             })?;
 
-    let reference = resolve_image_digest(&delivery.image_repository, &commit_sha)
+    let reference = resolve_image_digest(delivery.image_repository().as_str(), &commit_sha)
         .map_err(|source| DeployBranchError::ResolveImageDigest { source })?;
 
     deploy_oci(

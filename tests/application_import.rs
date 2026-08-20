@@ -18,7 +18,7 @@ fn imports_and_persists_the_application_specification() {
     )
     .unwrap();
 
-    assert_eq!(application.name, "personal-site");
+    assert_eq!(application.name.as_str(), "personal-site");
     assert_eq!(
         application.repository.as_deref(),
         Some("https://github.com/vitoraalmeida/vitoralmeida.tech")

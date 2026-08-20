@@ -95,10 +95,10 @@ pub fn deploy_oci(
             application_id: application_id.to_string(),
         });
     };
-    if artifact.repository() != delivery.image_repository {
+    if artifact.repository() != delivery.image_repository().as_str() {
         return Err(DeployOciError::RepositoryMismatch {
             application_id: application_id.to_string(),
-            allowed: delivery.image_repository,
+            allowed: delivery.image_repository().as_str().to_owned(),
             actual: artifact.repository().to_owned(),
         });
     }

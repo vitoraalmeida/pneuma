@@ -775,12 +775,14 @@ fn run_status(
         verbose,
         format!("report status of application {}", application.name),
     );
-    let observation =
-        report_application_status(connection, application.id.as_str(), &application.name).map_err(
-            |source| CliError::ApplicationRuntime {
-                source: Box::new(source),
-            },
-        )?;
+    let observation = report_application_status(
+        connection,
+        application.id.as_str(),
+        application.name.as_str(),
+    )
+    .map_err(|source| CliError::ApplicationRuntime {
+        source: Box::new(source),
+    })?;
     println!("Application: {}", application.name);
     println!("Desired state: {:?}", observation.desired_runtime_state);
     println!("Observed state: {:?}", observation.observed_runtime_state);
@@ -801,10 +803,14 @@ fn run_stop(
     );
     let application = resolve_application(connection, application_name)?;
     log_verbose(verbose, format!("stop application {}", application.name));
-    let observation = stop_application(connection, application.id.as_str(), &application.name)
-        .map_err(|source| CliError::ApplicationRuntime {
-            source: Box::new(source),
-        })?;
+    let observation = stop_application(
+        connection,
+        application.id.as_str(),
+        application.name.as_str(),
+    )
+    .map_err(|source| CliError::ApplicationRuntime {
+        source: Box::new(source),
+    })?;
     println!("Stopped {}", application.name);
     println!("Desired state: {:?}", observation.desired_runtime_state);
     println!("Observed state: {:?}", observation.observed_runtime_state);
@@ -823,10 +829,14 @@ fn run_start(
     );
     let application = resolve_application(connection, application_name)?;
     log_verbose(verbose, format!("start application {}", application.name));
-    let observation = start_application(connection, application.id.as_str(), &application.name)
-        .map_err(|source| CliError::ApplicationRuntime {
-            source: Box::new(source),
-        })?;
+    let observation = start_application(
+        connection,
+        application.id.as_str(),
+        application.name.as_str(),
+    )
+    .map_err(|source| CliError::ApplicationRuntime {
+        source: Box::new(source),
+    })?;
     println!("Started {}", application.name);
     println!("Desired state: {:?}", observation.desired_runtime_state);
     println!("Observed state: {:?}", observation.observed_runtime_state);

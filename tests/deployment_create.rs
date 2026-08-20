@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use pneuma::adapters::database;
+use pneuma::domain::deployment::SourceRevision;
 use pneuma::domain::deployment::{DeploymentStatus, DeploymentType};
 use pneuma::domain::identity::{ApplicationId, ReleaseId};
 use pneuma::domain::release::OciArtifact;
@@ -148,7 +149,7 @@ fn preserves_provenance_for_each_attempt_using_the_same_release() {
         &application.id,
         &release.id,
         DeploymentType::Deploy,
-        Some("first-commit"),
+        Some(&SourceRevision::new(&"a".repeat(40)).unwrap()),
     )
     .unwrap();
     connection
@@ -166,7 +167,10 @@ fn preserves_provenance_for_each_attempt_using_the_same_release() {
     )
     .unwrap();
 
-    assert_eq!(first.source_revision.as_deref(), Some("first-commit"));
+    assert_eq!(
+        first.source_revision.as_ref().map(SourceRevision::as_str),
+        Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    );
     assert_eq!(second.source_revision, None);
     let release_source_revision: Option<String> = connection
         .query_row("SELECT source_revision FROM releases", [], |row| row.get(0))

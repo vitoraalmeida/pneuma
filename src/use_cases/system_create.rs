@@ -3,6 +3,7 @@ use std::fmt;
 
 use rusqlite::{Connection, params};
 
+use crate::domain::application::SystemName;
 use crate::domain::identity::SystemId;
 use crate::domain::system::System;
 
@@ -61,7 +62,13 @@ pub fn create_system(
             |row| {
                 Ok(System {
                     id: SystemId::from(row.get::<_, String>(0)?),
-                    name: row.get(1)?,
+                    name: SystemName::new(&row.get::<_, String>(1)?).map_err(|error| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            1,
+                            rusqlite::types::Type::Text,
+                            Box::new(error),
+                        )
+                    })?,
                     description: row.get(2)?,
                 })
             },

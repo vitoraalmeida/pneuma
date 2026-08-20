@@ -6,8 +6,13 @@ use rusqlite::Connection;
 
 use crate::adapters::git_source::is_remote_repository;
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
-use crate::domain::application::{ApplicationSummary, RepositoryKind};
+use crate::domain::application::{
+    ApplicationName, ApplicationSource, ApplicationSummary, ContainerPort, HealthCheckPath,
+    HealthCheckStatus, RelativeManifestPath, RepositoryKind, SystemName,
+};
+use crate::domain::exposure::DomainName;
 use crate::domain::manifest::{Manifest, ManifestError, load_manifest_at};
+use crate::domain::release::OciRepository;
 
 const DEFAULT_MANIFEST_PATH: &str = "pneuma.toml";
 
@@ -90,13 +95,15 @@ pub fn import_application(
     let resolved_system_name = system_name
         .or_else(|| manifest.system.as_ref().map(|s| s.name.as_str()))
         .ok_or(ImportError::SystemRequired)?;
+    let resolved_system_name = SystemName::new(resolved_system_name).map_err(|_| ImportError::Manifest { source: ManifestError::InvalidField { field: "system.name", reason: "must be 1-63 lowercase ASCII letters, digits, or hyphens and start and end with a letter or digit" } })?;
+    let application_name = ApplicationName::new(&manifest.application.name).map_err(|_| ImportError::Manifest { source: ManifestError::InvalidField { field: "application.name", reason: "must be 1-63 lowercase ASCII letters, digits, or hyphens and start and end with a letter or digit" } })?;
 
     let transaction = connection
         .transaction()
         .map_err(|source| ImportError::Persistence { source })?;
 
     if let Some(application) =
-        application_store::load_application_for_import(&transaction, &manifest.application.name)?
+        application_store::load_application_for_import(&transaction, application_name.as_str())?
     {
         transaction
             .commit()
@@ -105,15 +112,16 @@ pub fn import_application(
     }
 
     let system_id = application_store::generate_id(&transaction).map_err(ImportError::from)?;
-    application_store::ensure_system(&transaction, &system_id, resolved_system_name)?;
-    let system_id = application_store::load_system_id_by_name(&transaction, resolved_system_name)?;
+    application_store::ensure_system(&transaction, &system_id, resolved_system_name.as_str())?;
+    let system_id =
+        application_store::load_system_id_by_name(&transaction, resolved_system_name.as_str())?;
 
     let application_id = application_store::generate_id(&transaction).map_err(ImportError::from)?;
     let inserted = application_store::insert_application(
         &transaction,
         &application_id,
         &system_id,
-        &manifest.application.name,
+        application_name.as_str(),
         manifest.schema_version,
     )?;
 
@@ -128,10 +136,10 @@ pub fn import_application(
     }
 
     let application =
-        application_store::load_application_for_import(&transaction, &manifest.application.name)?
+        application_store::load_application_for_import(&transaction, application_name.as_str())?
             .ok_or_else(|| ImportError::ApplicationNotFound {
-            application_id: application_id.clone(),
-        })?;
+                application_id: application_id.clone(),
+            })?;
 
     transaction
         .commit()
@@ -153,7 +161,12 @@ fn persist_specification(
         transaction,
         application_id,
         manifest.delivery.delivery_type,
-        &manifest.delivery.image,
+        &OciRepository::new(&manifest.delivery.image).map_err(|_| ImportError::Manifest {
+            source: ManifestError::InvalidField {
+                field: "delivery.image",
+                reason: "must be a non-empty OCI repository without surrounding whitespace",
+            },
+        })?,
     )?;
 
     if let Some(repository_url) = repository_url {
@@ -163,32 +176,73 @@ fn persist_specification(
             RepositoryKind::Local
         };
 
-        application_store::insert_source_spec(
-            transaction,
-            application_id,
-            repository_url,
+        let source = ApplicationSource::new(
             repository_kind,
+            repository_url,
             None,
-            manifest_path,
-        )?;
+            RelativeManifestPath::new(manifest_path).map_err(|_| ImportError::Manifest {
+                source: ManifestError::InvalidField {
+                    field: "manifest_path",
+                    reason: "must be a relative path within the checkout",
+                },
+            })?,
+        )
+        .map_err(|_| ImportError::Manifest {
+            source: ManifestError::InvalidField {
+                field: "repository",
+                reason: "must not be empty or contain surrounding whitespace",
+            },
+        })?;
+        application_store::insert_source_spec(transaction, application_id, &source)?;
     }
 
     application_store::insert_runtime_spec(
         transaction,
         application_id,
-        manifest.runtime.container_port,
+        ContainerPort::new(manifest.runtime.container_port).map_err(|_| ImportError::Manifest {
+            source: ManifestError::InvalidField {
+                field: "runtime.container_port",
+                reason: "must be between 1 and 65535",
+            },
+        })?,
     )?;
     application_store::insert_health_check_spec(
         transaction,
         application_id,
-        &manifest.runtime.healthcheck_path,
-        manifest.runtime.expected_status,
+        &HealthCheckPath::new(&manifest.runtime.healthcheck_path).map_err(|_| {
+            ImportError::Manifest {
+                source: ManifestError::InvalidField {
+                    field: "runtime.healthcheck_path",
+                    reason: "must be an absolute HTTP path without whitespace",
+                },
+            }
+        })?,
+        HealthCheckStatus::new(manifest.runtime.expected_status).map_err(|_| {
+            ImportError::Manifest {
+                source: ManifestError::InvalidField {
+                    field: "runtime.expected_status",
+                    reason: "must be between 100 and 599",
+                },
+            }
+        })?,
     )?;
     application_store::insert_exposure(
         transaction,
         application_id,
         manifest.exposure.default_visibility,
-        manifest.exposure.domain.as_deref(),
+        manifest
+            .exposure
+            .domain
+            .as_deref()
+            .map(DomainName::new)
+            .transpose()
+            .map_err(|_| ImportError::Manifest {
+                source: ManifestError::InvalidField {
+                    field: "exposure.domain",
+                    reason: "must be a valid domain name",
+                },
+            })?
+            .as_ref(),
     )?;
 
     Ok(())

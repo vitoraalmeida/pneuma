@@ -48,8 +48,10 @@ without selecting a new Release or making destructive changes from ambiguity.
   changing SQLite's persisted text representation.
   Result: opaque logical and container identities now map through stores without
   changing SQLite TEXT values.
-- [ ] Validate application specification and OCI values at domain boundaries,
+- [x] Validate application specification and OCI values at domain boundaries,
   including shared repository identity and cohesive source representation.
+  Result: validated specification values and cohesive sources now reject invalid
+  input and persisted malformed text maps to contextual store errors.
 - [ ] Separate expected runtime identity from external observation, preserve
   `Missing`, and model retirement explicitly.
 - [ ] Make Exposure intent, confirmed route evidence, and diagnostics valid by

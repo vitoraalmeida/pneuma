@@ -6,7 +6,7 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
 use crate::adapters::stores::release_store::{self, ReleaseStoreError};
-use crate::domain::deployment::{Deployment, DeploymentType};
+use crate::domain::deployment::{Deployment, DeploymentType, SourceRevision};
 use crate::domain::identity::{ApplicationId, ReleaseId};
 
 #[derive(Debug)]
@@ -92,7 +92,7 @@ pub fn create_deployment_with_source_revision(
     application_id: &ApplicationId,
     release_id: &ReleaseId,
     deployment_type: DeploymentType,
-    source_revision: Option<&str>,
+    source_revision: Option<&SourceRevision>,
 ) -> Result<Deployment, CreateDeploymentError> {
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)

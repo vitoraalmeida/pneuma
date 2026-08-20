@@ -10,7 +10,7 @@ const SHA256_HEX_LENGTH: usize = 64;
 // Represents a validated immutable repository-and-digest OCI artifact identity.
 pub struct OciArtifact {
     reference: String,
-    repository: String,
+    repository: OciRepository,
     digest: String,
 }
 
@@ -27,7 +27,10 @@ impl OciArtifact {
                 reference: reference.to_owned(),
             });
         };
-        if !is_repository(repository) || !is_sha256_digest(digest) {
+        let repository = OciRepository::new(repository).map_err(|_| InvalidOciArtifact {
+            reference: reference.to_owned(),
+        })?;
+        if !is_sha256_digest(digest) {
             return Err(InvalidOciArtifact {
                 reference: reference.to_owned(),
             });
@@ -35,7 +38,7 @@ impl OciArtifact {
 
         Ok(Self {
             reference: reference.to_owned(),
-            repository: repository.to_owned(),
+            repository,
             digest: digest.to_owned(),
         })
     }
@@ -47,7 +50,7 @@ impl OciArtifact {
         digest: &str,
     ) -> Result<Self, InvalidOciArtifact> {
         let artifact = Self::parse(reference)?;
-        if artifact.repository != repository || artifact.digest != digest {
+        if artifact.repository.as_str() != repository || artifact.digest != digest {
             return Err(InvalidOciArtifact {
                 reference: reference.to_owned(),
             });
@@ -62,7 +65,7 @@ impl OciArtifact {
 
     // Returns the repository portion constrained by artifact validation.
     pub fn repository(&self) -> &str {
-        &self.repository
+        self.repository.as_str()
     }
 
     // Returns the sha256 digest portion constrained by artifact validation.
@@ -70,6 +73,36 @@ impl OciArtifact {
         &self.digest
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+// Identifies an OCI repository without a mutable tag or digest suffix.
+pub struct OciRepository(String);
+
+impl OciRepository {
+    pub fn new(repository: &str) -> Result<Self, InvalidOciRepository> {
+        if !is_repository(repository) {
+            return Err(InvalidOciRepository {
+                repository: repository.to_owned(),
+            });
+        }
+        Ok(Self(repository.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct InvalidOciRepository {
+    pub repository: String,
+}
+impl fmt::Display for InvalidOciRepository {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "invalid OCI repository `{}`", self.repository)
+    }
+}
+impl Error for InvalidOciRepository {}
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct InvalidOciArtifact {
@@ -99,10 +132,43 @@ pub struct Release {
 
 // Accepts the restricted repository characters used by artifact validation.
 fn is_repository(repository: &str) -> bool {
-    !repository.is_empty()
-        && repository.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'/' | b'_' | b'-' | b':')
-        })
+    if repository.is_empty()
+        || repository.trim() != repository
+        || repository.contains('@')
+        || repository.split('/').any(str::is_empty)
+    {
+        return false;
+    }
+    let mut components = repository.split('/');
+    let Some(first) = components.next() else {
+        return false;
+    };
+    let remaining = components.collect::<Vec<_>>();
+    if first.contains(':') && remaining.is_empty() {
+        return false;
+    }
+    is_repository_component(first, true)
+        && remaining
+            .iter()
+            .all(|component| is_repository_component(component, false))
+}
+
+// Only the first component can carry a numeric registry port; a colon in a path is a tag.
+fn is_repository_component(component: &str, registry: bool) -> bool {
+    let (name, port) = if registry {
+        match component.rsplit_once(':') {
+            Some((name, port)) => (name, Some(port)),
+            None => (component, None),
+        }
+    } else {
+        (component, None)
+    };
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        && port
+            .is_none_or(|port| !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 // Requires a sha256 prefix followed by exactly 64 lowercase hexadecimal characters.

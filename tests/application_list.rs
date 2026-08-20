@@ -30,7 +30,7 @@ fn finds_a_core_application_by_name_without_loading_the_catalog() {
         .unwrap()
         .unwrap();
 
-    assert_eq!(application.name, "personal-site");
+    assert_eq!(application.name.as_str(), "personal-site");
     assert_eq!(
         application.desired_runtime_state,
         DesiredRuntimeState::Stopped
@@ -72,14 +72,14 @@ fn returns_registered_applications_ordered_by_name() {
     let applications = list_applications(&connection).unwrap();
 
     assert_eq!(applications.len(), 2);
-    assert_eq!(applications[0].name, "another-site");
+    assert_eq!(applications[0].name.as_str(), "another-site");
     assert_eq!(applications[0].repository.as_deref(), Some("."));
     assert_eq!(applications[0].default_branch.as_deref(), None);
     assert_eq!(
         applications[0].desired_runtime_state,
         DesiredRuntimeState::Running
     );
-    assert_eq!(applications[1].name, "personal-site");
+    assert_eq!(applications[1].name.as_str(), "personal-site");
     assert_eq!(
         applications[1].desired_runtime_state,
         DesiredRuntimeState::Stopped
@@ -101,7 +101,7 @@ fn lists_legacy_applications_without_a_system() {
     let applications = list_applications(&connection).unwrap();
 
     assert_eq!(applications.len(), 1);
-    assert_eq!(applications[0].name, "legacy-app");
+    assert_eq!(applications[0].name.as_str(), "legacy-app");
     assert_eq!(applications[0].system_id, None);
     assert_eq!(
         applications[0].desired_runtime_state,

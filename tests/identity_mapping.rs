@@ -12,7 +12,7 @@ fn typed_application_identity_preserves_its_sqlite_text_value() {
     let persisted_id: String = connection
         .query_row(
             "SELECT id FROM applications WHERE name = ?1",
-            [&application.name],
+            [application.name.as_str()],
             |row| row.get(0),
         )
         .unwrap();

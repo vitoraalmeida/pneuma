@@ -6,8 +6,13 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use crate::domain::application::{
+    ApplicationName, ContainerPort, HealthCheckPath, HealthCheckStatus, RelativeManifestPath,
+    SystemName,
+};
 use crate::domain::delivery::DeliveryType;
-use crate::domain::exposure::{Visibility, is_valid_domain};
+use crate::domain::exposure::{DomainName, Visibility};
+use crate::domain::release::OciRepository;
 
 const SUPPORTED_SCHEMA_VERSION: u32 = 3;
 const MANIFEST_FILE_NAME: &str = "pneuma.toml";
@@ -128,7 +133,12 @@ pub fn load_manifest_at(
     repository_path: &Path,
     manifest_path: &str,
 ) -> Result<Manifest, ManifestError> {
-    let manifest_path = repository_path.join(manifest_path);
+    let manifest_path =
+        RelativeManifestPath::new(manifest_path).map_err(|_| ManifestError::InvalidField {
+            field: "manifest_path",
+            reason: "must be a relative path within the checkout",
+        })?;
+    let manifest_path = repository_path.join(manifest_path.as_str());
     let contents = fs::read_to_string(&manifest_path).map_err(|source| ManifestError::Read {
         path: manifest_path,
         source,
@@ -153,7 +163,7 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), ManifestError> {
     }
 
     if let Some(system) = &manifest.system {
-        if !is_valid_system_name(&system.name) {
+        if SystemName::new(&system.name).is_err() {
             return invalid_field(
                 "system.name",
                 "must be 1-63 lowercase ASCII letters, digits, or hyphens and start and end with a letter or digit",
@@ -161,7 +171,7 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), ManifestError> {
         }
     }
 
-    if !is_valid_application_name(&manifest.application.name) {
+    if ApplicationName::new(&manifest.application.name).is_err() {
         return invalid_field(
             "application.name",
             "must be 1-63 lowercase ASCII letters, digits, or hyphens and start and end with a letter or digit",
@@ -172,38 +182,25 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), ManifestError> {
         return invalid_field("delivery.type", "must be `oci`");
     }
 
-    if manifest.delivery.image.contains('@') {
-        return invalid_field(
-            "delivery.image",
-            "must be a repository without a tag or digest",
-        );
-    }
-
-    if !is_valid_delivery_image(&manifest.delivery.image) {
+    if OciRepository::new(&manifest.delivery.image).is_err() {
         return invalid_field(
             "delivery.image",
             "must be a non-empty OCI repository without surrounding whitespace",
         );
     }
 
-    if manifest.runtime.container_port == 0 {
+    if ContainerPort::new(manifest.runtime.container_port).is_err() {
         return invalid_field("runtime.container_port", "must be between 1 and 65535");
     }
 
-    if !manifest.runtime.healthcheck_path.starts_with('/')
-        || manifest
-            .runtime
-            .healthcheck_path
-            .chars()
-            .any(char::is_whitespace)
-    {
+    if HealthCheckPath::new(&manifest.runtime.healthcheck_path).is_err() {
         return invalid_field(
             "runtime.healthcheck_path",
             "must be an absolute HTTP path without whitespace",
         );
     }
 
-    if !(100..=599).contains(&manifest.runtime.expected_status) {
+    if HealthCheckStatus::new(manifest.runtime.expected_status).is_err() {
         return invalid_field("runtime.expected_status", "must be between 100 and 599");
     }
 
@@ -214,7 +211,7 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), ManifestError> {
         (Visibility::Public, None) => {
             return invalid_field("exposure.domain", "is required for public exposure");
         }
-        (_, Some(domain)) if !is_valid_domain(domain) => {
+        (_, Some(domain)) if DomainName::new(domain).is_err() => {
             return invalid_field("exposure.domain", "must be a valid domain name");
         }
         (Visibility::Internal, None) | (Visibility::Internal, Some(_)) => {}
@@ -222,36 +219,6 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), ManifestError> {
     }
 
     Ok(())
-}
-
-// Reuses application-name rules so System names share the same identifier constraints.
-fn is_valid_system_name(name: &str) -> bool {
-    is_valid_application_name(name)
-}
-
-// Validates stable lowercase ASCII identifiers used in application identity and paths.
-fn is_valid_application_name(name: &str) -> bool {
-    let bytes = name.as_bytes();
-    !bytes.is_empty()
-        && bytes.len() <= 63
-        && bytes.first().is_some_and(u8::is_ascii_alphanumeric)
-        && bytes.last().is_some_and(u8::is_ascii_alphanumeric)
-        && bytes
-            .iter()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
-}
-
-// Requires values to be present without accepting leading or trailing whitespace.
-fn is_trimmed_nonempty(value: &str) -> bool {
-    !value.is_empty() && value.trim() == value
-}
-
-// Validates the restricted OCI repository syntax accepted in manifest input.
-fn is_valid_delivery_image(image: &str) -> bool {
-    is_trimmed_nonempty(image)
-        && image.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'/' | b'_' | b'-' | b':')
-        })
 }
 
 // Produces a typed validation failure without constructing an unrelated success value.
