@@ -136,15 +136,26 @@ are recoverable diagnostics and do not revoke promotion already atomically confi
 
 ## Concurrency and Results
 
-This design creates no additional lock. Existing deployment retains the logical
-reservation through a non-terminal Deployment. While a non-terminal Deployment
-exists, reconcile returns `deferred` with the deployment blocking the operation
-and does not trigger concurrent runtime, Caddy, or cleanup work.
+Each Application has one kernel-held advisory lock and one persisted operation
+token. The lock file is derived from the configured database path and Application
+ID. It is acquired before any reconciliation or deployment effect and remains held
+through promotion, failure cleanup, and prior-runtime retirement. Kernel release on
+process exit proves that an owner died; timestamps never infer liveness.
 
-The future command must serialize `reconcile × reconcile` per Application through
-the same reservation or an equivalent persisted primitive before executing external
-effects. A lost CAS after an external effect results in `failed` or `deferred`,
-with diagnostics and without reporting success.
+The persisted operation row carries the owner token and monotonically increasing
+generation. A process that acquires a free kernel lock takes ownership through a
+short SQLite transaction. Every effect-result write includes that token and
+generation, so a prior owner cannot complete after ownership changes. A live lock
+causes `deferred` without external observation or effects. After an owner dies, a
+new holder may recover its non-terminal Deployment using the status-specific rules
+above, or reconcile current materialization when no non-terminal Deployment exists.
+
+Deploy creates its pending Deployment and operation ownership atomically. The
+non-terminal Deployment index remains the activation-history invariant; operation
+ownership serializes `reconcile × reconcile` and both acquisition orderings of
+`deploy × reconcile`. A lost ownership CAS after an external effect returns
+`deferred` or `failed`, records diagnostics when still fenced, and never reports
+success.
 
 Observable results are:
 
