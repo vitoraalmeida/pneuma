@@ -117,6 +117,7 @@ impl From<DeploymentStoreError> for RegisterCandidateRuntimeError {
                 actual: status,
             },
             DeploymentStoreError::InvalidType { .. } => Self::DeploymentStore { source: error },
+            DeploymentStoreError::InvalidEvidence { .. } => Self::DeploymentStore { source: error },
             DeploymentStoreError::Persistence { source } => Self::Persistence { source },
         }
     }
@@ -162,10 +163,10 @@ pub fn register_candidate_runtime(
     }
 
     let deployment = deployment_store::load_deployment(&transaction, deployment_id)?;
-    if deployment.status != DeploymentStatus::Starting {
+    if deployment.status() != DeploymentStatus::Starting {
         return Err(RegisterCandidateRuntimeError::InvalidDeploymentState {
             deployment_id: deployment_id.to_owned(),
-            actual: deployment.status.database_value().to_owned(),
+            actual: deployment.status().database_value().to_owned(),
         });
     }
 

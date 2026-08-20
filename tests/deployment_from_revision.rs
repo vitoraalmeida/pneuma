@@ -37,7 +37,10 @@ fn deploys_a_branch_and_persists_source_revision() {
 
     let deployed = deployed.unwrap();
     assert_eq!(
-        deployed.source_revision.as_deref(),
+        deployed
+            .source_revision
+            .as_ref()
+            .map(pneuma::domain::deployment::SourceRevision::as_str),
         Some(staging_commit.as_str())
     );
     let (source_revision, image_reference): (Option<String>, String) = connection
@@ -63,7 +66,7 @@ fn deploys_a_branch_and_persists_source_revision() {
     assert!(environment.log().contains(&format!(
         "pull --quiet registry.example/team/service:{staging_commit}"
     )));
-    assert_eq!(deployed.image_reference, image_reference);
+    assert_eq!(deployed.artifact.reference(), image_reference);
 }
 
 #[test]
@@ -95,7 +98,10 @@ fn uses_the_default_branch_when_branch_is_omitted() {
 
     let deployed = deployed.unwrap();
     assert_eq!(
-        deployed.source_revision.as_deref(),
+        deployed
+            .source_revision
+            .as_ref()
+            .map(pneuma::domain::deployment::SourceRevision::as_str),
         Some(main_commit.as_str())
     );
 }

@@ -220,7 +220,10 @@ fn rejects_incomplete_failure_details_without_changing_state() {
 
     for (code, message) in [("", "diagnostic"), ("failure", " not trimmed")] {
         let error = fail_deployment(&mut connection, &deployment_id, code, message).unwrap_err();
-        assert!(matches!(error, TransitionDeploymentError::InvalidFailure));
+        assert!(matches!(
+            error,
+            TransitionDeploymentError::InvalidFailure { .. }
+        ));
     }
     assert_eq!(
         advance_deployment(&connection, &deployment_id, DeploymentTransition::Start).unwrap(),

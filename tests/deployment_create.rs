@@ -58,7 +58,7 @@ fn persists_a_pending_deployment_atomically() {
 
     assert_eq!(deployment.application_id, application.id);
     assert_eq!(deployment.release_id, release.id);
-    assert_eq!(deployment.status, DeploymentStatus::Pending);
+    assert_eq!(deployment.status(), DeploymentStatus::Pending);
     assert!(!deployment.requested_at.is_empty());
 }
 
@@ -69,7 +69,7 @@ fn rejects_a_second_active_deployment_for_the_application() {
         import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
     let first_release = create_release(&mut connection, &application.id, &artifact('a')).unwrap();
     let second_release = create_release(&mut connection, &application.id, &artifact('b')).unwrap();
-    create_deployment(
+    let first_deployment = create_deployment(
         &mut connection,
         &application.id,
         &first_release.id,
@@ -87,8 +87,8 @@ fn rejects_a_second_active_deployment_for_the_application() {
 
     assert!(matches!(
         error,
-        CreateDeploymentError::ActiveDeployment { application_id }
-            if application_id == application.id.as_str()
+        CreateDeploymentError::ActiveDeployment { deployment }
+            if deployment.id == first_deployment.id
     ));
     let release_count: i64 = connection
         .query_row("SELECT COUNT(*) FROM releases", [], |row| row.get(0))
@@ -270,7 +270,7 @@ fn a_removed_active_runtime_does_not_block_deployment() {
     )
     .unwrap();
 
-    assert_eq!(deployment.status, DeploymentStatus::Pending);
+    assert_eq!(deployment.status(), DeploymentStatus::Pending);
 }
 
 #[test]
@@ -287,7 +287,7 @@ fn rollback_of_the_active_release_is_allowed() {
     .unwrap();
 
     assert_eq!(deployment.deployment_type, DeploymentType::Rollback);
-    assert_eq!(deployment.status, DeploymentStatus::Pending);
+    assert_eq!(deployment.status(), DeploymentStatus::Pending);
 }
 
 #[test]

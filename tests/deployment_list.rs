@@ -67,14 +67,25 @@ fn returns_deployments_ordered_newest_first() {
     let deployments = list_deployments(&connection, &application.id).unwrap();
 
     assert_eq!(deployments.len(), 2);
-    assert_eq!(deployments[0].id, second_deployment.id.as_str());
-    assert_eq!(deployments[0].image_digest, digest('b'));
-    assert_eq!(deployments[0].status, DeploymentStatus::Succeeded);
-    assert!(deployments[0].finished_at.is_some());
-    assert_eq!(deployments[1].id, first_deployment.id.as_str());
-    assert_eq!(deployments[1].image_digest, digest('a'));
-    assert_eq!(deployments[1].status, DeploymentStatus::Failed);
-    assert!(deployments[1].finished_at.is_some());
+    assert_eq!(deployments[0].deployment.id, second_deployment.id);
+    assert_eq!(deployments[0].release.artifact.digest(), digest('b'));
+    assert_eq!(
+        deployments[0].deployment.status(),
+        DeploymentStatus::Succeeded
+    );
+    assert!(matches!(
+        deployments[0].deployment.lifecycle,
+        pneuma::domain::deployment::DeploymentLifecycle::Succeeded { .. }
+    ));
+    assert_eq!(deployments[1].deployment.id, first_deployment.id);
+    assert_eq!(deployments[1].release.artifact.digest(), digest('a'));
+    assert_eq!(deployments[1].deployment.status(), DeploymentStatus::Failed);
+    assert!(matches!(
+        deployments[1].deployment.lifecycle,
+        pneuma::domain::deployment::DeploymentLifecycle::Failed {
+            evidence: pneuma::domain::deployment::DeploymentFailureEvidence::Incomplete
+        }
+    ));
 }
 
 #[test]
@@ -105,9 +116,9 @@ fn returns_only_deployments_for_the_given_application() {
     let second_deployments = list_deployments(&connection, &second.id).unwrap();
 
     assert_eq!(first_deployments.len(), 1);
-    assert_eq!(first_deployments[0].image_digest, digest('a'));
+    assert_eq!(first_deployments[0].release.artifact.digest(), digest('a'));
     assert_eq!(second_deployments.len(), 1);
-    assert_eq!(second_deployments[0].image_digest, digest('b'));
+    assert_eq!(second_deployments[0].release.artifact.digest(), digest('b'));
 }
 
 fn fixture_path(name: &str) -> PathBuf {

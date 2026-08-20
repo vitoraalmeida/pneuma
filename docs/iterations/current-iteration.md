@@ -61,8 +61,11 @@ without selecting a new Release or making destructive changes from ambiguity.
   construction while retaining compensation-relevant evidence.
   Result: typed exposure intent, route evidence, and diagnostics reject invalid
   persisted combinations while preserving confirmed routes through transitions.
-- [ ] Add Deployment lifecycle evidence and replace scalar or tuple operation
+- [x] Add Deployment lifecycle evidence and replace scalar or tuple operation
   results with cohesive domain values.
+  Result: Deployment hydration now validates lifecycle evidence, preserves incomplete
+  historical failures, exposes typed blockers and history, and uses named execution
+  and rollback targets.
 - [ ] Move persisted-value conversion into stores and require explicit stale
   outcomes from compare-and-set persistence primitives.
 - [ ] Convert `reconciliation-e2e.md` into an executable reconciliation test

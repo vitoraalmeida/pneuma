@@ -6,11 +6,10 @@ use rusqlite::Connection;
 
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::domain::application::ApplicationDeploymentSpecification;
-use crate::domain::deployment::SourceRevision;
-use crate::domain::deployment::{DeploymentStatus, DeploymentType};
+use crate::domain::deployment::{DeploymentStatus, DeploymentType, SourceRevision};
 use crate::domain::exposure::Visibility;
-use crate::domain::identity::ApplicationId;
-use crate::domain::release::Release;
+use crate::domain::identity::{ApplicationId, DeploymentId, RuntimeInstanceId};
+use crate::domain::release::{OciArtifact, Release};
 use crate::use_cases::deployment_activate_public::{
     PublicActivationError, PublicActivationInput, activate_public_candidate,
 };
@@ -33,11 +32,11 @@ use crate::use_cases::deployment_transition::{TransitionDeploymentError, fail_de
 #[derive(Debug, PartialEq, Eq)]
 // Describes the successfully promoted runtime returned to deployment callers.
 pub struct DeploymentResult {
-    pub deployment_id: String,
-    pub runtime_id: String,
+    pub deployment_id: DeploymentId,
+    pub runtime_id: RuntimeInstanceId,
     pub container_name: String,
-    pub image_reference: String,
-    pub source_revision: Option<String>,
+    pub artifact: OciArtifact,
+    pub source_revision: Option<SourceRevision>,
     pub finished_at: String,
 }
 
@@ -250,13 +249,13 @@ fn deploy_release_reporting(
         progress,
     );
     match execution {
-        Ok((runtime_id, container_name, finished_at)) => Ok(DeploymentResult {
-            deployment_id: deployment.id.to_string(),
-            runtime_id,
-            container_name,
-            image_reference: release.artifact.reference().to_owned(),
-            source_revision: deployment.source_revision.map(|value| value.to_string()),
-            finished_at,
+        Ok(execution) => Ok(DeploymentResult {
+            deployment_id: deployment.id,
+            runtime_id: execution.runtime_id,
+            container_name: execution.container_name,
+            artifact: release.artifact.clone(),
+            source_revision: deployment.source_revision,
+            finished_at: execution.finished_at,
         }),
         Err(failed) => {
             finish_failed_deployment(connection, deployment.id.as_str(), failed, progress)
@@ -302,6 +301,13 @@ struct FailedExecution {
     resources: CandidateResources,
 }
 
+// Keeps the three facts produced by candidate execution together until they form a result.
+struct CompletedDeploymentExecution {
+    runtime_id: RuntimeInstanceId,
+    container_name: String,
+    finished_at: String,
+}
+
 // Starts and verifies a candidate outside database transactions, promoting it only after the
 // visibility-specific health checks succeed.
 fn execute_deployment(
@@ -312,7 +318,7 @@ fn execute_deployment(
     artifact_identity: &str,
     public_configuration: Option<&PublicDeploymentConfiguration>,
     progress: &mut ProgressReporter<'_>,
-) -> Result<(String, String, String), FailedExecution> {
+) -> Result<CompletedDeploymentExecution, FailedExecution> {
     progress.state_changed(deployment_id, DeploymentStatus::Starting);
     progress.started(
         DeploymentStep::CreateContainer,
@@ -502,12 +508,10 @@ fn execute_deployment(
                 previous_runtime.as_ref(),
             );
         }
-        return completed.map(|output| {
-            (
-                candidate.runtime.id.to_string(),
-                candidate.container_name,
-                output.finished_at,
-            )
+        return completed.map(|output| CompletedDeploymentExecution {
+            runtime_id: candidate.runtime.id,
+            container_name: candidate.container_name,
+            finished_at: output.finished_at,
         });
     }
 
@@ -559,11 +563,11 @@ fn execute_deployment(
         previous_runtime.as_ref(),
     );
 
-    Ok((
-        candidate.runtime.id.to_string(),
-        candidate.container_name,
-        promoted.finished_at,
-    ))
+    Ok(CompletedDeploymentExecution {
+        runtime_id: candidate.runtime.id,
+        container_name: candidate.container_name,
+        finished_at: promoted.finished_at,
+    })
 }
 
 // Records a nonterminal deployment failure before releasing candidate resources, returning

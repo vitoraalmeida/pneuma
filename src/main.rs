@@ -13,6 +13,7 @@ use pneuma::adapters::git_source::{
 };
 use pneuma::adapters::oci_image::pull_image;
 use pneuma::domain::application::Application;
+use pneuma::domain::deployment::{DeploymentFailureEvidence, DeploymentLifecycle};
 use pneuma::domain::exposure::Visibility;
 use pneuma::domain::release::OciArtifact;
 use pneuma::use_cases::application_import::{ImportError, import_application};
@@ -744,16 +745,47 @@ fn run_deployments(
         println!("No deployments for {}", application.name);
     } else {
         println!("Deployments for {}:", application.name);
-        println!("DEPLOYMENT\tTYPE\tRELEASE\tSOURCE\tSTATUS");
+        println!("DEPLOYMENT\tTYPE\tRELEASE\tSOURCE\tSTATUS\tSTARTED\tFINISHED\tACTIVE\tFAILURE");
         for deployment in deployments {
-            let source = deployment.source_revision.as_deref().unwrap_or("-");
+            let source = deployment
+                .deployment
+                .source_revision
+                .as_ref()
+                .map_or("-", pneuma::domain::deployment::SourceRevision::as_str);
+            let (finished_at, failure) = match &deployment.deployment.lifecycle {
+                DeploymentLifecycle::Succeeded { finished_at } => {
+                    (finished_at.as_str(), "-".to_owned())
+                }
+                DeploymentLifecycle::Failed {
+                    evidence: DeploymentFailureEvidence::Complete(failure),
+                } => (
+                    failure.finished_at.as_str(),
+                    format!(
+                        "{}:{}:{}",
+                        failure.code,
+                        failure.stage.database_value(),
+                        failure.message
+                    ),
+                ),
+                DeploymentLifecycle::Failed {
+                    evidence: DeploymentFailureEvidence::Incomplete,
+                } => ("-", "incomplete".to_owned()),
+                DeploymentLifecycle::Pending
+                | DeploymentLifecycle::Starting
+                | DeploymentLifecycle::Verifying
+                | DeploymentLifecycle::Activating => ("-", "-".to_owned()),
+            };
             println!(
-                "{}\t{:?}\t{}\t{}\t{:?}",
-                deployment.id,
-                deployment.deployment_type,
-                deployment.image_digest,
+                "{}\t{:?}\t{}\t{}\t{:?}\t{}\t{}\t{}\t{}",
+                deployment.deployment.id,
+                deployment.deployment.deployment_type,
+                deployment.release.artifact.digest(),
                 source,
-                deployment.status
+                deployment.deployment.status(),
+                deployment.deployment.started_at.as_deref().unwrap_or("-"),
+                finished_at,
+                if deployment.is_active { "yes" } else { "no" },
+                failure,
             );
         }
     }
@@ -877,7 +909,7 @@ fn run_deploy_oci(
         source: Box::new(source),
     })?;
     println!("Deployed {}", application.name);
-    println!("Image: {}", deployed.image_reference);
+    println!("Image: {}", deployed.artifact.reference());
     println!("Deployment: {}", deployed.deployment_id);
     println!("Runtime: {}", deployed.runtime_id);
     println!("Container: {}", deployed.container_name);
@@ -928,7 +960,7 @@ fn run_deploy_branch(
         source: Box::new(source),
     })?;
     println!("Deployed {}", application.name);
-    println!("Image: {}", deployed.image_reference);
+    println!("Image: {}", deployed.artifact.reference());
     if let Some(source_revision) = &deployed.source_revision {
         println!("Source revision: {source_revision}");
     }
@@ -967,7 +999,7 @@ fn run_rollback(
     let rolled_back = rollback_deployment(connection, &application.id, Some(&public_configuration))
         .map_err(|source| CliError::Rollback { source })?;
     println!("Rolled back {}", application.name);
-    println!("Image: {}", rolled_back.image_reference);
+    println!("Image: {}", rolled_back.artifact.reference());
     if let Some(source_revision) = rolled_back.source_revision {
         println!("Source revision: {source_revision}");
     }

@@ -9,6 +9,7 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use pneuma::adapters::database;
+use pneuma::domain::deployment::SourceRevision;
 use pneuma::domain::identity::ApplicationId;
 use pneuma::use_cases::application_import::import_application;
 use pneuma::use_cases::deployment_from_oci::{DeployOciError, deploy_oci};
@@ -52,8 +53,14 @@ fn deploys_a_verified_oci_image_and_persists_its_exact_reference() {
     assert_eq!(release.2, "registry.example/team/service");
     assert_eq!(release.3, digest);
     assert_eq!(release.4, None);
-    assert_eq!(deployed.image_reference, release.1);
-    assert_eq!(deployed.source_revision, release.4);
+    assert_eq!(deployed.artifact.reference(), release.1);
+    assert_eq!(
+        deployed
+            .source_revision
+            .as_ref()
+            .map(SourceRevision::as_str),
+        release.4.as_deref()
+    );
     assert!(environment.log().contains(&reference));
     assert!(
         environment

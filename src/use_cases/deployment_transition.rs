@@ -4,22 +4,13 @@ use std::fmt;
 use rusqlite::{Connection, TransactionBehavior};
 
 use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
-use crate::domain::deployment::DeploymentStatus;
+use crate::domain::deployment::{DeploymentFailure, DeploymentStatus, InvalidDeploymentFailure};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeploymentTransition {
     Start,
     RuntimeRunning,
     Verified,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-// Records durable evidence for a terminal deployment failure.
-pub struct DeploymentFailure {
-    pub code: String,
-    pub stage: DeploymentStatus,
-    pub message: String,
-    pub finished_at: String,
 }
 
 #[derive(Debug)]
@@ -44,7 +35,9 @@ pub enum TransitionDeploymentError {
         deployment_id: String,
         deployment_type: String,
     },
-    InvalidFailure,
+    InvalidFailure {
+        source: InvalidDeploymentFailure,
+    },
     Persistence {
         source: rusqlite::Error,
     },
@@ -85,8 +78,7 @@ impl fmt::Display for TransitionDeploymentError {
                 formatter,
                 "deployment `{deployment_id}` has invalid persisted type `{deployment_type}`"
             ),
-            Self::InvalidFailure => formatter
-                .write_str("deployment failure code and message must be trimmed and non-empty"),
+            Self::InvalidFailure { source } => write!(formatter, "{source}"),
             Self::Persistence { source } => {
                 write!(formatter, "failed to transition deployment: {source}")
             }
@@ -103,7 +95,7 @@ impl Error for TransitionDeploymentError {
             | Self::CannotFail { .. }
             | Self::InvalidPersistedStatus { .. }
             | Self::InvalidPersistedType { .. }
-            | Self::InvalidFailure => None,
+            | Self::InvalidFailure { .. } => None,
         }
     }
 }
@@ -127,6 +119,13 @@ impl From<DeploymentStoreError> for TransitionDeploymentError {
             } => Self::InvalidPersistedType {
                 deployment_id,
                 deployment_type,
+            },
+            DeploymentStoreError::InvalidEvidence {
+                deployment_id,
+                reason,
+            } => Self::InvalidPersistedStatus {
+                deployment_id,
+                status: reason,
             },
             DeploymentStoreError::Persistence { source } => Self::Persistence { source },
         }
@@ -160,33 +159,28 @@ pub fn fail_deployment(
     code: &str,
     message: &str,
 ) -> Result<DeploymentFailure, TransitionDeploymentError> {
-    if !is_trimmed_nonempty(code) || !is_trimmed_nonempty(message) {
-        return Err(TransitionDeploymentError::InvalidFailure);
-    }
+    DeploymentFailure::validate_details(code, DeploymentStatus::Pending, message)
+        .map_err(|source| TransitionDeploymentError::InvalidFailure { source })?;
 
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|source| TransitionDeploymentError::Persistence { source })?;
     let stage = deployment_store::load_status(&transaction, deployment_id)?;
-    if !can_fail(stage) {
+    if !stage.is_nonterminal() {
         return Err(TransitionDeploymentError::CannotFail {
             deployment_id: deployment_id.to_owned(),
             actual: stage,
         });
     }
+    DeploymentFailure::validate_details(code, stage, message)
+        .map_err(|source| TransitionDeploymentError::InvalidFailure { source })?;
 
-    let finished_at =
-        deployment_store::mark_failed(&transaction, deployment_id, stage, code, message)?;
+    let failure = deployment_store::mark_failed(&transaction, deployment_id, stage, code, message)?;
     transaction
         .commit()
         .map_err(|source| TransitionDeploymentError::Persistence { source })?;
 
-    Ok(DeploymentFailure {
-        code: code.to_owned(),
-        stage,
-        message: message.to_owned(),
-        finished_at,
-    })
+    Ok(failure)
 }
 
 // Defines the closed deployment state-machine edges accepted by this use case.
@@ -200,20 +194,4 @@ fn transition_states(transition: DeploymentTransition) -> (DeploymentStatus, Dep
             (DeploymentStatus::Verifying, DeploymentStatus::Activating)
         }
     }
-}
-
-// Limits failure recording to states that have not reached a terminal outcome.
-fn can_fail(status: DeploymentStatus) -> bool {
-    matches!(
-        status,
-        DeploymentStatus::Pending
-            | DeploymentStatus::Starting
-            | DeploymentStatus::Verifying
-            | DeploymentStatus::Activating
-    )
-}
-
-// Rejects ambiguous failure diagnostics before they become durable evidence.
-fn is_trimmed_nonempty(value: &str) -> bool {
-    !value.is_empty() && value.trim() == value
 }

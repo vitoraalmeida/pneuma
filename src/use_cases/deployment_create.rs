@@ -13,7 +13,7 @@ use crate::domain::identity::{ApplicationId, ReleaseId};
 pub enum CreateDeploymentError {
     ReleaseNotFound { release_id: String },
     ApplicationNotFound { application_id: String },
-    ActiveDeployment { application_id: String },
+    ActiveDeployment { deployment: Box<Deployment> },
     AlreadyActive { release_id: String },
     ApplicationStore { source: ApplicationStoreError },
     ReleaseStore { source: ReleaseStoreError },
@@ -30,9 +30,10 @@ impl fmt::Display for CreateDeploymentError {
             Self::ApplicationNotFound { application_id } => {
                 write!(formatter, "application `{application_id}` was not found")
             }
-            Self::ActiveDeployment { application_id } => write!(
+            Self::ActiveDeployment { deployment } => write!(
                 formatter,
-                "application `{application_id}` already has an active deployment"
+                "application `{}` already has an active deployment",
+                deployment.application_id
             ),
             Self::AlreadyActive { release_id } => write!(
                 formatter,
@@ -114,12 +115,12 @@ pub fn create_deployment_with_source_revision(
             release_id: release_id.to_string(),
         });
     }
-    let has_nonterminal =
-        deployment_store::has_nonterminal_deployment(&transaction, application_id.as_str())
+    let blocker =
+        deployment_store::load_nonterminal_deployment(&transaction, application_id.as_str())
             .map_err(|source| CreateDeploymentError::DeploymentStore { source })?;
-    if has_nonterminal {
+    if let Some(deployment) = blocker {
         return Err(CreateDeploymentError::ActiveDeployment {
-            application_id: application_id.to_string(),
+            deployment: Box::new(deployment),
         });
     }
     let active_release_id =

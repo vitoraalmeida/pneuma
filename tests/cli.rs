@@ -1055,7 +1055,10 @@ fn lists_deployments_for_a_deployed_application() {
         lines[0],
         format!("Deployments for {}:", environment.application_name)
     );
-    assert_eq!(lines[1], "DEPLOYMENT\tTYPE\tRELEASE\tSOURCE\tSTATUS");
+    assert_eq!(
+        lines[1],
+        "DEPLOYMENT\tTYPE\tRELEASE\tSOURCE\tSTATUS\tSTARTED\tFINISHED\tACTIVE\tFAILURE"
+    );
     assert!(lines[2].contains("\tDeploy\t"));
     assert!(lines[2].contains("Succeeded"));
     assert!(lines[2].contains("\t-\t"));
@@ -1422,7 +1425,10 @@ fn deployments_source_is_dash_for_oci_releases() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     let lines: Vec<&str> = stdout.lines().collect();
     assert_eq!(lines.len(), 3);
-    assert_eq!(lines[1], "DEPLOYMENT\tTYPE\tRELEASE\tSOURCE\tSTATUS");
+    assert_eq!(
+        lines[1],
+        "DEPLOYMENT\tTYPE\tRELEASE\tSOURCE\tSTATUS\tSTARTED\tFINISHED\tACTIVE\tFAILURE"
+    );
     assert!(lines[2].contains("\tDeploy\t"));
     assert!(lines[2].contains(&format!("sha256:{}", "a".repeat(64))));
     assert!(lines[2].contains("\t-\tSucceeded"));

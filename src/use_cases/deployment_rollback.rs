@@ -4,7 +4,7 @@ use std::fmt;
 use rusqlite::{Connection, OptionalExtension};
 
 use crate::adapters::oci_image::{PullImageError, pull_image};
-use crate::domain::deployment::DeploymentType;
+use crate::domain::deployment::{DeploymentType, SourceRevision};
 use crate::domain::identity::{ApplicationId, ReleaseId};
 use crate::domain::release::{OciArtifact, Release};
 use crate::use_cases::deployment_execute_release::{
@@ -70,25 +70,30 @@ pub fn rollback_deployment(
             application_id: application_id.to_string(),
         });
     }
-    let (release, source_revision) = previous_release(connection, application_id.as_str())?;
-    pull_image(release.artifact.reference())
+    let target = previous_release(connection, application_id.as_str())?;
+    pull_image(target.release.artifact.reference())
         .map_err(|source| RollbackError::PullImage { source })?;
     deploy_release(
         connection,
         application_id,
-        &release,
+        &target.release,
         DeploymentType::Rollback,
-        source_revision.as_deref(),
+        target.source_revision.as_ref().map(SourceRevision::as_str),
         public_configuration,
     )
     .map_err(|source| RollbackError::DeployRelease { source })
 }
 
 // Selects the newest succeeded deployment that is not currently active.
+struct RollbackTarget {
+    release: Release,
+    source_revision: Option<SourceRevision>,
+}
+
 fn previous_release(
     connection: &Connection,
     application_id: &str,
-) -> Result<(Release, Option<String>), RollbackError> {
+) -> Result<RollbackTarget, RollbackError> {
     connection
         .query_row(
             "SELECT r.id, r.application_id, r.image_reference, r.image_repository,
@@ -118,15 +123,27 @@ fn previous_release(
                                 )),
                             )
                         })?;
-                Ok((
-                    Release {
+                let source_revision = row
+                    .get::<_, Option<String>>(5)?
+                    .map(|value| {
+                        SourceRevision::from_persisted(&value).map_err(|error| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                5,
+                                rusqlite::types::Type::Text,
+                                Box::new(error),
+                            )
+                        })
+                    })
+                    .transpose()?;
+                Ok(RollbackTarget {
+                    release: Release {
                         id: ReleaseId::from(row.get::<_, String>(0)?),
                         application_id: ApplicationId::from(row.get::<_, String>(1)?),
                         artifact,
                         created_at: row.get(6)?,
                     },
-                    row.get(5)?,
-                ))
+                    source_revision,
+                })
             },
         )
         .optional()
@@ -141,6 +158,7 @@ mod tests {
     use std::path::Path;
 
     use crate::adapters::database;
+    use crate::domain::deployment::SourceRevision;
 
     use super::previous_release;
 
@@ -170,10 +188,13 @@ mod tests {
             )
             .unwrap();
 
-        let (release, source_revision) = previous_release(&connection, "app-id").unwrap();
+        let target = previous_release(&connection, "app-id").unwrap();
 
-        assert_eq!(release.id.as_str(), "release-id");
-        assert_eq!(release.artifact.repository(), "registry.example/app");
-        assert_eq!(source_revision.as_deref(), Some("historical-commit"));
+        assert_eq!(target.release.id.as_str(), "release-id");
+        assert_eq!(target.release.artifact.repository(), "registry.example/app");
+        assert_eq!(
+            target.source_revision.as_ref().map(SourceRevision::as_str),
+            Some("historical-commit")
+        );
     }
 }
