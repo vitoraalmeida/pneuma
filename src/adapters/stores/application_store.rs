@@ -10,6 +10,7 @@ use crate::domain::application::{
 };
 use crate::domain::delivery::{DeliverySpecification, DeliveryType};
 use crate::domain::exposure::{Exposure, ExposureMaterializationState, Visibility};
+use crate::domain::identity::{ApplicationId, DeploymentId, RuntimeInstanceId, SystemId};
 use crate::domain::runtime::DesiredRuntimeState;
 
 #[derive(Debug)]
@@ -183,11 +184,11 @@ pub(crate) fn map_application_row(row: &Row<'_>) -> rusqlite::Result<Application
         .ok_or_else(|| invalid_text_value(3, "desired runtime state", &desired_runtime_state))?;
 
     Ok(Application {
-        id: row.get(0)?,
-        system_id: row.get(1)?,
+        id: ApplicationId::from(row.get::<_, String>(0)?),
+        system_id: row.get::<_, Option<String>>(1)?.map(SystemId::from),
         name: row.get(2)?,
         desired_runtime_state,
-        active_deployment_id: row.get(4)?,
+        active_deployment_id: row.get::<_, Option<String>>(4)?.map(DeploymentId::from),
         specification_version: row.get(5)?,
     })
 }
@@ -478,10 +479,10 @@ pub fn load_exposure(
             state: materialization_state,
         })?;
     Ok(Some(Exposure {
-        application_id: application_id.to_owned(),
+        application_id: ApplicationId::from(application_id),
         desired_visibility: visibility,
         domain,
-        active_runtime_id,
+        active_runtime_id: active_runtime_id.map(RuntimeInstanceId::from),
         materialization_state,
         configuration_version,
         last_materialized_at,
@@ -646,7 +647,7 @@ pub fn load_deployment_specification(
         }
     })?;
     Ok(Some(ApplicationDeploymentSpecification {
-        application_id,
+        application_id: ApplicationId::from(application_id),
         application_name,
         runtime: RuntimeSpecification {
             container_port,

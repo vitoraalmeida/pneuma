@@ -185,7 +185,7 @@ pub(crate) fn start_candidate(
         source: Box::new(source),
         resources: Box::new(resources.clone()),
     })?;
-    resources = resources.with_runtime_mut(&runtime.id);
+    resources = resources.with_runtime_mut(runtime.id.as_str());
 
     consume_port_reservation(connection, deployment_id).map_err(|source| {
         CandidateStartError::PortPersistence {

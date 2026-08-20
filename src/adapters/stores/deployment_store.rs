@@ -4,6 +4,7 @@ use std::fmt;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::domain::deployment::{Deployment, DeploymentStatus, DeploymentType};
+use crate::domain::identity::{ApplicationId, DeploymentId, ReleaseId};
 
 #[derive(Debug)]
 pub enum DeploymentStoreError {
@@ -174,9 +175,9 @@ pub fn load_deployment(
         }
     })?;
     Ok(Deployment {
-        id,
-        application_id,
-        release_id,
+        id: DeploymentId::from(id),
+        application_id: ApplicationId::from(application_id),
+        release_id: ReleaseId::from(release_id),
         deployment_type,
         status,
         source_revision,

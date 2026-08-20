@@ -82,7 +82,7 @@ fn uses_the_default_branch_when_branch_is_omitted() {
     connection
         .execute(
             "UPDATE application_sources SET default_branch = 'main' WHERE application_id = ?1",
-            [&application.id],
+            [application.id.as_str()],
         )
         .unwrap();
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();

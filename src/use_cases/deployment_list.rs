@@ -4,6 +4,7 @@ use std::fmt;
 use rusqlite::Connection;
 
 use crate::domain::deployment::{DeploymentStatus, DeploymentType};
+use crate::domain::identity::ApplicationId;
 
 #[derive(Debug)]
 // Represents the immutable release identity and lifecycle state shown in deployment history.
@@ -54,7 +55,7 @@ impl Error for ListDeploymentsError {
 // Reads an application's deployment history and rejects invalid persisted lifecycle values.
 pub fn list_deployments(
     connection: &Connection,
-    application_id: &str,
+    application_id: &ApplicationId,
 ) -> Result<Vec<DeploymentSummary>, ListDeploymentsError> {
     let mut statement = connection
         .prepare(
@@ -67,7 +68,7 @@ pub fn list_deployments(
         .map_err(|source| ListDeploymentsError::Persistence { source })?;
 
     let rows = statement
-        .query_map([application_id], |row| {
+        .query_map([application_id.as_str()], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,

@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use pneuma::adapters::database;
 use pneuma::domain::deployment::{DeploymentStatus, DeploymentType};
+use pneuma::domain::identity::ApplicationId;
 use pneuma::domain::release::OciArtifact;
 use pneuma::use_cases::application_import::import_application;
 use pneuma::use_cases::deployment_create::create_deployment;
@@ -158,6 +159,7 @@ fn records_a_structured_failure_and_allows_a_later_attempt() {
         )
     );
 
+    let application_id = ApplicationId::from(application_id);
     let release = create_release(&mut connection, &application_id, &artifact('b')).unwrap();
     create_deployment(
         &mut connection,
@@ -238,7 +240,11 @@ fn pending_deployment() -> (rusqlite::Connection, String, String) {
         DeploymentType::Deploy,
     )
     .unwrap();
-    (connection, deployment.id, application.id)
+    (
+        connection,
+        deployment.id.to_string(),
+        application.id.to_string(),
+    )
 }
 
 fn fixture_path(name: &str) -> PathBuf {

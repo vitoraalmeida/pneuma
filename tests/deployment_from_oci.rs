@@ -9,6 +9,7 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use pneuma::adapters::database;
+use pneuma::domain::identity::ApplicationId;
 use pneuma::use_cases::application_import::import_application;
 use pneuma::use_cases::deployment_from_oci::{DeployOciError, deploy_oci};
 
@@ -67,7 +68,7 @@ fn rejects_an_unpinned_oci_reference_before_external_work() {
 
     let error = deploy_oci(
         &mut connection,
-        "application",
+        &ApplicationId::from("application"),
         "registry.example/service:latest",
         None,
         None,

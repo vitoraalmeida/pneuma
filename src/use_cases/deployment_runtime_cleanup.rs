@@ -134,7 +134,7 @@ pub(crate) fn retire_previous_runtime(
     let Some(previous) = previous else {
         return;
     };
-    let previous_unit = unit_name(application_name, &previous.deployment_id);
+    let previous_unit = unit_name(application_name, previous.deployment_id.as_str());
     let retirement = (|| -> Result<(), QuadletError> {
         stop(&previous_unit)?;
         remove_unit(&previous_unit)?;
@@ -148,14 +148,16 @@ pub(crate) fn retire_previous_runtime(
         );
         return;
     }
-    if let Err(source) = remove_container(&previous.external_runtime_id) {
+    if let Err(source) = remove_container(previous.external_runtime_id.as_str()) {
         eprintln!(
             "warning: previous runtime {} unit was retired but its container could not be removed: {source}",
             previous.runtime_id
         );
         return;
     }
-    if let Err(source) = runtime_store::mark_runtime_removed(connection, &previous.runtime_id) {
+    if let Err(source) =
+        runtime_store::mark_runtime_removed(connection, previous.runtime_id.as_str())
+    {
         eprintln!(
             "warning: previous runtime {} was retired but could not be marked removed: {source}",
             previous.runtime_id

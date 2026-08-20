@@ -3,6 +3,7 @@ use std::fmt;
 
 use rusqlite::Connection;
 
+use crate::domain::identity::SystemId;
 use crate::domain::system::System;
 
 #[derive(Debug)]
@@ -31,7 +32,7 @@ pub fn list_systems(connection: &Connection) -> Result<Vec<System>, ListSystemsE
     let rows = statement
         .query_map([], |row| {
             Ok(System {
-                id: row.get(0)?,
+                id: SystemId::from(row.get::<_, String>(0)?),
                 name: row.get(1)?,
                 description: row.get(2)?,
             })

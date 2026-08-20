@@ -275,21 +275,21 @@ fn make_public(
             },
         );
     };
-    let observation = match observe_container(&runtime.external_runtime_id, runtime.container_port)
-    {
-        Ok(observation) => observation,
-        Err(source) => {
-            let message = source.to_string();
-            return fail_public(
-                connection,
-                application_id,
-                "runtime_observation_failed",
-                &message,
-                false,
-                ExposureChangeError::ObserveFailed { source },
-            );
-        }
-    };
+    let observation =
+        match observe_container(runtime.external_runtime_id.as_str(), runtime.container_port) {
+            Ok(observation) => observation,
+            Err(source) => {
+                let message = source.to_string();
+                return fail_public(
+                    connection,
+                    application_id,
+                    "runtime_observation_failed",
+                    &message,
+                    false,
+                    ExposureChangeError::ObserveFailed { source },
+                );
+            }
+        };
     let endpoint = match observation {
         ContainerObservation {
             state: ObservedRuntimeState::Running,
@@ -347,7 +347,7 @@ fn make_public(
     let completion = application_store::complete_public_exposure_change(
         &transaction,
         application_id,
-        &runtime.id,
+        runtime.id.as_str(),
         &configuration_version,
     );
     let completed = match completion {

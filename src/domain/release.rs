@@ -1,6 +1,8 @@
 use std::error::Error;
 use std::fmt;
 
+use crate::domain::identity::{ApplicationId, ReleaseId};
+
 const DIGEST_ALGORITHM: &str = "sha256:";
 const SHA256_HEX_LENGTH: usize = 64;
 
@@ -89,8 +91,8 @@ impl Error for InvalidOciArtifact {}
 #[derive(Debug, Clone, PartialEq, Eq)]
 // Records a reusable immutable artifact associated with one Application.
 pub struct Release {
-    pub id: String,
-    pub application_id: String,
+    pub id: ReleaseId,
+    pub application_id: ApplicationId,
     pub artifact: OciArtifact,
     pub created_at: String,
 }

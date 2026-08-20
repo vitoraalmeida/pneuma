@@ -5,6 +5,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
+use crate::domain::identity::{ApplicationId, ContainerId, DeploymentId, RuntimeInstanceId};
 use crate::domain::runtime::{
     ContainerObservation, DesiredRuntimeState, ObservedRuntimeState, PreviousRuntime,
     RuntimeInstance, RuntimeRegistration, RuntimeState,
@@ -85,10 +86,10 @@ pub fn insert_runtime(
                 last_observed_state, last_observed_at, created_at, updated_at
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'running', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
             params![
-                registration.id,
-                registration.application_id,
-                registration.deployment_id,
-                registration.external_runtime_id,
+                registration.id.as_str(),
+                registration.application_id.as_str(),
+                registration.deployment_id.as_str(),
+                registration.external_runtime_id.as_str(),
                 RuntimeState::Starting.database_value(),
                 registration.endpoint.ip().to_string(),
                 registration.endpoint.port(),
@@ -280,9 +281,9 @@ pub fn load_previous_runtime(
             [application_id, candidate_runtime_id],
             |row| {
                 Ok(PreviousRuntime {
-                    runtime_id: row.get(0)?,
-                    deployment_id: row.get(1)?,
-                    external_runtime_id: row.get(2)?,
+                    runtime_id: RuntimeInstanceId::from(row.get::<_, String>(0)?),
+                    deployment_id: DeploymentId::from(row.get::<_, String>(1)?),
+                    external_runtime_id: ContainerId::from(row.get::<_, String>(2)?),
                 })
             },
         )
@@ -391,10 +392,10 @@ fn map_runtime_instance(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeInst
     let observed_state_text = row.get::<_, String>(8)?;
 
     Ok(RuntimeInstance {
-        id: row.get(0)?,
-        application_id: row.get(1)?,
-        deployment_id: row.get(2)?,
-        external_runtime_id: row.get(3)?,
+        id: RuntimeInstanceId::from(row.get::<_, String>(0)?),
+        application_id: ApplicationId::from(row.get::<_, String>(1)?),
+        deployment_id: DeploymentId::from(row.get::<_, String>(2)?),
+        external_runtime_id: ContainerId::from(row.get::<_, String>(3)?),
         state,
         endpoint: SocketAddr::from((Ipv4Addr::LOCALHOST, row.get::<_, u16>(6)?)),
         container_port: row.get(7)?,

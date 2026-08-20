@@ -28,9 +28,9 @@ fn persists_a_running_candidate_linked_to_its_deployment() {
     )
     .unwrap();
 
-    assert_eq!(runtime.application_id, application_id);
-    assert_eq!(runtime.deployment_id, deployment_id);
-    assert_eq!(runtime.external_runtime_id, external_runtime_id);
+    assert_eq!(runtime.application_id.as_str(), application_id);
+    assert_eq!(runtime.deployment_id.as_str(), deployment_id);
+    assert_eq!(runtime.external_runtime_id.as_str(), external_runtime_id);
     assert_eq!(runtime.endpoint, endpoint);
     assert_eq!(runtime.container_port, 8080);
     assert_eq!(runtime.state, RuntimeState::Starting);
@@ -39,7 +39,7 @@ fn persists_a_running_candidate_linked_to_its_deployment() {
     let state: String = connection
         .query_row(
             "SELECT state FROM runtime_instances WHERE id = ?1",
-            [&runtime.id],
+            [runtime.id.as_str()],
             |row| row.get(0),
         )
         .unwrap();
@@ -62,7 +62,7 @@ fn requires_a_starting_deployment() {
 
     let error = register_candidate_runtime(
         &mut connection,
-        &deployment.id,
+        deployment.id.as_str(),
         &"b".repeat(64),
         "127.0.0.1:30001".parse().unwrap(),
         8080,
@@ -217,8 +217,8 @@ fn database_rejects_a_duplicate_active_endpoint() {
                 'running', CURRENT_TIMESTAMP
              )",
             rusqlite::params![
-                runtime.application_id,
-                runtime.deployment_id,
+                runtime.application_id.as_str(),
+                runtime.deployment_id.as_str(),
                 "b".repeat(64),
                 endpoint.port()
             ],
@@ -245,7 +245,7 @@ fn database_rejects_a_runtime_identity_from_another_application() {
     let error = connection
         .execute(
             "UPDATE runtime_instances SET application_id = ?1 WHERE id = ?2",
-            [&second.id, &runtime.id],
+            rusqlite::params![second.id.as_str(), runtime.id.as_str()],
         )
         .unwrap_err();
 
@@ -277,8 +277,13 @@ fn add_starting_deployment(
         DeploymentType::Deploy,
     )
     .unwrap();
-    advance_deployment(connection, &deployment.id, DeploymentTransition::Start).unwrap();
-    (application.id, deployment.id)
+    advance_deployment(
+        connection,
+        deployment.id.as_str(),
+        DeploymentTransition::Start,
+    )
+    .unwrap();
+    (application.id.to_string(), deployment.id.to_string())
 }
 
 fn fixture_path(name: &str) -> PathBuf {

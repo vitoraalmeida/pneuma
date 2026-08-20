@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use pneuma::adapters::database;
+use pneuma::domain::identity::ApplicationId;
 use pneuma::domain::release::OciArtifact;
 use pneuma::use_cases::application_import::import_application;
 use pneuma::use_cases::release_create::{CreateReleaseError, create_release};
@@ -38,7 +39,8 @@ fn reports_the_actual_missing_application_identifier() {
     )
     .unwrap();
 
-    let error = create_release(&mut connection, "missing-app", &artifact).unwrap_err();
+    let application_id = ApplicationId::from("missing-app");
+    let error = create_release(&mut connection, &application_id, &artifact).unwrap_err();
 
     assert!(matches!(
         error,

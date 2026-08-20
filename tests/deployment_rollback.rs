@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use pneuma::adapters::database;
+use pneuma::domain::identity::ApplicationId;
 use pneuma::use_cases::application_import::import_application;
 use pneuma::use_cases::deployment_rollback::{RollbackError, rollback_deployment};
 
@@ -19,7 +20,8 @@ fn rollback_fails_when_no_previous_deployment_exists() {
 fn rollback_fails_for_unknown_application() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
 
-    let error = rollback_deployment(&mut connection, "non-existent-app", None).unwrap_err();
+    let application_id = ApplicationId::from("non-existent-app");
+    let error = rollback_deployment(&mut connection, &application_id, None).unwrap_err();
 
     assert!(matches!(error, RollbackError::ApplicationNotFound { .. }));
 }

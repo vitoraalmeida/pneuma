@@ -6,6 +6,7 @@ use rusqlite::Connection;
 use crate::adapters::oci_image::{PullImageError, pull_image};
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::domain::deployment::DeploymentType;
+use crate::domain::identity::ApplicationId;
 use crate::domain::release::OciArtifact;
 use crate::use_cases::deployment_execute_release::{
     DeployReleaseError, DeploymentResult, PublicDeploymentConfiguration, deploy_release,
@@ -77,7 +78,7 @@ impl Error for DeployOciError {
 // delegates runtime orchestration to the release deployment workflow.
 pub fn deploy_oci(
     connection: &mut Connection,
-    application_id: &str,
+    application_id: &ApplicationId,
     image_reference: &str,
     source_revision: Option<&str>,
     public_configuration: Option<&PublicDeploymentConfiguration>,
@@ -86,16 +87,17 @@ pub fn deploy_oci(
         OciArtifact::parse(image_reference).map_err(|source| DeployOciError::PullImage {
             source: PullImageError::InvalidReference { source },
         })?;
-    let delivery = application_store::load_delivery_specification(connection, application_id)
-        .map_err(|source| DeployOciError::DeliveryConfiguration { source })?;
+    let delivery =
+        application_store::load_delivery_specification(connection, application_id.as_str())
+            .map_err(|source| DeployOciError::DeliveryConfiguration { source })?;
     let Some(delivery) = delivery else {
         return Err(DeployOciError::NoDeliveryConfiguration {
-            application_id: application_id.to_owned(),
+            application_id: application_id.to_string(),
         });
     };
     if artifact.repository() != delivery.image_repository {
         return Err(DeployOciError::RepositoryMismatch {
-            application_id: application_id.to_owned(),
+            application_id: application_id.to_string(),
             allowed: delivery.image_repository,
             actual: artifact.repository().to_owned(),
         });

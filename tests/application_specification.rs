@@ -19,7 +19,7 @@ fn loads_named_source_delivery_runtime_and_health_configuration() {
     )
     .unwrap();
 
-    let source = application_store::load_source(&connection, &application.id)
+    let source = application_store::load_source(&connection, application.id.as_str())
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -30,18 +30,20 @@ fn loads_named_source_delivery_runtime_and_health_configuration() {
     assert_eq!(source.default_branch, None);
     assert_eq!(source.manifest_path, "deploy/staging/pneuma.toml");
 
-    let delivery = application_store::load_delivery_specification(&connection, &application.id)
-        .unwrap()
-        .unwrap();
+    let delivery =
+        application_store::load_delivery_specification(&connection, application.id.as_str())
+            .unwrap()
+            .unwrap();
     assert_eq!(delivery.delivery_type, DeliveryType::Oci);
     assert_eq!(
         delivery.image_repository,
         "ghcr.io/vitoraalmeida/vitoralmeida.tech"
     );
 
-    let deployment = application_store::load_deployment_specification(&connection, &application.id)
-        .unwrap()
-        .unwrap();
+    let deployment =
+        application_store::load_deployment_specification(&connection, application.id.as_str())
+            .unwrap()
+            .unwrap();
     assert_eq!(deployment.application_id, application.id);
     assert_eq!(deployment.application_name, "personal-site");
     assert_eq!(deployment.runtime.container_port, 8080);
@@ -49,7 +51,7 @@ fn loads_named_source_delivery_runtime_and_health_configuration() {
     assert_eq!(deployment.runtime.health_check.expected_status, 200);
     assert_eq!(deployment.visibility, Visibility::Public);
 
-    let exposure = application_store::load_exposure(&connection, &application.id)
+    let exposure = application_store::load_exposure(&connection, application.id.as_str())
         .unwrap()
         .unwrap();
     assert_eq!(exposure.application_id, application.id);

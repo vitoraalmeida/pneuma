@@ -42,7 +42,7 @@ fn returns_deployments_ordered_newest_first() {
                  failure_code = 'test_failure',
                  updated_at = CURRENT_TIMESTAMP
              WHERE id = ?1",
-            [&first_deployment.id],
+            [first_deployment.id.as_str()],
         )
         .unwrap();
     let second_deployment = create_deployment(
@@ -60,18 +60,18 @@ fn returns_deployments_ordered_newest_first() {
                  finished_at = '2026-08-07 11:01:00',
                  updated_at = CURRENT_TIMESTAMP
              WHERE id = ?1",
-            [&second_deployment.id],
+            [second_deployment.id.as_str()],
         )
         .unwrap();
 
     let deployments = list_deployments(&connection, &application.id).unwrap();
 
     assert_eq!(deployments.len(), 2);
-    assert_eq!(deployments[0].id, second_deployment.id);
+    assert_eq!(deployments[0].id, second_deployment.id.as_str());
     assert_eq!(deployments[0].image_digest, digest('b'));
     assert_eq!(deployments[0].status, DeploymentStatus::Succeeded);
     assert!(deployments[0].finished_at.is_some());
-    assert_eq!(deployments[1].id, first_deployment.id);
+    assert_eq!(deployments[1].id, first_deployment.id.as_str());
     assert_eq!(deployments[1].image_digest, digest('a'));
     assert_eq!(deployments[1].status, DeploymentStatus::Failed);
     assert!(deployments[1].finished_at.is_some());

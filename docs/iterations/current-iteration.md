@@ -44,8 +44,10 @@ without selecting a new Release or making destructive changes from ambiguity.
   non-obvious mechanisms without changing behavior or annotating tests.
   Result: production structs and operational functions now describe their role,
   transaction or external-effect boundaries, and critical invariants.
-- [ ] Harden domain identities across logical and external resources without
+- [x] Harden domain identities across logical and external resources without
   changing SQLite's persisted text representation.
+  Result: opaque logical and container identities now map through stores without
+  changing SQLite TEXT values.
 - [ ] Validate application specification and OCI values at domain boundaries,
   including shared repository identity and cohesive source representation.
 - [ ] Separate expected runtime identity from external observation, preserve

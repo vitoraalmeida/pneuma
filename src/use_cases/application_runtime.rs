@@ -151,7 +151,7 @@ pub fn report_application_status(
             return Ok(RuntimeObservation {
                 desired_runtime_state,
                 observed_runtime_state: ObservedRuntimeState::Stopped,
-                runtime_id: runtime.id,
+                runtime_id: runtime.id.to_string(),
                 container_id: external_runtime_id,
                 endpoint: None,
             });
@@ -166,7 +166,7 @@ pub fn report_application_status(
     Ok(RuntimeObservation {
         desired_runtime_state,
         observed_runtime_state: observation.state,
-        runtime_id: runtime.id,
+        runtime_id: runtime.id.to_string(),
         container_id: external_runtime_id,
         endpoint: observation.endpoint,
     })
@@ -236,7 +236,7 @@ fn transition_application(
             return Ok(RuntimeObservation {
                 desired_runtime_state,
                 observed_runtime_state: ObservedRuntimeState::Stopped,
-                runtime_id: runtime.id,
+                runtime_id: runtime.id.to_string(),
                 container_id: external_runtime_id,
                 endpoint: None,
             });
@@ -244,15 +244,15 @@ fn transition_application(
         // When the operator wants the application running and the unit exists, attempt to
         // start it and re-observe (Quadlet recreates the container under the stable name).
         if desired_runtime_state == DesiredRuntimeState::Running {
-            let unit = unit_name(application_name, &runtime.deployment_id);
+            let unit = unit_name(application_name, runtime.deployment_id.as_str());
             if unit_exists(&unit).map_err(|source| RuntimeLifecycleError::Supervision {
                 operation: "checking Quadlet unit for",
-                runtime_id: runtime.id.clone(),
+                runtime_id: runtime.id.to_string(),
                 source,
             })? {
                 start_unit(&unit).map_err(|source| RuntimeLifecycleError::Supervision {
                     operation,
-                    runtime_id: runtime.id.clone(),
+                    runtime_id: runtime.id.to_string(),
                     source,
                 })?;
                 let (new_observation, new_external_runtime_id) =
@@ -262,7 +262,7 @@ fn transition_application(
                     return Ok(RuntimeObservation {
                         desired_runtime_state,
                         observed_runtime_state: new_observation.state,
-                        runtime_id: runtime.id,
+                        runtime_id: runtime.id.to_string(),
                         container_id: new_external_runtime_id,
                         endpoint: new_observation.endpoint,
                     });
@@ -277,35 +277,35 @@ fn transition_application(
     let observation = if observation.state == target {
         observation
     } else {
-        let unit = unit_name(application_name, &runtime.deployment_id);
+        let unit = unit_name(application_name, runtime.deployment_id.as_str());
         if unit_exists(&unit).map_err(|source| RuntimeLifecycleError::Supervision {
             operation: "checking Quadlet unit for",
-            runtime_id: runtime.id.clone(),
+            runtime_id: runtime.id.to_string(),
             source,
         })? {
             if desired_runtime_state == DesiredRuntimeState::Running {
                 start_unit(&unit).map_err(|source| RuntimeLifecycleError::Supervision {
                     operation,
-                    runtime_id: runtime.id.clone(),
+                    runtime_id: runtime.id.to_string(),
                     source,
                 })?;
             } else {
                 stop_unit(&unit).map_err(|source| RuntimeLifecycleError::Supervision {
                     operation,
-                    runtime_id: runtime.id.clone(),
+                    runtime_id: runtime.id.to_string(),
                     source,
                 })?;
             }
         } else {
             control(&external_runtime_id).map_err(|source| RuntimeLifecycleError::Control {
                 operation,
-                runtime_id: runtime.id.clone(),
+                runtime_id: runtime.id.to_string(),
                 source: Box::new(source),
             })?;
         }
         observe_container(&external_runtime_id, runtime.container_port).map_err(|source| {
             RuntimeLifecycleError::Observe {
-                runtime_id: runtime.id.clone(),
+                runtime_id: runtime.id.to_string(),
                 source,
             }
         })?
@@ -324,7 +324,7 @@ fn transition_application(
         return Ok(RuntimeObservation {
             desired_runtime_state,
             observed_runtime_state: ObservedRuntimeState::Stopped,
-            runtime_id: runtime.id,
+            runtime_id: runtime.id.to_string(),
             container_id: external_runtime_id,
             endpoint: None,
         });
@@ -334,7 +334,7 @@ fn transition_application(
     Ok(RuntimeObservation {
         desired_runtime_state,
         observed_runtime_state: observation.state,
-        runtime_id: runtime.id,
+        runtime_id: runtime.id.to_string(),
         container_id: external_runtime_id,
         endpoint: observation.endpoint,
     })
@@ -349,34 +349,38 @@ fn observe_current_runtime(
     runtime: &RuntimeInstance,
     application_name: &str,
 ) -> Result<(ContainerObservation, String), RuntimeLifecycleError> {
-    let observation = observe_container(&runtime.external_runtime_id, runtime.container_port)
-        .map_err(|source| RuntimeLifecycleError::Observe {
-            runtime_id: runtime.id.clone(),
-            source,
-        })?;
+    let observation =
+        observe_container(runtime.external_runtime_id.as_str(), runtime.container_port).map_err(
+            |source| RuntimeLifecycleError::Observe {
+                runtime_id: runtime.id.to_string(),
+                source,
+            },
+        )?;
     if observation.state != ObservedRuntimeState::Missing {
-        return Ok((observation, runtime.external_runtime_id.clone()));
+        return Ok((observation, runtime.external_runtime_id.to_string()));
     }
-    let resolved =
-        match resolve_container_id(&container_name(application_name, &runtime.deployment_id)) {
-            Ok(id) => id,
-            Err(_) => return Ok((observation, runtime.external_runtime_id.clone())),
-        };
+    let resolved = match resolve_container_id(&container_name(
+        application_name,
+        runtime.deployment_id.as_str(),
+    )) {
+        Ok(id) => id,
+        Err(_) => return Ok((observation, runtime.external_runtime_id.to_string())),
+    };
     let reconciled = runtime_store::reconcile_external_runtime_id(
         connection,
-        &runtime.id,
-        &runtime.external_runtime_id,
+        runtime.id.as_str(),
+        runtime.external_runtime_id.as_str(),
         &resolved,
     )
     .map_err(|source| RuntimeLifecycleError::Store { source })?;
     if !reconciled {
         return Err(RuntimeLifecycleError::RuntimeChanged {
-            runtime_id: runtime.id.clone(),
+            runtime_id: runtime.id.to_string(),
         });
     }
     let observation = observe_container(&resolved, runtime.container_port).map_err(|source| {
         RuntimeLifecycleError::Observe {
-            runtime_id: runtime.id.clone(),
+            runtime_id: runtime.id.to_string(),
             source,
         }
     })?;
@@ -438,11 +442,11 @@ fn persist_observation(
     runtime: &RuntimeInstance,
     observation: &ContainerObservation,
 ) -> Result<(), RuntimeLifecycleError> {
-    let updated = runtime_store::persist_observation(connection, &runtime.id, observation)
+    let updated = runtime_store::persist_observation(connection, runtime.id.as_str(), observation)
         .map_err(|source| RuntimeLifecycleError::Store { source })?;
     if !updated {
         return Err(RuntimeLifecycleError::RuntimeChanged {
-            runtime_id: runtime.id.clone(),
+            runtime_id: runtime.id.to_string(),
         });
     }
     Ok(())

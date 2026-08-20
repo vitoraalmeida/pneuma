@@ -8,6 +8,7 @@ use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::domain::application::ApplicationDeploymentSpecification;
 use crate::domain::deployment::{DeploymentStatus, DeploymentType};
 use crate::domain::exposure::Visibility;
+use crate::domain::identity::ApplicationId;
 use crate::domain::release::Release;
 use crate::use_cases::deployment_activate_public::{
     PublicActivationError, PublicActivationInput, activate_public_candidate,
@@ -138,7 +139,7 @@ impl Error for DeployReleaseError {
 // Deploys a release without progress callbacks while preserving the full execution workflow.
 pub fn deploy_release(
     connection: &mut Connection,
-    application_id: &str,
+    application_id: &ApplicationId,
     release: &Release,
     deployment_type: DeploymentType,
     source_revision: Option<&str>,
@@ -159,7 +160,7 @@ pub fn deploy_release(
 // Deploys a release while reporting durable lifecycle milestones to the supplied callback.
 pub fn deploy_release_with_progress(
     connection: &mut Connection,
-    application_id: &str,
+    application_id: &ApplicationId,
     release: &Release,
     deployment_type: DeploymentType,
     source_revision: Option<&str>,
@@ -182,7 +183,7 @@ pub fn deploy_release_with_progress(
 // one finalizer that records failure and cleans up candidate resources.
 fn deploy_release_reporting(
     connection: &mut Connection,
-    application_id: &str,
+    application_id: &ApplicationId,
     release: &Release,
     deployment_type: DeploymentType,
     source_revision: Option<&str>,
@@ -204,7 +205,7 @@ fn deploy_release_reporting(
     );
     if specification.visibility == Visibility::Public && public_configuration.is_none() {
         return Err(DeployReleaseError::PublicApplication {
-            application_id: application_id.to_owned(),
+            application_id: application_id.to_string(),
         });
     }
 
@@ -224,11 +225,11 @@ fn deploy_release_reporting(
         DeploymentStep::CreateDeployment,
         format!("deployment {}", deployment.id),
     );
-    progress.state_changed(&deployment.id, DeploymentStatus::Pending);
+    progress.state_changed(deployment.id.as_str(), DeploymentStatus::Pending);
 
     let execution = execute_deployment(
         connection,
-        &deployment.id,
+        deployment.id.as_str(),
         &specification,
         release.artifact.reference(),
         release.artifact.digest(),
@@ -237,41 +238,45 @@ fn deploy_release_reporting(
     );
     match execution {
         Ok((runtime_id, container_name, finished_at)) => Ok(DeploymentResult {
-            deployment_id: deployment.id,
+            deployment_id: deployment.id.to_string(),
             runtime_id,
             container_name,
             image_reference: release.artifact.reference().to_owned(),
             source_revision: deployment.source_revision,
             finished_at,
         }),
-        Err(failed) => finish_failed_deployment(connection, &deployment.id, failed, progress),
+        Err(failed) => {
+            finish_failed_deployment(connection, deployment.id.as_str(), failed, progress)
+        }
     }
 }
 
 // Loads the complete persisted specification needed to execute a deployment.
 fn load_specification(
     connection: &Connection,
-    application_id: &str,
+    application_id: &ApplicationId,
 ) -> Result<ApplicationDeploymentSpecification, DeployReleaseError> {
-    let spec = match application_store::load_deployment_specification(connection, application_id) {
-        Ok(Some(spec)) => spec,
-        Ok(None) => {
-            return Err(DeployReleaseError::ApplicationNotFound {
-                application_id: application_id.to_owned(),
-            });
-        }
-        Err(ApplicationStoreError::NotFound { application_id }) => {
-            return Err(DeployReleaseError::ApplicationNotFound { application_id });
-        }
-        Err(ApplicationStoreError::SystemNotFound { .. }) => {
-            return Err(DeployReleaseError::LoadApplication {
-                source: rusqlite::Error::QueryReturnedNoRows,
-            });
-        }
-        Err(ApplicationStoreError::Persistence { source }) => {
-            return Err(DeployReleaseError::LoadApplication { source });
-        }
-    };
+    let spec =
+        match application_store::load_deployment_specification(connection, application_id.as_str())
+        {
+            Ok(Some(spec)) => spec,
+            Ok(None) => {
+                return Err(DeployReleaseError::ApplicationNotFound {
+                    application_id: application_id.to_string(),
+                });
+            }
+            Err(ApplicationStoreError::NotFound { application_id }) => {
+                return Err(DeployReleaseError::ApplicationNotFound { application_id });
+            }
+            Err(ApplicationStoreError::SystemNotFound { .. }) => {
+                return Err(DeployReleaseError::LoadApplication {
+                    source: rusqlite::Error::QueryReturnedNoRows,
+                });
+            }
+            Err(ApplicationStoreError::Persistence { source }) => {
+                return Err(DeployReleaseError::LoadApplication { source });
+            }
+        };
 
     Ok(spec)
 }
@@ -304,7 +309,7 @@ fn execute_deployment(
     let input = CandidateStartInput {
         connection,
         deployment_id,
-        application_id: &specification.application_id,
+        application_id: specification.application_id.as_str(),
         application_name: &specification.application_name,
         image_reference,
         container_port: specification.runtime.container_port,
@@ -388,15 +393,15 @@ fn execute_deployment(
 
     let previous_runtime = load_previous_runtime(
         connection,
-        &specification.application_id,
-        &candidate.runtime.id,
+        specification.application_id.as_str(),
+        candidate.runtime.id.as_str(),
     )
     .map_err(|source| {
         candidate_failure(
             "runtime_reconciliation_failed",
             source,
-            Some(&candidate.runtime.external_runtime_id),
-            Some(&candidate.runtime.id),
+            Some(candidate.runtime.external_runtime_id.as_str()),
+            Some(candidate.runtime.id.as_str()),
             Some(&candidate.unit_name),
             true,
         )
@@ -407,16 +412,16 @@ fn execute_deployment(
             return Err(failure_needing_persistence(
                 "public_configuration_missing",
                 DeployReleaseError::PublicApplication {
-                    application_id: specification.application_id.clone(),
+                    application_id: specification.application_id.to_string(),
                 },
-                Some(&candidate.runtime.external_runtime_id),
-                Some(&candidate.runtime.id),
+                Some(candidate.runtime.external_runtime_id.as_str()),
+                Some(candidate.runtime.id.as_str()),
             ));
         };
         let input = PublicActivationInput {
             connection,
             runtime: &candidate.runtime,
-            application_id: &specification.application_id,
+            application_id: specification.application_id.as_str(),
             health_path: &specification.runtime.health_check.path,
             expected_status: specification.runtime.health_check.expected_status,
             managed_caddy_directory: &public_configuration.managed_caddy_directory,
@@ -483,7 +488,7 @@ fn execute_deployment(
         }
         return completed.map(|output| {
             (
-                candidate.runtime.id.clone(),
+                candidate.runtime.id.to_string(),
                 candidate.container_name,
                 output.finished_at,
             )
@@ -501,7 +506,7 @@ fn execute_deployment(
     );
     let promoted = promote_internal_candidate(
         connection,
-        &candidate.runtime.id,
+        candidate.runtime.id.as_str(),
         &specification.runtime.health_check.path,
         specification.runtime.health_check.expected_status,
     )
@@ -513,15 +518,15 @@ fn execute_deployment(
             failure_already_persisted(
                 "health_check_failed",
                 source,
-                &candidate.runtime.external_runtime_id,
-                &candidate.runtime.id,
+                candidate.runtime.external_runtime_id.as_str(),
+                candidate.runtime.id.as_str(),
             )
         } else {
             failure_needing_persistence(
                 "candidate_promotion_failed",
                 source,
-                Some(&candidate.runtime.external_runtime_id),
-                Some(&candidate.runtime.id),
+                Some(candidate.runtime.external_runtime_id.as_str()),
+                Some(candidate.runtime.id.as_str()),
             )
         };
         failed.resources = failed.resources.with_unit(&candidate.unit_name).with_port();
@@ -539,7 +544,7 @@ fn execute_deployment(
     );
 
     Ok((
-        candidate.runtime.id,
+        candidate.runtime.id.to_string(),
         candidate.container_name,
         promoted.finished_at,
     ))

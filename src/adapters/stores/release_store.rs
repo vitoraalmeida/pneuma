@@ -4,6 +4,7 @@ use std::io;
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
+use crate::domain::identity::{ApplicationId, ReleaseId};
 use crate::domain::release::{OciArtifact, Release};
 
 #[derive(Debug)]
@@ -131,8 +132,8 @@ pub fn load_release_by_digest(
                             )
                         })?;
                 Ok(Release {
-                    id: row.get(0)?,
-                    application_id: row.get(1)?,
+                    id: ReleaseId::from(row.get::<_, String>(0)?),
+                    application_id: ApplicationId::from(row.get::<_, String>(1)?),
                     artifact,
                     created_at: row.get(5)?,
                 })

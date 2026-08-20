@@ -1,27 +1,28 @@
 use crate::domain::exposure::Visibility;
+use crate::domain::identity::{ApplicationId, DeploymentId, SystemId};
 use crate::domain::runtime::DesiredRuntimeState;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 // Captures durable application identity and persisted runtime intent.
 pub struct Application {
-    pub id: String,
-    pub system_id: Option<String>,
+    pub id: ApplicationId,
+    pub system_id: Option<SystemId>,
     pub name: String,
     pub desired_runtime_state: DesiredRuntimeState,
-    pub active_deployment_id: Option<String>,
+    pub active_deployment_id: Option<DeploymentId>,
     pub specification_version: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 // Provides catalog fields without requiring callers to load the full specification.
 pub struct ApplicationSummary {
-    pub id: String,
-    pub system_id: Option<String>,
+    pub id: ApplicationId,
+    pub system_id: Option<SystemId>,
     pub name: String,
     pub repository: Option<String>,
     pub default_branch: Option<String>,
     pub desired_runtime_state: DesiredRuntimeState,
-    pub active_deployment_id: Option<String>,
+    pub active_deployment_id: Option<DeploymentId>,
     pub specification_version: u32,
 }
 
@@ -76,7 +77,7 @@ pub struct RuntimeSpecification {
 #[derive(Debug, Clone, PartialEq, Eq)]
 // Collects the application settings needed to activate a deployment.
 pub struct ApplicationDeploymentSpecification {
-    pub application_id: String,
+    pub application_id: ApplicationId,
     pub application_name: String,
     pub runtime: RuntimeSpecification,
     pub visibility: Visibility,

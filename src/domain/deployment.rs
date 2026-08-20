@@ -1,9 +1,11 @@
+use crate::domain::identity::{ApplicationId, DeploymentId, ReleaseId};
+
 #[derive(Debug, PartialEq, Eq)]
 // Records one immutable attempt to activate a Release for an Application.
 pub struct Deployment {
-    pub id: String,
-    pub application_id: String,
-    pub release_id: String,
+    pub id: DeploymentId,
+    pub application_id: ApplicationId,
+    pub release_id: ReleaseId,
     pub deployment_type: DeploymentType,
     pub status: DeploymentStatus,
     pub source_revision: Option<String>,

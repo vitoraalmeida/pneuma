@@ -1,5 +1,7 @@
 use std::net::SocketAddr;
 
+use crate::domain::identity::{ApplicationId, ContainerId, DeploymentId, RuntimeInstanceId};
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum ObservedRuntimeState {
     Missing,
@@ -77,10 +79,10 @@ pub enum RuntimeState {
 #[derive(Debug, PartialEq, Eq)]
 // Identifies the logical runtime materialized for a Deployment, not just its container.
 pub struct RuntimeInstance {
-    pub id: String,
-    pub application_id: String,
-    pub deployment_id: String,
-    pub external_runtime_id: String,
+    pub id: RuntimeInstanceId,
+    pub application_id: ApplicationId,
+    pub deployment_id: DeploymentId,
+    pub external_runtime_id: ContainerId,
     pub state: RuntimeState,
     pub endpoint: SocketAddr,
     pub container_port: u16,
@@ -94,10 +96,10 @@ pub struct RuntimeInstance {
 #[derive(Debug, PartialEq, Eq)]
 // Supplies the identity and reserved endpoint required to register a runtime.
 pub struct RuntimeRegistration {
-    pub id: String,
-    pub application_id: String,
-    pub deployment_id: String,
-    pub external_runtime_id: String,
+    pub id: RuntimeInstanceId,
+    pub application_id: ApplicationId,
+    pub deployment_id: DeploymentId,
+    pub external_runtime_id: ContainerId,
     pub endpoint: SocketAddr,
     pub container_port: u16,
 }
@@ -105,9 +107,9 @@ pub struct RuntimeRegistration {
 #[derive(Debug, PartialEq, Eq)]
 // Identifies the prior materialization retained during candidate replacement.
 pub struct PreviousRuntime {
-    pub runtime_id: String,
-    pub deployment_id: String,
-    pub external_runtime_id: String,
+    pub runtime_id: RuntimeInstanceId,
+    pub deployment_id: DeploymentId,
+    pub external_runtime_id: ContainerId,
 }
 
 impl RuntimeState {

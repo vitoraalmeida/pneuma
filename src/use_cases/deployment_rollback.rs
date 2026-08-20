@@ -5,6 +5,7 @@ use rusqlite::{Connection, OptionalExtension};
 
 use crate::adapters::oci_image::{PullImageError, pull_image};
 use crate::domain::deployment::DeploymentType;
+use crate::domain::identity::{ApplicationId, ReleaseId};
 use crate::domain::release::{OciArtifact, Release};
 use crate::use_cases::deployment_execute_release::{
     DeployReleaseError, DeploymentResult, PublicDeploymentConfiguration, deploy_release,
@@ -54,22 +55,22 @@ impl Error for RollbackError {
 // Reuses a historical immutable artifact through the normal deployment flow, preserving history.
 pub fn rollback_deployment(
     connection: &mut Connection,
-    application_id: &str,
+    application_id: &ApplicationId,
     public_configuration: Option<&PublicDeploymentConfiguration>,
 ) -> Result<DeploymentResult, RollbackError> {
     let exists = connection
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM applications WHERE id = ?1)",
-            [application_id],
+            [application_id.as_str()],
             |row| row.get::<_, bool>(0),
         )
         .map_err(|source| RollbackError::Persistence { source })?;
     if !exists {
         return Err(RollbackError::ApplicationNotFound {
-            application_id: application_id.to_owned(),
+            application_id: application_id.to_string(),
         });
     }
-    let (release, source_revision) = previous_release(connection, application_id)?;
+    let (release, source_revision) = previous_release(connection, application_id.as_str())?;
     pull_image(release.artifact.reference())
         .map_err(|source| RollbackError::PullImage { source })?;
     deploy_release(
@@ -119,8 +120,8 @@ fn previous_release(
                         })?;
                 Ok((
                     Release {
-                        id: row.get(0)?,
-                        application_id: row.get(1)?,
+                        id: ReleaseId::from(row.get::<_, String>(0)?),
+                        application_id: ApplicationId::from(row.get::<_, String>(1)?),
                         artifact,
                         created_at: row.get(6)?,
                     },
@@ -171,7 +172,7 @@ mod tests {
 
         let (release, source_revision) = previous_release(&connection, "app-id").unwrap();
 
-        assert_eq!(release.id, "release-id");
+        assert_eq!(release.id.as_str(), "release-id");
         assert_eq!(release.artifact.repository(), "registry.example/app");
         assert_eq!(source_revision.as_deref(), Some("historical-commit"));
     }

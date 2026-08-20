@@ -253,7 +253,7 @@ fn cli_system_overrides_manifest() {
             "SELECT systems.name FROM systems
              JOIN applications ON applications.system_id = systems.id
              WHERE applications.id = ?1",
-            [&application.id],
+            [application.id.as_str()],
             |row| row.get(0),
         )
         .unwrap();
@@ -356,9 +356,12 @@ fn reimport_preserves_the_active_deployment_of_a_deployed_application() {
     )
     .unwrap();
 
-    assert_eq!(reimported.id, application_id);
+    assert_eq!(reimported.id.as_str(), application_id);
     assert_eq!(
-        reimported.active_deployment_id.as_deref(),
+        reimported
+            .active_deployment_id
+            .as_ref()
+            .map(|id| id.as_str()),
         Some("deployment-1")
     );
     assert_eq!(

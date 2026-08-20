@@ -7,6 +7,7 @@ use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
 use crate::adapters::stores::release_store::{self, ReleaseStoreError};
 use crate::domain::deployment::{Deployment, DeploymentType};
+use crate::domain::identity::{ApplicationId, ReleaseId};
 
 #[derive(Debug)]
 pub enum CreateDeploymentError {
@@ -71,8 +72,8 @@ impl Error for CreateDeploymentError {
 // Creates a deployment without source provenance for callers that deploy an existing release.
 pub fn create_deployment(
     connection: &mut Connection,
-    application_id: &str,
-    release_id: &str,
+    application_id: &ApplicationId,
+    release_id: &ReleaseId,
     deployment_type: DeploymentType,
 ) -> Result<Deployment, CreateDeploymentError> {
     create_deployment_with_source_revision(
@@ -88,8 +89,8 @@ pub fn create_deployment(
 // concurrent active deployments for the same application.
 pub fn create_deployment_with_source_revision(
     connection: &mut Connection,
-    application_id: &str,
-    release_id: &str,
+    application_id: &ApplicationId,
+    release_id: &ReleaseId,
     deployment_type: DeploymentType,
     source_revision: Option<&str>,
 ) -> Result<Deployment, CreateDeploymentError> {
@@ -97,35 +98,38 @@ pub fn create_deployment_with_source_revision(
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|source| CreateDeploymentError::Persistence { source })?;
 
-    let application_exists = application_store::application_exists(&transaction, application_id)
-        .map_err(|source| CreateDeploymentError::ApplicationStore { source })?;
+    let application_exists =
+        application_store::application_exists(&transaction, application_id.as_str())
+            .map_err(|source| CreateDeploymentError::ApplicationStore { source })?;
     if !application_exists {
         return Err(CreateDeploymentError::ApplicationNotFound {
-            application_id: application_id.to_owned(),
+            application_id: application_id.to_string(),
         });
     }
-    let release_exists = release_store::release_exists(&transaction, release_id, application_id)
-        .map_err(|source| CreateDeploymentError::ReleaseStore { source })?;
+    let release_exists =
+        release_store::release_exists(&transaction, release_id.as_str(), application_id.as_str())
+            .map_err(|source| CreateDeploymentError::ReleaseStore { source })?;
     if !release_exists {
         return Err(CreateDeploymentError::ReleaseNotFound {
-            release_id: release_id.to_owned(),
+            release_id: release_id.to_string(),
         });
     }
     let has_nonterminal =
-        deployment_store::has_nonterminal_deployment(&transaction, application_id)
+        deployment_store::has_nonterminal_deployment(&transaction, application_id.as_str())
             .map_err(|source| CreateDeploymentError::DeploymentStore { source })?;
     if has_nonterminal {
         return Err(CreateDeploymentError::ActiveDeployment {
-            application_id: application_id.to_owned(),
+            application_id: application_id.to_string(),
         });
     }
     let active_release_id =
-        deployment_store::load_active_runtime_release_id(&transaction, application_id)
+        deployment_store::load_active_runtime_release_id(&transaction, application_id.as_str())
             .map_err(|source| CreateDeploymentError::DeploymentStore { source })?;
-    if active_release_id.as_deref() == Some(release_id) && deployment_type == DeploymentType::Deploy
+    if active_release_id.as_deref() == Some(release_id.as_str())
+        && deployment_type == DeploymentType::Deploy
     {
         return Err(CreateDeploymentError::AlreadyActive {
-            release_id: release_id.to_owned(),
+            release_id: release_id.to_string(),
         });
     }
 
@@ -134,8 +138,8 @@ pub fn create_deployment_with_source_revision(
     deployment_store::insert_pending_deployment(
         &transaction,
         &deployment_id,
-        application_id,
-        release_id,
+        application_id.as_str(),
+        release_id.as_str(),
         deployment_type,
         source_revision,
     )

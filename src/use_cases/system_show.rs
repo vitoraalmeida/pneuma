@@ -5,6 +5,7 @@ use rusqlite::Connection;
 
 use crate::adapters::stores::application_store;
 use crate::domain::application::ApplicationSummary;
+use crate::domain::identity::SystemId;
 use crate::domain::system::System;
 
 #[derive(Debug)]
@@ -49,7 +50,7 @@ pub fn show_system(connection: &Connection, system_name: &str) -> Result<SystemD
             [system_name],
             |row| {
                 Ok(System {
-                    id: row.get(0)?,
+                    id: SystemId::from(row.get::<_, String>(0)?),
                     name: row.get(1)?,
                     description: row.get(2)?,
                 })
@@ -82,7 +83,10 @@ pub fn show_system(connection: &Connection, system_name: &str) -> Result<SystemD
         .map_err(|source| ShowError::Persistence { source })?;
 
     let rows = statement
-        .query_map([&system.id], application_store::map_application_summary_row)
+        .query_map(
+            [system.id.as_str()],
+            application_store::map_application_summary_row,
+        )
         .map_err(|source| ShowError::Persistence { source })?;
 
     let mut applications = Vec::new();

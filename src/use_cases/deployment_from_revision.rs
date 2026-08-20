@@ -6,6 +6,7 @@ use rusqlite::Connection;
 use crate::adapters::git_source::{CommitSha, ResolveBranchError, resolve_branch};
 use crate::adapters::oci_image::{ResolveImageDigestError, resolve_image_digest};
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
+use crate::domain::identity::ApplicationId;
 use crate::use_cases::deployment_execute_release::{
     DeploymentResult, PublicDeploymentConfiguration,
 };
@@ -68,14 +69,14 @@ impl Error for DeployBranchError {
 // Resolves a branch to its immutable commit and image digest before delegating to OCI deployment.
 pub fn deploy_branch(
     connection: &mut Connection,
-    application_id: &str,
+    application_id: &ApplicationId,
     branch: Option<&str>,
     public_configuration: Option<&PublicDeploymentConfiguration>,
 ) -> Result<DeploymentResult, DeployBranchError> {
-    let source = application_store::load_source(connection, application_id)
+    let source = application_store::load_source(connection, application_id.as_str())
         .map_err(|source| DeployBranchError::SourceConfiguration { source })?
         .ok_or_else(|| DeployBranchError::NoSourceConfiguration {
-            application_id: application_id.to_owned(),
+            application_id: application_id.to_string(),
         })?;
 
     let branch = match branch {
@@ -83,18 +84,19 @@ pub fn deploy_branch(
         None => source
             .default_branch
             .ok_or_else(|| DeployBranchError::NoDefaultBranch {
-                application_id: application_id.to_owned(),
+                application_id: application_id.to_string(),
             })?,
     };
 
     let commit_sha: CommitSha = resolve_branch(&source.repository_url, &branch)
         .map_err(|source| DeployBranchError::ResolveBranch { source })?;
 
-    let delivery = application_store::load_delivery_specification(connection, application_id)
-        .map_err(|source| DeployBranchError::SourceConfiguration { source })?
-        .ok_or_else(|| DeployBranchError::NoDeliveryConfiguration {
-            application_id: application_id.to_owned(),
-        })?;
+    let delivery =
+        application_store::load_delivery_specification(connection, application_id.as_str())
+            .map_err(|source| DeployBranchError::SourceConfiguration { source })?
+            .ok_or_else(|| DeployBranchError::NoDeliveryConfiguration {
+                application_id: application_id.to_string(),
+            })?;
 
     let reference = resolve_image_digest(&delivery.image_repository, &commit_sha)
         .map_err(|source| DeployBranchError::ResolveImageDigest { source })?;

@@ -7,6 +7,7 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
 use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
 use crate::domain::deployment::DeploymentStatus;
+use crate::domain::identity::{ContainerId, RuntimeInstanceId};
 use crate::domain::runtime::{RuntimeInstance, RuntimeRegistration};
 
 #[derive(Debug)]
@@ -146,7 +147,7 @@ pub fn register_candidate_runtime(
     if let Some(existing) =
         runtime_store::load_runtime_by_external_id(&transaction, external_runtime_id)?
     {
-        if existing.deployment_id == deployment_id
+        if existing.deployment_id.as_str() == deployment_id
             && existing.endpoint == endpoint
             && existing.container_port == container_port
         {
@@ -176,10 +177,10 @@ pub fn register_candidate_runtime(
 
     let runtime_id = runtime_store::generate_id(&transaction)?;
     let registration = RuntimeRegistration {
-        id: runtime_id,
+        id: RuntimeInstanceId::from(runtime_id),
         application_id: deployment.application_id,
         deployment_id: deployment.id,
-        external_runtime_id: external_runtime_id.to_owned(),
+        external_runtime_id: ContainerId::from(external_runtime_id),
         endpoint,
         container_port,
     };

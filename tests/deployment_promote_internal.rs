@@ -167,11 +167,16 @@ fn add_verifying_candidate(
         DeploymentType::Deploy,
     )
     .unwrap();
-    advance_deployment(connection, &deployment.id, DeploymentTransition::Start).unwrap();
+    advance_deployment(
+        connection,
+        deployment.id.as_str(),
+        DeploymentTransition::Start,
+    )
+    .unwrap();
     let external_runtime_id = runtime_character.to_string().repeat(64);
     let runtime = register_candidate_runtime(
         connection,
-        &deployment.id,
+        deployment.id.as_str(),
         &external_runtime_id,
         endpoint,
         8080,
@@ -179,11 +184,11 @@ fn add_verifying_candidate(
     .unwrap();
     advance_deployment(
         connection,
-        &deployment.id,
+        deployment.id.as_str(),
         DeploymentTransition::RuntimeRunning,
     )
     .unwrap();
-    runtime.id
+    runtime.id.to_string()
 }
 
 fn runtime_and_deployment_state(

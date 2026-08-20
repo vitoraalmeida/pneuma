@@ -1,5 +1,7 @@
 use serde::Deserialize;
 
+use crate::domain::identity::{ApplicationId, RuntimeInstanceId};
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Visibility {
@@ -66,10 +68,10 @@ impl ExposureMaterializationState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 // Tracks visibility intent separately from the confirmed Caddy route state.
 pub struct Exposure {
-    pub application_id: String,
+    pub application_id: ApplicationId,
     pub desired_visibility: Visibility,
     pub domain: Option<String>,
-    pub active_runtime_id: Option<String>,
+    pub active_runtime_id: Option<RuntimeInstanceId>,
     pub materialization_state: ExposureMaterializationState,
     pub configuration_version: Option<String>,
     pub last_materialized_at: Option<String>,

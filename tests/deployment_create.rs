@@ -3,6 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use pneuma::adapters::database;
 use pneuma::domain::deployment::{DeploymentStatus, DeploymentType};
+use pneuma::domain::identity::{ApplicationId, ReleaseId};
 use pneuma::domain::release::OciArtifact;
 use pneuma::use_cases::application_import::import_application;
 use pneuma::use_cases::deployment_create::{
@@ -23,8 +24,8 @@ fn immediate_transaction_acquires_the_writer_lock_before_reading() {
         .unwrap();
     let error = create_deployment(
         &mut second,
-        "missing",
-        "missing-release",
+        &ApplicationId::from("missing"),
+        &ReleaseId::from("missing-release"),
         DeploymentType::Deploy,
     )
     .unwrap_err();
@@ -86,7 +87,7 @@ fn rejects_a_second_active_deployment_for_the_application() {
     assert!(matches!(
         error,
         CreateDeploymentError::ActiveDeployment { application_id }
-            if application_id == application.id
+            if application_id == application.id.as_str()
     ));
     let release_count: i64 = connection
         .query_row("SELECT COUNT(*) FROM releases", [], |row| row.get(0))
@@ -115,7 +116,7 @@ fn reuses_a_release_for_a_later_deployment_attempt() {
                  failure_code = 'test_failure',
                  updated_at = CURRENT_TIMESTAMP
              WHERE id = ?1",
-            [&first_deployment.id],
+            [first_deployment.id.as_str()],
         )
         .unwrap();
 
@@ -153,7 +154,7 @@ fn preserves_provenance_for_each_attempt_using_the_same_release() {
     connection
         .execute(
             "UPDATE deployments SET status = 'failed' WHERE id = ?1",
-            [&first.id],
+            [first.id.as_str()],
         )
         .unwrap();
     let second = create_deployment_with_source_revision(
@@ -179,8 +180,8 @@ fn rejects_a_missing_release_and_missing_application() {
 
     let missing_release = create_deployment(
         &mut connection,
-        "missing",
-        "missing-release",
+        &ApplicationId::from("missing"),
+        &ReleaseId::from("missing-release"),
         DeploymentType::Deploy,
     )
     .unwrap_err();
@@ -201,7 +202,7 @@ fn rejects_a_missing_release_for_an_existing_application() {
     let error = create_deployment(
         &mut connection,
         &application.id,
-        "missing-release",
+        &ReleaseId::from("missing-release"),
         DeploymentType::Deploy,
     )
     .unwrap_err();
@@ -220,8 +221,8 @@ fn a_running_active_runtime_blocks_deploying_the_same_release() {
 
     let error = create_deployment(
         &mut connection,
-        &application_id,
-        &release_id,
+        &ApplicationId::from(application_id),
+        &ReleaseId::from(release_id.clone()),
         DeploymentType::Deploy,
     )
     .unwrap_err();
@@ -239,8 +240,8 @@ fn a_stopped_active_runtime_blocks_deploying_the_same_release() {
 
     let error = create_deployment(
         &mut connection,
-        &application_id,
-        &release_id,
+        &ApplicationId::from(application_id),
+        &ReleaseId::from(release_id.clone()),
         DeploymentType::Deploy,
     )
     .unwrap_err();
@@ -259,8 +260,8 @@ fn a_removed_active_runtime_does_not_block_deployment() {
 
     let deployment = create_deployment(
         &mut connection,
-        &application_id,
-        &release_id,
+        &ApplicationId::from(application_id),
+        &ReleaseId::from(release_id),
         DeploymentType::Deploy,
     )
     .unwrap();
@@ -275,8 +276,8 @@ fn rollback_of_the_active_release_is_allowed() {
 
     let deployment = create_deployment(
         &mut connection,
-        &application_id,
-        &release_id,
+        &ApplicationId::from(application_id),
+        &ReleaseId::from(release_id),
         DeploymentType::Rollback,
     )
     .unwrap();
@@ -304,7 +305,7 @@ fn database_rejects_a_release_from_another_application() {
     let error = connection
         .execute(
             "UPDATE deployments SET application_id = ?1 WHERE id = ?2",
-            [&second.id, &deployment.id],
+            rusqlite::params![second.id.as_str(), deployment.id.as_str()],
         )
         .unwrap_err();
 
@@ -325,7 +326,7 @@ fn setup_active_runtime(
                 id, application_id, release_id, type, status, created_at, updated_at
              ) VALUES ('active-deployment', ?1, ?2, 'deploy', 'succeeded',
                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-            [&application.id, &release.id],
+            rusqlite::params![application.id.as_str(), release.id.as_str()],
         )
         .unwrap();
     connection
@@ -337,17 +338,17 @@ fn setup_active_runtime(
              ) VALUES ('active-runtime', ?1, 'active-deployment', 'aabbccdd', ?2,
                        '127.0.0.1', 30000, 8080, ?2, CURRENT_TIMESTAMP,
                        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?3)",
-            rusqlite::params![application.id, runtime_state, removed_at],
+            rusqlite::params![application.id.as_str(), runtime_state, removed_at],
         )
         .unwrap();
     connection
         .execute(
             "UPDATE applications SET active_deployment_id = 'active-deployment' WHERE id = ?1",
-            [&application.id],
+            [application.id.as_str()],
         )
         .unwrap();
 
-    (application.id, release.id)
+    (application.id.to_string(), release.id.to_string())
 }
 
 fn fixture_path(name: &str) -> PathBuf {
