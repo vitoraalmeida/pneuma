@@ -179,8 +179,21 @@ REMOTE
 prepare_baseline() {
 	local fixture="$1"
 	"$SCRIPT_DIR/reset-fixtures.sh" "$SSH_HOST" >"$CASE_DIR/reset.log" 2>&1
-	"$SCRIPT_DIR/rebuild-fixtures.sh" "$SSH_HOST" >"$CASE_DIR/rebuild.log" 2>&1
-	"$SCRIPT_DIR/deploy-all-fixtures.sh" "$SSH_HOST" >"$CASE_DIR/deploy.log" 2>&1
+	local digest
+	digest=$(
+		root_ssh <<REMOTE
+set -euo pipefail
+curl -fsS -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
+  'http://$REGISTRY/v2/$fixture/manifests/latest' -D - -o /dev/null |
+  awk 'BEGIN { IGNORECASE=1 } /^docker-content-digest:/ { print \$2 }' | tr -d '\r'
+REMOTE
+	)
+	pneuma_ssh >"$CASE_DIR/deploy.log" 2>&1 <<REMOTE
+set -euo pipefail
+cd "\$HOME"
+pneuma app import 'file:///var/lib/pneuma/repos/$fixture.git'
+pneuma app deploy '$fixture' --image '$REGISTRY/$fixture@$digest'
+REMOTE
 	APP="$fixture"
 	load_identity
 	snapshot before
@@ -239,7 +252,7 @@ candidate_digest() {
 set -euo pipefail
 work="/tmp/pneuma-$tag"
 rm -rf "\$work"
-cp -a "/var/lib/pneuma/checkouts/fixtures/$fixture" "\$work"
+	cp -a "/var/lib/pneuma/repos/$fixture-work" "\$work"
 sed -i 's/v1.0/candidate/g' "\$work/server.py"
 podman build -q -t '$REGISTRY/$fixture:$tag' "\$work" >/dev/null
 podman push --tls-verify=false '$REGISTRY/$fixture:$tag' >/dev/null
@@ -764,6 +777,16 @@ runuser -u pneuma -- bash -lc 'command -v podman >/dev/null && systemctl --user 
 REMOTE
 }
 
+# Build/push fixture images and create their local Git repositories once. Every
+# case still resets the database and materialization, then imports/deploys only
+# its own fixture from these immutable inputs.
+prepare_catalog_fixtures() {
+	"$SCRIPT_DIR/reset-fixtures.sh" "$SSH_HOST" >"$LOG_ROOT/catalog-reset.log" 2>&1
+	"$SCRIPT_DIR/rebuild-fixtures.sh" "$SSH_HOST" >"$LOG_ROOT/catalog-rebuild.log" 2>&1
+	"$SCRIPT_DIR/deploy-all-fixtures.sh" "$SSH_HOST" >"$LOG_ROOT/catalog-repositories.log" 2>&1
+	"$SCRIPT_DIR/reset-fixtures.sh" "$SSH_HOST" >"$LOG_ROOT/catalog-ready.log" 2>&1
+}
+
 run_case() {
 	local id="$1" function
 	function=$(case_function "$id") || {
@@ -790,6 +813,16 @@ if ! preflight >"$LOG_ROOT/preflight.log" 2>&1; then
 	for id in "${ALL_CASES[@]}"; do
 		if [[ "$REQUESTED_CASE" == all || "$REQUESTED_CASE" == "$id" ]]; then
 			report skip "$id unavailable VM dependency; see $LOG_ROOT/preflight.log"
+		fi
+	done
+	printf '\n%d passed, %d failed, %d skipped. Logs: %s\n' "$PASS_COUNT" "$FAIL_COUNT" "$SKIP_COUNT" "$LOG_ROOT"
+	exit 0
+fi
+
+if ! prepare_catalog_fixtures; then
+	for id in "${ALL_CASES[@]}"; do
+		if [[ "$REQUESTED_CASE" == all || "$REQUESTED_CASE" == "$id" ]]; then
+			report skip "$id unavailable fixture dependency; see $LOG_ROOT/catalog-*.log"
 		fi
 	done
 	printf '\n%d passed, %d failed, %d skipped. Logs: %s\n' "$PASS_COUNT" "$FAIL_COUNT" "$SKIP_COUNT" "$LOG_ROOT"
