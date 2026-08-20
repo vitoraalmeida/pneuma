@@ -6,6 +6,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::domain::reconciliation::{QuadletSourceObservation, SystemdUnitObservation};
+
 pub const QUADLET_DIRECTORY_ENVIRONMENT_VARIABLE: &str = "PNEUMA_QUADLET_DIR";
 
 #[derive(Debug)]
@@ -21,6 +23,14 @@ pub enum QuadletError {
     RemoveUnit {
         path: PathBuf,
         source: io::Error,
+    },
+    ReadUnit {
+        path: PathBuf,
+        source: io::Error,
+    },
+    ObserveUnit {
+        unit: String,
+        stderr: String,
     },
     Execute {
         operation: &'static str,
@@ -52,6 +62,16 @@ impl fmt::Display for QuadletError {
                 "failed to remove Quadlet unit {}: {source}",
                 path.display()
             ),
+            Self::ReadUnit { path, source } => write!(
+                formatter,
+                "failed to read Quadlet unit {}: {source}",
+                path.display()
+            ),
+            Self::ObserveUnit { unit, stderr } => write!(
+                formatter,
+                "systemctl failed while observing `{unit}`: {}",
+                stderr.trim()
+            ),
             Self::Execute { operation, source } => write!(
                 formatter,
                 "failed to execute systemctl while {operation}: {source}"
@@ -75,8 +95,9 @@ impl Error for QuadletError {
             Self::CreateDirectory { source }
             | Self::WriteUnit { source, .. }
             | Self::RemoveUnit { source, .. }
+            | Self::ReadUnit { source, .. }
             | Self::Execute { source, .. } => Some(source),
-            Self::HomeUnavailable | Self::Systemd { .. } => None,
+            Self::HomeUnavailable | Self::ObserveUnit { .. } | Self::Systemd { .. } => None,
         }
     }
 }
@@ -127,6 +148,41 @@ pub fn unit_exists(unit: &str) -> Result<bool, QuadletError> {
     Ok(quadlet_directory()?
         .join(format!("{unit}.container"))
         .exists())
+}
+
+// Reads the source Quadlet without creating its directory or changing user-systemd state.
+pub fn observe_unit_source(unit: &str) -> Result<QuadletSourceObservation, QuadletError> {
+    let path = quadlet_directory()?.join(format!("{unit}.container"));
+    match fs::read_to_string(&path) {
+        Ok(contents) => Ok(QuadletSourceObservation::Present { contents }),
+        Err(source) if source.kind() == io::ErrorKind::NotFound => {
+            Ok(QuadletSourceObservation::Missing)
+        }
+        Err(source) => Err(QuadletError::ReadUnit { path, source }),
+    }
+}
+
+// Reads systemd's generated-unit state without starting, stopping, or reloading it.
+pub fn observe_generated_unit(unit: &str) -> Result<SystemdUnitObservation, QuadletError> {
+    let service = format!("{unit}.service");
+    let output = Command::new("systemctl")
+        .args(["--user", "is-active", &service])
+        .output()
+        .map_err(|source| QuadletError::Execute {
+            operation: "observing generated unit",
+            source,
+        })?;
+    if output.status.code() == Some(4) {
+        return Ok(SystemdUnitObservation::Missing);
+    }
+    if !(output.status.success() || output.status.code() == Some(3)) {
+        return Err(QuadletError::ObserveUnit {
+            unit: service,
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        });
+    }
+    let active_state = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    Ok(SystemdUnitObservation::Present { active_state })
 }
 
 // Regenerates user-systemd units after a Quadlet file changes.

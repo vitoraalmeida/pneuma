@@ -62,7 +62,7 @@ impl ExpectedRuntimeEndpoint {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 // Captures one Podman observation. Only a confirmed running container carries an endpoint.
 pub enum ContainerObservation {
     Running { observed_endpoint: SocketAddr },

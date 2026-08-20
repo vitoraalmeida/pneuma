@@ -96,6 +96,16 @@ runtime path without the Caddy traffic path.
 The project uses concrete synchronous Rust code. The constraints in
 [`docs/rust-guidelines.md`](../rust-guidelines.md) apply to every change.
 
+### Reconciliation Preparation
+
+The library now has a read-only reconciliation input path. It loads the
+persisted Application, any non-terminal Deployment, active Deployment and
+Release, RuntimeInstance, Exposure, and specification in a short SQLite
+transaction, then closes that transaction before observing Podman, Quadlet, and
+Caddy fragment state. This path does not expose a CLI command, change SQLite,
+or control external resources; future reconciliation use cases classify these
+facts before performing any effect.
+
 ## Domain Roles
 
 | Concept | Role |

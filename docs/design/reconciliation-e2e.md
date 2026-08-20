@@ -89,3 +89,43 @@ When `pneuma reconcile` exists, every row in this catalog becomes a named case
 in the VM harness. The script must report PASS/FAIL/SKIP, retain logs, and never
 mark an unavailable registry, network, VM, or credential dependency as PASS.
 Skips require an explicit reason in the iteration tracker.
+
+## Executable Mapping
+
+Every scenario below is a named case in the future disposable-VM script
+`scripts/dev-vm/reconciliation-e2e.sh`. Focused Rust tests supplement VM proof:
+they exercise classification, compare-and-set, compensation, and fault injection
+without replacing the VM case. Each VM case starts from one deployed fixture
+baseline, records the fixture digest and Application, Deployment, and
+RuntimeInstance IDs, captures SQLite rows and external command logs before and
+after the action, and removes its resources during cleanup.
+
+| ID | VM case | Focused Rust coverage | Fixture and injection | Required assertions |
+|---|---|---|---|---|
+| R1 | `runtime-container-removed-before-observation` | Missing runtime repair and external-ID CAS | Internal `healthy-http`; remove active container before reconcile. | Same logical IDs and port; only confirmed external ID may change; no tombstone or new logical row. |
+| R2 | `runtime-container-removed-after-status` | Missing observation is not retirement | Internal `healthy-http`; run status, remove container, then reconcile. | Missing remains non-retiring; recovery preserves RuntimeInstance and endpoint. |
+| R3 | `runtime-unit-present-container-absent` | Existing-unit recovery | Internal `healthy-http`; retain canonical Quadlet, remove container. | Unit bytes unchanged; one canonical container, digest, labels, endpoint, and loopback health confirmed. |
+| R4 | `runtime-unit-and-container-absent` | Missing-unit rematerialization | Internal `healthy-http`; remove container and expected unit, preserving SQLite. | Same Deployment, RuntimeInstance, and port; canonical unit is recreated and healthy. |
+| R5 | `runtime-divergent-identity` | Parameterized digest, label, port, name, and unit drift | Internal fixture with each external identity field independently divergent. | `manual-intervention`; no start, stop, removal, unit write, port allocation, or logical-row change. |
+| R6 | `runtime-reboot-running` | Recreated-ID classification | Internal `healthy-http` with Running intent; reboot. | User manager, unit, container, digest, labels, port, and health are correct; result is `no-op` or renewed-ID `repaired`. |
+| R7 | `runtime-reboot-stopped` | Stopped/missing no-op | Stop internal fixture, reboot, then reconcile. | Runtime remains non-retired; no start occurs; result is `no-op`. |
+| E1 | `exposure-public-fragment-removed` | Public fragment recreation | Public `redirect-public`; delete canonical fragment. | Same runtime and deployment; canonical fragment, validation, reload, and external health produce active exposure. |
+| E2 | `exposure-divergent-upstream` | Divergent fragment replacement | Public fixture; replace loopback upstream and reload it. | Canonical bytes replace divergent bytes; configuration version advances only after reload and health. |
+| E3 | `exposure-correct-fragment-reload-unconfirmed` | Ordered reload failure and compensation | Public fixture; keep canonical bytes and force reload failure. | Public intent remains; no active route is claimed; result is `failed` or `diverged` with diagnostics. |
+| E4 | `exposure-public-intent-without-route` | Public materialization | Healthy public-intent fixture with no fragment or route evidence. | Intent remains Public; route is materialized and confirmed or an explicit recoverable failure is stored. |
+| E5 | `exposure-internal-intent-with-route` | Internal route removal | Persist Internal intent while retaining the fragment. | Fragment is removed and reload confirmed; runtime remains healthy; route becomes not materialized. |
+| E6 | `exposure-compensation-fails` | Failed restoration classification | Public fixture; fail after materialization and fail restoration. | Observable final state and both diagnostics remain; result is `diverged`. |
+| I1 | `interrupted-pending` | Pending interruption recovery | Interrupt after Pending persistence and before an external effect. | No candidate effect is assumed; prior runtime and route remain active; only proven reservation is released. |
+| I2 | `interrupted-starting` | Confirmed-candidate cleanup | Interrupt after a candidate unit/container is identifiable. | Only candidate resources with confirmed identity are cleaned; prior runtime and route remain active. |
+| I3 | `interrupted-verifying` | No ambiguous promotion | Interrupt while candidate health is unproven. | Candidate is never promoted; confirmed candidate cleanup preserves prior active materialization. |
+| I4 | `interrupted-activating` | Route compensation and divergence | Interrupt after candidate activation begins. | Prior route is restored only when provable; otherwise result is `diverged`; candidate is never inferred active. |
+| C1 | `concurrency-repeated-reconcile` | Repeated no-op and repaired convergence | Run twice on correct materialization and recoverable drift. | Second result is `no-op`; no duplicate unit, route, RuntimeInstance, Deployment, or port. |
+| C2 | `concurrency-parallel-reconcile` | Reservation and stale-result faults | Block first reconcile after reservation and start a second. | One converges, one defers; no database lock or concurrent external effect. |
+| C3 | `concurrency-deploy-deploy` | Existing CLI deployment gate regression | Block deploy A after a non-terminal transition and invoke deploy B. | B reports active deployment; A remains the only successful activation path. |
+| C4 | `concurrency-deploy-reconcile` | Deferred-before-observation | Block a deployment in a non-terminal state and invoke reconcile. | Reconcile is `deferred` before Podman, systemd, Caddy, curl, or cleanup work. |
+
+The VM harness must expose deterministic process gates for `Pending`,
+`Starting`, `Verifying`, and `Activating`; polling and killing an arbitrary
+process state is not sufficient evidence. It must retain a case-specific log
+directory containing command output, SQLite dumps for `runtime_instances`,
+`deployments`, and `exposures`, and pre/post external observations.

@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::domain::exposure::is_valid_domain;
+use crate::domain::reconciliation::CaddyFragmentObservation;
 
 #[derive(Debug, PartialEq, Eq)]
 // Records a newly active fragment and the prior bytes needed to compensate a later route failure.
@@ -59,6 +60,36 @@ pub enum CaddyFilesystemAction {
     ReadPreviousFragment,
     WriteTemporaryFragment,
     ActivateFragment,
+}
+
+#[derive(Debug)]
+pub enum ObserveCaddyFragmentError {
+    InvalidApplicationId,
+    Read { path: PathBuf, source: io::Error },
+}
+
+impl fmt::Display for ObserveCaddyFragmentError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidApplicationId => {
+                formatter.write_str("application ID must be a 32-character hexadecimal value")
+            }
+            Self::Read { path, source } => write!(
+                formatter,
+                "failed to read Caddy fragment at {}: {source}",
+                path.display()
+            ),
+        }
+    }
+}
+
+impl Error for ObserveCaddyFragmentError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Read { source, .. } => Some(source),
+            Self::InvalidApplicationId => None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -336,6 +367,24 @@ pub fn materialize_caddy_fragment(
 // Produces the canonical route representation used to detect and repair fragment drift.
 pub fn canonical_fragment_contents(domain: &str, endpoint: SocketAddr) -> String {
     format!("{domain} {{\n    reverse_proxy {endpoint}\n}}\n")
+}
+
+// Reads one managed fragment without creating directories, validating, or reloading Caddy.
+pub fn observe_caddy_fragment(
+    managed_directory: &Path,
+    application_id: &str,
+) -> Result<CaddyFragmentObservation, ObserveCaddyFragmentError> {
+    if application_id.len() != 32 || !application_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(ObserveCaddyFragmentError::InvalidApplicationId);
+    }
+    let path = managed_directory.join(format!("{application_id}.caddy"));
+    match fs::read_to_string(&path) {
+        Ok(contents) => Ok(CaddyFragmentObservation::Present { contents }),
+        Err(source) if source.kind() == io::ErrorKind::NotFound => {
+            Ok(CaddyFragmentObservation::Missing)
+        }
+        Err(source) => Err(ObserveCaddyFragmentError::Read { path, source }),
+    }
 }
 
 // Restores the fragment active before materialization when later external health rejects the route.

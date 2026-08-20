@@ -4,6 +4,7 @@ pub mod deployment;
 pub mod exposure;
 pub mod identity;
 pub mod manifest;
+pub mod reconciliation;
 pub mod release;
 pub mod runtime;
 pub mod system;

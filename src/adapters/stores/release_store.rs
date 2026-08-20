@@ -146,6 +146,33 @@ pub fn load_release_by_digest(
         })
 }
 
+// Loads a Release by durable identity and validates its redundant persisted artifact fields.
+pub fn load_release_by_id(
+    connection: &Connection,
+    release_id: &str,
+) -> Result<Release, ReleaseStoreError> {
+    connection
+        .query_row(
+            "SELECT id, application_id, image_reference, image_repository, image_digest, created_at FROM releases WHERE id = ?1",
+            [release_id],
+            |row| {
+                let reference = row.get::<_, String>(2)?;
+                let repository = row.get::<_, String>(3)?;
+                let digest = row.get::<_, String>(4)?;
+                let artifact = artifact_from_values(&reference, &repository, &digest).map_err(|source| rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(io::Error::new(io::ErrorKind::InvalidData, source))))?;
+                Ok(Release {
+                    id: ReleaseId::from(row.get::<_, String>(0)?),
+                    application_id: ApplicationId::from(row.get::<_, String>(1)?),
+                    artifact,
+                    created_at: row.get(5)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|source| ReleaseStoreError::Persistence { source })?
+        .ok_or_else(|| ReleaseStoreError::NotFound { release_id: release_id.to_owned() })
+}
+
 pub(crate) fn artifact_from_values(
     reference: &str,
     repository: &str,

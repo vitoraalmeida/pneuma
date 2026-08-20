@@ -70,14 +70,20 @@ without selecting a new Release or making destructive changes from ambiguity.
   outcomes from compare-and-set persistence primitives.
   Result: stores own SQLite mapping and CAS writes return explicit updated or
   stale outcomes; promotion, catalog, and rollback use typed store values.
-- [ ] Convert `reconciliation-e2e.md` into an executable reconciliation test
+- [x] Convert `reconciliation-e2e.md` into an executable reconciliation test
   plan before implementation: assign every scenario to a focused Rust test or
   disposable-VM E2E case, define fixtures, fault injection, persisted-state and
   external-observation assertions, and add initial failing tests for the first
   implementation slice.
-- [ ] Define reconciliation input and read-only observation: load persisted
+  Result: all approved scenarios have named VM cases and supplemental focused
+  coverage, fixtures, injections, and persisted/external assertions; the initial
+  reconciliation tests were demonstrated red before implementation.
+- [x] Define reconciliation input and read-only observation: load persisted
   Application intent, active Deployment, RuntimeInstance, and Exposure; observe
   Podman/systemd and Caddy without changing SQLite or external resources.
+  Result: a short SQLite snapshot now loads Application, blocker, active
+  Deployment, Release, RuntimeInstance, Exposure, and specification before
+  read-only container, Quadlet, and Caddy fragment observation.
 - [ ] Add `pneuma reconcile <application>` with observable `no-op` and
   `deferred` results. A non-terminal Deployment must defer reconciliation before
   any external effect.

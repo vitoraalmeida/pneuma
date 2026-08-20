@@ -4,6 +4,8 @@ use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::process::Command;
 
+use crate::domain::identity::ContainerId;
+use crate::domain::reconciliation::NamedContainerObservation;
 use crate::domain::runtime::{ContainerObservation, ObservedRuntimeState};
 
 const APPLICATION_LABEL: &str = "io.pneuma.application";
@@ -92,6 +94,27 @@ pub enum ResolveContainerError {
     },
     InvalidOutput {
         name: String,
+    },
+}
+
+#[derive(Debug)]
+pub enum ObserveNamedContainerError {
+    EmptyName,
+    Execute {
+        operation: &'static str,
+        source: io::Error,
+    },
+    Podman {
+        operation: &'static str,
+        name: String,
+        stdout: String,
+        stderr: String,
+    },
+    InvalidOutput {
+        name: String,
+    },
+    Observe {
+        source: ObserveContainerError,
     },
 }
 
@@ -243,6 +266,45 @@ impl Error for ResolveContainerError {
     }
 }
 
+impl fmt::Display for ObserveNamedContainerError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptyName => formatter.write_str("container name must not be empty"),
+            Self::Execute { operation, source } => write!(
+                formatter,
+                "failed to execute Podman while {operation}: {source}"
+            ),
+            Self::Podman {
+                operation,
+                name,
+                stdout,
+                stderr,
+            } => write!(
+                formatter,
+                "Podman failed while {operation} container `{name}`: {}",
+                diagnostic(stdout, stderr)
+            ),
+            Self::InvalidOutput { name } => write!(
+                formatter,
+                "Podman returned invalid materialization data for container `{name}`"
+            ),
+            Self::Observe { source } => {
+                write!(formatter, "failed to observe resolved container: {source}")
+            }
+        }
+    }
+}
+
+impl Error for ObserveNamedContainerError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Execute { source, .. } => Some(source),
+            Self::Observe { source } => Some(source),
+            Self::EmptyName | Self::Podman { .. } | Self::InvalidOutput { .. } => None,
+        }
+    }
+}
+
 // Creates a loopback-only candidate container so it cannot receive public traffic before promotion.
 pub fn create_container(
     image_reference: &str,
@@ -328,6 +390,77 @@ pub fn resolve_container_id(name: &str) -> Result<String, ResolveContainerError>
         });
     }
     Ok(id.to_owned())
+}
+
+// Observes a deterministic container name without treating ordinary absence as an adapter failure.
+pub fn observe_named_container(
+    name: &str,
+    container_port: u16,
+) -> Result<NamedContainerObservation, ObserveNamedContainerError> {
+    if name.is_empty() {
+        return Err(ObserveNamedContainerError::EmptyName);
+    }
+    let exists = Command::new("podman")
+        .args(["container", "exists", name])
+        .output()
+        .map_err(|source| ObserveNamedContainerError::Execute {
+            operation: "checking for",
+            source,
+        })?;
+    if exists.status.code() == Some(1) {
+        return Ok(NamedContainerObservation::Missing);
+    }
+    if !exists.status.success() {
+        return Err(named_container_failure("checking for", name, exists));
+    }
+    let format = "{{.Id}}\t{{.Name}}\t{{.Config.Image}}\t{{index .Config.Labels \"io.pneuma.application\"}}\t{{index .Config.Labels \"io.pneuma.image-digest\"}}";
+    let inspected = Command::new("podman")
+        .args(["inspect", "--format", format, name])
+        .output()
+        .map_err(|source| ObserveNamedContainerError::Execute {
+            operation: "inspecting",
+            source,
+        })?;
+    if !inspected.status.success() {
+        return Err(named_container_failure("inspecting", name, inspected));
+    }
+    let output = String::from_utf8_lossy(&inspected.stdout);
+    let mut values = output.trim().split('\t');
+    let (
+        Some(id),
+        Some(observed_name),
+        Some(image_reference),
+        Some(application_label),
+        Some(image_digest_label),
+        None,
+    ) = (
+        values.next(),
+        values.next(),
+        values.next(),
+        values.next(),
+        values.next(),
+        values.next(),
+    )
+    else {
+        return Err(ObserveNamedContainerError::InvalidOutput {
+            name: name.to_owned(),
+        });
+    };
+    if !is_container_id(id) || observed_name.is_empty() || image_reference.is_empty() {
+        return Err(ObserveNamedContainerError::InvalidOutput {
+            name: name.to_owned(),
+        });
+    }
+    let observation = observe_container(id, container_port)
+        .map_err(|source| ObserveNamedContainerError::Observe { source })?;
+    Ok(NamedContainerObservation::Present {
+        id: ContainerId::from(id),
+        name: observed_name.to_owned(),
+        image_reference: image_reference.to_owned(),
+        application_label: (!application_label.is_empty()).then(|| application_label.to_owned()),
+        image_digest_label: (!image_digest_label.is_empty()).then(|| image_digest_label.to_owned()),
+        observation,
+    })
 }
 
 // Stops a validated container through the shared Podman lifecycle command path.
@@ -426,6 +559,19 @@ fn control_container(
     }
 
     Ok(ContainerCommandOutput { stdout, stderr })
+}
+
+fn named_container_failure(
+    operation: &'static str,
+    name: &str,
+    output: std::process::Output,
+) -> ObserveNamedContainerError {
+    ObserveNamedContainerError::Podman {
+        operation,
+        name: name.to_owned(),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
 }
 
 // Reads Podman's published endpoint and accepts only the loopback binding required by the runtime boundary.
