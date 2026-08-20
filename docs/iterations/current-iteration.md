@@ -4,8 +4,8 @@
 
 **Base:** `49b9476` (`docs: refactor documentation architecture`)
 
-**Approved designs:** [`reconciliation.md`](../design/reconciliation.md) and
-[`tui.md`](../design/tui.md)
+**Approved designs:** [`domain-model-hardening.md`](../design/domain-model-hardening.md),
+[`reconciliation.md`](../design/reconciliation.md), and [`tui.md`](../design/tui.md)
 
 ## Iteration - v0.4 Reconciliation
 
@@ -44,6 +44,18 @@ without selecting a new Release or making destructive changes from ambiguity.
   non-obvious mechanisms without changing behavior or annotating tests.
   Result: production structs and operational functions now describe their role,
   transaction or external-effect boundaries, and critical invariants.
+- [ ] Harden domain identities across logical and external resources without
+  changing SQLite's persisted text representation.
+- [ ] Validate application specification and OCI values at domain boundaries,
+  including shared repository identity and cohesive source representation.
+- [ ] Separate expected runtime identity from external observation, preserve
+  `Missing`, and model retirement explicitly.
+- [ ] Make Exposure intent, confirmed route evidence, and diagnostics valid by
+  construction while retaining compensation-relevant evidence.
+- [ ] Add Deployment lifecycle evidence and replace scalar or tuple operation
+  results with cohesive domain values.
+- [ ] Move persisted-value conversion into stores and require explicit stale
+  outcomes from compare-and-set persistence primitives.
 - [ ] Convert `reconciliation-e2e.md` into an executable reconciliation test
   plan before implementation: assign every scenario to a focused Rust test or
   disposable-VM E2E case, define fixtures, fault injection, persisted-state and
@@ -84,6 +96,8 @@ without selecting a new Release or making destructive changes from ambiguity.
   RBAC, multiple hosts, and precompiled binary download are out of scope.
 - Reconciliation never creates a Release, selects a registry artifact, or
   changes desired runtime state or visibility.
+- Domain hardening preserves persisted representation and never silently repairs
+  ambiguous historical values.
 - Ambiguous identity or configuration drift is reported for manual intervention,
   not repaired destructively.
 
