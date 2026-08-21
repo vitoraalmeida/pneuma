@@ -138,7 +138,6 @@ impl From<RuntimeStoreError> for RegisterCandidateRuntimeError {
     fn from(error: RuntimeStoreError) -> Self {
         match error {
             RuntimeStoreError::Persistence { source } => Self::Persistence { source },
-            RuntimeStoreError::InvalidDesiredState { .. } => Self::Store { source: error },
         }
     }
 }

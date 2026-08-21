@@ -6,7 +6,6 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
 use crate::adapters::stores::operation_store::{self, OperationStoreError};
-use crate::adapters::stores::release_store::{self, ReleaseStoreError};
 use crate::domain::deployment::{Deployment, DeploymentType, SourceRevision};
 use crate::domain::identity::{ApplicationId, ReleaseId};
 
@@ -17,7 +16,6 @@ pub enum CreateDeploymentError {
     ActiveDeployment { deployment: Box<Deployment> },
     AlreadyActive { release_id: String },
     ApplicationStore { source: ApplicationStoreError },
-    ReleaseStore { source: ReleaseStoreError },
     DeploymentStore { source: DeploymentStoreError },
     OperationStore { source: OperationStoreError },
     Persistence { source: rusqlite::Error },
@@ -44,9 +42,6 @@ impl fmt::Display for CreateDeploymentError {
             Self::ApplicationStore { source } => {
                 write!(formatter, "failed to create deployment: {source}")
             }
-            Self::ReleaseStore { source } => {
-                write!(formatter, "failed to create deployment: {source}")
-            }
             Self::DeploymentStore { source } => {
                 write!(formatter, "failed to create deployment: {source}")
             }
@@ -64,7 +59,6 @@ impl Error for CreateDeploymentError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::ApplicationStore { source } => Some(source),
-            Self::ReleaseStore { source } => Some(source),
             Self::DeploymentStore { source } => Some(source),
             Self::OperationStore { source } => Some(source),
             Self::Persistence { source } => Some(source),
@@ -155,8 +149,8 @@ fn create_deployment_in_transaction(
         });
     }
     let release_exists =
-        release_store::release_exists(transaction, release_id.as_str(), application_id.as_str())
-            .map_err(|source| CreateDeploymentError::ReleaseStore { source })?;
+        deployment_store::release_exists(transaction, release_id.as_str(), application_id.as_str())
+            .map_err(|source| CreateDeploymentError::DeploymentStore { source })?;
     if !release_exists {
         return Err(CreateDeploymentError::ReleaseNotFound {
             release_id: release_id.to_string(),

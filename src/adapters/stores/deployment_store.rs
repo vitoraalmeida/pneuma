@@ -146,6 +146,21 @@ pub fn load_active_runtime_release_id(
     ).optional().map_err(persistence)
 }
 
+// Confirms that the Release belongs to the Application before creating a Deployment.
+pub fn release_exists(
+    transaction: &Transaction<'_>,
+    release_id: &str,
+    application_id: &str,
+) -> Result<bool, DeploymentStoreError> {
+    transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM releases WHERE id = ?1 AND application_id = ?2)",
+            params![release_id, application_id],
+            |row| row.get(0),
+        )
+        .map_err(persistence)
+}
+
 // Persists a new activation attempt in its initial pending state.
 pub fn insert_pending_deployment(
     transaction: &Transaction<'_>,

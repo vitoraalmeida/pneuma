@@ -8,6 +8,7 @@ use crate::adapters::local_runtime::{
     ContainerCommandOutput, ControlContainerError, ObserveContainerError, observe_container,
     resolve_container_id, start_container, stop_container,
 };
+use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
 use crate::adapters::systemd_quadlet::{
     QuadletError, container_name, start as start_unit, stop as stop_unit, unit_exists, unit_name,
@@ -42,6 +43,9 @@ pub enum RuntimeLifecycleError {
     },
     Store {
         source: RuntimeStoreError,
+    },
+    ApplicationStore {
+        source: ApplicationStoreError,
     },
     Observe {
         runtime_id: String,
@@ -84,6 +88,9 @@ impl fmt::Display for RuntimeLifecycleError {
             Self::Store { source } => {
                 write!(formatter, "failed to control application runtime: {source}")
             }
+            Self::ApplicationStore { source } => {
+                write!(formatter, "failed to control application runtime: {source}")
+            }
             Self::Observe { runtime_id, source } => write!(
                 formatter,
                 "failed to observe runtime `{runtime_id}`: {source}"
@@ -118,6 +125,7 @@ impl Error for RuntimeLifecycleError {
             Self::Control { source, .. } => Some(source.as_ref()),
             Self::Supervision { source, .. } => Some(source),
             Self::Store { source } => Some(source),
+            Self::ApplicationStore { source } => Some(source),
             Self::Persistence { source } => Some(source),
             Self::NotDeployed { .. }
             | Self::ContainerMissing { .. }
@@ -414,12 +422,12 @@ fn load_desired_state(
     connection: &Connection,
     application_id: &ApplicationId,
 ) -> Result<DesiredRuntimeState, RuntimeLifecycleError> {
-    match runtime_store::load_desired_runtime_state(connection, application_id.as_str()) {
+    match application_store::load_desired_runtime_state(connection, application_id.as_str()) {
         Ok(state) => Ok(state),
-        Err(RuntimeStoreError::InvalidDesiredState { state, .. }) => {
+        Err(ApplicationStoreError::InvalidDesiredRuntimeState { state, .. }) => {
             Err(RuntimeLifecycleError::InvalidDesiredState { state })
         }
-        Err(source) => Err(RuntimeLifecycleError::Store { source }),
+        Err(source) => Err(RuntimeLifecycleError::ApplicationStore { source }),
     }
 }
 
@@ -430,13 +438,13 @@ fn set_desired_state(
     desired_runtime_state: DesiredRuntimeState,
 ) -> Result<(), RuntimeLifecycleError> {
     let expected = load_desired_state(connection, application_id)?;
-    let updated = runtime_store::compare_and_set_desired_runtime_state(
+    let updated = application_store::compare_and_set_desired_runtime_state(
         connection,
         application_id.as_str(),
         expected,
         desired_runtime_state,
     )
-    .map_err(|source| RuntimeLifecycleError::Store { source })?;
+    .map_err(|source| RuntimeLifecycleError::ApplicationStore { source })?;
     if updated == crate::adapters::stores::PersistenceOutcome::Stale {
         return Err(RuntimeLifecycleError::RuntimeChanged {
             runtime_id: application_id.to_string(),

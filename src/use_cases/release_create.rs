@@ -52,7 +52,7 @@ impl From<ApplicationStoreError> for CreateReleaseError {
             ApplicationStoreError::NotFound { application_id } => {
                 Self::ApplicationNotFound { application_id }
             }
-            ApplicationStoreError::SystemNotFound { .. } => {
+            ApplicationStoreError::InvalidDesiredRuntimeState { .. } => {
                 Self::ApplicationStore { source: error }
             }
             ApplicationStoreError::Persistence { source } => Self::Persistence { source },
@@ -65,9 +65,6 @@ impl From<ReleaseStoreError> for CreateReleaseError {
         match error {
             ReleaseStoreError::NotFound { .. } | ReleaseStoreError::NotFoundByArtifact { .. } => {
                 Self::ReleaseStore { source: error }
-            }
-            ReleaseStoreError::ApplicationNotFound { application_id } => {
-                Self::ApplicationNotFound { application_id }
             }
             ReleaseStoreError::Persistence { source } => Self::Persistence { source },
         }

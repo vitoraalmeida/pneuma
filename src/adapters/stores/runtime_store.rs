@@ -6,7 +6,6 @@ use std::net::{Ipv4Addr, SocketAddr};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::adapters::stores::PersistenceOutcome;
-use crate::domain::application::DesiredRuntimeState;
 use crate::domain::identity::{ApplicationId, ContainerId, DeploymentId, RuntimeInstanceId};
 use crate::domain::runtime::{
     ContainerObservation, ExpectedRuntimeEndpoint, ObservedRuntimeState, PreviousRuntime,
@@ -15,27 +14,12 @@ use crate::domain::runtime::{
 
 #[derive(Debug)]
 pub enum RuntimeStoreError {
-    InvalidDesiredState {
-        application_id: String,
-        state: String,
-    },
-    Persistence {
-        source: rusqlite::Error,
-    },
+    Persistence { source: rusqlite::Error },
 }
 
 impl fmt::Display for RuntimeStoreError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidDesiredState {
-                application_id,
-                state,
-            } => {
-                write!(
-                    formatter,
-                    "application `{application_id}` has invalid desired runtime state `{state}`"
-                )
-            }
             Self::Persistence { source } => {
                 write!(formatter, "runtime store error: {source}")
             }
@@ -47,7 +31,6 @@ impl Error for RuntimeStoreError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Persistence { source } => Some(source),
-            Self::InvalidDesiredState { .. } => None,
         }
     }
 }
@@ -180,46 +163,6 @@ pub fn persist_observation(
               updated_at = CURRENT_TIMESTAMP
          WHERE id = ?1 AND removed_at IS NULL",
             params![runtime_id, state],
-        )
-        .map_err(|source| RuntimeStoreError::Persistence { source })?;
-    Ok(outcome(updated))
-}
-
-// Loads persisted runtime intent and rejects values outside the domain state set.
-pub fn load_desired_runtime_state(
-    connection: &Connection,
-    application_id: &str,
-) -> Result<DesiredRuntimeState, RuntimeStoreError> {
-    let value = connection
-        .query_row(
-            "SELECT desired_runtime_state FROM applications WHERE id = ?1",
-            [application_id],
-            |row| row.get::<_, String>(0),
-        )
-        .map_err(|source| RuntimeStoreError::Persistence { source })?;
-    desired_runtime_state_from_value(&value).ok_or_else(|| RuntimeStoreError::InvalidDesiredState {
-        application_id: application_id.to_owned(),
-        state: value,
-    })
-}
-
-// Changes runtime intent only when the prior persisted intent matches the caller's observation.
-pub fn compare_and_set_desired_runtime_state(
-    connection: &Connection,
-    application_id: &str,
-    expected: DesiredRuntimeState,
-    desired: DesiredRuntimeState,
-) -> Result<PersistenceOutcome, RuntimeStoreError> {
-    let updated = connection
-        .execute(
-            "UPDATE applications
-             SET desired_runtime_state = ?1, updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?2 AND desired_runtime_state = ?3",
-            params![
-                desired_runtime_state_value(desired),
-                application_id,
-                desired_runtime_state_value(expected)
-            ],
         )
         .map_err(|source| RuntimeStoreError::Persistence { source })?;
     Ok(outcome(updated))
@@ -483,19 +426,6 @@ fn runtime_state_from_value(value: &str) -> Option<RuntimeState> {
         "running" => Some(RuntimeState::Running),
         "stopped" => Some(RuntimeState::Stopped),
         "failed" => Some(RuntimeState::Failed),
-        _ => None,
-    }
-}
-fn desired_runtime_state_value(value: DesiredRuntimeState) -> &'static str {
-    match value {
-        DesiredRuntimeState::Running => "running",
-        DesiredRuntimeState::Stopped => "stopped",
-    }
-}
-fn desired_runtime_state_from_value(value: &str) -> Option<DesiredRuntimeState> {
-    match value {
-        "running" => Some(DesiredRuntimeState::Running),
-        "stopped" => Some(DesiredRuntimeState::Stopped),
         _ => None,
     }
 }

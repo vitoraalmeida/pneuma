@@ -23,9 +23,16 @@ use crate::domain::runtime::{
 
 #[derive(Debug)]
 pub enum ApplicationStoreError {
-    NotFound { application_id: String },
-    SystemNotFound { system_name: String },
-    Persistence { source: rusqlite::Error },
+    NotFound {
+        application_id: String,
+    },
+    InvalidDesiredRuntimeState {
+        application_id: String,
+        state: String,
+    },
+    Persistence {
+        source: rusqlite::Error,
+    },
 }
 
 impl fmt::Display for ApplicationStoreError {
@@ -34,8 +41,14 @@ impl fmt::Display for ApplicationStoreError {
             Self::NotFound { application_id } => {
                 write!(formatter, "application `{application_id}` not found")
             }
-            Self::SystemNotFound { system_name } => {
-                write!(formatter, "system `{system_name}` not found")
+            Self::InvalidDesiredRuntimeState {
+                application_id,
+                state,
+            } => {
+                write!(
+                    formatter,
+                    "application `{application_id}` has invalid desired runtime state `{state}`"
+                )
             }
             Self::Persistence { source } => {
                 write!(formatter, "application store error: {source}")
@@ -48,7 +61,7 @@ impl Error for ApplicationStoreError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Persistence { source } => Some(source),
-            Self::NotFound { .. } | Self::SystemNotFound { .. } => None,
+            Self::NotFound { .. } | Self::InvalidDesiredRuntimeState { .. } => None,
         }
     }
 }
@@ -116,37 +129,6 @@ impl Error for ExposureStoreError {
 pub fn generate_id(connection: &Connection) -> Result<String, ApplicationStoreError> {
     connection
         .query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))
-        .map_err(|source| ApplicationStoreError::Persistence { source })
-}
-
-// Inserts a System when absent without changing the identity of an existing named System.
-pub fn ensure_system(
-    transaction: &Transaction<'_>,
-    system_id: &str,
-    system_name: &str,
-) -> Result<(), ApplicationStoreError> {
-    transaction
-        .execute(
-            "INSERT INTO systems (id, name, created_at)
-             VALUES (?1, ?2, CURRENT_TIMESTAMP)
-             ON CONFLICT(name) DO NOTHING",
-            params![system_id, system_name],
-        )
-        .map_err(|source| ApplicationStoreError::Persistence { source })?;
-    Ok(())
-}
-
-// Resolves the persisted System identity needed by the import transaction.
-pub fn load_system_id_by_name(
-    transaction: &Transaction<'_>,
-    system_name: &str,
-) -> Result<String, ApplicationStoreError> {
-    transaction
-        .query_row(
-            "SELECT id FROM systems WHERE name = ?1",
-            [system_name],
-            |row| row.get(0),
-        )
         .map_err(|source| ApplicationStoreError::Persistence { source })
 }
 
@@ -277,6 +259,48 @@ pub fn application_has_successful_deployment(
     application_id: &str,
 ) -> Result<bool, ApplicationStoreError> {
     connection.query_row("SELECT EXISTS(SELECT 1 FROM deployments WHERE application_id = ?1 AND status = 'succeeded')", [application_id], |row| row.get(0)).map_err(|source| ApplicationStoreError::Persistence { source })
+}
+
+// Loads persisted runtime intent from its owning Application aggregate.
+pub fn load_desired_runtime_state(
+    connection: &Connection,
+    application_id: &str,
+) -> Result<DesiredRuntimeState, ApplicationStoreError> {
+    let value = connection
+        .query_row(
+            "SELECT desired_runtime_state FROM applications WHERE id = ?1",
+            [application_id],
+            |row| row.get::<_, String>(0),
+        )
+        .map_err(|source| ApplicationStoreError::Persistence { source })?;
+    desired_runtime_state_from_value(&value).ok_or_else(|| {
+        ApplicationStoreError::InvalidDesiredRuntimeState {
+            application_id: application_id.to_owned(),
+            state: value,
+        }
+    })
+}
+
+// Changes Application runtime intent only when the persisted state matches the observation.
+pub fn compare_and_set_desired_runtime_state(
+    connection: &Connection,
+    application_id: &str,
+    expected: DesiredRuntimeState,
+    desired: DesiredRuntimeState,
+) -> Result<PersistenceOutcome, ApplicationStoreError> {
+    let updated = connection
+        .execute(
+            "UPDATE applications
+             SET desired_runtime_state = ?1, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?2 AND desired_runtime_state = ?3",
+            params![
+                desired_runtime_state_value(desired),
+                application_id,
+                desired_runtime_state_value(expected)
+            ],
+        )
+        .map_err(|source| ApplicationStoreError::Persistence { source })?;
+    Ok(outcome(updated))
 }
 
 // Persists the immutable delivery configuration associated with an imported Application.
@@ -966,5 +990,11 @@ fn desired_runtime_state_from_value(value: &str) -> Option<DesiredRuntimeState> 
         "running" => Some(DesiredRuntimeState::Running),
         "stopped" => Some(DesiredRuntimeState::Stopped),
         _ => None,
+    }
+}
+fn desired_runtime_state_value(value: DesiredRuntimeState) -> &'static str {
+    match value {
+        DesiredRuntimeState::Running => "running",
+        DesiredRuntimeState::Stopped => "stopped",
     }
 }

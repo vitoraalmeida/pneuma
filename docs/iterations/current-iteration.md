@@ -145,9 +145,11 @@ without selecting a new Release or making destructive changes from ambiguity.
   OCI, and Deployment source revision handling.
   Result: a validated `CommitSha` now passes intact from Git resolution through
   OCI tag lookup to typed Deployment provenance while historical revisions remain readable.
-- [ ] Realign store ownership: move System SQL into `system_store`, Application
+- [x] Realign store ownership: move System SQL into `system_store`, Application
   runtime intent into `application_store`, and Deployment-only queries into
   `deployment_store`; remove obsolete Release-store APIs.
+  Result: import uses the System store, Application owns desired runtime-state
+  persistence, and Deployment owns Release eligibility checks.
 - [ ] Extract Exposure persistence, hydration, transitions, and reconciliation CAS
   into `exposure_store`, keeping Application deployment-specification projection
   in `application_store`.

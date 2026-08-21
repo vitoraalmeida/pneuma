@@ -6,6 +6,7 @@ use rusqlite::Connection;
 
 use crate::adapters::git_source::is_remote_repository;
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
+use crate::adapters::stores::system_store::{self, SystemStoreError};
 use crate::domain::application::{
     ApplicationName, ApplicationSource, ApplicationSummary, RelativeManifestPath, RepositoryKind,
 };
@@ -21,8 +22,8 @@ const DEFAULT_MANIFEST_PATH: &str = "pneuma.toml";
 pub enum ImportError {
     Manifest { source: ManifestError },
     Persistence { source: rusqlite::Error },
+    ApplicationStore { source: ApplicationStoreError },
     ApplicationNotFound { application_id: String },
-    SystemNotFound { system_name: String },
     SystemRequired,
 }
 
@@ -38,11 +39,14 @@ impl fmt::Display for ImportError {
                     "failed to persist imported application: {source}"
                 )
             }
+            Self::ApplicationStore { source } => {
+                write!(
+                    formatter,
+                    "failed to persist imported application: {source}"
+                )
+            }
             Self::ApplicationNotFound { application_id } => {
                 write!(formatter, "application `{application_id}` was not found")
-            }
-            Self::SystemNotFound { system_name } => {
-                write!(formatter, "system `{system_name}` was not found")
             }
             Self::SystemRequired => {
                 write!(
@@ -59,9 +63,8 @@ impl Error for ImportError {
         match self {
             Self::Manifest { source } => Some(source),
             Self::Persistence { source } => Some(source),
-            Self::ApplicationNotFound { .. }
-            | Self::SystemNotFound { .. }
-            | Self::SystemRequired => None,
+            Self::ApplicationStore { source } => Some(source),
+            Self::ApplicationNotFound { .. } | Self::SystemRequired => None,
         }
     }
 }
@@ -73,9 +76,17 @@ impl From<ApplicationStoreError> for ImportError {
             ApplicationStoreError::NotFound { application_id } => {
                 Self::ApplicationNotFound { application_id }
             }
-            ApplicationStoreError::SystemNotFound { system_name } => {
-                Self::SystemNotFound { system_name }
+            ApplicationStoreError::InvalidDesiredRuntimeState { .. } => {
+                Self::ApplicationStore { source: error }
             }
+        }
+    }
+}
+
+impl From<SystemStoreError> for ImportError {
+    fn from(error: SystemStoreError) -> Self {
+        match error {
+            SystemStoreError::Persistence { source } => Self::Persistence { source },
         }
     }
 }
@@ -123,16 +134,13 @@ pub fn import_application(
         return Ok(application);
     }
 
-    let system_id = application_store::generate_id(&transaction).map_err(ImportError::from)?;
-    application_store::ensure_system(&transaction, &system_id, resolved_system_name.as_str())?;
-    let system_id =
-        application_store::load_system_id_by_name(&transaction, resolved_system_name.as_str())?;
+    let system = system_store::create_or_load(&transaction, resolved_system_name.as_str(), None)?;
 
     let application_id = application_store::generate_id(&transaction).map_err(ImportError::from)?;
     let inserted = application_store::insert_application(
         &transaction,
         &application_id,
-        &system_id,
+        system.id.as_str(),
         application_name.as_str(),
         manifest.schema_version,
     )?;

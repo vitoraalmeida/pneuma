@@ -16,9 +16,6 @@ pub enum ReleaseStoreError {
         application_id: String,
         image_digest: String,
     },
-    ApplicationNotFound {
-        application_id: String,
-    },
     Persistence {
         source: rusqlite::Error,
     },
@@ -37,9 +34,6 @@ impl fmt::Display for ReleaseStoreError {
                 formatter,
                 "release for application `{application_id}` and digest `{image_digest}` not found"
             ),
-            Self::ApplicationNotFound { application_id } => {
-                write!(formatter, "application `{application_id}` not found")
-            }
             Self::Persistence { source } => {
                 write!(formatter, "release store error: {source}")
             }
@@ -51,40 +45,9 @@ impl Error for ReleaseStoreError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Persistence { source } => Some(source),
-            Self::NotFound { .. }
-            | Self::NotFoundByArtifact { .. }
-            | Self::ApplicationNotFound { .. } => None,
+            Self::NotFound { .. } | Self::NotFoundByArtifact { .. } => None,
         }
     }
-}
-
-// Checks that the owning Application exists before Release persistence.
-pub fn application_exists(
-    connection: &Connection,
-    application_id: &str,
-) -> Result<bool, ReleaseStoreError> {
-    connection
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM applications WHERE id = ?1)",
-            [application_id],
-            |row| row.get(0),
-        )
-        .map_err(|source| ReleaseStoreError::Persistence { source })
-}
-
-// Checks the Application-scoped immutable digest identity used to reuse Releases.
-pub fn release_exists_for_digest(
-    connection: &Connection,
-    application_id: &str,
-    image_digest: &str,
-) -> Result<bool, ReleaseStoreError> {
-    connection
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM releases WHERE application_id = ?1 AND image_digest = ?2)",
-            params![application_id, image_digest],
-            |row| row.get(0),
-        )
-        .map_err(|source| ReleaseStoreError::Persistence { source })
 }
 
 // Allocates a Release ID beside its digest-uniqueness check in the same transaction.
@@ -205,21 +168,6 @@ pub(crate) fn artifact_from_values(
         });
     }
     Ok(artifact)
-}
-
-// Checks that a Release belongs to the specified Application before deployment work.
-pub fn release_exists(
-    connection: &Connection,
-    release_id: &str,
-    application_id: &str,
-) -> Result<bool, ReleaseStoreError> {
-    connection
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM releases WHERE id = ?1 AND application_id = ?2)",
-            params![release_id, application_id],
-            |row| row.get(0),
-        )
-        .map_err(|source| ReleaseStoreError::Persistence { source })
 }
 
 #[cfg(test)]
