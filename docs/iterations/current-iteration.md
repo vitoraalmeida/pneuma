@@ -1,6 +1,6 @@
 # Current Iteration
 
-**Status:** in progress
+**Status:** completed
 
 **Base:** `49b9476` (`docs: refactor documentation architecture`)
 
@@ -190,6 +190,13 @@ without selecting a new Release or making destructive changes from ambiguity.
 - Required VM E2E coverage proves the approved reconciliation scenarios.
 - The exact CI gates and all required VM evidence are green before this
   iteration is closed.
+
+## Closure Evidence
+
+- `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`,
+  `cargo test --all-features`, and `cargo build --workspace --release` passed on `3cc404a`.
+- A fresh disposable clone passed `scripts/dev-vm/test-all.sh` with 45 PASS, 0 FAIL,
+  and 0 SKIP; the clone and its storage were removed.
 
 ## Blockers
 
