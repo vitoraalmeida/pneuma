@@ -69,18 +69,21 @@ persistence, and the restricted SSH CI dispatcher.
 
 ## v0.4 - Reconciliation and Deployment Reliability
 
-**Status:** in progress.
+**Status:** completed on August 21, 2026.
 
-Pneuma will converge runtime and exposure materialization toward persisted intent
+Pneuma converged runtime and exposure materialization toward persisted intent
 without selecting a new Release or creating a Deployment from drift.
 
-- [ ] Desired versus observed state.
-- [ ] Drift detection and unambiguous recovery.
-- [ ] Interrupted Deployment recovery.
-- [ ] Better restart/reboot convergence.
-- [ ] Candidate and activation improvements.
-- [ ] Deployment mutual exclusion per Application.
-- [ ] Non-interactive CLI with structured output and exit codes.
+- [x] Desired versus observed state.
+- [x] Drift detection and unambiguous recovery.
+- [x] Interrupted Deployment recovery.
+- [x] Better restart/reboot convergence.
+- [x] Candidate and activation improvements.
+- [x] Deployment mutual exclusion per Application.
+
+Deferred from v0.4, still open for a future version:
+
+- Non-interactive CLI with structured output and exit codes.
 
 Already implemented, not v0.4 work: CI validation and image publishing under the
 full commit-SHA tag; restricted SSH deployment through `pneuma ci dispatch`.

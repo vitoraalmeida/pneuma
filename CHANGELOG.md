@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.4.0 — Reconciliation and Domain Boundaries (2026-08-21)
+
+### Added
+
+- `pneuma reconcile <application>`: read-only observation of Podman, Quadlet,
+  and Caddy state against persisted intent, with `no-op` and `deferred` results.
+- Runtime drift recovery: recreates missing Quadlet containers and rematerializes
+  absent units only when persisted identity, digest, labels, and loopback
+  endpoint are unambiguous; divergent identity requires manual intervention.
+- Exposure drift recovery: repairs confirmed public fragments through validated
+  Caddy reload and external health, removes internal routes, and records
+  `failed`, `diverged`, or manual outcomes when convergence cannot be confirmed.
+- Interrupted deployment recovery per stage, cleaning only resources with proven
+  candidate identity while preserving the active healthy runtime and route.
+- Per-Application operation locking serializing reconcile and deployment effects.
+- Step-by-step stderr progress for `pneuma app deploy --verbose`.
+
+### Changed
+
+- Domain ownership realignment without SQLite or CLI behavior changes: Git
+  commit identity, repository classification, and source locations live in the
+  Git domain; container identity lives in the Runtime domain; System naming,
+  Application runtime intent, and runtime/health specifications live in their
+  owning modules.
+- Manifest validation produces a typed import projection consumed directly by
+  the import transaction instead of revalidated raw strings.
+- Store APIs retain typed logical identities (`ApplicationId`, `SystemId`,
+  `ReleaseId`, `DeploymentId`, `RuntimeInstanceId`) and names until the SQLite
+  parameter boundary; compare-and-set writes report explicit stale outcomes.
+
 ## v0.3.1 — Caddy Routing Fix (2026-08-13)
 
 ### Fixed
