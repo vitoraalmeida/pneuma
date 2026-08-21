@@ -1,6 +1,6 @@
 # Current Iteration
 
-**Status:** em andamento
+**Status:** completed
 
 **Base:** `d643a32` (`chore(release): v0.4.0`)
 
@@ -91,7 +91,16 @@ primitive round-trips, and removing duplicate or drifted validation.
 
 ## Closure Evidence
 
-- TBD.
+- `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`,
+  `cargo test --all-features` (3 ignored environment-dependent Podman cases),
+  and `cargo build --workspace --release` passed on the final code commit
+  `7dd2840`.
+- A fresh disposable clone (`pneuma-dev-base-test`, provisioned, binary synced,
+  restricted CI key installed, fixtures rebuilt) passed
+  `scripts/dev-vm/test-all.sh` with 45 PASS, 0 FAIL, and 0 SKIP.
+- The same clone passed `scripts/dev-vm/reconciliation-e2e.sh` with 21 PASS,
+  0 FAIL, and 0 SKIP (R1-R7, E1-E6, I1-I4, C1-C4).
+- The clone was destroyed and undefined with its storage after both runs.
 
 ## Blockers
 
