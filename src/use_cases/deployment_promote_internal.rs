@@ -143,7 +143,7 @@ pub fn promote_internal_candidate(
             let message = health_failure_message(failure);
             fail_deployment(
                 connection,
-                &target.deployment_id,
+                target.deployment_id.as_str(),
                 "health_check_failed",
                 &message,
             )
@@ -174,24 +174,26 @@ pub fn promote_internal_candidate(
     })?;
     if updated == crate::adapters::stores::PersistenceOutcome::Stale {
         return Err(PromoteInternalCandidateError::InvalidDeploymentState {
-            deployment_id: target.deployment_id,
+            deployment_id: target.deployment_id.to_string(),
             actual: "changed during promotion".to_owned(),
         });
     }
-    let finished_at = deployment_store::load_finished_at(&transaction, &target.deployment_id)
-        .map_err(|source| PromoteInternalCandidateError::Persistence {
-            source: match source {
-                DeploymentStoreError::Persistence { source } => source,
-                _ => rusqlite::Error::QueryReturnedNoRows,
+    let finished_at =
+        deployment_store::load_finished_at(&transaction, target.deployment_id.as_str()).map_err(
+            |source| PromoteInternalCandidateError::Persistence {
+                source: match source {
+                    DeploymentStoreError::Persistence { source } => source,
+                    _ => rusqlite::Error::QueryReturnedNoRows,
+                },
             },
-        })?;
+        )?;
     transaction
         .commit()
         .map_err(|source| PromoteInternalCandidateError::Persistence { source })?;
 
     Ok(PromotedCandidate {
         runtime_id: runtime_id.to_owned(),
-        deployment_id: target.deployment_id,
+        deployment_id: target.deployment_id.to_string(),
         finished_at,
     })
 }
@@ -227,8 +229,8 @@ fn completed_promotion(target: &PromotionTarget) -> Option<PromotedCandidate> {
         .deployment_finished_at
         .as_ref()
         .map(|finished_at| PromotedCandidate {
-            runtime_id: target.runtime_id.clone(),
-            deployment_id: target.deployment_id.clone(),
+            runtime_id: target.runtime_id.to_string(),
+            deployment_id: target.deployment_id.to_string(),
             finished_at: finished_at.clone(),
         })
 }
@@ -237,30 +239,30 @@ fn completed_promotion(target: &PromotionTarget) -> Option<PromotedCandidate> {
 fn validate_target(target: &PromotionTarget) -> Result<(), PromoteInternalCandidateError> {
     if target.state != RuntimeState::Starting {
         return Err(PromoteInternalCandidateError::InvalidRuntimeState {
-            runtime_id: target.runtime_id.clone(),
+            runtime_id: target.runtime_id.to_string(),
             actual: target.state.to_string(),
         });
     }
     if target.observed_state != ObservedRuntimeState::Running {
         return Err(PromoteInternalCandidateError::RuntimeNotRunning {
-            runtime_id: target.runtime_id.clone(),
+            runtime_id: target.runtime_id.to_string(),
             actual: target.observed_state.to_string(),
         });
     }
-    if target.removed_at.is_some() {
+    if target.retirement.is_some() {
         return Err(PromoteInternalCandidateError::RuntimeRemoved {
-            runtime_id: target.runtime_id.clone(),
+            runtime_id: target.runtime_id.to_string(),
         });
     }
     if target.deployment_status != DeploymentStatus::Verifying {
         return Err(PromoteInternalCandidateError::InvalidDeploymentState {
-            deployment_id: target.deployment_id.clone(),
+            deployment_id: target.deployment_id.to_string(),
             actual: target.deployment_status.to_string(),
         });
     }
     if target.visibility != Visibility::Internal {
         return Err(PromoteInternalCandidateError::PublicApplication {
-            application_id: target.application_id.clone(),
+            application_id: target.application_id.to_string(),
         });
     }
 

@@ -122,7 +122,7 @@ impl std::fmt::Display for RuntimeState {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 // Records explicit retirement evidence; absence means the runtime remains logically active.
 pub struct RuntimeRetirement {
     pub removed_at: String,

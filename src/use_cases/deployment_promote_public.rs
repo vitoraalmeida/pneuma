@@ -116,7 +116,7 @@ pub fn begin_public_exposure(
     validate_runtime(&target)?;
     if target.deployment_status != DeploymentStatus::Activating {
         return Err(PromotePublicCandidateError::InvalidDeploymentState {
-            deployment_id: target.deployment_id,
+            deployment_id: target.deployment_id.to_string(),
             actual: target.deployment_status.to_string(),
         });
     }
@@ -125,24 +125,19 @@ pub fn begin_public_exposure(
             .domain
             .clone()
             .ok_or_else(|| PromotePublicCandidateError::InvalidExposure {
-                application_id: target.application_id.clone(),
+                application_id: target.application_id.to_string(),
                 reason: "public visibility requires a domain".to_owned(),
             })?;
-    let domain =
-        DomainName::new(&domain).map_err(|_| PromotePublicCandidateError::InvalidExposure {
-            application_id: target.application_id.clone(),
-            reason: "public visibility has an invalid domain".to_owned(),
-        })?;
     if target.visibility != Visibility::Public {
         return Err(PromotePublicCandidateError::InvalidExposure {
-            application_id: target.application_id,
+            application_id: target.application_id.to_string(),
             reason: format!("visibility is `{}`", target.visibility),
         });
     }
 
     let updated = crate::adapters::stores::application_store::begin_public_exposure(
         connection,
-        &target.application_id,
+        target.application_id.as_str(),
     )
     .map_err(|source| PromotePublicCandidateError::Persistence {
         source: match source {
@@ -154,13 +149,13 @@ pub fn begin_public_exposure(
     })?;
     if updated == crate::adapters::stores::PersistenceOutcome::Stale {
         return Err(PromotePublicCandidateError::InvalidExposure {
-            application_id: target.application_id,
+            application_id: target.application_id.to_string(),
             reason: "exposure changed while application was being prepared".to_owned(),
         });
     }
 
     Ok(PublicExposureTarget {
-        application_id: target.application_id,
+        application_id: target.application_id.to_string(),
         domain,
     })
 }
@@ -212,18 +207,13 @@ pub fn promote_public_candidate(
     validate_runtime(&target)?;
     if target.deployment_status != DeploymentStatus::Activating {
         return Err(PromotePublicCandidateError::InvalidDeploymentState {
-            deployment_id: target.deployment_id,
+            deployment_id: target.deployment_id.to_string(),
             actual: target.deployment_status.to_string(),
         });
     }
-    if target.visibility != Visibility::Public
-        || !target
-            .domain
-            .as_deref()
-            .is_some_and(|domain| DomainName::new(domain).is_ok())
-    {
+    if target.visibility != Visibility::Public || target.domain.is_none() {
         return Err(PromotePublicCandidateError::InvalidExposure {
-            application_id: target.application_id,
+            application_id: target.application_id.to_string(),
             reason: "visibility or domain changed during deployment".to_owned(),
         });
     }
@@ -249,7 +239,7 @@ pub fn promote_public_candidate(
     }
     let finished_at = crate::adapters::stores::deployment_store::load_finished_at(
         &transaction,
-        &target.deployment_id,
+        target.deployment_id.as_str(),
     )
     .map_err(|source| PromotePublicCandidateError::Persistence {
         source: match source {
@@ -265,7 +255,7 @@ pub fn promote_public_candidate(
 
     Ok(PromotedPublicCandidate {
         runtime_id: runtime_id.to_owned(),
-        deployment_id: target.deployment_id,
+        deployment_id: target.deployment_id.to_string(),
         finished_at,
     })
 }
@@ -298,14 +288,14 @@ fn validate_runtime(target: &PromotionTarget) -> Result<(), PromotePublicCandida
         Some(format!("state is `{}`", target.state))
     } else if target.observed_state != ObservedRuntimeState::Running {
         Some(format!("observed state is `{}`", target.observed_state))
-    } else if target.removed_at.is_some() {
+    } else if target.retirement.is_some() {
         Some("runtime has been removed".to_owned())
     } else {
         None
     };
     if let Some(reason) = reason {
         return Err(PromotePublicCandidateError::InvalidRuntime {
-            runtime_id: target.runtime_id.clone(),
+            runtime_id: target.runtime_id.to_string(),
             reason,
         });
     }

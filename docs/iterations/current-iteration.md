@@ -122,8 +122,10 @@ without selecting a new Release or making destructive changes from ambiguity.
   candidate cleanup and compensation.
   Result: cleanup now receives typed lifecycle and distinct runtime/container IDs;
   malformed persisted runtime state is rejected by the runtime store.
-- [ ] Complete promotion domain adoption: replace raw `PromotionTarget` IDs,
+- [x] Complete promotion domain adoption: replace raw `PromotionTarget` IDs,
   domain text, and retirement timestamp with validated domain values.
+  Result: promotion targets now map SQLite values to typed identities, retirement
+  evidence, and domains before the promotion use cases validate them.
 - [ ] Preserve artifacts and runtime specifications through candidate orchestration
   until adapter boundaries, without independent reference/digest or health scalars.
 - [ ] Replace remaining use-case tuple and raw identity operation outputs with

@@ -9,10 +9,10 @@ use crate::domain::deployment::{
     Deployment, DeploymentFailure, DeploymentFailureEvidence, DeploymentHistory,
     DeploymentLifecycle, DeploymentStatus, DeploymentType, SourceRevision,
 };
-use crate::domain::exposure::{ExposureConfigurationVersion, Visibility};
-use crate::domain::identity::{ApplicationId, DeploymentId, ReleaseId};
+use crate::domain::exposure::{DomainName, ExposureConfigurationVersion, Visibility};
+use crate::domain::identity::{ApplicationId, DeploymentId, ReleaseId, RuntimeInstanceId};
 use crate::domain::release::Release;
-use crate::domain::runtime::{ObservedRuntimeState, RuntimeState};
+use crate::domain::runtime::{ObservedRuntimeState, RuntimeRetirement, RuntimeState};
 use std::net::{Ipv4Addr, SocketAddr};
 
 #[derive(Debug)]
@@ -43,17 +43,17 @@ pub enum DeploymentStoreError {
 #[derive(Debug)]
 // Combines the persisted facts a promotion must validate before changing its state.
 pub struct PromotionTarget {
-    pub runtime_id: String,
-    pub application_id: String,
-    pub deployment_id: String,
+    pub runtime_id: RuntimeInstanceId,
+    pub application_id: ApplicationId,
+    pub deployment_id: DeploymentId,
     pub endpoint: SocketAddr,
     pub state: RuntimeState,
     pub observed_state: ObservedRuntimeState,
-    pub removed_at: Option<String>,
+    pub retirement: Option<RuntimeRetirement>,
     pub deployment_status: DeploymentStatus,
     pub deployment_finished_at: Option<String>,
     pub visibility: Visibility,
-    pub domain: Option<String>,
+    pub domain: Option<DomainName>,
 }
 
 #[derive(Debug)]
@@ -324,16 +324,24 @@ pub fn load_promotion_target(
             let state_text: String = row.get(3)?;
             let status_text: String = row.get(6)?;
             let visibility_text: String = row.get(8)?;
+            let domain = row
+                .get::<_, Option<String>>(9)?
+                .map(|value| {
+                    DomainName::new(&value).map_err(|error| {
+                        conversion_error(9, std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+                    })
+                })
+                .transpose()?;
             Ok(PromotionTarget {
-                runtime_id: runtime_id.to_owned(), application_id: row.get(0)?, deployment_id: row.get(1)?,
+                runtime_id: RuntimeInstanceId::from(runtime_id), application_id: ApplicationId::from(row.get::<_, String>(0)?), deployment_id: DeploymentId::from(row.get::<_, String>(1)?),
                 endpoint: SocketAddr::from((Ipv4Addr::LOCALHOST, row.get::<_, u16>(2)?)),
                 state: runtime_state_from_value(&state_text).ok_or_else(|| conversion_error(3, std::io::Error::new(std::io::ErrorKind::InvalidData, format!("invalid runtime state: {state_text}"))))?,
                 observed_state: observed_runtime_state_from_value(&row.get::<_, String>(4)?),
-                removed_at: row.get(5)?,
+                retirement: row.get::<_, Option<String>>(5)?.map(|removed_at| RuntimeRetirement { removed_at }),
                 deployment_status: deployment_status_from_value(&status_text).ok_or_else(|| conversion_error(6, std::io::Error::new(std::io::ErrorKind::InvalidData, format!("invalid deployment status: {status_text}"))))?,
                 deployment_finished_at: row.get(7)?,
                 visibility: visibility_from_value(&visibility_text).ok_or_else(|| conversion_error(8, std::io::Error::new(std::io::ErrorKind::InvalidData, format!("invalid visibility: {visibility_text}"))))?,
-                domain: row.get(9)?,
+                domain,
             })
         },
     ).optional().map_err(persistence)
@@ -365,17 +373,17 @@ pub fn promote_internal(
     transaction: &Transaction<'_>,
     target: &PromotionTarget,
 ) -> Result<PersistenceOutcome, DeploymentStoreError> {
-    transaction.execute("UPDATE runtime_instances SET state = 'stopped', updated_at = CURRENT_TIMESTAMP WHERE application_id = ?1 AND state = 'running' AND removed_at IS NULL AND id != ?2", params![target.application_id, target.runtime_id]).map_err(persistence)?;
-    if outcome(transaction.execute("UPDATE runtime_instances SET state = 'running', updated_at = CURRENT_TIMESTAMP WHERE id = ?1 AND state = 'starting' AND removed_at IS NULL", [&target.runtime_id]).map_err(persistence)?) == PersistenceOutcome::Stale { return Ok(PersistenceOutcome::Stale); }
+    transaction.execute("UPDATE runtime_instances SET state = 'stopped', updated_at = CURRENT_TIMESTAMP WHERE application_id = ?1 AND state = 'running' AND removed_at IS NULL AND id != ?2", params![target.application_id.as_str(), target.runtime_id.as_str()]).map_err(persistence)?;
+    if outcome(transaction.execute("UPDATE runtime_instances SET state = 'running', updated_at = CURRENT_TIMESTAMP WHERE id = ?1 AND state = 'starting' AND removed_at IS NULL", [target.runtime_id.as_str()]).map_err(persistence)?) == PersistenceOutcome::Stale { return Ok(PersistenceOutcome::Stale); }
     if mark_succeeded(
         transaction,
-        &target.deployment_id,
+        target.deployment_id.as_str(),
         DeploymentStatus::Verifying,
     )? == PersistenceOutcome::Stale
     {
         return Ok(PersistenceOutcome::Stale);
     }
-    if outcome(transaction.execute("UPDATE applications SET active_deployment_id = ?1, desired_runtime_state = 'running', updated_at = CURRENT_TIMESTAMP WHERE id = ?2", params![target.deployment_id, target.application_id]).map_err(persistence)?) == PersistenceOutcome::Stale { return Ok(PersistenceOutcome::Stale); }
+    if outcome(transaction.execute("UPDATE applications SET active_deployment_id = ?1, desired_runtime_state = 'running', updated_at = CURRENT_TIMESTAMP WHERE id = ?2", params![target.deployment_id.as_str(), target.application_id.as_str()]).map_err(persistence)?) == PersistenceOutcome::Stale { return Ok(PersistenceOutcome::Stale); }
     Ok(PersistenceOutcome::Updated)
 }
 
@@ -385,18 +393,18 @@ pub fn promote_public(
     target: &PromotionTarget,
     configuration_version: &ExposureConfigurationVersion,
 ) -> Result<PersistenceOutcome, DeploymentStoreError> {
-    transaction.execute("UPDATE runtime_instances SET state = 'stopped', updated_at = CURRENT_TIMESTAMP WHERE application_id = ?1 AND state = 'running' AND removed_at IS NULL AND id != ?2", params![target.application_id, target.runtime_id]).map_err(persistence)?;
-    if outcome(transaction.execute("UPDATE runtime_instances SET state = 'running', updated_at = CURRENT_TIMESTAMP WHERE id = ?1 AND state = 'starting' AND removed_at IS NULL", [&target.runtime_id]).map_err(persistence)?) == PersistenceOutcome::Stale { return Ok(PersistenceOutcome::Stale); }
-    if outcome(transaction.execute("UPDATE exposures SET active_runtime_id = ?1, materialization_state = 'active', configuration_version = ?2, last_materialized_at = CURRENT_TIMESTAMP, last_error_code = NULL, last_error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?3 AND desired_visibility = 'public' AND materialization_state = 'applying'", params![target.runtime_id, configuration_version.as_str(), target.application_id]).map_err(persistence)?) == PersistenceOutcome::Stale { return Ok(PersistenceOutcome::Stale); }
+    transaction.execute("UPDATE runtime_instances SET state = 'stopped', updated_at = CURRENT_TIMESTAMP WHERE application_id = ?1 AND state = 'running' AND removed_at IS NULL AND id != ?2", params![target.application_id.as_str(), target.runtime_id.as_str()]).map_err(persistence)?;
+    if outcome(transaction.execute("UPDATE runtime_instances SET state = 'running', updated_at = CURRENT_TIMESTAMP WHERE id = ?1 AND state = 'starting' AND removed_at IS NULL", [target.runtime_id.as_str()]).map_err(persistence)?) == PersistenceOutcome::Stale { return Ok(PersistenceOutcome::Stale); }
+    if outcome(transaction.execute("UPDATE exposures SET active_runtime_id = ?1, materialization_state = 'active', configuration_version = ?2, last_materialized_at = CURRENT_TIMESTAMP, last_error_code = NULL, last_error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?3 AND desired_visibility = 'public' AND materialization_state = 'applying'", params![target.runtime_id.as_str(), configuration_version.as_str(), target.application_id.as_str()]).map_err(persistence)?) == PersistenceOutcome::Stale { return Ok(PersistenceOutcome::Stale); }
     if mark_succeeded(
         transaction,
-        &target.deployment_id,
+        target.deployment_id.as_str(),
         DeploymentStatus::Activating,
     )? == PersistenceOutcome::Stale
     {
         return Ok(PersistenceOutcome::Stale);
     }
-    if outcome(transaction.execute("UPDATE applications SET active_deployment_id = ?1, desired_runtime_state = 'running', updated_at = CURRENT_TIMESTAMP WHERE id = ?2", params![target.deployment_id, target.application_id]).map_err(persistence)?) == PersistenceOutcome::Stale { return Ok(PersistenceOutcome::Stale); }
+    if outcome(transaction.execute("UPDATE applications SET active_deployment_id = ?1, desired_runtime_state = 'running', updated_at = CURRENT_TIMESTAMP WHERE id = ?2", params![target.deployment_id.as_str(), target.application_id.as_str()]).map_err(persistence)?) == PersistenceOutcome::Stale { return Ok(PersistenceOutcome::Stale); }
     Ok(PersistenceOutcome::Updated)
 }
 
