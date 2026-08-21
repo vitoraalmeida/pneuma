@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::domain::application::ApplicationName;
-use crate::domain::delivery::DeliveryType;
 use crate::domain::exposure::{DomainName, ExposureIntent, Visibility};
 use crate::domain::git::RelativeManifestPath;
 use crate::domain::release::OciRepository;
@@ -16,6 +15,13 @@ use crate::domain::system::SystemName;
 
 const SUPPORTED_SCHEMA_VERSION: u32 = 3;
 const MANIFEST_FILE_NAME: &str = "pneuma.toml";
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+// Names the delivery mechanism a repository manifest declares for its artifact.
+pub enum DeliveryType {
+    Oci,
+}
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]

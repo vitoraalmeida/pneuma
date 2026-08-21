@@ -1,6 +1,8 @@
 use std::error::Error;
 use std::fmt;
 
+use crate::domain::application::ApplicationName;
+
 #[derive(Debug, PartialEq)]
 pub enum CiCommand {
     Deploy { application: String, branch: String },
@@ -30,7 +32,7 @@ impl fmt::Display for CiDispatchError {
             Self::InvalidApplicationName { name } => {
                 write!(
                     formatter,
-                    "invalid application name `{name}`: only alphanumeric characters, dots, underscores, and hyphens are allowed"
+                    "invalid application name `{name}`: use 1-63 lowercase alphanumeric characters or hyphens"
                 )
             }
             Self::InvalidBranchName { name } => {
@@ -50,14 +52,6 @@ impl fmt::Display for CiDispatchError {
 }
 
 impl Error for CiDispatchError {}
-
-// Restricts application identifiers to the safe syntax accepted by the dispatcher.
-fn is_valid_application_name(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
-}
 
 // Rejects shell metacharacters because branch names cross the SSH command boundary.
 fn is_valid_branch_name(name: &str) -> bool {
@@ -104,7 +98,7 @@ pub fn parse_ci_command(input: &str) -> Result<CiCommand, CiDispatchError> {
                 return Err(CiDispatchError::InvalidDeployFormat);
             }
 
-            if !is_valid_application_name(&application) {
+            if ApplicationName::new(&application).is_err() {
                 return Err(CiDispatchError::InvalidApplicationName { name: application });
             }
 
@@ -149,14 +143,16 @@ mod tests {
     }
 
     #[test]
-    fn parse_deploy_with_dots_and_underscores() {
+    fn parse_deploy_reuses_the_domain_application_name_rule() {
         assert_eq!(
-            parse_ci_command("deploy my.app_v2 main").unwrap(),
+            parse_ci_command("deploy my-app main").unwrap(),
             CiCommand::Deploy {
-                application: "my.app_v2".to_owned(),
+                application: "my-app".to_owned(),
                 branch: "main".to_owned(),
             }
         );
+        // The dispatcher now rejects names that the catalog domain would reject.
+        assert!(parse_ci_command("deploy my.app_v2 main").is_err());
     }
 
     #[test]
@@ -205,20 +201,20 @@ mod tests {
 
     #[test]
     fn valid_application_names() {
-        assert!(is_valid_application_name("my-app"));
-        assert!(is_valid_application_name("my.app"));
-        assert!(is_valid_application_name("my_app"));
-        assert!(is_valid_application_name("MyApp123"));
-        assert!(is_valid_application_name("a"));
+        assert!(parse_ci_command("deploy my-app main").is_ok());
+        assert!(parse_ci_command("deploy a main").is_ok());
+        assert!(parse_ci_command("deploy myapp123 main").is_ok());
     }
 
     #[test]
     fn invalid_application_names() {
-        assert!(!is_valid_application_name(""));
-        assert!(!is_valid_application_name("my app"));
-        assert!(!is_valid_application_name("my@app"));
-        assert!(!is_valid_application_name("my;app"));
-        assert!(!is_valid_application_name("my$(id)"));
-        assert!(!is_valid_application_name("my`id`"));
+        assert!(parse_ci_command("deploy my app main").is_err());
+        assert!(parse_ci_command("deploy my@app main").is_err());
+        assert!(parse_ci_command("deploy my;app main").is_err());
+        assert!(parse_ci_command("deploy my$(id) main").is_err());
+        assert!(parse_ci_command("deploy my`id` main").is_err());
+        assert!(parse_ci_command("deploy my.app main").is_err());
+        assert!(parse_ci_command("deploy my_app main").is_err());
+        assert!(parse_ci_command("deploy MyApp123 main").is_err());
     }
 }

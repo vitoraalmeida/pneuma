@@ -4,7 +4,7 @@ use std::fmt;
 use rusqlite::{Connection, TransactionBehavior};
 
 use crate::adapters::health_check_internal::{
-    HealthCheckError, HealthCheckFailure, HealthCheckResult, check_internal_health,
+    HealthCheckError, HealthCheckResult, check_internal_health,
 };
 use crate::adapters::stores::PersistenceOutcome;
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
@@ -187,7 +187,7 @@ pub fn promote_internal_candidate(
     match health {
         HealthCheckResult::Healthy { .. } => {}
         HealthCheckResult::Unhealthy { ref failure, .. } => {
-            let message = health_failure_message(failure);
+            let message = failure.to_string();
             fail_deployment(
                 connection,
                 &target.deployment_id,
@@ -304,20 +304,4 @@ fn load_target(
         .ok_or_else(|| PromoteInternalCandidateError::RuntimeNotFound {
             runtime_id: runtime_id.to_string(),
         })
-}
-
-// Converts structured health failures into durable deployment diagnostics.
-fn health_failure_message(failure: &HealthCheckFailure) -> String {
-    match failure {
-        HealthCheckFailure::TimedOut => "internal health check timed out".to_owned(),
-        HealthCheckFailure::Unreachable { kind } => {
-            format!("internal health endpoint was unreachable: {kind:?}")
-        }
-        HealthCheckFailure::InvalidResponse => {
-            "internal health endpoint returned an invalid HTTP response".to_owned()
-        }
-        HealthCheckFailure::UnexpectedStatus { expected, actual } => {
-            format!("internal health endpoint returned status {actual}; expected {expected}")
-        }
-    }
 }

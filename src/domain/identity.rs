@@ -140,6 +140,18 @@ impl fmt::Display for RuntimeInstanceId {
     }
 }
 
+// Shares the catalog naming rule between Application and System names.
+pub(crate) fn is_valid_catalog_name(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 63
+        && bytes.first().is_some_and(u8::is_ascii_alphanumeric)
+        && bytes.last().is_some_and(u8::is_ascii_alphanumeric)
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+}
+
 #[cfg(test)]
 mod tests {
     use super::ApplicationId;

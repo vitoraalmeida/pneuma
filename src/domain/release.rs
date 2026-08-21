@@ -78,6 +78,31 @@ impl OciRepository {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+// Defines the immutable repository boundary allowed for application artifacts.
+pub struct DeliverySpecification {
+    delivery_type: crate::domain::manifest::DeliveryType,
+    image_repository: OciRepository,
+}
+
+impl DeliverySpecification {
+    pub fn new(
+        delivery_type: crate::domain::manifest::DeliveryType,
+        image_repository: OciRepository,
+    ) -> Self {
+        Self {
+            delivery_type,
+            image_repository,
+        }
+    }
+    pub fn delivery_type(&self) -> crate::domain::manifest::DeliveryType {
+        self.delivery_type
+    }
+    pub fn image_repository(&self) -> &OciRepository {
+        &self.image_repository
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct InvalidOciRepository {
     pub repository: String,

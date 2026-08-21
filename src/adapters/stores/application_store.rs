@@ -9,10 +9,11 @@ use crate::domain::application::{
     Application, ApplicationDeploymentSpecification, ApplicationName, ApplicationSummary,
     DesiredRuntimeState,
 };
-use crate::domain::delivery::{DeliverySpecification, DeliveryType};
 use crate::domain::exposure::Visibility;
 use crate::domain::git::{ApplicationSource, RelativeManifestPath, RepositoryKind};
 use crate::domain::identity::{ApplicationId, DeploymentId, SystemId};
+use crate::domain::manifest::DeliveryType;
+use crate::domain::release::DeliverySpecification;
 use crate::domain::release::OciRepository;
 use crate::domain::runtime::{
     ContainerPort, HealthCheckPath, HealthCheckSpecification, HealthCheckStatus,

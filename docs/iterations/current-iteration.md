@@ -59,10 +59,13 @@ primitive round-trips, and removing duplicate or drifted validation.
   operation ownership, port reservations, digest resolution, candidate-start
   inputs, public-activation inputs, and reconciliation entry points retain
   validated identities end to end.
-- [ ] Align CI dispatch name validation with `ApplicationName::new`; share the
+- [x] Align CI dispatch name validation with `ApplicationName::new`; share the
   catalog-name validator; move `DeliveryType`/`DeliverySpecification` to their
   canonical domain modules.
-  Result: TBD.
+  Result: the SSH dispatcher now rejects names the catalog domain rejects;
+  `ApplicationName` and `SystemName` share one validator in `identity.rs`;
+  `DeliveryType` lives in `manifest.rs` and `DeliverySpecification` in
+  `release.rs`; health failures carry their diagnostics through `Display`.
 
 ## Scope and Non-goals
 

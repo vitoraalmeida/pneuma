@@ -16,15 +16,7 @@ pub struct SystemName(String);
 
 impl SystemName {
     pub fn new(value: &str) -> Result<Self, InvalidSystemName> {
-        let bytes = value.as_bytes();
-        if bytes.is_empty()
-            || bytes.len() > 63
-            || !bytes.first().is_some_and(u8::is_ascii_alphanumeric)
-            || !bytes.last().is_some_and(u8::is_ascii_alphanumeric)
-            || !bytes
-                .iter()
-                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
-        {
+        if !crate::domain::identity::is_valid_catalog_name(value) {
             return Err(InvalidSystemName {
                 value: value.to_owned(),
             });

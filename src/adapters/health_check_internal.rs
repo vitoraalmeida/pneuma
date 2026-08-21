@@ -32,6 +32,27 @@ pub enum HealthCheckFailure {
     UnexpectedStatus { expected: u16, actual: u16 },
 }
 
+impl fmt::Display for HealthCheckFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TimedOut => formatter.write_str("internal health check timed out"),
+            Self::Unreachable { kind } => {
+                write!(
+                    formatter,
+                    "internal health endpoint was unreachable: {kind:?}"
+                )
+            }
+            Self::InvalidResponse => {
+                formatter.write_str("internal health endpoint returned an invalid HTTP response")
+            }
+            Self::UnexpectedStatus { expected, actual } => write!(
+                formatter,
+                "internal health endpoint returned status {actual}; expected {expected}"
+            ),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum HealthCheckError {
     NonLoopbackEndpoint { endpoint: SocketAddr },
