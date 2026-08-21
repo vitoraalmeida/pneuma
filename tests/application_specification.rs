@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use pneuma::adapters::database;
 use pneuma::adapters::stores::application_store;
 use pneuma::adapters::stores::application_store::ApplicationStoreError;
+use pneuma::adapters::stores::exposure_store;
 use pneuma::domain::application::RepositoryKind;
 use pneuma::domain::delivery::DeliveryType;
 use pneuma::domain::exposure::{ExposureMaterialization, Visibility};
@@ -61,7 +62,7 @@ fn loads_named_source_delivery_runtime_and_health_configuration() {
     );
     assert_eq!(deployment.visibility, Visibility::Public);
 
-    let exposure = application_store::load_exposure(&connection, application.id.as_str())
+    let exposure = exposure_store::load_exposure(&connection, application.id.as_str())
         .unwrap()
         .unwrap();
     assert_eq!(exposure.application_id, application.id);
@@ -163,7 +164,7 @@ fn rejects_invalid_persisted_exposure_evidence_with_context() {
             [],
         )
         .unwrap();
-    let exposure = application_store::load_exposure(&connection, application_id)
+    let exposure = exposure_store::load_exposure(&connection, application_id)
         .unwrap()
         .unwrap();
     match exposure.materialization() {
@@ -186,7 +187,7 @@ fn rejects_invalid_persisted_exposure_evidence_with_context() {
         )
         .unwrap();
     assert!(matches!(
-        application_store::load_exposure(&connection, application_id),
+        exposure_store::load_exposure(&connection, application_id),
         Ok(Some(exposure)) if matches!(exposure.materialization(), ExposureMaterialization::Diverged { confirmed_route: Some(_), diagnostic: _ })
     ));
 }
@@ -208,7 +209,7 @@ fn loads_historical_internal_removal_timestamp_without_a_confirmed_route() {
         )
         .unwrap();
 
-    let exposure = application_store::load_exposure(&connection, application.id.as_str())
+    let exposure = exposure_store::load_exposure(&connection, application.id.as_str())
         .unwrap()
         .unwrap();
     assert!(matches!(
@@ -219,8 +220,8 @@ fn loads_historical_internal_removal_timestamp_without_a_confirmed_route() {
 
 fn assert_invalid_exposure(connection: &rusqlite::Connection, application_id: &str) {
     assert!(matches!(
-        application_store::load_exposure(connection, application_id),
-        Err(application_store::ExposureStoreError::InvalidExposure { .. })
+        exposure_store::load_exposure(connection, application_id),
+        Err(exposure_store::ExposureStoreError::InvalidExposure { .. })
     ));
 }
 

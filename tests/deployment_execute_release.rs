@@ -10,7 +10,6 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use pneuma::adapters::database;
-use pneuma::adapters::stores::application_store;
 use pneuma::domain::exposure::ExposureMaterialization;
 
 #[test]
@@ -340,7 +339,7 @@ fn public_deploy_succeeds_with_caddy_and_external_health() {
         format!("vitoralmeida.tech {{\n    reverse_proxy 127.0.0.1:{port}\n}}\n")
     );
     assert!(matches!(
-        application_store::load_exposure(&connection, &app_id),
+        pneuma::adapters::stores::exposure_store::load_exposure(&connection, &app_id),
         Ok(Some(exposure)) if matches!(
             exposure.materialization(),
             ExposureMaterialization::Active { .. }

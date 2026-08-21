@@ -3,8 +3,8 @@ use std::fmt;
 
 use rusqlite::{Connection, TransactionBehavior};
 
-use crate::adapters::stores::application_store::ApplicationStoreError;
 use crate::adapters::stores::deployment_store::DeploymentStoreError;
+use crate::adapters::stores::exposure_store::{self, ExposureStoreError};
 use crate::domain::deployment::DeploymentStatus;
 use crate::domain::exposure::{
     DomainName, ExposureConfigurationVersion, ExposureDiagnostic, ExposureMaterializationState,
@@ -53,8 +53,8 @@ pub enum PromotePublicCandidateError {
     },
     InvalidConfigurationVersion,
     InvalidDiagnostic,
-    ApplicationStore {
-        source: ApplicationStoreError,
+    ExposureStore {
+        source: ExposureStoreError,
     },
     DeploymentStore {
         source: DeploymentStoreError,
@@ -92,7 +92,7 @@ impl fmt::Display for PromotePublicCandidateError {
             ),
             Self::InvalidDiagnostic => formatter
                 .write_str("exposure failure code and message must be trimmed and non-empty"),
-            Self::ApplicationStore { source } => {
+            Self::ExposureStore { source } => {
                 write!(formatter, "failed to persist public promotion: {source}")
             }
             Self::DeploymentStore { source } => {
@@ -112,7 +112,7 @@ impl Error for PromotePublicCandidateError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Persistence { source } => Some(source),
-            Self::ApplicationStore { source } => Some(source),
+            Self::ExposureStore { source } => Some(source),
             Self::DeploymentStore { source } => Some(source),
             Self::RuntimeNotFound { .. }
             | Self::InvalidRuntime { .. }
@@ -152,11 +152,8 @@ pub fn begin_public_exposure(
         });
     }
 
-    let updated = crate::adapters::stores::application_store::begin_public_exposure(
-        connection,
-        target.application_id.as_str(),
-    )
-    .map_err(|source| PromotePublicCandidateError::ApplicationStore { source })?;
+    let updated = exposure_store::begin_public_exposure(connection, target.application_id.as_str())
+        .map_err(|source| PromotePublicCandidateError::ExposureStore { source })?;
     if updated == crate::adapters::stores::PersistenceOutcome::Stale {
         return Err(PromotePublicCandidateError::InvalidExposure {
             application_id: target.application_id.to_string(),
@@ -181,13 +178,13 @@ pub fn record_public_exposure_failure(
         ExposureOutcome::Failed => ExposureMaterializationState::Failed,
         ExposureOutcome::Diverged => ExposureMaterializationState::Diverged,
     };
-    let updated = crate::adapters::stores::application_store::record_public_exposure_failure(
+    let updated = exposure_store::record_public_exposure_failure(
         connection,
         application_id,
         diagnostic,
         state,
     )
-    .map_err(|source| PromotePublicCandidateError::ApplicationStore { source })?;
+    .map_err(|source| PromotePublicCandidateError::ExposureStore { source })?;
     if updated == crate::adapters::stores::PersistenceOutcome::Stale {
         return Err(PromotePublicCandidateError::InvalidExposure {
             application_id: application_id.to_owned(),

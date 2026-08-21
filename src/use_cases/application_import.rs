@@ -6,6 +6,7 @@ use rusqlite::Connection;
 
 use crate::adapters::git_source::is_remote_repository;
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
+use crate::adapters::stores::exposure_store::{self, ExposureStoreError};
 use crate::adapters::stores::system_store::{self, SystemStoreError};
 use crate::domain::application::{
     ApplicationName, ApplicationSource, ApplicationSummary, RelativeManifestPath, RepositoryKind,
@@ -23,6 +24,7 @@ pub enum ImportError {
     Manifest { source: ManifestError },
     Persistence { source: rusqlite::Error },
     ApplicationStore { source: ApplicationStoreError },
+    ExposureStore { source: ExposureStoreError },
     ApplicationNotFound { application_id: String },
     SystemRequired,
 }
@@ -40,6 +42,12 @@ impl fmt::Display for ImportError {
                 )
             }
             Self::ApplicationStore { source } => {
+                write!(
+                    formatter,
+                    "failed to persist imported application: {source}"
+                )
+            }
+            Self::ExposureStore { source } => {
                 write!(
                     formatter,
                     "failed to persist imported application: {source}"
@@ -64,6 +72,7 @@ impl Error for ImportError {
             Self::Manifest { source } => Some(source),
             Self::Persistence { source } => Some(source),
             Self::ApplicationStore { source } => Some(source),
+            Self::ExposureStore { source } => Some(source),
             Self::ApplicationNotFound { .. } | Self::SystemRequired => None,
         }
     }
@@ -79,6 +88,15 @@ impl From<ApplicationStoreError> for ImportError {
             ApplicationStoreError::InvalidDesiredRuntimeState { .. } => {
                 Self::ApplicationStore { source: error }
             }
+        }
+    }
+}
+
+impl From<ExposureStoreError> for ImportError {
+    fn from(error: ExposureStoreError) -> Self {
+        match error {
+            ExposureStoreError::Persistence { source } => Self::Persistence { source },
+            error => Self::ExposureStore { source: error },
         }
     }
 }
@@ -265,7 +283,7 @@ fn persist_specification(
                 reason: "is required for public visibility",
             },
         })?;
-    application_store::insert_exposure(transaction, application_id, &exposure_intent)?;
+    exposure_store::insert_exposure(transaction, application_id, &exposure_intent)?;
 
     Ok(())
 }

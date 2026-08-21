@@ -14,7 +14,9 @@ use crate::adapters::local_runtime::{
     ObserveContainerError, ObserveNamedContainerError, observe_container, observe_named_container,
 };
 use crate::adapters::stores::operation_store::{self, OperationStoreError};
-use crate::adapters::stores::{application_store, deployment_store, release_store, runtime_store};
+use crate::adapters::stores::{
+    application_store, deployment_store, exposure_store, release_store, runtime_store,
+};
 use crate::adapters::systemd_quadlet::{
     QuadletError, canonical_unit_contents, container_name, daemon_reload, observe_generated_unit,
     observe_unit_source, start, unit_name, write_unit,
@@ -73,7 +75,7 @@ pub enum ReconciliationReadError {
         source: runtime_store::RuntimeStoreError,
     },
     Exposure {
-        source: application_store::ExposureStoreError,
+        source: exposure_store::ExposureStoreError,
     },
     OperationLock {
         source: ApplicationLockError,
@@ -505,7 +507,7 @@ fn recover_interrupted_deployment(
             } else {
                 ExposureMaterializationState::Diverged
             };
-            let outcome = application_store::record_reconciliation_exposure_failure(
+            let outcome = exposure_store::record_reconciliation_exposure_failure(
                 connection,
                 application.id.as_str(),
                 exposure.intent().visibility(),
@@ -513,7 +515,7 @@ fn recover_interrupted_deployment(
                 state,
                 &diagnostic,
             )
-            .map_err(|source| ReconciliationReadError::Application { source })?;
+            .map_err(|source| ReconciliationReadError::Exposure { source })?;
             if outcome == crate::adapters::stores::PersistenceOutcome::Stale {
                 return Ok(ReconciliationResult::ManualIntervention {
                     reason:
@@ -627,11 +629,11 @@ fn reconcile_exposure(
                 }
             };
             let transaction = connection.transaction().map_err(persistence_error)?;
-            let completed = application_store::complete_internal_exposure_change(
+            let completed = exposure_store::complete_internal_exposure_change(
                 &transaction,
                 input.application.id.as_str(),
             )
-            .map_err(|source| ReconciliationReadError::Application { source })?;
+            .map_err(|source| ReconciliationReadError::Exposure { source })?;
             if completed == crate::adapters::stores::PersistenceOutcome::Stale {
                 drop(transaction);
                 let recovery_failed =
@@ -790,13 +792,13 @@ fn reconcile_public_exposure(
         );
     }
     let transaction = connection.transaction().map_err(persistence_error)?;
-    let completed = application_store::complete_public_exposure_change(
+    let completed = exposure_store::complete_public_exposure_change(
         &transaction,
         input.application.id.as_str(),
         &runtime.id,
         &configuration_version,
     )
-    .map_err(|source| ReconciliationReadError::Application { source })?;
+    .map_err(|source| ReconciliationReadError::Exposure { source })?;
     if completed == crate::adapters::stores::PersistenceOutcome::Stale {
         drop(transaction);
         let recovery_failed =
@@ -822,18 +824,16 @@ fn reserve_exposure(
     state: ExposureMaterializationState,
 ) -> Result<(), ReconciliationReadError> {
     let outcome = match visibility {
-        Visibility::Public => application_store::begin_public_exposure_reconciliation(
-            connection,
-            application_id,
-            state,
-        ),
-        Visibility::Internal => application_store::begin_internal_exposure_reconciliation(
+        Visibility::Public => {
+            exposure_store::begin_public_exposure_reconciliation(connection, application_id, state)
+        }
+        Visibility::Internal => exposure_store::begin_internal_exposure_reconciliation(
             connection,
             application_id,
             state,
         ),
     }
-    .map_err(|source| ReconciliationReadError::Application { source })?;
+    .map_err(|source| ReconciliationReadError::Exposure { source })?;
     if outcome == crate::adapters::stores::PersistenceOutcome::Stale {
         return Err(ReconciliationReadError::NotConverged {
             reason: "exposure changed before reconciliation could reserve it".to_owned(),
@@ -861,7 +861,7 @@ fn record_exposure_failure(
     } else {
         ExposureMaterializationState::Failed
     };
-    let outcome = application_store::record_reconciliation_exposure_failure(
+    let outcome = exposure_store::record_reconciliation_exposure_failure(
         connection,
         application_id,
         visibility,
@@ -869,7 +869,7 @@ fn record_exposure_failure(
         state,
         &diagnostic,
     )
-    .map_err(|source| ReconciliationReadError::Application { source })?;
+    .map_err(|source| ReconciliationReadError::Exposure { source })?;
     if outcome == crate::adapters::stores::PersistenceOutcome::Stale {
         return Err(ReconciliationReadError::NotConverged {
             reason: "exposure changed before reconciliation failure could be recorded".to_owned(),
@@ -991,7 +991,7 @@ pub fn load_reconciliation_input(
     let blocking_deployment =
         deployment_store::load_nonterminal_deployment(&transaction, application.id.as_str())
             .map_err(|source| ReconciliationReadError::Deployment { source })?;
-    let exposure = application_store::load_exposure(&transaction, application.id.as_str())
+    let exposure = exposure_store::load_exposure(&transaction, application.id.as_str())
         .map_err(|source| ReconciliationReadError::Exposure { source })?;
     let specification =
         application_store::load_deployment_specification(&transaction, application.id.as_str())

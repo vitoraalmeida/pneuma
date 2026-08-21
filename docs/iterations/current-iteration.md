@@ -150,9 +150,11 @@ without selecting a new Release or making destructive changes from ambiguity.
   `deployment_store`; remove obsolete Release-store APIs.
   Result: import uses the System store, Application owns desired runtime-state
   persistence, and Deployment owns Release eligibility checks.
-- [ ] Extract Exposure persistence, hydration, transitions, and reconciliation CAS
+- [x] Extract Exposure persistence, hydration, transitions, and reconciliation CAS
   into `exposure_store`, keeping Application deployment-specification projection
   in `application_store`.
+  Result: Exposure hydration, visibility transitions, diagnostics, and reconciliation
+  reservations now have one store owner; Application retains deployment input projection.
 - [ ] Move internal and public promotion write ordering from `deployment_store`
   into their use cases while retaining one atomic transaction and explicit stale
   outcomes for every persistence primitive.

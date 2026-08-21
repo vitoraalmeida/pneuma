@@ -11,7 +11,7 @@ use crate::adapters::caddy_exposure::{
 };
 use crate::adapters::health_check_external::{ExternalHealthCheckError, check_external_health};
 use crate::adapters::local_runtime::{ObserveContainerError, observe_container};
-use crate::adapters::stores::application_store::{self, ApplicationStoreError, ExposureStoreError};
+use crate::adapters::stores::exposure_store::{self, ExposureStoreError};
 use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
 use crate::domain::exposure::{
     DomainName, Exposure, ExposureConfigurationVersion, ExposureDiagnostic,
@@ -53,7 +53,7 @@ pub enum ExposureChangeError {
     },
     InvalidConfigurationVersion,
     Store {
-        source: ApplicationStoreError,
+        source: ExposureStoreError,
     },
     RuntimeStore {
         source: RuntimeStoreError,
@@ -176,7 +176,7 @@ pub fn change_exposure(
     managed_directory: &Path,
     caddyfile_path: &Path,
 ) -> Result<ExposureChange, ExposureChangeError> {
-    let exposure = match application_store::load_exposure(connection, application_id) {
+    let exposure = match exposure_store::load_exposure(connection, application_id) {
         Ok(Some(exposure)) => exposure,
         Ok(None) => {
             return Err(ExposureChangeError::ApplicationNotFound {
@@ -242,7 +242,7 @@ fn begin_change(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|source| ExposureChangeError::Persistence { source })?;
-    let updated = application_store::begin_exposure_change(
+    let updated = exposure_store::begin_exposure_change(
         &transaction,
         application_id,
         current_visibility,
@@ -364,7 +364,7 @@ fn make_public(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|source| ExposureChangeError::Persistence { source })?;
-    let completion = application_store::complete_public_exposure_change(
+    let completion = exposure_store::complete_public_exposure_change(
         &transaction,
         application_id,
         &runtime.id,
@@ -447,7 +447,7 @@ fn make_internal(
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|source| ExposureChangeError::Persistence { source })?;
     let completion =
-        application_store::complete_internal_exposure_change(&transaction, application_id);
+        exposure_store::complete_internal_exposure_change(&transaction, application_id);
     let completed = match completion {
         Ok(completed) => completed,
         Err(source) => {
@@ -554,7 +554,7 @@ fn record_failure(
     };
     let diagnostic = ExposureDiagnostic::new(code, message)
         .map_err(|_| ExposureChangeError::InvalidConfigurationVersion)?;
-    let updated = application_store::record_exposure_change_failure(
+    let updated = exposure_store::record_exposure_change_failure(
         &transaction,
         application_id,
         visibility,
