@@ -10,20 +10,13 @@ use crate::adapters::stores::PersistenceOutcome;
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
 use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
-use crate::domain::deployment::DeploymentStatus;
+use crate::domain::deployment::{
+    DeploymentStatus, PromotedCandidate, PromotionCandidateRejection, PromotionTarget,
+};
 use crate::domain::exposure::Visibility;
-use crate::domain::identity::{DeploymentId, RuntimeInstanceId};
+use crate::domain::identity::RuntimeInstanceId;
 use crate::domain::runtime::HealthCheckSpecification;
-use crate::domain::runtime::{ObservedRuntimeState, RuntimeState};
 use crate::use_cases::deployment_transition::{TransitionDeploymentError, fail_deployment};
-
-#[derive(Debug, PartialEq, Eq)]
-// Identifies a candidate whose promotion was atomically confirmed.
-pub struct PromotedCandidate {
-    pub runtime_id: RuntimeInstanceId,
-    pub deployment_id: DeploymentId,
-    pub finished_at: String,
-}
 
 #[derive(Debug)]
 pub enum PromoteInternalCandidateError {
@@ -155,12 +148,41 @@ pub fn promote_internal_candidate(
     health_check: &HealthCheckSpecification,
 ) -> Result<PromotedCandidate, PromoteInternalCandidateError> {
     let target = load_target(connection, runtime_id)?;
-    if let Some(promoted) = completed_promotion(&target) {
+    if let Some(promoted) = target.completed_promotion() {
         return Ok(promoted);
     }
-    validate_target(&target)?;
+    target
+        .validate_promotion_candidate()
+        .map_err(|rejection| match rejection {
+            PromotionCandidateRejection::NotStarting { actual } => {
+                PromoteInternalCandidateError::InvalidRuntimeState {
+                    runtime_id: target.runtime_id.to_string(),
+                    actual: actual.to_string(),
+                }
+            }
+            PromotionCandidateRejection::NotRunning { actual } => {
+                PromoteInternalCandidateError::RuntimeNotRunning {
+                    runtime_id: target.runtime_id.to_string(),
+                    actual: actual.to_string(),
+                }
+            }
+            PromotionCandidateRejection::Removed => PromoteInternalCandidateError::RuntimeRemoved {
+                runtime_id: target.runtime_id.to_string(),
+            },
+        })?;
+    if target.deployment_status != DeploymentStatus::Verifying {
+        return Err(PromoteInternalCandidateError::InvalidDeploymentState {
+            deployment_id: target.deployment_id.to_string(),
+            actual: target.deployment_status.to_string(),
+        });
+    }
+    if target.visibility != Visibility::Internal {
+        return Err(PromoteInternalCandidateError::PublicApplication {
+            application_id: target.application_id.to_string(),
+        });
+    }
 
-    let health = check_internal_health(target.endpoint, health_check)
+    let health = check_internal_health(target.endpoint.socket_addr(), health_check)
         .map_err(|source| PromoteInternalCandidateError::HealthCheck { source })?;
     match health {
         HealthCheckResult::Healthy { .. } => {}
@@ -181,13 +203,42 @@ pub fn promote_internal_candidate(
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|source| PromoteInternalCandidateError::Persistence { source })?;
     let target = load_target(&transaction, runtime_id)?;
-    if let Some(promoted) = completed_promotion(&target) {
+    if let Some(promoted) = target.completed_promotion() {
         transaction
             .commit()
             .map_err(|source| PromoteInternalCandidateError::Persistence { source })?;
         return Ok(promoted);
     }
-    validate_target(&target)?;
+    target
+        .validate_promotion_candidate()
+        .map_err(|rejection| match rejection {
+            PromotionCandidateRejection::NotStarting { actual } => {
+                PromoteInternalCandidateError::InvalidRuntimeState {
+                    runtime_id: target.runtime_id.to_string(),
+                    actual: actual.to_string(),
+                }
+            }
+            PromotionCandidateRejection::NotRunning { actual } => {
+                PromoteInternalCandidateError::RuntimeNotRunning {
+                    runtime_id: target.runtime_id.to_string(),
+                    actual: actual.to_string(),
+                }
+            }
+            PromotionCandidateRejection::Removed => PromoteInternalCandidateError::RuntimeRemoved {
+                runtime_id: target.runtime_id.to_string(),
+            },
+        })?;
+    if target.deployment_status != DeploymentStatus::Verifying {
+        return Err(PromoteInternalCandidateError::InvalidDeploymentState {
+            deployment_id: target.deployment_id.to_string(),
+            actual: target.deployment_status.to_string(),
+        });
+    }
+    if target.visibility != Visibility::Internal {
+        return Err(PromoteInternalCandidateError::PublicApplication {
+            application_id: target.application_id.to_string(),
+        });
+    }
 
     runtime_store::stop_other_running_runtimes(
         &transaction,
@@ -243,9 +294,6 @@ pub fn promote_internal_candidate(
     })
 }
 
-// Captures the persisted facts that must remain valid throughout promotion.
-type PromotionTarget = deployment_store::PromotionTarget;
-
 // Loads and validates persisted state text before making promotion decisions.
 fn load_target(
     connection: &Connection,
@@ -256,57 +304,6 @@ fn load_target(
         .ok_or_else(|| PromoteInternalCandidateError::RuntimeNotFound {
             runtime_id: runtime_id.to_string(),
         })
-}
-
-// Recognizes an already committed promotion so retries remain idempotent.
-fn completed_promotion(target: &PromotionTarget) -> Option<PromotedCandidate> {
-    if target.state != RuntimeState::Running
-        || target.deployment_status != DeploymentStatus::Succeeded
-    {
-        return None;
-    }
-    target
-        .deployment_finished_at
-        .as_ref()
-        .map(|finished_at| PromotedCandidate {
-            runtime_id: target.runtime_id.clone(),
-            deployment_id: target.deployment_id.clone(),
-            finished_at: finished_at.clone(),
-        })
-}
-
-// Prevents an unobserved, removed, or public candidate from bypassing route activation.
-fn validate_target(target: &PromotionTarget) -> Result<(), PromoteInternalCandidateError> {
-    if target.state != RuntimeState::Starting {
-        return Err(PromoteInternalCandidateError::InvalidRuntimeState {
-            runtime_id: target.runtime_id.to_string(),
-            actual: target.state.to_string(),
-        });
-    }
-    if target.observed_state != ObservedRuntimeState::Running {
-        return Err(PromoteInternalCandidateError::RuntimeNotRunning {
-            runtime_id: target.runtime_id.to_string(),
-            actual: target.observed_state.to_string(),
-        });
-    }
-    if target.retirement.is_some() {
-        return Err(PromoteInternalCandidateError::RuntimeRemoved {
-            runtime_id: target.runtime_id.to_string(),
-        });
-    }
-    if target.deployment_status != DeploymentStatus::Verifying {
-        return Err(PromoteInternalCandidateError::InvalidDeploymentState {
-            deployment_id: target.deployment_id.to_string(),
-            actual: target.deployment_status.to_string(),
-        });
-    }
-    if target.visibility != Visibility::Internal {
-        return Err(PromoteInternalCandidateError::PublicApplication {
-            application_id: target.application_id.to_string(),
-        });
-    }
-
-    Ok(())
 }
 
 // Converts structured health failures into durable deployment diagnostics.

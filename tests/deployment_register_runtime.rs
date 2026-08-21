@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use pneuma::adapters::database;
+use pneuma::domain::deployment::DeploymentTransition;
 use pneuma::domain::deployment::DeploymentType;
 use pneuma::domain::identity::{ApplicationId, DeploymentId};
 use pneuma::domain::release::OciArtifact;
@@ -13,7 +14,7 @@ use pneuma::use_cases::deployment_create::create_deployment;
 use pneuma::use_cases::deployment_register_runtime::{
     RegisterCandidateRuntimeError, register_candidate_runtime,
 };
-use pneuma::use_cases::deployment_transition::{DeploymentTransition, advance_deployment};
+use pneuma::use_cases::deployment_transition::advance_deployment;
 use pneuma::use_cases::release_create::create_release;
 
 #[test]

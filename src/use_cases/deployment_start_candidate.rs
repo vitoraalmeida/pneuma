@@ -8,6 +8,7 @@ use crate::adapters::port_allocator::{consume_port_reservation, reserve_port};
 use crate::adapters::systemd_quadlet::{
     QuadletError, container_name, daemon_reload, start, write_unit,
 };
+use crate::domain::deployment::DeploymentTransition;
 use crate::domain::identity::{ApplicationId, DeploymentId};
 use crate::domain::release::OciArtifact;
 use crate::domain::runtime::{
@@ -16,9 +17,7 @@ use crate::domain::runtime::{
 };
 use crate::use_cases::deployment_register_runtime::register_candidate_runtime;
 use crate::use_cases::deployment_runtime_cleanup::CandidateResources;
-use crate::use_cases::deployment_transition::{
-    DeploymentTransition, TransitionDeploymentError, advance_deployment,
-};
+use crate::use_cases::deployment_transition::{TransitionDeploymentError, advance_deployment};
 
 // Returns the observed candidate identity needed by verification and cleanup orchestration.
 pub(crate) struct StartedCandidate {

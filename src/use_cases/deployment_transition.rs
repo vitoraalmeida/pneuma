@@ -5,15 +5,10 @@ use rusqlite::{Connection, TransactionBehavior};
 
 use crate::adapters::stores::PersistenceOutcome;
 use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
-use crate::domain::deployment::{DeploymentFailure, DeploymentStatus, InvalidDeploymentFailure};
+use crate::domain::deployment::{
+    DeploymentFailure, DeploymentStatus, DeploymentTransition, InvalidDeploymentFailure,
+};
 use crate::domain::identity::DeploymentId;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DeploymentTransition {
-    Start,
-    RuntimeRunning,
-    Verified,
-}
 
 #[derive(Debug)]
 pub enum TransitionDeploymentError {
@@ -144,7 +139,7 @@ pub fn advance_deployment(
     deployment_id: &DeploymentId,
     transition: DeploymentTransition,
 ) -> Result<DeploymentStatus, TransitionDeploymentError> {
-    let (expected, next) = transition_states(transition);
+    let (expected, next) = transition.edge();
     let advanced = deployment_store::advance_status(connection, deployment_id, expected, next)?;
     match advanced {
         PersistenceOutcome::Updated => return Ok(next),
@@ -188,17 +183,4 @@ pub fn fail_deployment(
         .map_err(|source| TransitionDeploymentError::Persistence { source })?;
 
     Ok(failure)
-}
-
-// Defines the closed deployment state-machine edges accepted by this use case.
-fn transition_states(transition: DeploymentTransition) -> (DeploymentStatus, DeploymentStatus) {
-    match transition {
-        DeploymentTransition::Start => (DeploymentStatus::Pending, DeploymentStatus::Starting),
-        DeploymentTransition::RuntimeRunning => {
-            (DeploymentStatus::Starting, DeploymentStatus::Verifying)
-        }
-        DeploymentTransition::Verified => {
-            (DeploymentStatus::Verifying, DeploymentStatus::Activating)
-        }
-    }
 }

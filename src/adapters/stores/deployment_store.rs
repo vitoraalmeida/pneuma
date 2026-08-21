@@ -7,13 +7,16 @@ use crate::adapters::stores::PersistenceOutcome;
 use crate::adapters::stores::release_store::artifact_from_values;
 use crate::domain::deployment::{
     Deployment, DeploymentFailure, DeploymentFailureEvidence, DeploymentHistory,
-    DeploymentLifecycle, DeploymentStatus, DeploymentType, SourceRevision,
+    DeploymentLifecycle, DeploymentStatus, DeploymentType, PromotionTarget, RollbackTarget,
+    SourceRevision,
 };
 use crate::domain::exposure::{DomainName, Visibility};
 use crate::domain::git::CommitSha;
 use crate::domain::identity::{ApplicationId, DeploymentId, ReleaseId, RuntimeInstanceId};
 use crate::domain::release::Release;
-use crate::domain::runtime::{ObservedRuntimeState, RuntimeRetirement, RuntimeState};
+use crate::domain::runtime::{
+    ExpectedRuntimeEndpoint, ObservedRuntimeState, RuntimeRetirement, RuntimeState,
+};
 use std::net::{Ipv4Addr, SocketAddr};
 
 #[derive(Debug)]
@@ -39,28 +42,6 @@ pub enum DeploymentStoreError {
     Persistence {
         source: rusqlite::Error,
     },
-}
-
-#[derive(Debug)]
-// Combines the persisted facts a promotion must validate before changing its state.
-pub struct PromotionTarget {
-    pub runtime_id: RuntimeInstanceId,
-    pub application_id: ApplicationId,
-    pub deployment_id: DeploymentId,
-    pub endpoint: SocketAddr,
-    pub state: RuntimeState,
-    pub observed_state: ObservedRuntimeState,
-    pub retirement: Option<RuntimeRetirement>,
-    pub deployment_status: DeploymentStatus,
-    pub deployment_finished_at: Option<String>,
-    pub visibility: Visibility,
-    pub domain: Option<DomainName>,
-}
-
-#[derive(Debug)]
-pub struct RollbackTarget {
-    pub release: Release,
-    pub source_revision: Option<SourceRevision>,
 }
 
 impl fmt::Display for DeploymentStoreError {
@@ -351,9 +332,21 @@ pub fn load_promotion_target(
                     })
                 })
                 .transpose()?;
+            let endpoint = ExpectedRuntimeEndpoint::new(SocketAddr::from((
+                Ipv4Addr::LOCALHOST,
+                row.get::<_, u16>(2)?,
+            )))
+            .map_err(|error| {
+                conversion_error(
+                    2,
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string()),
+                )
+            })?;
             Ok(PromotionTarget {
-                runtime_id: runtime_id.clone(), application_id: ApplicationId::from(row.get::<_, String>(0)?), deployment_id: DeploymentId::from(row.get::<_, String>(1)?),
-                endpoint: SocketAddr::from((Ipv4Addr::LOCALHOST, row.get::<_, u16>(2)?)),
+                runtime_id: runtime_id.clone(),
+                application_id: ApplicationId::from(row.get::<_, String>(0)?),
+                deployment_id: DeploymentId::from(row.get::<_, String>(1)?),
+                endpoint,
                 state: runtime_state_from_value(&state_text).ok_or_else(|| conversion_error(3, std::io::Error::new(std::io::ErrorKind::InvalidData, format!("invalid runtime state: {state_text}"))))?,
                 observed_state: observed_runtime_state_from_value(&row.get::<_, String>(4)?),
                 retirement: row.get::<_, Option<String>>(5)?.map(|removed_at| RuntimeRetirement { removed_at }),

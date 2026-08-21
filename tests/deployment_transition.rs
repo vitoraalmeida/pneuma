@@ -1,13 +1,13 @@
 use std::path::{Path, PathBuf};
 
 use pneuma::adapters::database;
-use pneuma::domain::deployment::{DeploymentStatus, DeploymentType};
+use pneuma::domain::deployment::{DeploymentStatus, DeploymentTransition, DeploymentType};
 use pneuma::domain::identity::{ApplicationId, DeploymentId};
 use pneuma::domain::release::OciArtifact;
 use pneuma::use_cases::application_import::import_application;
 use pneuma::use_cases::deployment_create::create_deployment;
 use pneuma::use_cases::deployment_transition::{
-    DeploymentTransition, TransitionDeploymentError, advance_deployment, fail_deployment,
+    TransitionDeploymentError, advance_deployment, fail_deployment,
 };
 use pneuma::use_cases::release_create::create_release;
 

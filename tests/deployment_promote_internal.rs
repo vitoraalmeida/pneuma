@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 
 use pneuma::adapters::database;
+use pneuma::domain::deployment::DeploymentTransition;
 use pneuma::domain::deployment::DeploymentType;
 use pneuma::domain::identity::RuntimeInstanceId;
 use pneuma::domain::release::OciArtifact;
@@ -18,7 +19,7 @@ use pneuma::use_cases::deployment_promote_internal::{
     PromoteInternalCandidateError, promote_internal_candidate,
 };
 use pneuma::use_cases::deployment_register_runtime::register_candidate_runtime;
-use pneuma::use_cases::deployment_transition::{DeploymentTransition, advance_deployment};
+use pneuma::use_cases::deployment_transition::advance_deployment;
 use pneuma::use_cases::release_create::create_release;
 
 #[test]

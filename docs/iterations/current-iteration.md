@@ -29,10 +29,14 @@ primitive round-trips, and removing duplicate or drifted validation.
   duplicated path/status validation is removed; `exposure_change` loads the
   deployment specification and probes the persisted health path/status;
   `ExposureDiagnostic::new` failures map to `InvalidDiagnostic`.
-- [ ] Move `DeploymentTransition`, its edge mapping, and promotion eligibility
+- [x] Move `DeploymentTransition`, its edge mapping, and promotion eligibility
   into `domain/deployment.rs`; move promotion/rollback target types out of
   `deployment_store`; merge duplicate promoted-candidate types.
-  Result: TBD.
+  Result: `DeploymentTransition` and its `edge()` method live in the domain;
+  `PromotionTarget`/`RollbackTarget`/`PromotedCandidate` moved to
+  `domain/deployment.rs`; `PromotionTarget` owns a shared
+  `validate_promotion_candidate()` predicate and `completed_promotion()`; the
+  `PromotionTarget.endpoint` field is now `ExpectedRuntimeEndpoint`.
 - [ ] Move public exposure target and outcome types into `domain/exposure.rs`;
   route public exposure through `ExposureIntent::new`; type `change_exposure`
   and helpers with `&ApplicationId`.

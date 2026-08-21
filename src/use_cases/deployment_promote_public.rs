@@ -8,27 +8,20 @@ use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::adapters::stores::deployment_store::DeploymentStoreError;
 use crate::adapters::stores::exposure_store::{self, ExposureStoreError};
 use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
-use crate::domain::deployment::DeploymentStatus;
+use crate::domain::deployment::{
+    DeploymentStatus, PromotedCandidate, PromotionCandidateRejection, PromotionTarget,
+};
 use crate::domain::exposure::{
     DomainName, ExposureConfigurationVersion, ExposureDiagnostic, ExposureMaterializationState,
     Visibility,
 };
-use crate::domain::identity::{ApplicationId, DeploymentId, RuntimeInstanceId};
-use crate::domain::runtime::{ObservedRuntimeState, RuntimeState};
+use crate::domain::identity::{ApplicationId, RuntimeInstanceId};
 
 #[derive(Debug, PartialEq, Eq)]
 // Supplies the route identity after public exposure enters the applying state.
 pub struct PublicExposureTarget {
     pub application_id: ApplicationId,
     pub domain: DomainName,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-// Identifies a candidate whose runtime, route, and deployment were atomically promoted.
-pub struct PromotedPublicCandidate {
-    pub runtime_id: RuntimeInstanceId,
-    pub deployment_id: DeploymentId,
-    pub finished_at: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -147,7 +140,20 @@ pub fn begin_public_exposure(
     runtime_id: &RuntimeInstanceId,
 ) -> Result<PublicExposureTarget, PromotePublicCandidateError> {
     let target = load_target(connection, runtime_id)?;
-    validate_runtime(&target)?;
+    target.validate_promotion_candidate().map_err(|rejection| {
+        PromotePublicCandidateError::InvalidRuntime {
+            runtime_id: target.runtime_id.to_string(),
+            reason: match rejection {
+                PromotionCandidateRejection::NotStarting { actual } => {
+                    format!("state is `{actual}`")
+                }
+                PromotionCandidateRejection::NotRunning { actual } => {
+                    format!("observed state is `{actual}`")
+                }
+                PromotionCandidateRejection::Removed => "runtime has been removed".to_owned(),
+            },
+        }
+    })?;
     if target.deployment_status != DeploymentStatus::Activating {
         return Err(PromotePublicCandidateError::InvalidDeploymentState {
             deployment_id: target.deployment_id.to_string(),
@@ -216,12 +222,25 @@ pub fn promote_public_candidate(
     connection: &mut Connection,
     runtime_id: &RuntimeInstanceId,
     configuration_version: &ExposureConfigurationVersion,
-) -> Result<PromotedPublicCandidate, PromotePublicCandidateError> {
+) -> Result<PromotedCandidate, PromotePublicCandidateError> {
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|source| PromotePublicCandidateError::Persistence { source })?;
     let target = load_target(&transaction, runtime_id)?;
-    validate_runtime(&target)?;
+    target.validate_promotion_candidate().map_err(|rejection| {
+        PromotePublicCandidateError::InvalidRuntime {
+            runtime_id: target.runtime_id.to_string(),
+            reason: match rejection {
+                PromotionCandidateRejection::NotStarting { actual } => {
+                    format!("state is `{actual}`")
+                }
+                PromotionCandidateRejection::NotRunning { actual } => {
+                    format!("observed state is `{actual}`")
+                }
+                PromotionCandidateRejection::Removed => "runtime has been removed".to_owned(),
+            },
+        }
+    })?;
     if target.deployment_status != DeploymentStatus::Activating {
         return Err(PromotePublicCandidateError::InvalidDeploymentState {
             deployment_id: target.deployment_id.to_string(),
@@ -299,15 +318,12 @@ pub fn promote_public_candidate(
         .commit()
         .map_err(|source| PromotePublicCandidateError::Persistence { source })?;
 
-    Ok(PromotedPublicCandidate {
+    Ok(PromotedCandidate {
         runtime_id: target.runtime_id,
         deployment_id: target.deployment_id,
         finished_at,
     })
 }
-
-// Captures persisted runtime, deployment, and exposure facts for public promotion.
-type PromotionTarget = crate::adapters::stores::deployment_store::PromotionTarget;
 
 // Loads the promotion target so later checks can reject incompatible state before promotion writes.
 fn load_target(
@@ -319,24 +335,4 @@ fn load_target(
         .ok_or_else(|| PromotePublicCandidateError::RuntimeNotFound {
             runtime_id: runtime_id.to_string(),
         })
-}
-
-// Requires the candidate to remain observed running and not retired before promotion.
-fn validate_runtime(target: &PromotionTarget) -> Result<(), PromotePublicCandidateError> {
-    let reason = if target.state != RuntimeState::Starting {
-        Some(format!("state is `{}`", target.state))
-    } else if target.observed_state != ObservedRuntimeState::Running {
-        Some(format!("observed state is `{}`", target.observed_state))
-    } else if target.retirement.is_some() {
-        Some("runtime has been removed".to_owned())
-    } else {
-        None
-    };
-    if let Some(reason) = reason {
-        return Err(PromotePublicCandidateError::InvalidRuntime {
-            runtime_id: target.runtime_id.to_string(),
-            reason,
-        });
-    }
-    Ok(())
 }
