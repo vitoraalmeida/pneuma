@@ -1,6 +1,6 @@
 # Current Iteration
 
-**Status:** completed
+**Status:** in progress
 
 **Base:** `49b9476` (`docs: refactor documentation architecture`)
 
@@ -169,6 +169,12 @@ without selecting a new Release or making destructive changes from ambiguity.
   the approved verbose deployment progress output.
   Result: remote imports, database helpers, diagnostics, and deployment progress
   now have dedicated owners; `--verbose` deploy reports lifecycle steps on stderr.
+- [x] Preserve validated manifest values through the import use case without
+  changing CLI input, remote import behavior, diagnostics, persistence
+  representation, or checkout cleanup.
+  Result: manifest validation now produces a typed import projection consumed by
+  the import transaction; remote import and all CLI import regressions retain
+  their existing behavior.
 
 ## Scope and Non-goals
 

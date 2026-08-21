@@ -8,7 +8,7 @@ use serde::Deserialize;
 
 use crate::domain::application::{ApplicationName, RelativeManifestPath};
 use crate::domain::delivery::DeliveryType;
-use crate::domain::exposure::{DomainName, Visibility};
+use crate::domain::exposure::{DomainName, ExposureIntent, Visibility};
 use crate::domain::release::OciRepository;
 use crate::domain::runtime::{ContainerPort, HealthCheckPath, HealthCheckStatus};
 use crate::domain::system::SystemName;
@@ -66,6 +66,20 @@ pub struct Runtime {
 pub struct Exposure {
     pub default_visibility: Visibility,
     pub domain: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+// Carries manifest values after validation into the import workflow.
+pub struct ImportSpecification {
+    pub schema_version: u32,
+    pub system_name: Option<SystemName>,
+    pub application_name: ApplicationName,
+    pub delivery_type: DeliveryType,
+    pub repository: OciRepository,
+    pub container_port: ContainerPort,
+    pub healthcheck_path: HealthCheckPath,
+    pub expected_status: HealthCheckStatus,
+    pub exposure: ExposureIntent,
 }
 
 #[derive(Debug)]
@@ -153,76 +167,79 @@ pub fn parse_manifest(contents: &str) -> Result<Manifest, ManifestError> {
     Ok(manifest)
 }
 
-// Enforces schema and cross-field constraints required before an import is persisted.
-fn validate_manifest(manifest: &Manifest) -> Result<(), ManifestError> {
-    if manifest.schema_version != SUPPORTED_SCHEMA_VERSION {
-        return Err(ManifestError::UnsupportedSchemaVersion {
-            found: manifest.schema_version,
-        });
-    }
-
-    if let Some(system) = &manifest.system {
-        if SystemName::new(&system.name).is_err() {
-            return invalid_field(
-                "system.name",
-                "must be 1-63 lowercase ASCII letters, digits, or hyphens and start and end with a letter or digit",
-            );
+impl Manifest {
+    // Converts the serde DTO to values whose invariants have been checked once.
+    pub fn import_specification(&self) -> Result<ImportSpecification, ManifestError> {
+        if self.schema_version != SUPPORTED_SCHEMA_VERSION {
+            return Err(ManifestError::UnsupportedSchemaVersion {
+                found: self.schema_version,
+            });
         }
-    }
-
-    if ApplicationName::new(&manifest.application.name).is_err() {
-        return invalid_field(
-            "application.name",
-            "must be 1-63 lowercase ASCII letters, digits, or hyphens and start and end with a letter or digit",
-        );
-    }
-
-    if manifest.delivery.delivery_type != DeliveryType::Oci {
-        return invalid_field("delivery.type", "must be `oci`");
-    }
-
-    if OciRepository::new(&manifest.delivery.image).is_err() {
-        return invalid_field(
-            "delivery.image",
-            "must be a non-empty OCI repository without surrounding whitespace",
-        );
-    }
-
-    if ContainerPort::new(manifest.runtime.container_port).is_err() {
-        return invalid_field("runtime.container_port", "must be between 1 and 65535");
-    }
-
-    if HealthCheckPath::new(&manifest.runtime.healthcheck_path).is_err() {
-        return invalid_field(
-            "runtime.healthcheck_path",
-            "must be an absolute HTTP path without whitespace",
-        );
-    }
-
-    if HealthCheckStatus::new(manifest.runtime.expected_status).is_err() {
-        return invalid_field("runtime.expected_status", "must be between 100 and 599");
-    }
-
-    match (
-        &manifest.exposure.default_visibility,
-        &manifest.exposure.domain,
-    ) {
-        (Visibility::Public, None) => {
-            return invalid_field("exposure.domain", "is required for public exposure");
+        let system_name = self.system.as_ref().map(|system| SystemName::new(&system.name)).transpose().map_err(|_| ManifestError::InvalidField { field: "system.name", reason: "must be 1-63 lowercase ASCII letters, digits, or hyphens and start and end with a letter or digit" })?;
+        let application_name = ApplicationName::new(&self.application.name).map_err(|_| ManifestError::InvalidField { field: "application.name", reason: "must be 1-63 lowercase ASCII letters, digits, or hyphens and start and end with a letter or digit" })?;
+        if self.delivery.delivery_type != DeliveryType::Oci {
+            return Err(ManifestError::InvalidField {
+                field: "delivery.type",
+                reason: "must be `oci`",
+            });
         }
-        (_, Some(domain)) if DomainName::new(domain).is_err() => {
-            return invalid_field("exposure.domain", "must be a valid domain name");
-        }
-        (Visibility::Internal, None) | (Visibility::Internal, Some(_)) => {}
-        (Visibility::Public, Some(_)) => {}
+        let repository =
+            OciRepository::new(&self.delivery.image).map_err(|_| ManifestError::InvalidField {
+                field: "delivery.image",
+                reason: "must be a non-empty OCI repository without surrounding whitespace",
+            })?;
+        let container_port = ContainerPort::new(self.runtime.container_port).map_err(|_| {
+            ManifestError::InvalidField {
+                field: "runtime.container_port",
+                reason: "must be between 1 and 65535",
+            }
+        })?;
+        let healthcheck_path =
+            HealthCheckPath::new(&self.runtime.healthcheck_path).map_err(|_| {
+                ManifestError::InvalidField {
+                    field: "runtime.healthcheck_path",
+                    reason: "must be an absolute HTTP path without whitespace",
+                }
+            })?;
+        let expected_status =
+            HealthCheckStatus::new(self.runtime.expected_status).map_err(|_| {
+                ManifestError::InvalidField {
+                    field: "runtime.expected_status",
+                    reason: "must be between 100 and 599",
+                }
+            })?;
+        let domain = self
+            .exposure
+            .domain
+            .as_deref()
+            .map(DomainName::new)
+            .transpose()
+            .map_err(|_| ManifestError::InvalidField {
+                field: "exposure.domain",
+                reason: "must be a valid domain name",
+            })?;
+        let exposure =
+            ExposureIntent::new(self.exposure.default_visibility, domain).map_err(|_| {
+                ManifestError::InvalidField {
+                    field: "exposure.domain",
+                    reason: "is required for public exposure",
+                }
+            })?;
+        Ok(ImportSpecification {
+            schema_version: self.schema_version,
+            system_name,
+            application_name,
+            delivery_type: self.delivery.delivery_type,
+            repository,
+            container_port,
+            healthcheck_path,
+            expected_status,
+            exposure,
+        })
     }
-
-    Ok(())
 }
 
-// Produces a typed validation failure without constructing an unrelated success value.
-fn invalid_field<T>(field: &'static str, reason: &'static str) -> Result<T, ManifestError> {
-    // The generic success type lets validation branches return the same error
-    // from functions with different `Result` success types; no `T` is created.
-    Err(ManifestError::InvalidField { field, reason })
+// Enforces schema and cross-field constraints required before an import is persisted.
+fn validate_manifest(manifest: &Manifest) -> Result<(), ManifestError> {
+    manifest.import_specification().map(|_| ())
 }

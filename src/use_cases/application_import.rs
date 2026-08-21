@@ -9,12 +9,9 @@ use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::adapters::stores::exposure_store::{self, ExposureStoreError};
 use crate::adapters::stores::system_store::{self, SystemStoreError};
 use crate::domain::application::{
-    ApplicationName, ApplicationSource, ApplicationSummary, RelativeManifestPath, RepositoryKind,
+    ApplicationSource, ApplicationSummary, RelativeManifestPath, RepositoryKind,
 };
-use crate::domain::exposure::{DomainName, ExposureIntent};
-use crate::domain::manifest::{Manifest, ManifestError, load_manifest_at};
-use crate::domain::release::OciRepository;
-use crate::domain::runtime::{ContainerPort, HealthCheckPath, HealthCheckStatus};
+use crate::domain::manifest::{ImportSpecification, ManifestError, load_manifest_at};
 use crate::domain::system::SystemName;
 
 const DEFAULT_MANIFEST_PATH: &str = "pneuma.toml";
@@ -121,23 +118,21 @@ pub fn import_application(
     let manifest_path = manifest_path.unwrap_or(DEFAULT_MANIFEST_PATH);
     let manifest = load_manifest_at(repository_path, manifest_path)
         .map_err(|source| ImportError::Manifest { source })?;
+    let specification = manifest
+        .import_specification()
+        .map_err(|source| ImportError::Manifest { source })?;
 
     let resolved_system_name = match system_name {
         Some(system_name) => system_name.clone(),
         None => {
-            let name = manifest
-                .system
+            let name = specification
+                .system_name
                 .as_ref()
                 .ok_or(ImportError::SystemRequired)?;
-            SystemName::new(&name.name).map_err(|_| ImportError::Manifest {
-                source: ManifestError::InvalidField {
-                    field: "system.name",
-                    reason: "must be 1-63 lowercase ASCII letters, digits, or hyphens and start and end with a letter or digit",
-                },
-            })?
+            name.clone()
         }
     };
-    let application_name = ApplicationName::new(&manifest.application.name).map_err(|_| ImportError::Manifest { source: ManifestError::InvalidField { field: "application.name", reason: "must be 1-63 lowercase ASCII letters, digits, or hyphens and start and end with a letter or digit" } })?;
+    let application_name = specification.application_name.clone();
 
     let transaction = connection
         .transaction()
@@ -160,14 +155,14 @@ pub fn import_application(
         &application_id,
         system.id.as_str(),
         application_name.as_str(),
-        manifest.schema_version,
+        specification.schema_version,
     )?;
 
     if inserted {
         persist_specification(
             &transaction,
             &application_id,
-            &manifest,
+            &specification,
             repository_url,
             manifest_path,
         )?;
@@ -191,20 +186,15 @@ pub fn import_application(
 fn persist_specification(
     transaction: &rusqlite::Transaction<'_>,
     application_id: &str,
-    manifest: &Manifest,
+    specification: &ImportSpecification,
     repository_url: Option<&str>,
     manifest_path: &str,
 ) -> Result<(), ImportError> {
     application_store::insert_delivery_spec(
         transaction,
         application_id,
-        manifest.delivery.delivery_type,
-        &OciRepository::new(&manifest.delivery.image).map_err(|_| ImportError::Manifest {
-            source: ManifestError::InvalidField {
-                field: "delivery.image",
-                reason: "must be a non-empty OCI repository without surrounding whitespace",
-            },
-        })?,
+        specification.delivery_type,
+        &specification.repository,
     )?;
 
     if let Some(repository_url) = repository_url {
@@ -237,53 +227,15 @@ fn persist_specification(
     application_store::insert_runtime_spec(
         transaction,
         application_id,
-        ContainerPort::new(manifest.runtime.container_port).map_err(|_| ImportError::Manifest {
-            source: ManifestError::InvalidField {
-                field: "runtime.container_port",
-                reason: "must be between 1 and 65535",
-            },
-        })?,
+        specification.container_port,
     )?;
     application_store::insert_health_check_spec(
         transaction,
         application_id,
-        &HealthCheckPath::new(&manifest.runtime.healthcheck_path).map_err(|_| {
-            ImportError::Manifest {
-                source: ManifestError::InvalidField {
-                    field: "runtime.healthcheck_path",
-                    reason: "must be an absolute HTTP path without whitespace",
-                },
-            }
-        })?,
-        HealthCheckStatus::new(manifest.runtime.expected_status).map_err(|_| {
-            ImportError::Manifest {
-                source: ManifestError::InvalidField {
-                    field: "runtime.expected_status",
-                    reason: "must be between 100 and 599",
-                },
-            }
-        })?,
+        &specification.healthcheck_path,
+        specification.expected_status,
     )?;
-    let domain = manifest
-        .exposure
-        .domain
-        .as_deref()
-        .map(DomainName::new)
-        .transpose()
-        .map_err(|_| ImportError::Manifest {
-            source: ManifestError::InvalidField {
-                field: "exposure.domain",
-                reason: "must be a valid domain name",
-            },
-        })?;
-    let exposure_intent = ExposureIntent::new(manifest.exposure.default_visibility, domain)
-        .map_err(|_| ImportError::Manifest {
-            source: ManifestError::InvalidField {
-                field: "exposure.domain",
-                reason: "is required for public visibility",
-            },
-        })?;
-    exposure_store::insert_exposure(transaction, application_id, &exposure_intent)?;
+    exposure_store::insert_exposure(transaction, application_id, &specification.exposure)?;
 
     Ok(())
 }

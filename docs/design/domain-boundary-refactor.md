@@ -36,6 +36,8 @@ SQLite representation, or reconciliation policy.
 - This refactor preserves persisted SQLite values, migration history, external-effect
   ordering, and existing reconciliation decisions. Verbose deployment commands gain
   their already-defined step-by-step stderr progress output; other CLI behavior is preserved.
+- Manifest parsing retains its serde-facing DTO for input diagnostics, but provides a
+  typed import projection so validated values are not reconstructed by use cases.
 
 ## Checkpoint Order
 
@@ -53,6 +55,8 @@ SQLite representation, or reconciliation policy.
    isolate the legacy direct Podman candidate-creation API.
 7. Extract shared remote import, diagnostics, database, and progress-enabled
    deployment orchestration from `main.rs` without changing CLI behavior.
+8. Preserve validated manifest values through typed import inputs without changing
+   import behavior or SQLite text.
 
 ## Validation
 
