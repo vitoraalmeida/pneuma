@@ -375,8 +375,8 @@ fn rematerialize_missing_runtime(
     let outcome = runtime_store::reconcile_external_runtime_id(
         connection,
         &runtime.id,
-        runtime.external_runtime_id.as_str(),
-        id.as_str(),
+        &runtime.external_runtime_id,
+        &id,
     )
     .map_err(|source| ReconciliationReadError::Runtime { source })?;
     if outcome == crate::adapters::stores::PersistenceOutcome::Stale {
@@ -960,8 +960,8 @@ fn repair_recreated_runtime(
     let outcome = runtime_store::reconcile_external_runtime_id(
         connection,
         &runtime.id,
-        runtime.external_runtime_id.as_str(),
-        id.as_str(),
+        &runtime.external_runtime_id,
+        id,
     )
     .map_err(|source| ReconciliationReadError::Runtime { source })?;
     if outcome == crate::adapters::stores::PersistenceOutcome::Stale {

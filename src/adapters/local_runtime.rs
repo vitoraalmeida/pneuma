@@ -274,7 +274,7 @@ pub fn resolve_container_id(name: &str) -> Result<String, ResolveContainerError>
         });
     }
     let id = stdout.trim();
-    if !is_container_id(id) {
+    if !ContainerId::is_valid(id) {
         return Err(ResolveContainerError::InvalidOutput {
             name: name.to_owned(),
         });
@@ -336,7 +336,7 @@ pub fn observe_named_container(
             name: name.to_owned(),
         });
     };
-    if !is_container_id(id) || observed_name.is_empty() || image_reference.is_empty() {
+    if !ContainerId::is_valid(id) || observed_name.is_empty() || image_reference.is_empty() {
         return Err(ObserveNamedContainerError::InvalidOutput {
             name: name.to_owned(),
         });
@@ -370,7 +370,7 @@ pub fn observe_container(
     container_id: &str,
     container_port: u16,
 ) -> Result<ContainerObservation, ObserveContainerError> {
-    if !is_container_id(container_id) {
+    if !ContainerId::is_valid(container_id) {
         return Err(ObserveContainerError::InvalidContainerId);
     }
     if container_port == 0 {
@@ -428,7 +428,7 @@ fn control_container(
     arguments: &[&str],
     container_id: &str,
 ) -> Result<ContainerCommandOutput, ControlContainerError> {
-    if !is_container_id(container_id) {
+    if !ContainerId::is_valid(container_id) {
         return Err(ControlContainerError::InvalidContainerId);
     }
 
@@ -525,11 +525,6 @@ fn observed_state(status: &str) -> ObservedRuntimeState {
             status: status.to_owned(),
         },
     }
-}
-
-// Rejects empty or non-hexadecimal values before passing a container ID to Podman.
-fn is_container_id(container_id: &str) -> bool {
-    !container_id.is_empty() && container_id.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 // Prefers Podman's stderr failure detail, using stdout only when stderr is empty.

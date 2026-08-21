@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::domain::reconciliation::{QuadletSourceObservation, SystemdUnitObservation};
+use crate::domain::runtime::stable_runtime_name;
 
 pub const QUADLET_DIRECTORY_ENVIRONMENT_VARIABLE: &str = "PNEUMA_QUADLET_DIR";
 
@@ -104,12 +105,12 @@ impl Error for QuadletError {
 
 // Derives the stable Quadlet unit base name from the logical application and deployment identity.
 pub fn unit_name(application_name: &str, deployment_id: &str) -> String {
-    format!("pneuma-{application_name}-{deployment_id}")
+    stable_runtime_name(application_name, deployment_id)
 }
 
 // Keeps the generated Podman container name aligned with the Quadlet unit identity.
 pub fn container_name(application_name: &str, deployment_id: &str) -> String {
-    format!("pneuma-{application_name}-{deployment_id}")
+    stable_runtime_name(application_name, deployment_id)
 }
 
 // Renders the exact unit representation used for both materialization and reconciliation checks.

@@ -72,7 +72,7 @@ fn maps_historical_removed_rows_to_explicit_retirement() {
 
     let mapped = pneuma::adapters::stores::runtime_store::load_runtime_by_external_id(
         &connection,
-        runtime.external_runtime_id.as_str(),
+        &runtime.external_runtime_id,
     )
     .unwrap()
     .unwrap();
@@ -101,7 +101,7 @@ fn rejects_persisted_retirement_without_a_removed_timestamp() {
 
     let error = pneuma::adapters::stores::runtime_store::load_runtime_by_external_id(
         &connection,
-        runtime.external_runtime_id.as_str(),
+        &runtime.external_runtime_id,
     )
     .unwrap_err();
 

@@ -12,6 +12,11 @@ impl ContainerId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    // Rejects empty or non-hexadecimal external container text before it reaches Podman or SQLite.
+    pub fn is_valid(value: &str) -> bool {
+        !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+    }
 }
 
 impl From<String> for ContainerId {
@@ -336,6 +341,12 @@ pub(crate) fn validate_loopback_endpoint(endpoint: SocketAddr) -> Result<(), Run
         return Err(RuntimeEndpointError::NotIpv4Loopback { endpoint });
     }
     Ok(())
+}
+
+// Derives the one stable external name shared by the Quadlet unit and the Podman container so
+// supervision, observation, and reconciliation always address the same runtime identity.
+pub fn stable_runtime_name(application_name: &str, deployment_id: &str) -> String {
+    format!("pneuma-{application_name}-{deployment_id}")
 }
 
 #[cfg(test)]

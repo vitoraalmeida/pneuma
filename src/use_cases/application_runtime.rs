@@ -376,7 +376,7 @@ fn observe_current_runtime(
         application_name,
         runtime.deployment_id.as_str(),
     )) {
-        Ok(id) => id,
+        Ok(id) => ContainerId::from(id),
         Err(_) => {
             return Ok(CurrentRuntimeObservation {
                 observation,
@@ -387,7 +387,7 @@ fn observe_current_runtime(
     let reconciled = runtime_store::reconcile_external_runtime_id(
         connection,
         &runtime.id,
-        runtime.external_runtime_id.as_str(),
+        &runtime.external_runtime_id,
         &resolved,
     )
     .map_err(|source| RuntimeLifecycleError::Store { source })?;
@@ -397,7 +397,7 @@ fn observe_current_runtime(
         });
     }
     let observation =
-        observe_container(&resolved, runtime.container_port.get()).map_err(|source| {
+        observe_container(resolved.as_str(), runtime.container_port.get()).map_err(|source| {
             RuntimeLifecycleError::Observe {
                 runtime_id: runtime.id.to_string(),
                 source,
@@ -405,7 +405,7 @@ fn observe_current_runtime(
         })?;
     Ok(CurrentRuntimeObservation {
         observation,
-        container_id: ContainerId::from(resolved),
+        container_id: resolved,
     })
 }
 

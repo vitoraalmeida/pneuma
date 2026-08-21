@@ -148,7 +148,7 @@ pub fn register_candidate_runtime(
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|source| RegisterCandidateRuntimeError::Persistence { source })?;
     if let Some(existing) =
-        runtime_store::load_runtime_by_external_id(&transaction, external_runtime_id.as_str())?
+        runtime_store::load_runtime_by_external_id(&transaction, external_runtime_id)?
     {
         if existing.deployment_id == *deployment_id
             && existing.expected_endpoint == endpoint
@@ -190,11 +190,10 @@ pub fn register_candidate_runtime(
     };
     runtime_store::insert_runtime(&transaction, &registration)?;
 
-    let runtime =
-        runtime_store::load_runtime_by_external_id(&transaction, external_runtime_id.as_str())?
-            .ok_or_else(|| RegisterCandidateRuntimeError::RegistrationNotFound {
-                runtime_id: registration.id.clone(),
-            })?;
+    let runtime = runtime_store::load_runtime_by_external_id(&transaction, external_runtime_id)?
+        .ok_or_else(|| RegisterCandidateRuntimeError::RegistrationNotFound {
+            runtime_id: registration.id.clone(),
+        })?;
     transaction
         .commit()
         .map_err(|source| RegisterCandidateRuntimeError::Persistence { source })?;
@@ -206,11 +205,7 @@ pub fn register_candidate_runtime(
 fn validate_external_runtime_id(
     external_runtime_id: &str,
 ) -> Result<(), RegisterCandidateRuntimeError> {
-    if external_runtime_id.is_empty()
-        || !external_runtime_id
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit())
-    {
+    if !ContainerId::is_valid(external_runtime_id) {
         return Err(RegisterCandidateRuntimeError::InvalidExternalRuntimeId);
     }
     Ok(())

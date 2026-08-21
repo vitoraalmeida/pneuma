@@ -44,10 +44,13 @@ primitive round-trips, and removing duplicate or drifted validation.
   exposure change and public promotion validate intent through
   `ExposureIntent::new`; the whole `change_exposure` call chain retains typed
   `ApplicationId` values without re-wrapping text.
-- [ ] Introduce a domain function for stable container/unit naming; move
+- [x] Introduce a domain function for stable container/unit naming; move
   external container identity format rules into the domain; type
   `runtime_store` external-id functions with `&ContainerId`.
-  Result: TBD.
+  Result: `stable_runtime_name` in `domain/runtime.rs` now backs both Quadlet
+  and Podman naming; `ContainerId::is_valid` owns the hex format rule used by
+  registration and Podman adapters; runtime-store external-id APIs accept
+  typed container identities.
 - [ ] Type adapter and store boundaries: Caddy fragment APIs, `ApplicationLock`,
   `operation_store`, `port_allocator`, `oci_image`, internal use-case input
   structs, and `reconcile_application` with typed identities.

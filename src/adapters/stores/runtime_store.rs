@@ -129,8 +129,8 @@ pub fn load_current_successful_runtime(
 pub fn reconcile_external_runtime_id(
     connection: &Connection,
     runtime_id: &RuntimeInstanceId,
-    expected_external_runtime_id: &str,
-    replacement_external_runtime_id: &str,
+    expected_external_runtime_id: &ContainerId,
+    replacement_external_runtime_id: &ContainerId,
 ) -> Result<PersistenceOutcome, RuntimeStoreError> {
     let updated = connection
         .execute(
@@ -139,13 +139,13 @@ pub fn reconcile_external_runtime_id(
                   last_observed_state = 'running',
                   last_observed_at = CURRENT_TIMESTAMP,
                   updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?2
-               AND external_runtime_id = ?3
-               AND removed_at IS NULL",
+              WHERE id = ?2
+                AND external_runtime_id = ?3
+                AND removed_at IS NULL",
             params![
-                replacement_external_runtime_id,
+                replacement_external_runtime_id.as_str(),
                 runtime_id.as_str(),
-                expected_external_runtime_id
+                expected_external_runtime_id.as_str()
             ],
         )
         .map_err(|source| RuntimeStoreError::Persistence { source })?;
@@ -257,7 +257,7 @@ pub fn load_previous_runtime(
 // Resolves a logical runtime from the container identity observed from Podman.
 pub fn load_runtime_by_external_id(
     connection: &Connection,
-    external_runtime_id: &str,
+    external_runtime_id: &ContainerId,
 ) -> Result<Option<RuntimeInstance>, RuntimeStoreError> {
     connection
         .query_row(
@@ -266,7 +266,7 @@ pub fn load_runtime_by_external_id(
                     last_observed_state, last_observed_at, exit_code,
                     observation_reason, removed_at
              FROM runtime_instances WHERE external_runtime_id = ?1",
-            [external_runtime_id],
+            [external_runtime_id.as_str()],
             map_runtime_instance,
         )
         .optional()
