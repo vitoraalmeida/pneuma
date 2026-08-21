@@ -10,6 +10,7 @@ use crate::domain::deployment::{
     DeploymentLifecycle, DeploymentStatus, DeploymentType, SourceRevision,
 };
 use crate::domain::exposure::{DomainName, ExposureConfigurationVersion, Visibility};
+use crate::domain::git::CommitSha;
 use crate::domain::identity::{ApplicationId, DeploymentId, ReleaseId, RuntimeInstanceId};
 use crate::domain::release::Release;
 use crate::domain::runtime::{ObservedRuntimeState, RuntimeRetirement, RuntimeState};
@@ -599,9 +600,9 @@ fn deployment_status_from_value(value: &str) -> Option<DeploymentStatus> {
 }
 fn source_revision_from_value(
     value: &str,
-) -> Result<SourceRevision, crate::domain::deployment::InvalidSourceRevision> {
-    match SourceRevision::new(value) {
-        Ok(revision) => Ok(revision),
+) -> Result<SourceRevision, crate::domain::git::InvalidCommitSha> {
+    match CommitSha::new(value) {
+        Ok(commit) => Ok(SourceRevision::from_commit(commit)),
         Err(_)
             if !value.is_empty()
                 && value.trim() == value

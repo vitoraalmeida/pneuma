@@ -64,9 +64,6 @@ pub enum DeployReleaseError {
     CreateDeployment {
         source: CreateDeploymentError,
     },
-    InvalidSourceRevision {
-        value: String,
-    },
     DeploymentFailed {
         deployment_id: String,
         code: &'static str,
@@ -110,9 +107,6 @@ impl fmt::Display for DeployReleaseError {
                 )
             }
             Self::CreateDeployment { source } => write!(formatter, "{source}"),
-            Self::InvalidSourceRevision { value } => {
-                write!(formatter, "invalid source revision `{value}`")
-            }
             Self::DeploymentFailed {
                 deployment_id,
                 code,
@@ -163,7 +157,6 @@ impl Error for DeployReleaseError {
             Self::OperationToken { source } => Some(source),
             Self::ApplicationNotFound { .. }
             | Self::PublicApplication { .. }
-            | Self::InvalidSourceRevision { .. }
             | Self::OperationInProgress { .. } => None,
         }
     }
@@ -175,7 +168,7 @@ pub fn deploy_release(
     application_id: &ApplicationId,
     release: &Release,
     deployment_type: DeploymentType,
-    source_revision: Option<&str>,
+    source_revision: Option<&SourceRevision>,
     public_configuration: Option<&PublicDeploymentConfiguration>,
 ) -> Result<DeploymentResult, DeployReleaseError> {
     let mut progress = ProgressReporter::disabled();
@@ -196,7 +189,7 @@ pub fn deploy_release_with_progress(
     application_id: &ApplicationId,
     release: &Release,
     deployment_type: DeploymentType,
-    source_revision: Option<&str>,
+    source_revision: Option<&SourceRevision>,
     public_configuration: Option<&PublicDeploymentConfiguration>,
     progress: &mut dyn FnMut(DeploymentProgress),
 ) -> Result<DeploymentResult, DeployReleaseError> {
@@ -219,7 +212,7 @@ fn deploy_release_reporting(
     application_id: &ApplicationId,
     release: &Release,
     deployment_type: DeploymentType,
-    source_revision: Option<&str>,
+    source_revision: Option<&SourceRevision>,
     public_configuration: Option<&PublicDeploymentConfiguration>,
     progress: &mut ProgressReporter<'_>,
 ) -> Result<DeploymentResult, DeployReleaseError> {
@@ -262,16 +255,12 @@ fn deploy_release_reporting(
         DeploymentStep::CreateDeployment,
         format!("release {}", release.id),
     );
-    let source_revision = source_revision
-        .map(SourceRevision::new)
-        .transpose()
-        .map_err(|error| DeployReleaseError::InvalidSourceRevision { value: error.value })?;
     let deployment = create_deployment_with_source_revision_and_ownership(
         connection,
         application_id,
         &release.id,
         deployment_type,
-        source_revision.as_ref(),
+        source_revision,
         Some(&owner_token),
     )
     .map_err(|source| DeployReleaseError::CreateDeployment { source })?;

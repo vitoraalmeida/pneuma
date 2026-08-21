@@ -3,9 +3,10 @@ use std::fmt;
 
 use rusqlite::Connection;
 
-use crate::adapters::git_source::{CommitSha, ResolveBranchError, resolve_branch};
+use crate::adapters::git_source::{ResolveBranchError, resolve_branch};
 use crate::adapters::oci_image::{ResolveImageDigestError, resolve_image_digest};
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
+use crate::domain::git::CommitSha;
 use crate::domain::identity::ApplicationId;
 use crate::use_cases::deployment_execute_release::{
     DeploymentResult, PublicDeploymentConfiguration,
@@ -105,7 +106,7 @@ pub fn deploy_branch(
         connection,
         application_id,
         reference.reference(),
-        Some(commit_sha.as_str()),
+        Some(&commit_sha),
         public_configuration,
     )
     .map_err(|source| DeployBranchError::DeployOci { source })

@@ -1,7 +1,7 @@
 use std::process::Command;
 
-use pneuma::adapters::git_source::CommitSha;
 use pneuma::adapters::oci_image::{self, ResolveImageDigestError};
+use pneuma::domain::git::CommitSha;
 
 #[test]
 #[ignore = "requires configured rootless Podman"]

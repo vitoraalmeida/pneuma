@@ -36,6 +36,10 @@ fn deploys_a_branch_and_persists_source_revision() {
     server.join().unwrap();
 
     let deployed = deployed.unwrap();
+    assert!(matches!(
+        deployed.source_revision,
+        Some(pneuma::domain::deployment::SourceRevision::Commit(_))
+    ));
     assert_eq!(
         deployed
             .source_revision

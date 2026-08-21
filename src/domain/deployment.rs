@@ -1,3 +1,4 @@
+use crate::domain::git::CommitSha;
 use crate::domain::identity::{ApplicationId, DeploymentId, ReleaseId};
 use crate::domain::release::Release;
 use std::error::Error;
@@ -129,27 +130,19 @@ pub struct DeploymentHistory {
 #[derive(Debug, Clone, PartialEq, Eq)]
 // Preserves readable historical revisions while requiring new revisions to be full commit SHAs.
 pub enum SourceRevision {
-    CommitSha(String),
+    Commit(CommitSha),
     Legacy(String),
 }
 
 impl SourceRevision {
-    pub fn new(value: &str) -> Result<Self, InvalidSourceRevision> {
-        if value.len() == 40
-            && value
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-        {
-            Ok(Self::CommitSha(value.to_owned()))
-        } else {
-            Err(InvalidSourceRevision {
-                value: value.to_owned(),
-            })
-        }
+    pub fn from_commit(commit: CommitSha) -> Self {
+        Self::Commit(commit)
     }
+
     pub fn as_str(&self) -> &str {
         match self {
-            Self::CommitSha(value) | Self::Legacy(value) => value,
+            Self::Commit(value) => value.as_str(),
+            Self::Legacy(value) => value,
         }
     }
 }
@@ -158,17 +151,6 @@ impl fmt::Display for SourceRevision {
         f.write_str(self.as_str())
     }
 }
-#[derive(Debug, PartialEq, Eq)]
-pub struct InvalidSourceRevision {
-    pub value: String,
-}
-impl fmt::Display for InvalidSourceRevision {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "invalid source revision `{}`", self.value)
-    }
-}
-impl Error for InvalidSourceRevision {}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeploymentType {
     Deploy,

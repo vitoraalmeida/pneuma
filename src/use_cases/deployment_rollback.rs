@@ -6,7 +6,7 @@ use rusqlite::Connection;
 use crate::adapters::oci_image::{PullImageError, pull_image};
 use crate::adapters::stores::application_store;
 use crate::adapters::stores::deployment_store;
-use crate::domain::deployment::{DeploymentType, SourceRevision};
+use crate::domain::deployment::DeploymentType;
 use crate::domain::identity::ApplicationId;
 use crate::use_cases::deployment_execute_release::{
     DeployReleaseError, DeploymentResult, PublicDeploymentConfiguration, deploy_release,
@@ -98,7 +98,7 @@ pub fn rollback_deployment(
         application_id,
         &target.release,
         DeploymentType::Rollback,
-        target.source_revision.as_ref().map(SourceRevision::as_str),
+        target.source_revision.as_ref(),
         public_configuration,
     )
     .map_err(|source| RollbackError::DeployRelease { source })

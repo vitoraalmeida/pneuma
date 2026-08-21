@@ -5,7 +5,8 @@ use rusqlite::Connection;
 
 use crate::adapters::oci_image::{PullImageError, pull_image};
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
-use crate::domain::deployment::DeploymentType;
+use crate::domain::deployment::{DeploymentType, SourceRevision};
+use crate::domain::git::CommitSha;
 use crate::domain::identity::ApplicationId;
 use crate::domain::release::OciArtifact;
 use crate::use_cases::deployment_execute_release::{
@@ -80,7 +81,7 @@ pub fn deploy_oci(
     connection: &mut Connection,
     application_id: &ApplicationId,
     image_reference: &str,
-    source_revision: Option<&str>,
+    source_commit: Option<&CommitSha>,
     public_configuration: Option<&PublicDeploymentConfiguration>,
 ) -> Result<DeploymentResult, DeployOciError> {
     let artifact =
@@ -106,12 +107,13 @@ pub fn deploy_oci(
         pull_image(artifact.reference()).map_err(|source| DeployOciError::PullImage { source })?;
     let release = create_release(connection, application_id, &image.artifact)
         .map_err(|source| DeployOciError::CreateRelease { source })?;
+    let source_revision = source_commit.cloned().map(SourceRevision::from_commit);
     deploy_release(
         connection,
         application_id,
         &release,
         DeploymentType::Deploy,
-        source_revision,
+        source_revision.as_ref(),
         public_configuration,
     )
     .map_err(|source| DeployOciError::DeployRelease { source })

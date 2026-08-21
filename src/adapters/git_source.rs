@@ -5,6 +5,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use crate::domain::git::CommitSha;
+
 #[derive(Debug)]
 pub enum ResolveCommitError {
     Execute {
@@ -19,7 +21,6 @@ pub enum ResolveCommitError {
 
 #[derive(Debug)]
 pub enum CreateCheckoutError {
-    InvalidCommit,
     DestinationExists {
         path: PathBuf,
     },
@@ -72,31 +73,6 @@ pub enum ResolveBranchError {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-// Represents a validated full Git object ID so downstream delivery always uses immutable commits.
-pub struct CommitSha(String);
-
-impl CommitSha {
-    // Validates the full SHA-1 commit identifier returned or supplied at the Git boundary.
-    pub fn new(sha: &str) -> Result<Self, String> {
-        if !is_commit_sha(sha) {
-            return Err("commit identifier must be exactly 40 hexadecimal characters".to_owned());
-        }
-        Ok(Self(sha.to_owned()))
-    }
-
-    // Exposes the validated identifier for Git and OCI tag construction.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for CommitSha {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
-
 impl fmt::Display for ResolveCommitError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -126,7 +102,6 @@ impl Error for ResolveCommitError {
 impl fmt::Display for CreateCheckoutError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidCommit => formatter.write_str("commit identifier must be hexadecimal"),
             Self::DestinationExists { path } => {
                 write!(
                     formatter,
@@ -157,7 +132,7 @@ impl Error for CreateCheckoutError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Execute { source, .. } => Some(source),
-            Self::InvalidCommit | Self::DestinationExists { .. } | Self::Git { .. } => None,
+            Self::DestinationExists { .. } | Self::Git { .. } => None,
         }
     }
 }
@@ -312,7 +287,7 @@ pub fn resolve_branch(url: &str, branch: &str) -> Result<CommitSha, ResolveBranc
             return CommitSha::new(sha).map_err(|message| ResolveBranchError::InvalidCommit {
                 url: url.to_owned(),
                 branch: branch.to_owned(),
-                message,
+                message: message.to_string(),
             });
         }
     }
@@ -329,24 +304,15 @@ fn parse_ls_remote_sha(stdout: &[u8]) -> Option<&str> {
         .ok()?
         .lines()
         .find_map(|line| line.split('\t').next())
-        .filter(|sha| is_commit_sha(sha))
-}
-
-// Restricts commit identifiers to complete hexadecimal SHA-1 values rather than abbreviated revisions.
-fn is_commit_sha(sha: &str) -> bool {
-    sha.len() == 40 && sha.bytes().all(|byte| byte.is_ascii_hexdigit())
+        .filter(|sha| CommitSha::new(sha).is_ok())
 }
 
 // Creates an isolated detached checkout so manifest reads cannot observe mutable branch state.
 pub fn create_checkout(
     repository_path: &Path,
-    commit_sha: &str,
+    commit_sha: &CommitSha,
     checkout_path: &Path,
 ) -> Result<(), CreateCheckoutError> {
-    if commit_sha.is_empty() || !commit_sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(CreateCheckoutError::InvalidCommit);
-    }
-
     if checkout_path
         .try_exists()
         .map_err(|source| CreateCheckoutError::Execute {
@@ -389,7 +355,7 @@ pub fn create_checkout(
         .arg("-C")
         .arg(checkout_path)
         .args(["checkout", "--quiet", "--detach"])
-        .arg(commit_sha)
+        .arg(commit_sha.as_str())
         .output()
         .map_err(|source| CreateCheckoutError::Execute {
             operation: "checking out the resolved commit",
@@ -410,13 +376,9 @@ pub fn create_checkout(
 // Reuses only a clean checkout at the requested commit; stale deployment leftovers are recreated.
 pub fn ensure_checkout(
     repository_path: &Path,
-    commit_sha: &str,
+    commit_sha: &CommitSha,
     checkout_path: &Path,
 ) -> Result<(), CreateCheckoutError> {
-    if commit_sha.is_empty() || !commit_sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(CreateCheckoutError::InvalidCommit);
-    }
-
     let exists = checkout_path
         .try_exists()
         .map_err(|source| CreateCheckoutError::Execute {
@@ -490,7 +452,7 @@ pub fn cleanup_checkout(path: &Path) -> Result<(), io::Error> {
 // Confirms both the detached commit and working-tree cleanliness before a checkout may be reused.
 fn is_clean_checkout_at(
     checkout_path: &Path,
-    commit_sha: &str,
+    commit_sha: &CommitSha,
 ) -> Result<bool, CreateCheckoutError> {
     let head = Command::new("git")
         .arg("-C")
@@ -501,7 +463,8 @@ fn is_clean_checkout_at(
             operation: "inspecting an existing checkout",
             source,
         })?;
-    if !head.status.success() || String::from_utf8_lossy(&head.stdout).trim() != commit_sha {
+    if !head.status.success() || String::from_utf8_lossy(&head.stdout).trim() != commit_sha.as_str()
+    {
         return Ok(false);
     }
 

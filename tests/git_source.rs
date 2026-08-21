@@ -5,10 +5,11 @@ use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use pneuma::adapters::git_source::{
-    CloneRepositoryError, CommitSha, CreateCheckoutError, ResolveBranchError, ResolveCommitError,
+    CloneRepositoryError, CreateCheckoutError, ResolveBranchError, ResolveCommitError,
     cleanup_checkout, clone_repository, create_checkout, ensure_checkout, is_remote_repository,
     resolve_branch, resolve_commit,
 };
+use pneuma::domain::git::CommitSha;
 
 #[test]
 fn resolves_branches_tags_and_abbreviated_shas_without_changing_the_repository() {
@@ -55,8 +56,8 @@ fn rejects_an_object_that_is_not_a_commit() {
 #[test]
 fn creates_independent_checkouts_for_two_commits() {
     let repository = TestRepository::new();
-    let first_commit = repository.head_commit();
-    let second_commit = repository.commit_file("second contents", "second commit");
+    let first_commit = commit(&repository.head_commit());
+    let second_commit = commit(&repository.commit_file("second contents", "second commit"));
     let first_checkout = repository.temporary_root.join("first-checkout");
     let second_checkout = repository.temporary_root.join("second-checkout");
 
@@ -89,8 +90,12 @@ fn rejects_an_existing_checkout_destination() {
     let destination = repository.temporary_root.join("existing");
     fs::create_dir(&destination).unwrap();
 
-    let error =
-        create_checkout(&repository.path, &repository.head_commit(), &destination).unwrap_err();
+    let error = create_checkout(
+        &repository.path,
+        &commit(&repository.head_commit()),
+        &destination,
+    )
+    .unwrap_err();
 
     assert!(matches!(
         error,
@@ -101,7 +106,7 @@ fn rejects_an_existing_checkout_destination() {
 #[test]
 fn reuses_a_clean_checkout_at_the_same_commit() {
     let repository = TestRepository::new();
-    let commit = repository.head_commit();
+    let commit = commit(&repository.head_commit());
     let destination = repository.temporary_root.join("checkout");
     create_checkout(&repository.path, &commit, &destination).unwrap();
 
@@ -116,7 +121,7 @@ fn reuses_a_clean_checkout_at_the_same_commit() {
 #[test]
 fn replaces_a_dirty_checkout_at_the_same_commit() {
     let repository = TestRepository::new();
-    let commit = repository.head_commit();
+    let commit = commit(&repository.head_commit());
     let destination = repository.temporary_root.join("checkout");
     create_checkout(&repository.path, &commit, &destination).unwrap();
     fs::write(destination.join("site.txt"), "local changes").unwrap();
@@ -132,8 +137,8 @@ fn replaces_a_dirty_checkout_at_the_same_commit() {
 #[test]
 fn replaces_a_checkout_at_a_different_commit() {
     let repository = TestRepository::new();
-    let first_commit = repository.head_commit();
-    let second_commit = repository.commit_file("second contents", "second commit");
+    let first_commit = commit(&repository.head_commit());
+    let second_commit = commit(&repository.commit_file("second contents", "second commit"));
     let destination = repository.temporary_root.join("checkout");
     create_checkout(&repository.path, &first_commit, &destination).unwrap();
 
@@ -288,6 +293,10 @@ fn commit_sha_accepts_a_full_hexadecimal_sha() {
 struct TestRepository {
     temporary_root: PathBuf,
     path: PathBuf,
+}
+
+fn commit(value: &str) -> CommitSha {
+    CommitSha::new(value).unwrap()
 }
 
 impl TestRepository {

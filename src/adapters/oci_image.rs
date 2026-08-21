@@ -3,7 +3,7 @@ use std::fmt;
 use std::io;
 use std::process::Command;
 
-use crate::adapters::git_source::CommitSha;
+use crate::domain::git::CommitSha;
 use crate::domain::release::{InvalidOciArtifact, OciArtifact};
 
 const DIGEST_ALGORITHM: &str = "sha256:";

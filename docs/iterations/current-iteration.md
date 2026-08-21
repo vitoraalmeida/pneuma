@@ -141,8 +141,10 @@ without selecting a new Release or making destructive changes from ambiguity.
   runtime and health specifications to Runtime.
   Result: System, Application intent, and runtime/health values now live in their
   owning modules; System and runtime-registration use cases receive typed inputs.
-- [ ] Canonicalize immutable Git commit identity as one domain value shared by Git,
+- [x] Canonicalize immutable Git commit identity as one domain value shared by Git,
   OCI, and Deployment source revision handling.
+  Result: a validated `CommitSha` now passes intact from Git resolution through
+  OCI tag lookup to typed Deployment provenance while historical revisions remain readable.
 - [ ] Realign store ownership: move System SQL into `system_store`, Application
   runtime intent into `application_store`, and Deployment-only queries into
   `deployment_store`; remove obsolete Release-store APIs.

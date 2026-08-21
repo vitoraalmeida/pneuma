@@ -5,6 +5,7 @@ use pneuma::domain::exposure::{
     ConfirmedRoute, DomainName, ExposureConfigurationVersion, ExposureDiagnostic, ExposureIntent,
     ExposureMaterialization, ExposureMaterializationState, Visibility,
 };
+use pneuma::domain::git::CommitSha;
 use pneuma::domain::identity::RuntimeInstanceId;
 use pneuma::domain::release::{OciArtifact, OciRepository};
 use pneuma::domain::runtime::{
@@ -30,6 +31,13 @@ fn validates_application_specification_value_objects() {
         ),
     );
     assert_eq!(runtime.container_port().get(), 8080);
+}
+
+#[test]
+fn validates_immutable_git_commit_identity() {
+    assert!(CommitSha::new(&"a".repeat(40)).is_ok());
+    assert!(CommitSha::new(&"A".repeat(40)).is_err());
+    assert!(CommitSha::new("short").is_err());
 }
 
 #[test]

@@ -33,9 +33,9 @@ pub struct ApplicationSummary {
 pub struct ApplicationName(String);
 
 impl ApplicationName {
-    pub fn new(value: &str) -> Result<Self, InvalidCatalogName> {
+    pub fn new(value: &str) -> Result<Self, InvalidApplicationName> {
         if !is_valid_catalog_name(value) {
-            return Err(InvalidCatalogName {
+            return Err(InvalidApplicationName {
                 value: value.to_owned(),
             });
         }
@@ -53,15 +53,15 @@ impl fmt::Display for ApplicationName {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct InvalidCatalogName {
+pub struct InvalidApplicationName {
     pub value: String,
 }
-impl fmt::Display for InvalidCatalogName {
+impl fmt::Display for InvalidApplicationName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "invalid catalog name `{}`", self.value)
     }
 }
-impl Error for InvalidCatalogName {}
+impl Error for InvalidApplicationName {}
 
 fn is_valid_catalog_name(value: &str) -> bool {
     let bytes = value.as_bytes();

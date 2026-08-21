@@ -4,6 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use pneuma::adapters::database;
 use pneuma::domain::deployment::SourceRevision;
 use pneuma::domain::deployment::{DeploymentStatus, DeploymentType};
+use pneuma::domain::git::CommitSha;
 use pneuma::domain::identity::{ApplicationId, ReleaseId};
 use pneuma::domain::release::OciArtifact;
 use pneuma::use_cases::application_import::import_application;
@@ -149,7 +150,9 @@ fn preserves_provenance_for_each_attempt_using_the_same_release() {
         &application.id,
         &release.id,
         DeploymentType::Deploy,
-        Some(&SourceRevision::new(&"a".repeat(40)).unwrap()),
+        Some(&SourceRevision::from_commit(
+            CommitSha::new(&"a".repeat(40)).unwrap(),
+        )),
     )
     .unwrap();
     connection
