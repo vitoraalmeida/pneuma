@@ -7,6 +7,7 @@ use crate::adapters::local_runtime::{ControlContainerError, remove_container};
 use crate::adapters::port_allocator::{PortAllocationError, release_port};
 use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
 use crate::adapters::systemd_quadlet::{QuadletError, daemon_reload, remove_unit, stop, unit_name};
+use crate::domain::application::ApplicationName;
 use crate::domain::identity::{ApplicationId, DeploymentId, RuntimeInstanceId};
 use crate::domain::runtime::{ContainerId, PreviousRuntime, RuntimeState};
 
@@ -138,7 +139,7 @@ pub(crate) fn load_previous_runtime(
 // Retires the prior runtime only after promotion; failures remain warnings and do not undo it.
 pub(crate) fn retire_previous_runtime(
     connection: &Connection,
-    application_name: &str,
+    application_name: &ApplicationName,
     previous: Option<&PreviousRuntime>,
 ) {
     // The Quadlet generator enables the unit for boot start itself by applying the
@@ -146,7 +147,7 @@ pub(crate) fn retire_previous_runtime(
     let Some(previous) = previous else {
         return;
     };
-    let previous_unit = unit_name(application_name, previous.deployment_id.as_str());
+    let previous_unit = unit_name(application_name, &previous.deployment_id);
     let retirement = (|| -> Result<(), QuadletError> {
         stop(&previous_unit)?;
         remove_unit(&previous_unit)?;

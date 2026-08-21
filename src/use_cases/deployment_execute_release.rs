@@ -414,7 +414,8 @@ fn execute_deployment(
         DeploymentStep::CreateContainer,
         format!(
             "unit {}, endpoint 127.0.0.1:{}",
-            candidate.unit_name, candidate.port
+            candidate.unit_name,
+            candidate.port.get()
         ),
     );
     progress.completed(
@@ -550,7 +551,7 @@ fn execute_deployment(
         if completed.is_ok() {
             retire_previous_runtime(
                 connection,
-                specification.application_name.as_str(),
+                &specification.application_name,
                 previous_runtime.as_ref(),
             );
         }
@@ -604,7 +605,7 @@ fn execute_deployment(
     progress.state_changed(deployment_id.as_str(), DeploymentStatus::Succeeded);
     retire_previous_runtime(
         connection,
-        specification.application_name.as_str(),
+        &specification.application_name,
         previous_runtime.as_ref(),
     );
 

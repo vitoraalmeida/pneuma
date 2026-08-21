@@ -11,6 +11,7 @@ use pneuma::adapters::diagnostics;
 use pneuma::domain::application::Application;
 use pneuma::domain::deployment::{DeploymentFailureEvidence, DeploymentLifecycle};
 use pneuma::domain::exposure::Visibility;
+use pneuma::domain::release::{InvalidOciArtifact, OciArtifact};
 use pneuma::domain::system::{InvalidSystemName, SystemName};
 use pneuma::use_cases::application_list::{ListError, application_is_deployed, list_applications};
 use pneuma::use_cases::application_lookup::{LookupError, find_application_by_name};
@@ -337,6 +338,9 @@ enum CliError {
     DeployOci {
         source: Box<DeployOciError>,
     },
+    InvalidOciArtifact {
+        source: InvalidOciArtifact,
+    },
     DeployBranch {
         source: Box<DeployBranchError>,
     },
@@ -385,6 +389,7 @@ impl fmt::Display for CliError {
             }
             Self::ApplicationRuntime { source } => write!(formatter, "{source}"),
             Self::DeployOci { source } => write!(formatter, "{source}"),
+            Self::InvalidOciArtifact { source } => write!(formatter, "{source}"),
             Self::DeployBranch { source } => write!(formatter, "{source}"),
             Self::Rollback { source } => write!(formatter, "{source}"),
             Self::VisibilitySet { source } => write!(formatter, "{source}"),
@@ -414,6 +419,7 @@ impl Error for CliError {
             Self::ApplicationLookup { source } => Some(source),
             Self::ListDeployments { source } => Some(source),
             Self::DeployOci { source } => Some(source.as_ref()),
+            Self::InvalidOciArtifact { source } => Some(source),
             Self::DeployBranch { source } => Some(source.as_ref()),
             Self::ApplicationRuntime { source } => Some(source.as_ref()),
             Self::ApplicationNotFound { .. } => None,
@@ -778,12 +784,10 @@ fn run_status(
         verbose,
         format!("report status of application {}", application.name),
     );
-    let observation =
-        report_application_status(connection, &application.id, application.name.as_str()).map_err(
-            |source| CliError::ApplicationRuntime {
-                source: Box::new(source),
-            },
-        )?;
+    let observation = report_application_status(connection, &application.id, &application.name)
+        .map_err(|source| CliError::ApplicationRuntime {
+            source: Box::new(source),
+        })?;
     println!("Application: {}", application.name);
     println!("Desired state: {:?}", observation.desired_runtime_state);
     println!("Observed state: {:?}", observation.observed_runtime_state);
@@ -884,9 +888,11 @@ fn run_stop(
     );
     let application = resolve_application(connection, application_name)?;
     log_verbose(verbose, format!("stop application {}", application.name));
-    let observation = stop_application(connection, &application.id, application.name.as_str())
-        .map_err(|source| CliError::ApplicationRuntime {
-            source: Box::new(source),
+    let observation =
+        stop_application(connection, &application.id, &application.name).map_err(|source| {
+            CliError::ApplicationRuntime {
+                source: Box::new(source),
+            }
         })?;
     println!("Stopped {}", application.name);
     println!("Desired state: {:?}", observation.desired_runtime_state);
@@ -906,9 +912,11 @@ fn run_start(
     );
     let application = resolve_application(connection, application_name)?;
     log_verbose(verbose, format!("start application {}", application.name));
-    let observation = start_application(connection, &application.id, application.name.as_str())
-        .map_err(|source| CliError::ApplicationRuntime {
-            source: Box::new(source),
+    let observation =
+        start_application(connection, &application.id, &application.name).map_err(|source| {
+            CliError::ApplicationRuntime {
+                source: Box::new(source),
+            }
         })?;
     println!("Started {}", application.name);
     println!("Desired state: {:?}", observation.desired_runtime_state);
@@ -927,6 +935,8 @@ fn run_deploy_oci(
         verbose,
         format!("resolve application by name: {application_name}"),
     );
+    let artifact = OciArtifact::parse(image_reference)
+        .map_err(|source| CliError::InvalidOciArtifact { source })?;
     let application = resolve_application(connection, application_name)?;
     let public_configuration = public_deployment_configuration();
     if verbose {
@@ -945,7 +955,7 @@ fn run_deploy_oci(
         deploy_oci_with_progress(
             connection,
             &application.id,
-            image_reference,
+            &artifact,
             None,
             Some(&public_configuration),
             &mut progress,
@@ -954,7 +964,7 @@ fn run_deploy_oci(
         deploy_oci(
             connection,
             &application.id,
-            image_reference,
+            &artifact,
             None,
             Some(&public_configuration),
         )

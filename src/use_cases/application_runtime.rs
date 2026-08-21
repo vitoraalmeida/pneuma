@@ -13,7 +13,7 @@ use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
 use crate::adapters::systemd_quadlet::{
     QuadletError, container_name, start as start_unit, stop as stop_unit, unit_exists, unit_name,
 };
-use crate::domain::application::DesiredRuntimeState;
+use crate::domain::application::{ApplicationName, DesiredRuntimeState};
 use crate::domain::identity::{ApplicationId, RuntimeInstanceId};
 use crate::domain::runtime::{
     ContainerId, ContainerObservation, ObservedRuntimeState, RuntimeInstance,
@@ -141,18 +141,15 @@ impl Error for RuntimeLifecycleError {
 pub fn report_application_status(
     connection: &mut Connection,
     application_id: &ApplicationId,
-    application_name: &str,
+    application_name: &ApplicationName,
 ) -> Result<RuntimeObservation, RuntimeLifecycleError> {
     let runtime = load_current_runtime(connection, application_id, application_name)?;
     let desired_runtime_state = load_desired_state(connection, application_id)?;
-    let observation = observe_container(
-        runtime.external_runtime_id.as_str(),
-        runtime.container_port.get(),
-    )
-    .map_err(|source| RuntimeLifecycleError::Observe {
-        runtime_id: runtime.id.to_string(),
-        source,
-    })?;
+    let observation = observe_container(&runtime.external_runtime_id, runtime.container_port)
+        .map_err(|source| RuntimeLifecycleError::Observe {
+            runtime_id: runtime.id.to_string(),
+            source,
+        })?;
     if *observation.state() == ObservedRuntimeState::Missing {
         if desired_runtime_state == DesiredRuntimeState::Stopped {
             persist_observation(connection, &runtime, &observation)?;
@@ -166,7 +163,7 @@ pub fn report_application_status(
         }
         persist_observation(connection, &runtime, &observation)?;
         return Err(RuntimeLifecycleError::ContainerMissing {
-            application_name: application_name.to_owned(),
+            application_name: application_name.as_str().to_owned(),
         });
     }
     persist_observation(connection, &runtime, &observation)?;
@@ -184,7 +181,7 @@ pub fn report_application_status(
 pub fn stop_application(
     connection: &mut Connection,
     application_id: &ApplicationId,
-    application_name: &str,
+    application_name: &ApplicationName,
 ) -> Result<RuntimeObservation, RuntimeLifecycleError> {
     transition_application(
         connection,
@@ -201,7 +198,7 @@ pub fn stop_application(
 pub fn start_application(
     connection: &mut Connection,
     application_id: &ApplicationId,
-    application_name: &str,
+    application_name: &ApplicationName,
 ) -> Result<RuntimeObservation, RuntimeLifecycleError> {
     transition_application(
         connection,
@@ -219,7 +216,7 @@ pub fn start_application(
 fn transition_application(
     connection: &mut Connection,
     application_id: &ApplicationId,
-    application_name: &str,
+    application_name: &ApplicationName,
     desired_runtime_state: DesiredRuntimeState,
     target: ObservedRuntimeState,
     operation: &'static str,
@@ -249,7 +246,7 @@ fn transition_application(
         // When the operator wants the application running and the unit exists, attempt to
         // start it and re-observe (Quadlet recreates the container under the stable name).
         if desired_runtime_state == DesiredRuntimeState::Running {
-            let unit = unit_name(application_name, runtime.deployment_id.as_str());
+            let unit = unit_name(application_name, &runtime.deployment_id);
             if unit_exists(&unit).map_err(|source| RuntimeLifecycleError::Supervision {
                 operation: "checking Quadlet unit for",
                 runtime_id: runtime.id.to_string(),
@@ -277,13 +274,13 @@ fn transition_application(
         }
         persist_observation(connection, &runtime, &observation)?;
         return Err(RuntimeLifecycleError::ContainerMissing {
-            application_name: application_name.to_owned(),
+            application_name: application_name.as_str().to_owned(),
         });
     }
     let observation = if *observation.state() == target {
         observation
     } else {
-        let unit = unit_name(application_name, runtime.deployment_id.as_str());
+        let unit = unit_name(application_name, &runtime.deployment_id);
         if unit_exists(&unit).map_err(|source| RuntimeLifecycleError::Supervision {
             operation: "checking Quadlet unit for",
             runtime_id: runtime.id.to_string(),
@@ -311,12 +308,12 @@ fn transition_application(
                 }
             })?;
         }
-        observe_container(external_runtime_id.as_str(), runtime.container_port.get()).map_err(
-            |source| RuntimeLifecycleError::Observe {
+        observe_container(&external_runtime_id, runtime.container_port).map_err(|source| {
+            RuntimeLifecycleError::Observe {
                 runtime_id: runtime.id.to_string(),
                 source,
-            },
-        )?
+            }
+        })?
     };
     // When stopping via Quadlet, the ExecStop removes the container, so the observation
     // after stop_unit is Missing. Deduce a stopped observation without marking the runtime
@@ -356,34 +353,29 @@ struct CurrentRuntimeObservation {
 fn observe_current_runtime(
     connection: &Connection,
     runtime: &RuntimeInstance,
-    application_name: &str,
+    application_name: &ApplicationName,
 ) -> Result<CurrentRuntimeObservation, RuntimeLifecycleError> {
-    let observation = observe_container(
-        runtime.external_runtime_id.as_str(),
-        runtime.container_port.get(),
-    )
-    .map_err(|source| RuntimeLifecycleError::Observe {
-        runtime_id: runtime.id.to_string(),
-        source,
-    })?;
+    let observation = observe_container(&runtime.external_runtime_id, runtime.container_port)
+        .map_err(|source| RuntimeLifecycleError::Observe {
+            runtime_id: runtime.id.to_string(),
+            source,
+        })?;
     if *observation.state() != ObservedRuntimeState::Missing {
         return Ok(CurrentRuntimeObservation {
             observation,
             container_id: runtime.external_runtime_id.clone(),
         });
     }
-    let resolved = match resolve_container_id(&container_name(
-        application_name,
-        runtime.deployment_id.as_str(),
-    )) {
-        Ok(id) => ContainerId::from(id),
-        Err(_) => {
-            return Ok(CurrentRuntimeObservation {
-                observation,
-                container_id: runtime.external_runtime_id.clone(),
-            });
-        }
-    };
+    let resolved =
+        match resolve_container_id(&container_name(application_name, &runtime.deployment_id)) {
+            Ok(id) => id,
+            Err(_) => {
+                return Ok(CurrentRuntimeObservation {
+                    observation,
+                    container_id: runtime.external_runtime_id.clone(),
+                });
+            }
+        };
     let reconciled = runtime_store::reconcile_external_runtime_id(
         connection,
         &runtime.id,
@@ -396,13 +388,12 @@ fn observe_current_runtime(
             runtime_id: runtime.id.to_string(),
         });
     }
-    let observation =
-        observe_container(resolved.as_str(), runtime.container_port.get()).map_err(|source| {
-            RuntimeLifecycleError::Observe {
-                runtime_id: runtime.id.to_string(),
-                source,
-            }
-        })?;
+    let observation = observe_container(&resolved, runtime.container_port).map_err(|source| {
+        RuntimeLifecycleError::Observe {
+            runtime_id: runtime.id.to_string(),
+            source,
+        }
+    })?;
     Ok(CurrentRuntimeObservation {
         observation,
         container_id: resolved,
@@ -413,12 +404,12 @@ fn observe_current_runtime(
 fn load_current_runtime(
     connection: &Connection,
     application_id: &ApplicationId,
-    application_name: &str,
+    application_name: &ApplicationName,
 ) -> Result<RuntimeInstance, RuntimeLifecycleError> {
     runtime_store::load_current_successful_runtime(connection, application_id)
         .map_err(|source| RuntimeLifecycleError::Store { source })?
         .ok_or_else(|| RuntimeLifecycleError::NotDeployed {
-            application_name: application_name.to_owned(),
+            application_name: application_name.as_str().to_owned(),
         })
 }
 
