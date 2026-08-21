@@ -92,6 +92,18 @@ Out of scope until demonstrated need: registry watchers, automatic deployment
 policies, complete audit logging, generic idempotency keys, image retention, and
 automatic rollback after promotion.
 
+### v0.4.2 - Domain Type Closure
+
+**Status:** completed on 2026-08-21.
+
+- Runtime lifecycle use cases and candidate cleanup accept `ApplicationName`.
+- `OciArtifact` flows through OCI deploy, pull, and rollback as a typed value;
+  parsing happens once at the CLI edge or branch-resolution boundary.
+- Container observation, container-id resolution, external health checks, and
+  Quadlet unit rendering accept typed domain identities; duplicated validation
+  removed.
+- `HostPort` newtype represents the reserved loopback host port.
+
 ## v0.5 - Application Topology and Internal Networking
 
 - [ ] Service relationships and Application dependencies.

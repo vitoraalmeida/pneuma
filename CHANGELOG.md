@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.4.2 — Domain Type Closure (2026-08-21)
+
+### Changed
+
+- Runtime lifecycle use cases (`status`, `start`, `stop`, candidate cleanup) now
+  accept `ApplicationName` instead of raw strings.
+- `OciArtifact` is parsed once at the CLI edge for `--image` deploys and once at
+  the branch-resolution boundary; `deploy_oci*`, `pull_image`, and rollback
+  consume the typed artifact without re-parsing.
+- Container observation (`observe_container`), container-id resolution
+  (`resolve_container_id`), named-container observation, external health checks,
+  and Quadlet unit rendering accept typed domain identities (`ContainerId`,
+  `ContainerPort`, `DomainName`, `HealthCheckPath`, `HealthCheckStatus`,
+  `ApplicationName`, `DeploymentId`, `OciArtifact`). Duplicated validation was
+  removed from those adapters.
+- Introduced `HostPort`, a newtype for the reserved loopback host port, carried
+  by `StartedCandidate`, `ExpectedRuntimeEndpoint`, and Quadlet unit creation.
+  Persisted representation remains `u16`.
+
 ## v0.4.0 — Reconciliation and Domain Boundaries (2026-08-21)
 
 ### Added

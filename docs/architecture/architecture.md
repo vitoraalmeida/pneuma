@@ -1,6 +1,6 @@
 # Pneuma Architecture
 
-**Status:** living document - describes the system as implemented in v0.3.1.
+**Status:** living document - describes the system as implemented in v0.4.2.
 
 Pneuma is a single-host deployment CLI. It imports application specifications
 from Git repositories, deploys immutable OCI artifacts with rootless Podman and
@@ -514,7 +514,7 @@ Internal health uses HTTP against the candidate loopback endpoint before traffic
 switches, with five bounded attempts. During public deployment, external health
 uses the configured path and expected status through `curl` at
 `https://<domain><path>` with `--resolve <domain>:443:127.0.0.1`. A standalone
-change to public visibility instead checks `/` for HTTP `200`. External health
+visibility change uses the same persisted health specification. External health
 retries through Caddy's local listener. Public Caddy fragments are stored as
 `<application-id>.caddy` files in the managed directory and imported by the main
 Caddyfile.
