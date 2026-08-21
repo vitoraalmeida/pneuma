@@ -18,9 +18,8 @@ use pneuma::domain::exposure::Visibility;
 use pneuma::domain::release::OciArtifact;
 use pneuma::domain::system::{InvalidSystemName, SystemName};
 use pneuma::use_cases::application_import::{ImportError, import_application};
-use pneuma::use_cases::application_list::{
-    ListError, application_is_deployed, find_application_by_name, list_applications,
-};
+use pneuma::use_cases::application_list::{ListError, application_is_deployed, list_applications};
+use pneuma::use_cases::application_lookup::{LookupError, find_application_by_name};
 use pneuma::use_cases::application_runtime::{
     RuntimeLifecycleError, report_application_status, start_application, stop_application,
 };
@@ -333,6 +332,9 @@ enum CliError {
     List {
         source: ListError,
     },
+    ApplicationLookup {
+        source: LookupError,
+    },
     ListDeployments {
         source: ListDeploymentsError,
     },
@@ -399,6 +401,7 @@ impl fmt::Display for CliError {
             }
             Self::InvalidSystemName { source } => write!(formatter, "{source}"),
             Self::List { source } => write!(formatter, "{source}"),
+            Self::ApplicationLookup { source } => write!(formatter, "{source}"),
             Self::ListDeployments { source } => write!(formatter, "{source}"),
             Self::ApplicationNotFound { application_name } => {
                 write!(formatter, "application `{application_name}` was not found")
@@ -433,6 +436,7 @@ impl Error for CliError {
             Self::ImportWorkspace { source } => Some(source),
             Self::InvalidSystemName { source } => Some(source),
             Self::List { source } => Some(source),
+            Self::ApplicationLookup { source } => Some(source),
             Self::ListDeployments { source } => Some(source),
             Self::DeployOci { source } => Some(source.as_ref()),
             Self::DeployBranch { source } => Some(source.as_ref()),
@@ -1167,7 +1171,7 @@ fn resolve_application(
     application_name: &str,
 ) -> Result<Application, CliError> {
     find_application_by_name(connection, application_name)
-        .map_err(|source| CliError::List { source })?
+        .map_err(|source| CliError::ApplicationLookup { source })?
         .ok_or_else(|| CliError::ApplicationNotFound {
             application_name: application_name.to_owned(),
         })
