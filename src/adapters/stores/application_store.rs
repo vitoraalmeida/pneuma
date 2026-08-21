@@ -7,8 +7,7 @@ use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 use crate::adapters::stores::PersistenceOutcome;
 use crate::domain::application::{
     Application, ApplicationDeploymentSpecification, ApplicationName, ApplicationSource,
-    ApplicationSummary, ContainerPort, HealthCheckPath, HealthCheckSpecification,
-    HealthCheckStatus, RelativeManifestPath, RepositoryKind, RuntimeSpecification,
+    ApplicationSummary, DesiredRuntimeState, RelativeManifestPath, RepositoryKind,
 };
 use crate::domain::delivery::{DeliverySpecification, DeliveryType};
 use crate::domain::exposure::{
@@ -17,7 +16,10 @@ use crate::domain::exposure::{
 };
 use crate::domain::identity::{ApplicationId, DeploymentId, RuntimeInstanceId, SystemId};
 use crate::domain::release::OciRepository;
-use crate::domain::runtime::DesiredRuntimeState;
+use crate::domain::runtime::{
+    ContainerPort, HealthCheckPath, HealthCheckSpecification, HealthCheckStatus,
+    RuntimeSpecification,
+};
 
 #[derive(Debug)]
 pub enum ApplicationStoreError {

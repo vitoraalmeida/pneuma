@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use pneuma::adapters::database;
-use pneuma::domain::runtime::DesiredRuntimeState;
+use pneuma::domain::application::DesiredRuntimeState;
+use pneuma::domain::system::SystemName;
 use pneuma::use_cases::application_import::import_application;
 use pneuma::use_cases::system_show::show_system;
 
@@ -23,7 +24,8 @@ fn returns_application_runtime_intent_and_specification_version() {
         )
         .unwrap();
 
-    let details = show_system(&connection, "personal-website").unwrap();
+    let system_name = SystemName::new("personal-website").unwrap();
+    let details = show_system(&connection, &system_name).unwrap();
 
     assert_eq!(details.applications.len(), 1);
     assert_eq!(

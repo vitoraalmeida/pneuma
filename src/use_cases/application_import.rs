@@ -7,12 +7,13 @@ use rusqlite::Connection;
 use crate::adapters::git_source::is_remote_repository;
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::domain::application::{
-    ApplicationName, ApplicationSource, ApplicationSummary, ContainerPort, HealthCheckPath,
-    HealthCheckStatus, RelativeManifestPath, RepositoryKind, SystemName,
+    ApplicationName, ApplicationSource, ApplicationSummary, RelativeManifestPath, RepositoryKind,
 };
 use crate::domain::exposure::{DomainName, ExposureIntent};
 use crate::domain::manifest::{Manifest, ManifestError, load_manifest_at};
 use crate::domain::release::OciRepository;
+use crate::domain::runtime::{ContainerPort, HealthCheckPath, HealthCheckStatus};
+use crate::domain::system::SystemName;
 
 const DEFAULT_MANIFEST_PATH: &str = "pneuma.toml";
 
@@ -84,7 +85,7 @@ impl From<ApplicationStoreError> for ImportError {
 pub fn import_application(
     connection: &mut Connection,
     repository_path: &Path,
-    system_name: Option<&str>,
+    system_name: Option<&SystemName>,
     repository_url: Option<&str>,
     manifest_path: Option<&str>,
 ) -> Result<ApplicationSummary, ImportError> {
@@ -92,10 +93,21 @@ pub fn import_application(
     let manifest = load_manifest_at(repository_path, manifest_path)
         .map_err(|source| ImportError::Manifest { source })?;
 
-    let resolved_system_name = system_name
-        .or_else(|| manifest.system.as_ref().map(|s| s.name.as_str()))
-        .ok_or(ImportError::SystemRequired)?;
-    let resolved_system_name = SystemName::new(resolved_system_name).map_err(|_| ImportError::Manifest { source: ManifestError::InvalidField { field: "system.name", reason: "must be 1-63 lowercase ASCII letters, digits, or hyphens and start and end with a letter or digit" } })?;
+    let resolved_system_name = match system_name {
+        Some(system_name) => system_name.clone(),
+        None => {
+            let name = manifest
+                .system
+                .as_ref()
+                .ok_or(ImportError::SystemRequired)?;
+            SystemName::new(&name.name).map_err(|_| ImportError::Manifest {
+                source: ManifestError::InvalidField {
+                    field: "system.name",
+                    reason: "must be 1-63 lowercase ASCII letters, digits, or hyphens and start and end with a letter or digit",
+                },
+            })?
+        }
+    };
     let application_name = ApplicationName::new(&manifest.application.name).map_err(|_| ImportError::Manifest { source: ManifestError::InvalidField { field: "application.name", reason: "must be 1-63 lowercase ASCII letters, digits, or hyphens and start and end with a letter or digit" } })?;
 
     let transaction = connection

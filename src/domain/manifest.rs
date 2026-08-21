@@ -6,13 +6,12 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::domain::application::{
-    ApplicationName, ContainerPort, HealthCheckPath, HealthCheckStatus, RelativeManifestPath,
-    SystemName,
-};
+use crate::domain::application::{ApplicationName, RelativeManifestPath};
 use crate::domain::delivery::DeliveryType;
 use crate::domain::exposure::{DomainName, Visibility};
 use crate::domain::release::OciRepository;
+use crate::domain::runtime::{ContainerPort, HealthCheckPath, HealthCheckStatus};
+use crate::domain::system::SystemName;
 
 const SUPPORTED_SCHEMA_VERSION: u32 = 3;
 const MANIFEST_FILE_NAME: &str = "pneuma.toml";

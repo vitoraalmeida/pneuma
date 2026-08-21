@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use pneuma::adapters::database;
-use pneuma::domain::runtime::DesiredRuntimeState;
+use pneuma::domain::application::DesiredRuntimeState;
 use pneuma::use_cases::application_import::import_application;
 use pneuma::use_cases::application_list::{find_application_by_name, list_applications};
 

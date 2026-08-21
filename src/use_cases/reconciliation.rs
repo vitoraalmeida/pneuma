@@ -20,6 +20,7 @@ use crate::adapters::systemd_quadlet::{
     observe_unit_source, start, unit_name, write_unit,
 };
 use crate::adapters::test_gate::wait_for_test_gate;
+use crate::domain::application::DesiredRuntimeState;
 use crate::domain::deployment::{Deployment, DeploymentStatus};
 use crate::domain::exposure::{
     ExposureConfigurationVersion, ExposureDiagnostic, ExposureMaterializationState, Visibility,
@@ -28,7 +29,7 @@ use crate::domain::reconciliation::{
     ActiveRuntime, CaddyFragmentObservation, NamedContainerObservation, ReconciliationInput,
     ReconciliationObservation,
 };
-use crate::domain::runtime::{DesiredRuntimeState, ObservedRuntimeState};
+use crate::domain::runtime::ObservedRuntimeState;
 use crate::use_cases::deployment_runtime_cleanup::cleanup_failed_candidate;
 use crate::use_cases::deployment_transition::fail_deployment;
 

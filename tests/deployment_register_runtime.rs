@@ -3,8 +3,9 @@ use std::path::{Path, PathBuf};
 
 use pneuma::adapters::database;
 use pneuma::domain::deployment::DeploymentType;
+use pneuma::domain::identity::ContainerId;
 use pneuma::domain::release::OciArtifact;
-use pneuma::domain::runtime::{ObservedRuntimeState, RuntimeState};
+use pneuma::domain::runtime::{ContainerPort, ObservedRuntimeState, RuntimeState};
 use pneuma::use_cases::application_import::import_application;
 use pneuma::use_cases::deployment_create::create_deployment;
 use pneuma::use_cases::deployment_register_runtime::{
@@ -16,7 +17,7 @@ use pneuma::use_cases::release_create::create_release;
 #[test]
 fn persists_a_running_candidate_linked_to_its_deployment() {
     let (mut connection, application_id, deployment_id) = starting_deployment("valid");
-    let external_runtime_id = "a".repeat(64);
+    let external_runtime_id = ContainerId::from("a".repeat(64));
     let endpoint: SocketAddr = "127.0.0.1:30001".parse().unwrap();
 
     let runtime = register_candidate_runtime(
@@ -24,13 +25,13 @@ fn persists_a_running_candidate_linked_to_its_deployment() {
         &deployment_id,
         &external_runtime_id,
         endpoint,
-        8080,
+        port(8080),
     )
     .unwrap();
 
     assert_eq!(runtime.application_id.as_str(), application_id);
     assert_eq!(runtime.deployment_id.as_str(), deployment_id);
-    assert_eq!(runtime.external_runtime_id.as_str(), external_runtime_id);
+    assert_eq!(runtime.external_runtime_id, external_runtime_id);
     assert_eq!(runtime.expected_endpoint.socket_addr(), endpoint);
     assert_eq!(runtime.container_port, 8080);
     assert_eq!(runtime.state, RuntimeState::Starting);
@@ -52,9 +53,9 @@ fn maps_historical_removed_rows_to_explicit_retirement() {
     let runtime = register_candidate_runtime(
         &mut connection,
         &deployment_id,
-        &"a".repeat(64),
+        &container_id('a'),
         "127.0.0.1:30001".parse().unwrap(),
-        8080,
+        port(8080),
     )
     .unwrap();
     connection
@@ -83,9 +84,9 @@ fn rejects_persisted_retirement_without_a_removed_timestamp() {
     let runtime = register_candidate_runtime(
         &mut connection,
         &deployment_id,
-        &"a".repeat(64),
+        &container_id('a'),
         "127.0.0.1:30001".parse().unwrap(),
-        8080,
+        port(8080),
     )
     .unwrap();
     connection
@@ -125,17 +126,17 @@ fn requires_a_starting_deployment() {
     let error = register_candidate_runtime(
         &mut connection,
         deployment.id.as_str(),
-        &"b".repeat(64),
+        &container_id('b'),
         "127.0.0.1:30001".parse().unwrap(),
-        8080,
+        port(8080),
     )
     .unwrap_err();
     let missing = register_candidate_runtime(
         &mut connection,
         "missing",
-        &"c".repeat(64),
+        &container_id('c'),
         "127.0.0.1:30002".parse().unwrap(),
-        8080,
+        port(8080),
     )
     .unwrap_err();
 
@@ -158,25 +159,17 @@ fn rejects_invalid_runtime_coordinates_before_writing() {
     let invalid_id = register_candidate_runtime(
         &mut connection,
         &deployment_id,
-        "not-hex",
+        &ContainerId::from("not-hex"),
         "127.0.0.1:30001".parse().unwrap(),
-        8080,
+        port(8080),
     )
     .unwrap_err();
     let invalid_endpoint = register_candidate_runtime(
         &mut connection,
         &deployment_id,
-        &"a".repeat(64),
+        &container_id('a'),
         "0.0.0.0:30001".parse().unwrap(),
-        8080,
-    )
-    .unwrap_err();
-    let invalid_port = register_candidate_runtime(
-        &mut connection,
-        &deployment_id,
-        &"b".repeat(64),
-        "127.0.0.1:30001".parse().unwrap(),
-        0,
+        port(8080),
     )
     .unwrap_err();
 
@@ -188,23 +181,19 @@ fn rejects_invalid_runtime_coordinates_before_writing() {
         invalid_endpoint,
         RegisterCandidateRuntimeError::InvalidEndpoint { .. }
     ));
-    assert!(matches!(
-        invalid_port,
-        RegisterCandidateRuntimeError::InvalidContainerPort
-    ));
 }
 
 #[test]
 fn identical_retry_is_idempotent_but_conflicting_reuse_is_rejected() {
     let (mut connection, _, deployment_id) = starting_deployment("valid");
-    let external_runtime_id = "a".repeat(64);
+    let external_runtime_id = ContainerId::from("a".repeat(64));
     let endpoint: SocketAddr = "127.0.0.1:30001".parse().unwrap();
     let runtime = register_candidate_runtime(
         &mut connection,
         &deployment_id,
         &external_runtime_id,
         endpoint,
-        8080,
+        port(8080),
     )
     .unwrap();
     connection
@@ -212,7 +201,7 @@ fn identical_retry_is_idempotent_but_conflicting_reuse_is_rejected() {
             "UPDATE runtime_instances
              SET last_observed_state = 'stopped'
              WHERE external_runtime_id = ?1",
-            [&external_runtime_id],
+            [external_runtime_id.as_str()],
         )
         .unwrap();
 
@@ -221,15 +210,15 @@ fn identical_retry_is_idempotent_but_conflicting_reuse_is_rejected() {
         &deployment_id,
         &external_runtime_id,
         endpoint,
-        8080,
+        port(8080),
     )
     .unwrap();
     let conflicting_endpoint = register_candidate_runtime(
         &mut connection,
         &deployment_id,
-        &"b".repeat(64),
+        &container_id('b'),
         endpoint,
-        8080,
+        port(8080),
     )
     .unwrap_err();
     let conflicting_external_id = register_candidate_runtime(
@@ -237,7 +226,7 @@ fn identical_retry_is_idempotent_but_conflicting_reuse_is_rejected() {
         &deployment_id,
         &external_runtime_id,
         "127.0.0.1:30002".parse().unwrap(),
-        8080,
+        port(8080),
     )
     .unwrap_err();
 
@@ -261,9 +250,9 @@ fn database_rejects_a_duplicate_active_endpoint() {
     let runtime = register_candidate_runtime(
         &mut connection,
         &deployment_id,
-        &"a".repeat(64),
+        &container_id('a'),
         endpoint,
-        8080,
+        port(8080),
     )
     .unwrap();
 
@@ -296,9 +285,9 @@ fn database_rejects_a_runtime_identity_from_another_application() {
     let runtime = register_candidate_runtime(
         &mut connection,
         &deployment_id,
-        &"a".repeat(64),
+        &container_id('a'),
         "127.0.0.1:30001".parse().unwrap(),
-        8080,
+        port(8080),
     )
     .unwrap();
     let second =
@@ -360,4 +349,12 @@ fn artifact(character: char) -> OciArtifact {
         &format!("sha256:{}", character.to_string().repeat(64)),
     )
     .unwrap()
+}
+
+fn container_id(character: char) -> ContainerId {
+    ContainerId::from(character.to_string().repeat(64))
+}
+
+fn port(value: u16) -> ContainerPort {
+    ContainerPort::new(value).unwrap()
 }

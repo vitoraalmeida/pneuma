@@ -6,7 +6,7 @@ use rusqlite::Connection;
 use crate::adapters::stores::application_store;
 use crate::adapters::stores::system_store;
 use crate::domain::application::ApplicationSummary;
-use crate::domain::system::System;
+use crate::domain::system::{System, SystemName};
 
 #[derive(Debug)]
 pub enum ShowError {
@@ -54,15 +54,18 @@ pub struct SystemDetails {
 }
 
 // Loads one named System and its applications without making lifecycle decisions.
-pub fn show_system(connection: &Connection, system_name: &str) -> Result<SystemDetails, ShowError> {
-    let system = system_store::load_by_name(connection, system_name)
+pub fn show_system(
+    connection: &Connection,
+    system_name: &SystemName,
+) -> Result<SystemDetails, ShowError> {
+    let system = system_store::load_by_name(connection, system_name.as_str())
         .map_err(|error| match error {
             system_store::SystemStoreError::Persistence { source } => {
                 ShowError::Persistence { source }
             }
         })?
         .ok_or_else(|| ShowError::NotFound {
-            system_name: system_name.to_owned(),
+            system_name: system_name.to_string(),
         })?;
     let applications =
         application_store::list_application_summaries_for_system(connection, &system.id)

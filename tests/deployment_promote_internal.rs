@@ -4,9 +4,12 @@ use std::path::{Path, PathBuf};
 use std::thread;
 
 use pneuma::adapters::database;
-use pneuma::domain::application::{HealthCheckPath, HealthCheckSpecification, HealthCheckStatus};
 use pneuma::domain::deployment::DeploymentType;
+use pneuma::domain::identity::ContainerId;
 use pneuma::domain::release::OciArtifact;
+use pneuma::domain::runtime::{
+    ContainerPort, HealthCheckPath, HealthCheckSpecification, HealthCheckStatus,
+};
 use pneuma::use_cases::application_import::import_application;
 use pneuma::use_cases::deployment_create::create_deployment;
 use pneuma::use_cases::deployment_promote_internal::{
@@ -183,13 +186,13 @@ fn add_verifying_candidate(
         DeploymentTransition::Start,
     )
     .unwrap();
-    let external_runtime_id = runtime_character.to_string().repeat(64);
+    let external_runtime_id = ContainerId::from(runtime_character.to_string().repeat(64));
     let runtime = register_candidate_runtime(
         connection,
         deployment.id.as_str(),
         &external_runtime_id,
         endpoint,
-        8080,
+        ContainerPort::new(8080).unwrap(),
     )
     .unwrap();
     advance_deployment(

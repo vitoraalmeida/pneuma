@@ -16,6 +16,7 @@ use pneuma::domain::application::Application;
 use pneuma::domain::deployment::{DeploymentFailureEvidence, DeploymentLifecycle};
 use pneuma::domain::exposure::Visibility;
 use pneuma::domain::release::OciArtifact;
+use pneuma::domain::system::{InvalidSystemName, SystemName};
 use pneuma::use_cases::application_import::{ImportError, import_application};
 use pneuma::use_cases::application_list::{
     ListError, application_is_deployed, find_application_by_name, list_applications,
@@ -326,6 +327,9 @@ enum CliError {
         source: std::io::Error,
     },
     InvalidImportRepository,
+    InvalidSystemName {
+        source: InvalidSystemName,
+    },
     List {
         source: ListError,
     },
@@ -393,6 +397,7 @@ impl fmt::Display for CliError {
                     "application imports require a Git URL; local paths are not supported"
                 )
             }
+            Self::InvalidSystemName { source } => write!(formatter, "{source}"),
             Self::List { source } => write!(formatter, "{source}"),
             Self::ListDeployments { source } => write!(formatter, "{source}"),
             Self::ApplicationNotFound { application_name } => {
@@ -426,6 +431,7 @@ impl Error for CliError {
             Self::Import { source } => Some(source),
             Self::ImportSource { source } => Some(source),
             Self::ImportWorkspace { source } => Some(source),
+            Self::InvalidSystemName { source } => Some(source),
             Self::List { source } => Some(source),
             Self::ListDeployments { source } => Some(source),
             Self::DeployOci { source } => Some(source.as_ref()),
@@ -633,6 +639,10 @@ fn run_import(
     if !is_remote_repository(repository) {
         return Err(CliError::InvalidImportRepository);
     }
+    let system_name = system_name
+        .map(SystemName::new)
+        .transpose()
+        .map_err(|source| CliError::InvalidSystemName { source })?;
 
     log_verbose(verbose, format!("import repository: {repository}"));
     let workspace = configured_path(WORKSPACE_PATH_ENVIRONMENT_VARIABLE, DEFAULT_WORKSPACE_PATH);
@@ -647,7 +657,7 @@ fn run_import(
     let import_result = import_application(
         connection,
         &checkout,
-        system_name,
+        system_name.as_ref(),
         Some(repository),
         manifest_path,
     )
@@ -683,7 +693,8 @@ fn run_system_create(
     description: Option<&str>,
 ) -> Result<(), CliError> {
     log_verbose(verbose, format!("create system: {name}"));
-    let system = create_system(connection, name, description)
+    let name = SystemName::new(name).map_err(|source| CliError::InvalidSystemName { source })?;
+    let system = create_system(connection, &name, description)
         .map_err(|source| CliError::SystemCreate { source })?;
     println!("Created {}", system.name);
     Ok(())
@@ -706,8 +717,9 @@ fn run_system_show(
     name: &str,
 ) -> Result<(), CliError> {
     log_verbose(verbose, format!("show system: {name}"));
+    let name = SystemName::new(name).map_err(|source| CliError::InvalidSystemName { source })?;
     let details =
-        show_system(connection, name).map_err(|source| CliError::SystemShow { source })?;
+        show_system(connection, &name).map_err(|source| CliError::SystemShow { source })?;
     println!("System: {}", details.system.name);
     if let Some(description) = &details.system.description {
         println!("Description: {description}");

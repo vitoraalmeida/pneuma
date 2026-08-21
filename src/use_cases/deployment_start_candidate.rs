@@ -8,10 +8,9 @@ use crate::adapters::port_allocator::{consume_port_reservation, reserve_port};
 use crate::adapters::systemd_quadlet::{
     QuadletError, container_name, daemon_reload, start, write_unit,
 };
-use crate::domain::application::RuntimeSpecification;
 use crate::domain::identity::ContainerId;
 use crate::domain::release::OciArtifact;
-use crate::domain::runtime::{ObservedRuntimeState, RuntimeInstance};
+use crate::domain::runtime::{ObservedRuntimeState, RuntimeInstance, RuntimeSpecification};
 use crate::use_cases::deployment_register_runtime::register_candidate_runtime;
 use crate::use_cases::deployment_runtime_cleanup::CandidateResources;
 use crate::use_cases::deployment_transition::{
@@ -177,9 +176,9 @@ pub(crate) fn start_candidate(
     let runtime = register_candidate_runtime(
         connection,
         deployment_id,
-        container_id.as_str(),
+        &container_id,
         endpoint,
-        runtime.container_port().get(),
+        runtime.container_port(),
     )
     .map_err(|source| CandidateStartError::RuntimeRegistration {
         source: Box::new(source),

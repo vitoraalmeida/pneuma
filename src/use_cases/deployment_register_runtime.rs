@@ -8,7 +8,9 @@ use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
 use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
 use crate::domain::deployment::DeploymentStatus;
 use crate::domain::identity::{ContainerId, RuntimeInstanceId};
-use crate::domain::runtime::{ExpectedRuntimeEndpoint, RuntimeInstance, RuntimeRegistration};
+use crate::domain::runtime::{
+    ContainerPort, ExpectedRuntimeEndpoint, RuntimeInstance, RuntimeRegistration,
+};
 
 #[derive(Debug)]
 pub enum RegisterCandidateRuntimeError {
@@ -16,7 +18,6 @@ pub enum RegisterCandidateRuntimeError {
     InvalidEndpoint {
         endpoint: SocketAddr,
     },
-    InvalidContainerPort,
     DeploymentNotFound {
         deployment_id: String,
     },
@@ -54,9 +55,6 @@ impl fmt::Display for RegisterCandidateRuntimeError {
                 formatter,
                 "candidate runtime endpoint must be IPv4 loopback with a nonzero port: {endpoint}"
             ),
-            Self::InvalidContainerPort => {
-                formatter.write_str("container port must be between 1 and 65535")
-            }
             Self::DeploymentNotFound { deployment_id } => {
                 write!(formatter, "deployment `{deployment_id}` was not found")
             }
@@ -103,7 +101,6 @@ impl Error for RegisterCandidateRuntimeError {
             Self::Persistence { source } => Some(source),
             Self::InvalidExternalRuntimeId
             | Self::InvalidEndpoint { .. }
-            | Self::InvalidContainerPort
             | Self::DeploymentNotFound { .. }
             | Self::InvalidDeploymentState { .. }
             | Self::ExternalRuntimeConflict { .. }
@@ -150,21 +147,21 @@ impl From<RuntimeStoreError> for RegisterCandidateRuntimeError {
 pub fn register_candidate_runtime(
     connection: &mut Connection,
     deployment_id: &str,
-    external_runtime_id: &str,
+    external_runtime_id: &ContainerId,
     endpoint: SocketAddr,
-    container_port: u16,
+    container_port: ContainerPort,
 ) -> Result<RuntimeInstance, RegisterCandidateRuntimeError> {
-    validate_runtime(external_runtime_id, endpoint, container_port)?;
+    validate_runtime(external_runtime_id.as_str(), endpoint)?;
 
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|source| RegisterCandidateRuntimeError::Persistence { source })?;
     if let Some(existing) =
-        runtime_store::load_runtime_by_external_id(&transaction, external_runtime_id)?
+        runtime_store::load_runtime_by_external_id(&transaction, external_runtime_id.as_str())?
     {
         if existing.deployment_id.as_str() == deployment_id
             && existing.expected_endpoint.socket_addr() == endpoint
-            && existing.container_port == container_port
+            && existing.container_port == container_port.get()
         {
             transaction
                 .commit()
@@ -172,7 +169,7 @@ pub fn register_candidate_runtime(
             return Ok(existing);
         }
         return Err(RegisterCandidateRuntimeError::ExternalRuntimeConflict {
-            external_runtime_id: external_runtime_id.to_owned(),
+            external_runtime_id: external_runtime_id.to_string(),
         });
     }
 
@@ -195,17 +192,18 @@ pub fn register_candidate_runtime(
         id: RuntimeInstanceId::from(runtime_id),
         application_id: deployment.application_id,
         deployment_id: deployment.id,
-        external_runtime_id: ContainerId::from(external_runtime_id),
+        external_runtime_id: external_runtime_id.clone(),
         expected_endpoint: ExpectedRuntimeEndpoint::new(endpoint)
             .map_err(|_| RegisterCandidateRuntimeError::InvalidEndpoint { endpoint })?,
-        container_port,
+        container_port: container_port.get(),
     };
     runtime_store::insert_runtime(&transaction, &registration)?;
 
-    let runtime = runtime_store::load_runtime_by_external_id(&transaction, external_runtime_id)?
-        .ok_or_else(|| RegisterCandidateRuntimeError::RegistrationNotFound {
-            runtime_id: registration.id.clone(),
-        })?;
+    let runtime =
+        runtime_store::load_runtime_by_external_id(&transaction, external_runtime_id.as_str())?
+            .ok_or_else(|| RegisterCandidateRuntimeError::RegistrationNotFound {
+                runtime_id: registration.id.clone(),
+            })?;
     transaction
         .commit()
         .map_err(|source| RegisterCandidateRuntimeError::Persistence { source })?;
@@ -217,7 +215,6 @@ pub fn register_candidate_runtime(
 fn validate_runtime(
     external_runtime_id: &str,
     endpoint: SocketAddr,
-    container_port: u16,
 ) -> Result<(), RegisterCandidateRuntimeError> {
     if external_runtime_id.is_empty()
         || !external_runtime_id
@@ -229,9 +226,5 @@ fn validate_runtime(
     if endpoint.ip() != IpAddr::V4(Ipv4Addr::LOCALHOST) || endpoint.port() == 0 {
         return Err(RegisterCandidateRuntimeError::InvalidEndpoint { endpoint });
     }
-    if container_port == 0 {
-        return Err(RegisterCandidateRuntimeError::InvalidContainerPort);
-    }
-
     Ok(())
 }

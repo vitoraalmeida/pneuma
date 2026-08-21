@@ -1,6 +1,5 @@
 use pneuma::domain::application::{
-    ApplicationName, ApplicationSource, ContainerPort, HealthCheckPath, HealthCheckSpecification,
-    HealthCheckStatus, RelativeManifestPath, RepositoryKind, RuntimeSpecification, SystemName,
+    ApplicationName, ApplicationSource, RelativeManifestPath, RepositoryKind,
 };
 use pneuma::domain::exposure::{
     ConfirmedRoute, DomainName, ExposureConfigurationVersion, ExposureDiagnostic, ExposureIntent,
@@ -9,8 +8,10 @@ use pneuma::domain::exposure::{
 use pneuma::domain::identity::RuntimeInstanceId;
 use pneuma::domain::release::{OciArtifact, OciRepository};
 use pneuma::domain::runtime::{
-    ContainerObservation, ExpectedRuntimeEndpoint, ObservedRuntimeState,
+    ContainerObservation, ContainerPort, ExpectedRuntimeEndpoint, HealthCheckPath,
+    HealthCheckSpecification, HealthCheckStatus, ObservedRuntimeState, RuntimeSpecification,
 };
+use pneuma::domain::system::SystemName;
 
 #[test]
 fn validates_application_specification_value_objects() {

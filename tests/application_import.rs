@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use pneuma::adapters::database;
-use pneuma::domain::runtime::DesiredRuntimeState;
+use pneuma::domain::application::DesiredRuntimeState;
+use pneuma::domain::system::SystemName;
 use pneuma::use_cases::application_import::{ImportError, import_application};
 use pneuma::use_cases::application_list::list_applications;
 
@@ -238,11 +239,12 @@ fn requires_system_from_manifest_or_cli() {
 #[test]
 fn cli_system_overrides_manifest() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
+    let system_name = SystemName::new("cli-system").unwrap();
 
     let application = import_application(
         &mut connection,
         &fixture_path("valid"),
-        Some("cli-system"),
+        Some(&system_name),
         None,
         None,
     )
@@ -436,11 +438,13 @@ fn reimport_is_create_only_when_arguments_diverge() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
     let repository = fixture_path("valid");
     let original_url = "https://github.com/vitoraalmeida/vitoralmeida.tech";
+    let original_system = SystemName::new("system-a").unwrap();
+    let divergent_system = SystemName::new("system-b").unwrap();
 
     let original = import_application(
         &mut connection,
         &repository,
-        Some("system-a"),
+        Some(&original_system),
         Some(original_url),
         None,
     )
@@ -449,7 +453,7 @@ fn reimport_is_create_only_when_arguments_diverge() {
     let divergent = import_application(
         &mut connection,
         &repository,
-        Some("system-b"),
+        Some(&divergent_system),
         Some("https://git.example.com/different/repository"),
         None,
     )

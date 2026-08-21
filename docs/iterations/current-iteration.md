@@ -136,9 +136,11 @@ without selecting a new Release or making destructive changes from ambiguity.
   Result: runtime, promotion, and exposure results retain typed identities;
   store failures preserve contextual sources and Release digest lookup reports
   its real Application and artifact keys.
-- [ ] Realign domain module ownership without behavioral change: move System naming
+- [x] Realign domain module ownership without behavioral change: move System naming
   to the System domain, Application desired runtime intent to Application, and
   runtime and health specifications to Runtime.
+  Result: System, Application intent, and runtime/health values now live in their
+  owning modules; System and runtime-registration use cases receive typed inputs.
 - [ ] Canonicalize immutable Git commit identity as one domain value shared by Git,
   OCI, and Deployment source revision handling.
 - [ ] Realign store ownership: move System SQL into `system_store`, Application

@@ -4,7 +4,6 @@ use std::path::{Component, Path};
 
 use crate::domain::exposure::Visibility;
 use crate::domain::identity::{ApplicationId, DeploymentId, SystemId};
-use crate::domain::runtime::DesiredRuntimeState;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 // Captures durable application identity and persisted runtime intent.
@@ -48,29 +47,6 @@ impl ApplicationName {
 }
 
 impl fmt::Display for ApplicationName {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SystemName(String);
-
-impl SystemName {
-    pub fn new(value: &str) -> Result<Self, InvalidCatalogName> {
-        if !is_valid_catalog_name(value) {
-            return Err(InvalidCatalogName {
-                value: value.to_owned(),
-            });
-        }
-        Ok(Self(value.to_owned()))
-    }
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for SystemName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
     }
@@ -221,130 +197,17 @@ impl fmt::Display for InvalidRelativeManifestPath {
 }
 impl Error for InvalidRelativeManifestPath {}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-// Groups the HTTP response contract used to verify a runtime.
-pub struct HealthCheckSpecification {
-    path: HealthCheckPath,
-    expected_status: HealthCheckStatus,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DesiredRuntimeState {
+    Running,
+    Stopped,
 }
-impl HealthCheckSpecification {
-    pub fn new(path: HealthCheckPath, expected_status: HealthCheckStatus) -> Self {
-        Self {
-            path,
-            expected_status,
-        }
-    }
-    pub fn path(&self) -> &HealthCheckPath {
-        &self.path
-    }
-    pub fn expected_status(&self) -> HealthCheckStatus {
-        self.expected_status
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-// Defines the container endpoint and health contract from the specification.
-pub struct RuntimeSpecification {
-    container_port: ContainerPort,
-    health_check: HealthCheckSpecification,
-}
-impl RuntimeSpecification {
-    pub fn new(container_port: ContainerPort, health_check: HealthCheckSpecification) -> Self {
-        Self {
-            container_port,
-            health_check,
-        }
-    }
-    pub fn container_port(&self) -> ContainerPort {
-        self.container_port
-    }
-    pub fn health_check(&self) -> &HealthCheckSpecification {
-        &self.health_check
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ContainerPort(u16);
-impl ContainerPort {
-    pub fn new(value: u16) -> Result<Self, InvalidContainerPort> {
-        if value == 0 {
-            Err(InvalidContainerPort { value })
-        } else {
-            Ok(Self(value))
-        }
-    }
-    pub fn get(self) -> u16 {
-        self.0
-    }
-}
-#[derive(Debug, PartialEq, Eq)]
-pub struct InvalidContainerPort {
-    pub value: u16,
-}
-impl fmt::Display for InvalidContainerPort {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "invalid container port {}", self.value)
-    }
-}
-impl Error for InvalidContainerPort {}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HealthCheckPath(String);
-impl HealthCheckPath {
-    pub fn new(value: &str) -> Result<Self, InvalidHealthCheckPath> {
-        if !value.starts_with('/') || value.chars().any(char::is_whitespace) {
-            Err(InvalidHealthCheckPath {
-                value: value.to_owned(),
-            })
-        } else {
-            Ok(Self(value.to_owned()))
-        }
-    }
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-#[derive(Debug, PartialEq, Eq)]
-pub struct InvalidHealthCheckPath {
-    pub value: String,
-}
-impl fmt::Display for InvalidHealthCheckPath {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "invalid health check path `{}`", self.value)
-    }
-}
-impl Error for InvalidHealthCheckPath {}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct HealthCheckStatus(u16);
-impl HealthCheckStatus {
-    pub fn new(value: u16) -> Result<Self, InvalidHealthCheckStatus> {
-        if !(100..=599).contains(&value) {
-            Err(InvalidHealthCheckStatus { value })
-        } else {
-            Ok(Self(value))
-        }
-    }
-    pub fn get(self) -> u16 {
-        self.0
-    }
-}
-#[derive(Debug, PartialEq, Eq)]
-pub struct InvalidHealthCheckStatus {
-    pub value: u16,
-}
-impl fmt::Display for InvalidHealthCheckStatus {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "invalid health check status {}", self.value)
-    }
-}
-impl Error for InvalidHealthCheckStatus {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 // Collects the application settings needed to activate a deployment.
 pub struct ApplicationDeploymentSpecification {
     pub application_id: ApplicationId,
     pub application_name: ApplicationName,
-    pub runtime: RuntimeSpecification,
+    pub runtime: crate::domain::runtime::RuntimeSpecification,
     pub visibility: Visibility,
 }

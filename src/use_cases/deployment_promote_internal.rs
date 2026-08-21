@@ -7,10 +7,10 @@ use crate::adapters::health_check_internal::{
     HealthCheckError, HealthCheckFailure, HealthCheckResult, check_internal_health,
 };
 use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
-use crate::domain::application::HealthCheckSpecification;
 use crate::domain::deployment::DeploymentStatus;
 use crate::domain::exposure::Visibility;
 use crate::domain::identity::{DeploymentId, RuntimeInstanceId};
+use crate::domain::runtime::HealthCheckSpecification;
 use crate::domain::runtime::{ObservedRuntimeState, RuntimeState};
 use crate::use_cases::deployment_transition::{TransitionDeploymentError, fail_deployment};
 

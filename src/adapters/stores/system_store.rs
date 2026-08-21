@@ -3,9 +3,9 @@ use std::fmt;
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
-use crate::domain::application::SystemName;
 use crate::domain::identity::SystemId;
 use crate::domain::system::System;
+use crate::domain::system::SystemName;
 
 #[derive(Debug)]
 pub enum SystemStoreError {

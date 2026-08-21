@@ -1,3 +1,5 @@
+use std::error::Error;
+use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use crate::domain::identity::{ApplicationId, ContainerId, DeploymentId, RuntimeInstanceId};
@@ -164,15 +166,146 @@ pub struct PreviousRuntime {
     pub external_runtime_id: ContainerId,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContainerPort(u16);
+
+impl ContainerPort {
+    pub fn new(value: u16) -> Result<Self, InvalidContainerPort> {
+        if value == 0 {
+            return Err(InvalidContainerPort { value });
+        }
+        Ok(Self(value))
+    }
+
+    pub fn get(self) -> u16 {
+        self.0
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct InvalidContainerPort {
+    pub value: u16,
+}
+
+impl fmt::Display for InvalidContainerPort {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "invalid container port {}", self.value)
+    }
+}
+
+impl Error for InvalidContainerPort {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HealthCheckPath(String);
+
+impl HealthCheckPath {
+    pub fn new(value: &str) -> Result<Self, InvalidHealthCheckPath> {
+        if !value.starts_with('/') || value.chars().any(char::is_whitespace) {
+            return Err(InvalidHealthCheckPath {
+                value: value.to_owned(),
+            });
+        }
+        Ok(Self(value.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct InvalidHealthCheckPath {
+    pub value: String,
+}
+
+impl fmt::Display for InvalidHealthCheckPath {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "invalid health check path `{}`", self.value)
+    }
+}
+
+impl Error for InvalidHealthCheckPath {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HealthCheckStatus(u16);
+
+impl HealthCheckStatus {
+    pub fn new(value: u16) -> Result<Self, InvalidHealthCheckStatus> {
+        if !(100..=599).contains(&value) {
+            return Err(InvalidHealthCheckStatus { value });
+        }
+        Ok(Self(value))
+    }
+
+    pub fn get(self) -> u16 {
+        self.0
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct InvalidHealthCheckStatus {
+    pub value: u16,
+}
+
+impl fmt::Display for InvalidHealthCheckStatus {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "invalid health check status {}", self.value)
+    }
+}
+
+impl Error for InvalidHealthCheckStatus {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+// Groups the HTTP response contract used to verify a runtime.
+pub struct HealthCheckSpecification {
+    path: HealthCheckPath,
+    expected_status: HealthCheckStatus,
+}
+
+impl HealthCheckSpecification {
+    pub fn new(path: HealthCheckPath, expected_status: HealthCheckStatus) -> Self {
+        Self {
+            path,
+            expected_status,
+        }
+    }
+
+    pub fn path(&self) -> &HealthCheckPath {
+        &self.path
+    }
+
+    pub fn expected_status(&self) -> HealthCheckStatus {
+        self.expected_status
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+// Defines the container endpoint and health contract from the specification.
+pub struct RuntimeSpecification {
+    container_port: ContainerPort,
+    health_check: HealthCheckSpecification,
+}
+
+impl RuntimeSpecification {
+    pub fn new(container_port: ContainerPort, health_check: HealthCheckSpecification) -> Self {
+        Self {
+            container_port,
+            health_check,
+        }
+    }
+
+    pub fn container_port(&self) -> ContainerPort {
+        self.container_port
+    }
+
+    pub fn health_check(&self) -> &HealthCheckSpecification {
+        &self.health_check
+    }
+}
+
 fn validate_loopback_endpoint(endpoint: SocketAddr) -> Result<(), RuntimeEndpointError> {
     if endpoint.ip() != IpAddr::V4(Ipv4Addr::LOCALHOST) || endpoint.port() == 0 {
         return Err(RuntimeEndpointError::NotIpv4Loopback { endpoint });
     }
     Ok(())
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DesiredRuntimeState {
-    Running,
-    Stopped,
 }

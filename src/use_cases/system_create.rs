@@ -4,7 +4,7 @@ use std::fmt;
 use rusqlite::Connection;
 
 use crate::adapters::stores::system_store;
-use crate::domain::system::System;
+use crate::domain::system::{System, SystemName};
 
 #[derive(Debug)]
 pub enum CreateError {
@@ -32,14 +32,14 @@ impl Error for CreateError {
 // Creates a System once and returns the existing row when its name already exists.
 pub fn create_system(
     connection: &mut Connection,
-    name: &str,
+    name: &SystemName,
     description: Option<&str>,
 ) -> Result<System, CreateError> {
     let transaction = connection
         .transaction()
         .map_err(|source| CreateError::Persistence { source })?;
 
-    let system = system_store::create_or_load(&transaction, name, description).map_err(
+    let system = system_store::create_or_load(&transaction, name.as_str(), description).map_err(
         |error| match error {
             system_store::SystemStoreError::Persistence { source } => {
                 CreateError::Persistence { source }
