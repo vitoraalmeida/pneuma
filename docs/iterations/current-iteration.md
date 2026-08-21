@@ -1,6 +1,6 @@
 # Current Iteration
 
-**Status:** in progress
+**Status:** completed
 
 **Base:** `49b9476` (`docs: refactor documentation architecture`)
 
@@ -220,11 +220,13 @@ without selecting a new Release or making destructive changes from ambiguity.
 ## Closure Evidence
 
 - `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`,
-  `cargo test --all-features`, and `cargo build --workspace --release` passed on `3cc404a`.
+  `cargo test --all-features`, and `cargo build --workspace --release` passed on `5cea214`.
 - A fresh disposable clone passed `scripts/dev-vm/test-all.sh` with 45 PASS, 0 FAIL,
   and 0 SKIP; the clone and its storage were removed.
 - The final refactor binary passed `scripts/dev-vm/reconciliation-e2e.sh` with 21 PASS,
   0 FAIL, and 0 SKIP; the clone and its storage were removed.
+- The final typed-store binary passed `scripts/dev-vm/reconciliation-e2e.sh` with
+  21 PASS, 0 FAIL, and 0 SKIP; the clone and its storage were removed.
 
 ## Blockers
 
