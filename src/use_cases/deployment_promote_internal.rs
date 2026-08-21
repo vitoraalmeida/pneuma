@@ -223,8 +223,8 @@ pub fn promote_internal_candidate(
     }
     if application_store::activate_deployment(
         &transaction,
-        target.application_id.as_str(),
-        target.deployment_id.as_str(),
+        &target.application_id,
+        &target.deployment_id,
     )
     .map_err(|source| PromoteInternalCandidateError::ApplicationStore { source })?
         == PersistenceOutcome::Stale

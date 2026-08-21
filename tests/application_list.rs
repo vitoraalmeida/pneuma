@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use pneuma::adapters::database;
-use pneuma::domain::application::DesiredRuntimeState;
+use pneuma::domain::application::{ApplicationName, DesiredRuntimeState};
 use pneuma::use_cases::application_import::import_application;
 use pneuma::use_cases::application_list::list_applications;
 use pneuma::use_cases::application_lookup::find_application_by_name;
@@ -27,9 +27,10 @@ fn finds_a_core_application_by_name_without_loading_the_catalog() {
     )
     .unwrap();
 
-    let application = find_application_by_name(&connection, "personal-site")
-        .unwrap()
-        .unwrap();
+    let application =
+        find_application_by_name(&connection, &ApplicationName::new("personal-site").unwrap())
+            .unwrap()
+            .unwrap();
 
     assert_eq!(application.name.as_str(), "personal-site");
     assert_eq!(
@@ -38,7 +39,7 @@ fn finds_a_core_application_by_name_without_loading_the_catalog() {
     );
     assert_eq!(application.specification_version, 3);
     assert!(
-        find_application_by_name(&connection, "missing")
+        find_application_by_name(&connection, &ApplicationName::new("missing").unwrap())
             .unwrap()
             .is_none()
     );

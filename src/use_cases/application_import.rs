@@ -9,6 +9,7 @@ use crate::adapters::stores::exposure_store::{self, ExposureStoreError};
 use crate::adapters::stores::system_store::{self, SystemStoreError};
 use crate::domain::application::ApplicationSummary;
 use crate::domain::git::{ApplicationSource, RelativeManifestPath};
+use crate::domain::identity::ApplicationId;
 use crate::domain::manifest::{ImportSpecification, ManifestError, load_manifest_at};
 use crate::domain::system::SystemName;
 
@@ -137,7 +138,7 @@ pub fn import_application(
         .map_err(|source| ImportError::Persistence { source })?;
 
     if let Some(application) =
-        application_store::load_application_for_import(&transaction, application_name.as_str())?
+        application_store::load_application_for_import(&transaction, &application_name)?
     {
         transaction
             .commit()
@@ -151,8 +152,8 @@ pub fn import_application(
     let inserted = application_store::insert_application(
         &transaction,
         &application_id,
-        system.id.as_str(),
-        application_name.as_str(),
+        &system.id,
+        &application_name,
         specification.schema_version,
     )?;
 
@@ -167,9 +168,9 @@ pub fn import_application(
     }
 
     let application =
-        application_store::load_application_for_import(&transaction, application_name.as_str())?
+        application_store::load_application_for_import(&transaction, &application_name)?
             .ok_or_else(|| ImportError::ApplicationNotFound {
-                application_id: application_id.clone(),
+                application_id: application_id.to_string(),
             })?;
 
     transaction
@@ -183,7 +184,7 @@ pub fn import_application(
 // partially imported application can become visible.
 fn persist_specification(
     transaction: &rusqlite::Transaction<'_>,
-    application_id: &str,
+    application_id: &ApplicationId,
     specification: &ImportSpecification,
     repository_url: Option<&str>,
     manifest_path: &str,
@@ -226,7 +227,11 @@ fn persist_specification(
         &specification.healthcheck_path,
         specification.expected_status,
     )?;
-    exposure_store::insert_exposure(transaction, application_id, &specification.exposure)?;
+    exposure_store::insert_exposure(
+        transaction,
+        application_id.as_str(),
+        &specification.exposure,
+    )?;
 
     Ok(())
 }

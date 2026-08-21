@@ -180,6 +180,10 @@ without selecting a new Release or making destructive changes from ambiguity.
   Runtime, without changing CLI behavior or SQLite text.
   Result: Git source construction and remote classification now share one domain
   rule; runtime container identity no longer resides with logical identities.
+- [x] Harden the Application-store typed boundary: generate Application IDs and
+  accept Application, System, Deployment, and name domain values at its API.
+  Result: Application-store callers retain typed identities and names until the
+  SQLite parameter boundary without changing persistence or CLI behavior.
 
 ## Scope and Non-goals
 

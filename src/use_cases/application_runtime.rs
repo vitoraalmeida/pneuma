@@ -424,7 +424,7 @@ fn load_desired_state(
     connection: &Connection,
     application_id: &ApplicationId,
 ) -> Result<DesiredRuntimeState, RuntimeLifecycleError> {
-    match application_store::load_desired_runtime_state(connection, application_id.as_str()) {
+    match application_store::load_desired_runtime_state(connection, application_id) {
         Ok(state) => Ok(state),
         Err(ApplicationStoreError::InvalidDesiredRuntimeState { state, .. }) => {
             Err(RuntimeLifecycleError::InvalidDesiredState { state })
@@ -442,7 +442,7 @@ fn set_desired_state(
     let expected = load_desired_state(connection, application_id)?;
     let updated = application_store::compare_and_set_desired_runtime_state(
         connection,
-        application_id.as_str(),
+        application_id,
         expected,
         desired_runtime_state,
     )

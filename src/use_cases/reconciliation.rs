@@ -22,7 +22,7 @@ use crate::adapters::systemd_quadlet::{
     observe_unit_source, start, unit_name, write_unit,
 };
 use crate::adapters::test_gate::wait_for_test_gate;
-use crate::domain::application::DesiredRuntimeState;
+use crate::domain::application::{ApplicationName, DesiredRuntimeState};
 use crate::domain::deployment::{Deployment, DeploymentStatus};
 use crate::domain::exposure::{
     ExposureConfigurationVersion, ExposureDiagnostic, ExposureMaterializationState, Visibility,
@@ -178,10 +178,15 @@ pub fn reconcile_application(
     managed_caddy_directory: &std::path::Path,
     caddyfile_path: &std::path::Path,
 ) -> Result<ReconciliationResult, ReconciliationReadError> {
-    let application = application_store::load_application_by_name(connection, application_name)
+    let application_name = ApplicationName::new(application_name).map_err(|_| {
+        ReconciliationReadError::ApplicationNotFound {
+            application_name: application_name.to_owned(),
+        }
+    })?;
+    let application = application_store::load_application_by_name(connection, &application_name)
         .map_err(|source| ReconciliationReadError::Application { source })?
         .ok_or_else(|| ReconciliationReadError::ApplicationNotFound {
-            application_name: application_name.to_owned(),
+            application_name: application_name.as_str().to_owned(),
         })?;
     let database_path = connection.path().map(std::path::PathBuf::from).ok_or(
         ReconciliationReadError::OperationLock {
@@ -207,7 +212,7 @@ pub fn reconcile_application(
         }
     })?;
 
-    let input = load_reconciliation_input(connection, application_name)?;
+    let input = load_reconciliation_input(connection, application_name.as_str())?;
     if let Some(blocking_deployment) = input.blocking_deployment {
         return recover_interrupted_deployment(
             connection,
@@ -983,10 +988,15 @@ pub fn load_reconciliation_input(
             .map_err(|source| ReconciliationReadError::Application {
                 source: application_store::ApplicationStoreError::Persistence { source },
             })?;
-    let application = application_store::load_application_by_name(&transaction, application_name)
+    let application_name = ApplicationName::new(application_name).map_err(|_| {
+        ReconciliationReadError::ApplicationNotFound {
+            application_name: application_name.to_owned(),
+        }
+    })?;
+    let application = application_store::load_application_by_name(&transaction, &application_name)
         .map_err(|source| ReconciliationReadError::Application { source })?
         .ok_or_else(|| ReconciliationReadError::ApplicationNotFound {
-            application_name: application_name.to_owned(),
+            application_name: application_name.as_str().to_owned(),
         })?;
     let blocking_deployment =
         deployment_store::load_nonterminal_deployment(&transaction, application.id.as_str())
@@ -994,7 +1004,7 @@ pub fn load_reconciliation_input(
     let exposure = exposure_store::load_exposure(&transaction, application.id.as_str())
         .map_err(|source| ReconciliationReadError::Exposure { source })?;
     let specification =
-        application_store::load_deployment_specification(&transaction, application.id.as_str())
+        application_store::load_deployment_specification(&transaction, &application.id)
             .map_err(|source| ReconciliationReadError::Application { source })?;
     let active = match &application.active_deployment_id {
         Some(deployment_id) => {

@@ -108,7 +108,7 @@ fn deploy_branch_reporting(
     public_configuration: Option<&PublicDeploymentConfiguration>,
     progress: Option<&mut dyn FnMut(DeploymentProgress)>,
 ) -> Result<DeploymentResult, DeployBranchError> {
-    let source = application_store::load_source(connection, application_id.as_str())
+    let source = application_store::load_source(connection, application_id)
         .map_err(|source| DeployBranchError::SourceConfiguration { source })?
         .ok_or_else(|| DeployBranchError::NoSourceConfiguration {
             application_id: application_id.to_string(),
@@ -126,12 +126,11 @@ fn deploy_branch_reporting(
     let commit_sha: CommitSha = resolve_branch(source.repository_location(), &branch)
         .map_err(|source| DeployBranchError::ResolveBranch { source })?;
 
-    let delivery =
-        application_store::load_delivery_specification(connection, application_id.as_str())
-            .map_err(|source| DeployBranchError::SourceConfiguration { source })?
-            .ok_or_else(|| DeployBranchError::NoDeliveryConfiguration {
-                application_id: application_id.to_string(),
-            })?;
+    let delivery = application_store::load_delivery_specification(connection, application_id)
+        .map_err(|source| DeployBranchError::SourceConfiguration { source })?
+        .ok_or_else(|| DeployBranchError::NoDeliveryConfiguration {
+            application_id: application_id.to_string(),
+        })?;
 
     let reference = resolve_image_digest(delivery.image_repository().as_str(), &commit_sha)
         .map_err(|source| DeployBranchError::ResolveImageDigest { source })?;

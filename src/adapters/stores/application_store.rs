@@ -65,18 +65,21 @@ impl Error for ApplicationStoreError {
 }
 
 // Allocates an ID inside the import transaction so related Application records share one boundary.
-pub fn generate_id(connection: &Connection) -> Result<String, ApplicationStoreError> {
+pub fn generate_id(connection: &Connection) -> Result<ApplicationId, ApplicationStoreError> {
     connection
-        .query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))
+        .query_row("SELECT lower(hex(randomblob(16)))", [], |row| {
+            row.get::<_, String>(0)
+        })
+        .map(ApplicationId::from)
         .map_err(|source| ApplicationStoreError::Persistence { source })
 }
 
 // Persists an imported Application once, preserving the original specification on name conflicts.
 pub fn insert_application(
     transaction: &Transaction<'_>,
-    application_id: &str,
-    system_id: &str,
-    name: &str,
+    application_id: &ApplicationId,
+    system_id: &SystemId,
+    name: &ApplicationName,
     spec_version: u32,
 ) -> Result<bool, ApplicationStoreError> {
     let inserted = transaction
@@ -86,7 +89,12 @@ pub fn insert_application(
                 created_at, updated_at
             ) VALUES (?1, ?2, ?3, 'stopped', ?4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             ON CONFLICT(name) DO NOTHING",
-            params![application_id, system_id, name, spec_version],
+            params![
+                application_id.as_str(),
+                system_id.as_str(),
+                name.as_str(),
+                spec_version
+            ],
         )
         .map_err(|source| ApplicationStoreError::Persistence { source })?;
     Ok(inserted == 1)
@@ -95,7 +103,7 @@ pub fn insert_application(
 // Loads the import-facing Application summary with optional source metadata.
 pub fn load_application_for_import(
     transaction: &Transaction<'_>,
-    name: &str,
+    name: &ApplicationName,
 ) -> Result<Option<ApplicationSummary>, ApplicationStoreError> {
     transaction
         .query_row(
@@ -112,7 +120,7 @@ pub fn load_application_for_import(
              LEFT JOIN application_sources AS s
                 ON s.application_id = a.id
              WHERE a.name = ?1",
-            [name],
+            [name.as_str()],
             map_application_summary_row,
         )
         .optional()
@@ -154,14 +162,14 @@ pub(crate) fn map_application_summary_row(row: &Row<'_>) -> rusqlite::Result<App
 // Loads the core Application projection by its durable unique name.
 pub fn load_application_by_name(
     connection: &Connection,
-    name: &str,
+    name: &ApplicationName,
 ) -> Result<Option<Application>, ApplicationStoreError> {
     connection
         .query_row(
             "SELECT id, system_id, name, desired_runtime_state,
                     active_deployment_id, spec_version
              FROM applications WHERE name = ?1",
-            [name],
+            [name.as_str()],
             map_application_row,
         )
         .optional()
@@ -195,26 +203,26 @@ pub fn list_application_summaries_for_system(
 
 pub fn application_has_successful_deployment(
     connection: &Connection,
-    application_id: &str,
+    application_id: &ApplicationId,
 ) -> Result<bool, ApplicationStoreError> {
-    connection.query_row("SELECT EXISTS(SELECT 1 FROM deployments WHERE application_id = ?1 AND status = 'succeeded')", [application_id], |row| row.get(0)).map_err(|source| ApplicationStoreError::Persistence { source })
+    connection.query_row("SELECT EXISTS(SELECT 1 FROM deployments WHERE application_id = ?1 AND status = 'succeeded')", [application_id.as_str()], |row| row.get(0)).map_err(|source| ApplicationStoreError::Persistence { source })
 }
 
 // Loads persisted runtime intent from its owning Application aggregate.
 pub fn load_desired_runtime_state(
     connection: &Connection,
-    application_id: &str,
+    application_id: &ApplicationId,
 ) -> Result<DesiredRuntimeState, ApplicationStoreError> {
     let value = connection
         .query_row(
             "SELECT desired_runtime_state FROM applications WHERE id = ?1",
-            [application_id],
+            [application_id.as_str()],
             |row| row.get::<_, String>(0),
         )
         .map_err(|source| ApplicationStoreError::Persistence { source })?;
     desired_runtime_state_from_value(&value).ok_or_else(|| {
         ApplicationStoreError::InvalidDesiredRuntimeState {
-            application_id: application_id.to_owned(),
+            application_id: application_id.to_string(),
             state: value,
         }
     })
@@ -223,7 +231,7 @@ pub fn load_desired_runtime_state(
 // Changes Application runtime intent only when the persisted state matches the observation.
 pub fn compare_and_set_desired_runtime_state(
     connection: &Connection,
-    application_id: &str,
+    application_id: &ApplicationId,
     expected: DesiredRuntimeState,
     desired: DesiredRuntimeState,
 ) -> Result<PersistenceOutcome, ApplicationStoreError> {
@@ -234,7 +242,7 @@ pub fn compare_and_set_desired_runtime_state(
              WHERE id = ?2 AND desired_runtime_state = ?3",
             params![
                 desired_runtime_state_value(desired),
-                application_id,
+                application_id.as_str(),
                 desired_runtime_state_value(expected)
             ],
         )
@@ -245,7 +253,7 @@ pub fn compare_and_set_desired_runtime_state(
 // Persists the immutable delivery configuration associated with an imported Application.
 pub fn insert_delivery_spec(
     transaction: &Transaction<'_>,
-    application_id: &str,
+    application_id: &ApplicationId,
     delivery_type: DeliveryType,
     image_repository: &OciRepository,
 ) -> Result<(), ApplicationStoreError> {
@@ -256,7 +264,7 @@ pub fn insert_delivery_spec(
                 created_at, updated_at
             ) VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
             params![
-                application_id,
+                application_id.as_str(),
                 delivery_type_value(delivery_type),
                 image_repository.as_str()
             ],
@@ -268,7 +276,7 @@ pub fn insert_delivery_spec(
 // Persists source provenance and checkout defaults for an imported Application.
 pub fn insert_source_spec(
     transaction: &Transaction<'_>,
-    application_id: &str,
+    application_id: &ApplicationId,
     source: &ApplicationSource,
 ) -> Result<(), ApplicationStoreError> {
     transaction
@@ -278,7 +286,7 @@ pub fn insert_source_spec(
                 default_branch, manifest_path, created_at, updated_at
             ) VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
             params![
-                application_id,
+                application_id.as_str(),
                 source.repository_location(),
                 repository_kind_value(source.repository_kind()),
                 source.default_branch(),
@@ -292,7 +300,7 @@ pub fn insert_source_spec(
 // Persists the container port that defines the Application's runtime endpoint.
 pub fn insert_runtime_spec(
     transaction: &Transaction<'_>,
-    application_id: &str,
+    application_id: &ApplicationId,
     container_port: ContainerPort,
 ) -> Result<(), ApplicationStoreError> {
     transaction
@@ -300,7 +308,7 @@ pub fn insert_runtime_spec(
             "INSERT INTO application_runtime_specs (
                 application_id, container_port, created_at, updated_at
             ) VALUES (?1, ?2, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-            params![application_id, i64::from(container_port.get())],
+            params![application_id.as_str(), i64::from(container_port.get())],
         )
         .map_err(|source| ApplicationStoreError::Persistence { source })?;
     Ok(())
@@ -309,7 +317,7 @@ pub fn insert_runtime_spec(
 // Persists the internal health-check contract used for candidate verification.
 pub fn insert_health_check_spec(
     transaction: &Transaction<'_>,
-    application_id: &str,
+    application_id: &ApplicationId,
     path: &HealthCheckPath,
     expected_status: HealthCheckStatus,
 ) -> Result<(), ApplicationStoreError> {
@@ -319,7 +327,7 @@ pub fn insert_health_check_spec(
                 application_id, path, expected_status, created_at, updated_at
             ) VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
             params![
-                application_id,
+                application_id.as_str(),
                 path.as_str(),
                 i64::from(expected_status.get())
             ],
@@ -331,12 +339,12 @@ pub fn insert_health_check_spec(
 // Checks durable Application existence before dependent persistence work.
 pub fn application_exists(
     connection: &Connection,
-    application_id: &str,
+    application_id: &ApplicationId,
 ) -> Result<bool, ApplicationStoreError> {
     connection
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM applications WHERE id = ?1)",
-            [application_id],
+            [application_id.as_str()],
             |row| row.get(0),
         )
         .map_err(|source| ApplicationStoreError::Persistence { source })
@@ -345,8 +353,8 @@ pub fn application_exists(
 // Atomically records the active Deployment and its running runtime intent.
 pub fn activate_deployment(
     transaction: &Transaction<'_>,
-    application_id: &str,
-    deployment_id: &str,
+    application_id: &ApplicationId,
+    deployment_id: &DeploymentId,
 ) -> Result<PersistenceOutcome, ApplicationStoreError> {
     let updated = transaction
         .execute(
@@ -355,7 +363,7 @@ pub fn activate_deployment(
                  desired_runtime_state = 'running',
                  updated_at = CURRENT_TIMESTAMP
              WHERE id = ?2",
-            params![deployment_id, application_id],
+            params![deployment_id.as_str(), application_id.as_str()],
         )
         .map_err(|source| ApplicationStoreError::Persistence { source })?;
     Ok(outcome(updated))
@@ -364,13 +372,13 @@ pub fn activate_deployment(
 // Loads delivery configuration and maps its persisted type into the domain enum.
 pub fn load_delivery_specification(
     connection: &Connection,
-    application_id: &str,
+    application_id: &ApplicationId,
 ) -> Result<Option<DeliverySpecification>, ApplicationStoreError> {
     let specification = connection
         .query_row(
             "SELECT delivery_type, image_repository
              FROM application_delivery_specs WHERE application_id = ?1",
-            [application_id],
+            [application_id.as_str()],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
         )
         .optional()
@@ -397,13 +405,13 @@ pub fn load_delivery_specification(
 // Loads source configuration and rejects unknown persisted repository kinds.
 pub fn load_source(
     connection: &Connection,
-    application_id: &str,
+    application_id: &ApplicationId,
 ) -> Result<Option<ApplicationSource>, ApplicationStoreError> {
     let source = connection
         .query_row(
             "SELECT repository_url, repository_kind, default_branch, manifest_path
              FROM application_sources WHERE application_id = ?1",
-            [application_id],
+            [application_id.as_str()],
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -443,7 +451,7 @@ pub fn load_source(
 // Joins persisted runtime, health, and visibility data into deployment input.
 pub fn load_deployment_specification(
     connection: &Connection,
-    application_id: &str,
+    application_id: &ApplicationId,
 ) -> Result<Option<ApplicationDeploymentSpecification>, ApplicationStoreError> {
     let specification = connection
         .query_row(
@@ -461,7 +469,7 @@ pub fn load_deployment_specification(
                 ON health_check_specs.application_id = applications.id
              JOIN exposures ON exposures.application_id = applications.id
              WHERE applications.id = ?1",
-            [application_id],
+            [application_id.as_str()],
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,

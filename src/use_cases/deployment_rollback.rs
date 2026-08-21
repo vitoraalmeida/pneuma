@@ -83,7 +83,7 @@ pub fn rollback_deployment(
     application_id: &ApplicationId,
     public_configuration: Option<&PublicDeploymentConfiguration>,
 ) -> Result<DeploymentResult, RollbackError> {
-    let exists = application_store::application_exists(connection, application_id.as_str())
+    let exists = application_store::application_exists(connection, application_id)
         .map_err(|source| RollbackError::ApplicationStore { source })?;
     if !exists {
         return Err(RollbackError::ApplicationNotFound {

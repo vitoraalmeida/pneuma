@@ -140,9 +140,8 @@ fn create_deployment_in_transaction(
     source_revision: Option<&SourceRevision>,
     owner_token: Option<&str>,
 ) -> Result<Deployment, CreateDeploymentError> {
-    let application_exists =
-        application_store::application_exists(transaction, application_id.as_str())
-            .map_err(|source| CreateDeploymentError::ApplicationStore { source })?;
+    let application_exists = application_store::application_exists(transaction, application_id)
+        .map_err(|source| CreateDeploymentError::ApplicationStore { source })?;
     if !application_exists {
         return Err(CreateDeploymentError::ApplicationNotFound {
             application_id: application_id.to_string(),

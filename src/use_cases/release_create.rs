@@ -81,7 +81,7 @@ pub fn create_release(
         .transaction()
         .map_err(|source| CreateReleaseError::Persistence { source })?;
 
-    let exists = application_store::application_exists(&transaction, application_id.as_str())?;
+    let exists = application_store::application_exists(&transaction, application_id)?;
     if !exists {
         return Err(CreateReleaseError::ApplicationNotFound {
             application_id: application_id.to_string(),

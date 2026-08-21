@@ -127,9 +127,8 @@ fn deploy_oci_reporting(
         OciArtifact::parse(image_reference).map_err(|source| DeployOciError::PullImage {
             source: PullImageError::InvalidReference { source },
         })?;
-    let delivery =
-        application_store::load_delivery_specification(connection, application_id.as_str())
-            .map_err(|source| DeployOciError::DeliveryConfiguration { source })?;
+    let delivery = application_store::load_delivery_specification(connection, application_id)
+        .map_err(|source| DeployOciError::DeliveryConfiguration { source })?;
     let Some(delivery) = delivery else {
         return Err(DeployOciError::NoDeliveryConfiguration {
             application_id: application_id.to_string(),

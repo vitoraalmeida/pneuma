@@ -687,7 +687,7 @@ fn run_list(connection: &rusqlite::Connection, verbose: bool) -> Result<(), CliE
     log_verbose(verbose, "list registered applications");
     let applications = list_applications(connection).map_err(|source| CliError::List { source })?;
     for application in applications {
-        let deployment_status = if application_is_deployed(connection, application.id.as_str())
+        let deployment_status = if application_is_deployed(connection, &application.id)
             .map_err(|source| CliError::List { source })?
         {
             "Deployed"
@@ -1133,10 +1133,14 @@ fn resolve_application(
     connection: &rusqlite::Connection,
     application_name: &str,
 ) -> Result<Application, CliError> {
-    find_application_by_name(connection, application_name)
+    let application_name = pneuma::domain::application::ApplicationName::new(application_name)
+        .map_err(|_| CliError::ApplicationNotFound {
+            application_name: application_name.to_owned(),
+        })?;
+    find_application_by_name(connection, &application_name)
         .map_err(|source| CliError::ApplicationLookup { source })?
         .ok_or_else(|| CliError::ApplicationNotFound {
-            application_name: application_name.to_owned(),
+            application_name: application_name.as_str().to_owned(),
         })
 }
 

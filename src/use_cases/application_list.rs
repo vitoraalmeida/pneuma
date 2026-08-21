@@ -5,6 +5,7 @@ use rusqlite::Connection;
 
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::domain::application::ApplicationSummary;
+use crate::domain::identity::ApplicationId;
 
 #[derive(Debug)]
 pub struct ListError {
@@ -31,7 +32,7 @@ pub fn list_applications(connection: &Connection) -> Result<Vec<ApplicationSumma
 // Determines whether an application has ever completed a successful deployment.
 pub fn application_is_deployed(
     connection: &Connection,
-    application_id: &str,
+    application_id: &ApplicationId,
 ) -> Result<bool, ListError> {
     application_store::application_has_successful_deployment(connection, application_id)
         .map_err(|source| ListError { source })

@@ -21,7 +21,7 @@ fn loads_named_source_delivery_runtime_and_health_configuration() {
     )
     .unwrap();
 
-    let source = application_store::load_source(&connection, application.id.as_str())
+    let source = application_store::load_source(&connection, &application.id)
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -35,20 +35,18 @@ fn loads_named_source_delivery_runtime_and_health_configuration() {
         "deploy/staging/pneuma.toml"
     );
 
-    let delivery =
-        application_store::load_delivery_specification(&connection, application.id.as_str())
-            .unwrap()
-            .unwrap();
+    let delivery = application_store::load_delivery_specification(&connection, &application.id)
+        .unwrap()
+        .unwrap();
     assert_eq!(delivery.delivery_type(), DeliveryType::Oci);
     assert_eq!(
         delivery.image_repository().as_str(),
         "ghcr.io/vitoraalmeida/vitoralmeida.tech"
     );
 
-    let deployment =
-        application_store::load_deployment_specification(&connection, application.id.as_str())
-            .unwrap()
-            .unwrap();
+    let deployment = application_store::load_deployment_specification(&connection, &application.id)
+        .unwrap()
+        .unwrap();
     assert_eq!(deployment.application_id, application.id);
     assert_eq!(deployment.application_name.as_str(), "personal-site");
     assert_eq!(deployment.runtime.container_port().get(), 8080);
@@ -85,7 +83,7 @@ fn rejects_invalid_persisted_specification_values_with_store_context() {
 
     connection.execute("UPDATE application_delivery_specs SET image_repository = 'registry.example/app:latest'", []).unwrap();
     assert!(matches!(
-        application_store::load_delivery_specification(&connection, application.id.as_str()),
+        application_store::load_delivery_specification(&connection, &application.id),
         Err(ApplicationStoreError::Persistence { .. })
     ));
 
@@ -100,7 +98,7 @@ fn rejects_invalid_persisted_specification_values_with_store_context() {
         )
         .unwrap();
     assert!(matches!(
-        application_store::load_deployment_specification(&connection, application.id.as_str()),
+        application_store::load_deployment_specification(&connection, &application.id),
         Err(ApplicationStoreError::Persistence { .. })
     ));
 }
