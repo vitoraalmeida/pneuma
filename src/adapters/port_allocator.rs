@@ -5,6 +5,7 @@ use std::fmt;
 use rusqlite::{Connection, TransactionBehavior, params};
 
 use crate::domain::identity::{ApplicationId, DeploymentId};
+use crate::domain::runtime::HostPort;
 
 pub const RUNTIME_PORT_RANGE_ENVIRONMENT_VARIABLE: &str = "PNEUMA_RUNTIME_PORT_RANGE";
 const DEFAULT_RUNTIME_PORT_RANGE: &str = "30000-39999";
@@ -50,12 +51,16 @@ pub fn reserve_port(
     connection: &mut Connection,
     application_id: &ApplicationId,
     deployment_id: &DeploymentId,
-) -> Result<u16, PortAllocationError> {
+) -> Result<HostPort, PortAllocationError> {
     let (start, end) = configured_range()?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|source| PortAllocationError::Persistence { source })?;
-    for port in start..=end {
+    for raw in start..=end {
+        // The configured range already excludes zero; skipping keeps the invariant local.
+        let Ok(port) = HostPort::new(raw) else {
+            continue;
+        };
         let in_use: bool = transaction
             .query_row(
                 "SELECT EXISTS(
@@ -64,7 +69,7 @@ pub fn reserve_port(
                     UNION ALL
                     SELECT 1 FROM runtime_port_reservations WHERE port = ?1
                 )",
-                [port],
+                [port.get()],
                 |row| row.get(0),
             )
             .map_err(|source| PortAllocationError::Persistence { source })?;
@@ -75,7 +80,7 @@ pub fn reserve_port(
             .execute(
                 "INSERT INTO runtime_port_reservations (port, application_id, deployment_id)
                  VALUES (?1, ?2, ?3)",
-                params![port, application_id.as_str(), deployment_id.as_str()],
+                params![port.get(), application_id.as_str(), deployment_id.as_str()],
             )
             .map_err(|source| PortAllocationError::Persistence { source })?;
         transaction

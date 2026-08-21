@@ -95,6 +95,11 @@ impl ExpectedRuntimeEndpoint {
     pub fn socket_addr(self) -> SocketAddr {
         self.0
     }
+
+    // Returns the published loopback port; loopback validation already rejected zero.
+    pub fn host_port(&self) -> Result<HostPort, InvalidHostPort> {
+        HostPort::new(self.0.port())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -225,6 +230,36 @@ impl fmt::Display for InvalidContainerPort {
         write!(formatter, "invalid container port {}", self.value)
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// Identifies the loopback host port published by a runtime container.
+pub struct HostPort(u16);
+
+impl HostPort {
+    pub fn new(value: u16) -> Result<Self, InvalidHostPort> {
+        if value == 0 {
+            return Err(InvalidHostPort { value });
+        }
+        Ok(Self(value))
+    }
+
+    pub fn get(self) -> u16 {
+        self.0
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct InvalidHostPort {
+    pub value: u16,
+}
+
+impl fmt::Display for InvalidHostPort {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "invalid host port {}", self.value)
+    }
+}
+
+impl Error for InvalidHostPort {}
 
 impl Error for InvalidContainerPort {}
 
