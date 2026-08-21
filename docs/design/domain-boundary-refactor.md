@@ -57,6 +57,9 @@ SQLite representation, or reconciliation policy.
    deployment orchestration from `main.rs` without changing CLI behavior.
 8. Preserve validated manifest values through typed import inputs without changing
    import behavior or SQLite text.
+9. Move Git repository classification and source-location values to `Git`, and
+   move external container identity to `Runtime`, eliminating duplicate
+   classification without changing behavior or persisted text.
 
 ## Validation
 

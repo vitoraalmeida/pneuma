@@ -4,13 +4,11 @@ use std::path::Path;
 
 use rusqlite::Connection;
 
-use crate::adapters::git_source::is_remote_repository;
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::adapters::stores::exposure_store::{self, ExposureStoreError};
 use crate::adapters::stores::system_store::{self, SystemStoreError};
-use crate::domain::application::{
-    ApplicationSource, ApplicationSummary, RelativeManifestPath, RepositoryKind,
-};
+use crate::domain::application::ApplicationSummary;
+use crate::domain::git::{ApplicationSource, RelativeManifestPath};
 use crate::domain::manifest::{ImportSpecification, ManifestError, load_manifest_at};
 use crate::domain::system::SystemName;
 
@@ -198,14 +196,7 @@ fn persist_specification(
     )?;
 
     if let Some(repository_url) = repository_url {
-        let repository_kind = if is_remote_repository(repository_url) {
-            RepositoryKind::Remote
-        } else {
-            RepositoryKind::Local
-        };
-
-        let source = ApplicationSource::new(
-            repository_kind,
+        let source = ApplicationSource::from_location(
             repository_url,
             None,
             RelativeManifestPath::new(manifest_path).map_err(|_| ImportError::Manifest {

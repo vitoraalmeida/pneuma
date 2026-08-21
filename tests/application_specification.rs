@@ -4,9 +4,9 @@ use pneuma::adapters::database;
 use pneuma::adapters::stores::application_store;
 use pneuma::adapters::stores::application_store::ApplicationStoreError;
 use pneuma::adapters::stores::exposure_store;
-use pneuma::domain::application::RepositoryKind;
 use pneuma::domain::delivery::DeliveryType;
 use pneuma::domain::exposure::{ExposureMaterialization, Visibility};
+use pneuma::domain::git::RepositoryKind;
 use pneuma::use_cases::application_import::import_application;
 
 #[test]

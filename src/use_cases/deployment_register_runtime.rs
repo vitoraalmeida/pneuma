@@ -7,9 +7,9 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
 use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
 use crate::domain::deployment::DeploymentStatus;
-use crate::domain::identity::{ContainerId, RuntimeInstanceId};
+use crate::domain::identity::RuntimeInstanceId;
 use crate::domain::runtime::{
-    ContainerPort, ExpectedRuntimeEndpoint, RuntimeInstance, RuntimeRegistration,
+    ContainerId, ContainerPort, ExpectedRuntimeEndpoint, RuntimeInstance, RuntimeRegistration,
 };
 
 #[derive(Debug)]

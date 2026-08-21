@@ -1,9 +1,8 @@
 use crate::domain::application::{Application, ApplicationDeploymentSpecification};
 use crate::domain::deployment::Deployment;
 use crate::domain::exposure::Exposure;
-use crate::domain::identity::ContainerId;
 use crate::domain::release::Release;
-use crate::domain::runtime::{ContainerObservation, RuntimeInstance};
+use crate::domain::runtime::{ContainerId, ContainerObservation, RuntimeInstance};
 
 // Collects the persisted authorities needed to classify reconciliation without retaining a SQLite transaction.
 #[derive(Debug)]

@@ -402,11 +402,6 @@ pub fn ensure_checkout(
     create_checkout(repository_path, commit_sha, checkout_path)
 }
 
-// Identifies supported remote URL forms before import decides whether cloning is required.
-pub fn is_remote_repository(repository: &str) -> bool {
-    repository.contains("://") || repository.starts_with("git@")
-}
-
 // Clones a remote repository into a create-only destination to avoid replacing existing workspace state.
 pub fn clone_repository(url: &str, destination: &Path) -> Result<(), CloneRepositoryError> {
     if destination

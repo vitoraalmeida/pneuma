@@ -175,6 +175,11 @@ without selecting a new Release or making destructive changes from ambiguity.
   Result: manifest validation now produces a typed import projection consumed by
   the import transaction; remote import and all CLI import regressions retain
   their existing behavior.
+- [x] Complete remaining domain ownership alignment: move Git repository
+  classification and source location to Git, and external container identity to
+  Runtime, without changing CLI behavior or SQLite text.
+  Result: Git source construction and remote classification now share one domain
+  rule; runtime container identity no longer resides with logical identities.
 
 ## Scope and Non-goals
 

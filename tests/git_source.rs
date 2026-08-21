@@ -6,10 +6,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use pneuma::adapters::git_source::{
     CloneRepositoryError, CreateCheckoutError, ResolveBranchError, ResolveCommitError,
-    cleanup_checkout, clone_repository, create_checkout, ensure_checkout, is_remote_repository,
-    resolve_branch, resolve_commit,
+    cleanup_checkout, clone_repository, create_checkout, ensure_checkout, resolve_branch,
+    resolve_commit,
 };
-use pneuma::domain::git::CommitSha;
+use pneuma::domain::git::{CommitSha, RepositoryKind};
 
 #[test]
 fn resolves_branches_tags_and_abbreviated_shas_without_changing_the_repository() {
@@ -152,14 +152,19 @@ fn replaces_a_checkout_at_a_different_commit() {
 
 #[test]
 fn classifies_remote_and_local_repositories() {
-    assert!(is_remote_repository(
-        "https://github.com/vitoraalmeida/vitoralmeida.tech.git"
-    ));
-    assert!(is_remote_repository(
-        "git@github.com:vitoraalmeida/vitoralmeida.tech.git"
-    ));
-    assert!(!is_remote_repository("/srv/checkouts/vitoralmeida.tech"));
-    assert!(!is_remote_repository("."));
+    assert_eq!(
+        RepositoryKind::from_location("https://github.com/vitoraalmeida/vitoralmeida.tech.git"),
+        RepositoryKind::Remote
+    );
+    assert_eq!(
+        RepositoryKind::from_location("git@github.com:vitoraalmeida/vitoralmeida.tech.git"),
+        RepositoryKind::Remote
+    );
+    assert_eq!(
+        RepositoryKind::from_location("/srv/checkouts/vitoralmeida.tech"),
+        RepositoryKind::Local
+    );
+    assert_eq!(RepositoryKind::from_location("."), RepositoryKind::Local);
 }
 
 #[test]

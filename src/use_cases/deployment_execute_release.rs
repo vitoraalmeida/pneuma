@@ -696,7 +696,7 @@ fn finish_failed_deployment(
 fn failure_needing_persistence(
     code: &'static str,
     source: impl Error + 'static,
-    container_id: Option<&crate::domain::identity::ContainerId>,
+    container_id: Option<&crate::domain::runtime::ContainerId>,
     runtime_id: Option<&RuntimeInstanceId>,
 ) -> FailedExecution {
     let resources = match (container_id, runtime_id) {
@@ -716,7 +716,7 @@ fn failure_needing_persistence(
 fn candidate_failure(
     code: &'static str,
     source: impl Error + 'static,
-    container_id: Option<&crate::domain::identity::ContainerId>,
+    container_id: Option<&crate::domain::runtime::ContainerId>,
     runtime_id: Option<&RuntimeInstanceId>,
     unit_name: Option<&str>,
     port_reserved: bool,
@@ -746,7 +746,7 @@ fn candidate_failure(
 fn failure_already_persisted(
     code: &'static str,
     source: impl Error + 'static,
-    container_id: &crate::domain::identity::ContainerId,
+    container_id: &crate::domain::runtime::ContainerId,
     runtime_id: &RuntimeInstanceId,
 ) -> FailedExecution {
     FailedExecution {

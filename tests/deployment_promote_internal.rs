@@ -5,8 +5,8 @@ use std::thread;
 
 use pneuma::adapters::database;
 use pneuma::domain::deployment::DeploymentType;
-use pneuma::domain::identity::ContainerId;
 use pneuma::domain::release::OciArtifact;
+use pneuma::domain::runtime::ContainerId;
 use pneuma::domain::runtime::{
     ContainerPort, HealthCheckPath, HealthCheckSpecification, HealthCheckStatus,
 };

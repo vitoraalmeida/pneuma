@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 
 use pneuma::adapters::database;
 use pneuma::domain::deployment::DeploymentType;
-use pneuma::domain::identity::ContainerId;
 use pneuma::domain::release::OciArtifact;
+use pneuma::domain::runtime::ContainerId;
 use pneuma::domain::runtime::{ContainerPort, ObservedRuntimeState, RuntimeState};
 use pneuma::use_cases::application_import::import_application;
 use pneuma::use_cases::deployment_create::create_deployment;

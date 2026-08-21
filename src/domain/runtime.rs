@@ -2,7 +2,35 @@ use std::error::Error;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use crate::domain::identity::{ApplicationId, ContainerId, DeploymentId, RuntimeInstanceId};
+use crate::domain::identity::{ApplicationId, DeploymentId, RuntimeInstanceId};
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+// Preserves adapter-provided container text separately from logical runtime identity.
+pub struct ContainerId(String);
+
+impl ContainerId {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for ContainerId {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl From<&str> for ContainerId {
+    fn from(value: &str) -> Self {
+        Self(value.to_owned())
+    }
+}
+
+impl fmt::Display for ContainerId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ObservedRuntimeState {
@@ -308,4 +336,22 @@ fn validate_loopback_endpoint(endpoint: SocketAddr) -> Result<(), RuntimeEndpoin
         return Err(RuntimeEndpointError::NotIpv4Loopback { endpoint });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ContainerId;
+    use crate::domain::identity::{ApplicationId, DeploymentId};
+
+    #[test]
+    fn logical_and_external_id_apis_are_not_interchangeable() {
+        fn deployment_for(_application_id: ApplicationId, _deployment_id: DeploymentId) {}
+        fn observe_container(_container_id: ContainerId) {}
+
+        deployment_for(
+            ApplicationId::from("application"),
+            DeploymentId::from("deployment"),
+        );
+        observe_container(ContainerId::from("container"));
+    }
 }

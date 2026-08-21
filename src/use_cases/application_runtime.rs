@@ -14,8 +14,10 @@ use crate::adapters::systemd_quadlet::{
     QuadletError, container_name, start as start_unit, stop as stop_unit, unit_exists, unit_name,
 };
 use crate::domain::application::DesiredRuntimeState;
-use crate::domain::identity::{ApplicationId, ContainerId, RuntimeInstanceId};
-use crate::domain::runtime::{ContainerObservation, ObservedRuntimeState, RuntimeInstance};
+use crate::domain::identity::{ApplicationId, RuntimeInstanceId};
+use crate::domain::runtime::{
+    ContainerId, ContainerObservation, ObservedRuntimeState, RuntimeInstance,
+};
 
 #[derive(Debug, PartialEq, Eq)]
 // Combines persisted operator intent with the latest observed runtime state for status commands.

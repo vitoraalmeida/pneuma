@@ -15,9 +15,6 @@ pub struct DeploymentId(String);
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RuntimeInstanceId(String);
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct ContainerId(String);
-
 impl SystemId {
     // Preserves legacy SQLite text without imposing a new identifier format.
     pub fn as_str(&self) -> &str {
@@ -48,13 +45,6 @@ impl DeploymentId {
 
 impl RuntimeInstanceId {
     // Preserves legacy SQLite text without imposing a new identifier format.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl ContainerId {
-    // Preserves adapter-provided container text separately from logical IDs.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -150,27 +140,9 @@ impl fmt::Display for RuntimeInstanceId {
     }
 }
 
-impl From<String> for ContainerId {
-    fn from(value: String) -> Self {
-        Self(value)
-    }
-}
-
-impl From<&str> for ContainerId {
-    fn from(value: &str) -> Self {
-        Self(value.to_owned())
-    }
-}
-
-impl fmt::Display for ContainerId {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{ApplicationId, ContainerId, DeploymentId};
+    use super::ApplicationId;
 
     #[test]
     fn preserves_legacy_text_without_a_format_requirement() {
@@ -178,17 +150,5 @@ mod tests {
 
         assert_eq!(application_id.as_str(), "legacy value/with punctuation");
         assert_eq!(application_id.to_string(), "legacy value/with punctuation");
-    }
-
-    #[test]
-    fn logical_and_external_id_apis_are_not_interchangeable() {
-        fn deployment_for(_application_id: ApplicationId, _deployment_id: DeploymentId) {}
-        fn observe_container(_container_id: ContainerId) {}
-
-        deployment_for(
-            ApplicationId::from("application"),
-            DeploymentId::from("deployment"),
-        );
-        observe_container(ContainerId::from("container"));
     }
 }

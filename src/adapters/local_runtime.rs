@@ -4,8 +4,8 @@ use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::process::Command;
 
-use crate::domain::identity::ContainerId;
 use crate::domain::reconciliation::NamedContainerObservation;
+use crate::domain::runtime::ContainerId;
 use crate::domain::runtime::{ContainerObservation, ObservedRuntimeState};
 
 #[derive(Debug, PartialEq, Eq)]

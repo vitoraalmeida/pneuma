@@ -6,10 +6,10 @@ use std::net::{Ipv4Addr, SocketAddr};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::adapters::stores::PersistenceOutcome;
-use crate::domain::identity::{ApplicationId, ContainerId, DeploymentId, RuntimeInstanceId};
+use crate::domain::identity::{ApplicationId, DeploymentId, RuntimeInstanceId};
 use crate::domain::runtime::{
-    ContainerObservation, ExpectedRuntimeEndpoint, ObservedRuntimeState, PreviousRuntime,
-    RuntimeInstance, RuntimeRegistration, RuntimeRetirement, RuntimeState,
+    ContainerId, ContainerObservation, ExpectedRuntimeEndpoint, ObservedRuntimeState,
+    PreviousRuntime, RuntimeInstance, RuntimeRegistration, RuntimeRetirement, RuntimeState,
 };
 
 #[derive(Debug)]

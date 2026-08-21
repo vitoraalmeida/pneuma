@@ -1,11 +1,10 @@
-use pneuma::domain::application::{
-    ApplicationName, ApplicationSource, RelativeManifestPath, RepositoryKind,
-};
+use pneuma::domain::application::ApplicationName;
 use pneuma::domain::exposure::{
     ConfirmedRoute, DomainName, ExposureConfigurationVersion, ExposureDiagnostic, ExposureIntent,
     ExposureMaterialization, ExposureMaterializationState, Visibility,
 };
 use pneuma::domain::git::CommitSha;
+use pneuma::domain::git::{ApplicationSource, RelativeManifestPath, RepositoryKind};
 use pneuma::domain::identity::RuntimeInstanceId;
 use pneuma::domain::release::{OciArtifact, OciRepository};
 use pneuma::domain::runtime::{

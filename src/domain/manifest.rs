@@ -6,9 +6,10 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::domain::application::{ApplicationName, RelativeManifestPath};
+use crate::domain::application::ApplicationName;
 use crate::domain::delivery::DeliveryType;
 use crate::domain::exposure::{DomainName, ExposureIntent, Visibility};
+use crate::domain::git::RelativeManifestPath;
 use crate::domain::release::OciRepository;
 use crate::domain::runtime::{ContainerPort, HealthCheckPath, HealthCheckStatus};
 use crate::domain::system::SystemName;

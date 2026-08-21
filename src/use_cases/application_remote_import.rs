@@ -6,10 +6,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::Connection;
 
-use crate::adapters::git_source::{
-    CloneRepositoryError, cleanup_checkout, clone_repository, is_remote_repository,
-};
+use crate::adapters::git_source::{CloneRepositoryError, cleanup_checkout, clone_repository};
 use crate::domain::application::ApplicationSummary;
+use crate::domain::git::RepositoryKind;
 use crate::domain::system::{InvalidSystemName, SystemName};
 use crate::use_cases::application_import::{ImportError, import_application};
 
@@ -60,7 +59,7 @@ pub fn import_remote_application(
     system_name: Option<&str>,
     manifest_path: Option<&str>,
 ) -> Result<ApplicationSummary, RemoteImportError> {
-    if !is_remote_repository(repository) {
+    if RepositoryKind::from_location(repository) != RepositoryKind::Remote {
         return Err(RemoteImportError::InvalidRepository);
     }
     let system_name = system_name

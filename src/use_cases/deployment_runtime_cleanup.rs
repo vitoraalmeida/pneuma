@@ -7,8 +7,8 @@ use crate::adapters::local_runtime::{ControlContainerError, remove_container};
 use crate::adapters::port_allocator::{PortAllocationError, release_port};
 use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
 use crate::adapters::systemd_quadlet::{QuadletError, daemon_reload, remove_unit, stop, unit_name};
-use crate::domain::identity::{ContainerId, RuntimeInstanceId};
-use crate::domain::runtime::{PreviousRuntime, RuntimeState};
+use crate::domain::identity::RuntimeInstanceId;
+use crate::domain::runtime::{ContainerId, PreviousRuntime, RuntimeState};
 
 #[derive(Debug, Clone)]
 // Tracks only resources proven to belong to a candidate for safe compensation.

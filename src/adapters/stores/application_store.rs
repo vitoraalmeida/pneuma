@@ -6,11 +6,12 @@ use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 
 use crate::adapters::stores::PersistenceOutcome;
 use crate::domain::application::{
-    Application, ApplicationDeploymentSpecification, ApplicationName, ApplicationSource,
-    ApplicationSummary, DesiredRuntimeState, RelativeManifestPath, RepositoryKind,
+    Application, ApplicationDeploymentSpecification, ApplicationName, ApplicationSummary,
+    DesiredRuntimeState,
 };
 use crate::domain::delivery::{DeliverySpecification, DeliveryType};
 use crate::domain::exposure::Visibility;
+use crate::domain::git::{ApplicationSource, RelativeManifestPath, RepositoryKind};
 use crate::domain::identity::{ApplicationId, DeploymentId, SystemId};
 use crate::domain::release::OciRepository;
 use crate::domain::runtime::{
