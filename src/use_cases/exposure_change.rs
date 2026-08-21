@@ -332,10 +332,8 @@ fn make_public(
             },
         );
     };
-    let observation = match observe_container(
-        runtime.external_runtime_id.as_str(),
-        runtime.container_port.get(),
-    ) {
+    let observation = match observe_container(&runtime.external_runtime_id, runtime.container_port)
+    {
         Ok(observation) => observation,
         Err(source) => {
             let message = source.to_string();
@@ -395,9 +393,9 @@ fn make_public(
                 reason: "missing deployment specification".to_owned(),
             })?;
     if let Err(source) = check_external_health(
-        domain.as_str(),
-        specification.runtime.health_check().path().as_str(),
-        specification.runtime.health_check().expected_status().get(),
+        &domain,
+        specification.runtime.health_check().path(),
+        specification.runtime.health_check().expected_status(),
     ) {
         let recovery_failed =
             restore_materialized_caddy_fragment(&materialized, caddyfile_path).is_err();

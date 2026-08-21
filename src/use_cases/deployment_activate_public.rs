@@ -213,9 +213,9 @@ pub(crate) fn activate_public_candidate(
     );
 
     if let Err(source) = check_external_health(
-        exposure.domain.as_str(),
-        health_check.path().as_str(),
-        health_check.expected_status().get(),
+        &exposure.domain,
+        health_check.path(),
+        health_check.expected_status(),
     ) {
         let (source, outcome) = rollback_public_route(source, &materialized, caddyfile_path);
 

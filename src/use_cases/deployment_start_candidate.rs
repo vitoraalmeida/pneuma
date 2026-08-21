@@ -13,8 +13,7 @@ use crate::domain::deployment::DeploymentTransition;
 use crate::domain::identity::{ApplicationId, DeploymentId};
 use crate::domain::release::OciArtifact;
 use crate::domain::runtime::{
-    ContainerId, ExpectedRuntimeEndpoint, ObservedRuntimeState, RuntimeInstance,
-    RuntimeSpecification,
+    ExpectedRuntimeEndpoint, HostPort, ObservedRuntimeState, RuntimeInstance, RuntimeSpecification,
 };
 use crate::use_cases::deployment_register_runtime::register_candidate_runtime;
 use crate::use_cases::deployment_runtime_cleanup::CandidateResources;
@@ -25,7 +24,7 @@ pub(crate) struct StartedCandidate {
     pub runtime: RuntimeInstance,
     pub container_name: String,
     pub unit_name: String,
-    pub port: u16,
+    pub port: HostPort,
 }
 
 // Groups the persisted deployment context and immutable artifact inputs for candidate startup.
@@ -126,12 +125,11 @@ pub(crate) fn start_candidate(
     let mut resources = CandidateResources::empty().with_port();
 
     let unit = write_unit(
-        application_name.as_str(),
-        deployment_id.as_str(),
-        artifact.reference(),
-        runtime.container_port().get(),
+        application_name,
+        deployment_id,
+        artifact,
+        runtime.container_port(),
         host_port,
-        artifact.digest(),
     )
     .map_err(|source| CandidateStartError::UnitCreation {
         source,
@@ -149,19 +147,20 @@ pub(crate) fn start_candidate(
         resources: Box::new(resources.clone()),
     })?;
 
-    let name = container_name(application_name.as_str(), deployment_id.as_str());
-    let container_id = ContainerId::from(resolve_container_id(&name).map_err(|source| {
-        CandidateStartError::ContainerResolution {
+    let name = container_name(application_name, deployment_id);
+    let container_id =
+        resolve_container_id(&name).map_err(|source| CandidateStartError::ContainerResolution {
             source: Box::new(source),
             resources: Box::new(resources.clone()),
-        }
-    })?);
+        })?;
     resources = resources.with_container_mut(&container_id);
 
-    let observation = observe_container(container_id.as_str(), runtime.container_port().get())
-        .map_err(|source| CandidateStartError::ContainerObservation {
-            source: Box::new(source),
-            resources: Box::new(resources.clone()),
+    let observation =
+        observe_container(&container_id, runtime.container_port()).map_err(|source| {
+            CandidateStartError::ContainerObservation {
+                source: Box::new(source),
+                resources: Box::new(resources.clone()),
+            }
         })?;
 
     if *observation.state() != ObservedRuntimeState::Running {

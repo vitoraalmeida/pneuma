@@ -138,12 +138,14 @@ fn reconcile_cleans_a_verified_candidate_only_after_unit_identity_is_proven() {
     fs::write(
         quadlets.join(format!("pneuma-another-{}.container", "3".repeat(32))),
         pneuma::adapters::systemd_quadlet::canonical_unit_contents(
-            "another",
-            &"3".repeat(32),
-            &format!("registry.example/team/another@{digest}"),
-            8080,
-            30000,
-            &digest,
+            &pneuma::domain::application::ApplicationName::new("another").unwrap(),
+            &pneuma::domain::identity::DeploymentId::from("3".repeat(32)),
+            &pneuma::domain::release::OciArtifact::parse(&format!(
+                "registry.example/team/another@{digest}"
+            ))
+            .unwrap(),
+            pneuma::domain::runtime::ContainerPort::new(8080).unwrap(),
+            pneuma::domain::runtime::HostPort::new(30000).unwrap(),
         ),
     )
     .unwrap();

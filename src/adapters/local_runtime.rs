@@ -5,9 +5,9 @@ use std::net::SocketAddr;
 use std::process::Command;
 
 use crate::domain::reconciliation::NamedContainerObservation;
-use crate::domain::runtime::ContainerId;
 use crate::domain::runtime::{
-    ContainerObservation, ObservedRuntimeState, validate_loopback_endpoint,
+    ContainerId, ContainerObservation, ContainerPort, ObservedRuntimeState,
+    validate_loopback_endpoint,
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -34,8 +34,6 @@ pub enum ControlContainerError {
 
 #[derive(Debug)]
 pub enum ObserveContainerError {
-    InvalidContainerId,
-    InvalidPort,
     Execute {
         operation: &'static str,
         source: io::Error,
@@ -130,10 +128,6 @@ impl Error for ControlContainerError {
 impl fmt::Display for ObserveContainerError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidContainerId => {
-                formatter.write_str("container ID must be a non-empty hexadecimal value")
-            }
-            Self::InvalidPort => formatter.write_str("container port must be between 1 and 65535"),
             Self::Execute { operation, source } => {
                 write!(
                     formatter,
@@ -169,11 +163,7 @@ impl Error for ObserveContainerError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Execute { source, .. } => Some(source),
-            Self::InvalidContainerId
-            | Self::InvalidPort
-            | Self::Podman { .. }
-            | Self::InvalidState { .. }
-            | Self::InvalidEndpoint { .. } => None,
+            Self::Podman { .. } | Self::InvalidState { .. } | Self::InvalidEndpoint { .. } => None,
         }
     }
 }
@@ -256,7 +246,7 @@ pub fn start_container(
 }
 
 // Resolves Podman's current container ID by stable name because recreation changes external IDs.
-pub fn resolve_container_id(name: &str) -> Result<String, ResolveContainerError> {
+pub fn resolve_container_id(name: &str) -> Result<ContainerId, ResolveContainerError> {
     if name.is_empty() {
         return Err(ResolveContainerError::EmptyName);
     }
@@ -279,13 +269,13 @@ pub fn resolve_container_id(name: &str) -> Result<String, ResolveContainerError>
             name: name.to_owned(),
         });
     }
-    Ok(id.to_owned())
+    Ok(ContainerId::from(id.to_owned()))
 }
 
 // Observes a deterministic container name without treating ordinary absence as an adapter failure.
 pub fn observe_named_container(
     name: &str,
-    container_port: u16,
+    container_port: ContainerPort,
 ) -> Result<NamedContainerObservation, ObserveNamedContainerError> {
     if name.is_empty() {
         return Err(ObserveNamedContainerError::EmptyName);
@@ -336,15 +326,22 @@ pub fn observe_named_container(
             name: name.to_owned(),
         });
     };
-    if !ContainerId::is_valid(id) || observed_name.is_empty() || image_reference.is_empty() {
+    let id = if ContainerId::is_valid(id) {
+        ContainerId::from(id.to_owned())
+    } else {
+        return Err(ObserveNamedContainerError::InvalidOutput {
+            name: name.to_owned(),
+        });
+    };
+    if observed_name.is_empty() || image_reference.is_empty() {
         return Err(ObserveNamedContainerError::InvalidOutput {
             name: name.to_owned(),
         });
     }
-    let observation = observe_container(id, container_port)
+    let observation = observe_container(&id, container_port)
         .map_err(|source| ObserveNamedContainerError::Observe { source })?;
     Ok(NamedContainerObservation::Present {
-        id: ContainerId::from(id),
+        id,
         name: observed_name.to_owned(),
         image_reference: image_reference.to_owned(),
         application_label: (!application_label.is_empty()).then(|| application_label.to_owned()),
@@ -367,18 +364,11 @@ pub fn remove_container(
 
 // Observes container state and exposes an endpoint only while Podman confirms it is running.
 pub fn observe_container(
-    container_id: &str,
-    container_port: u16,
+    container_id: &ContainerId,
+    container_port: ContainerPort,
 ) -> Result<ContainerObservation, ObserveContainerError> {
-    if !ContainerId::is_valid(container_id) {
-        return Err(ObserveContainerError::InvalidContainerId);
-    }
-    if container_port == 0 {
-        return Err(ObserveContainerError::InvalidPort);
-    }
-
     let exists = Command::new("podman")
-        .args(["container", "exists", container_id])
+        .args(["container", "exists", container_id.as_str()])
         .output()
         .map_err(|source| ObserveContainerError::Execute {
             operation: "checking for",
@@ -388,36 +378,50 @@ pub fn observe_container(
         return Ok(ContainerObservation::missing());
     }
     if !exists.status.success() {
-        return Err(observation_failure("checking for", container_id, exists));
+        return Err(observation_failure(
+            "checking for",
+            container_id.as_str(),
+            exists,
+        ));
     }
 
     let status = Command::new("podman")
-        .args(["inspect", "--format", "{{.State.Status}}", container_id])
+        .args([
+            "inspect",
+            "--format",
+            "{{.State.Status}}",
+            container_id.as_str(),
+        ])
         .output()
         .map_err(|source| ObserveContainerError::Execute {
             operation: "observing",
             source,
         })?;
     if !status.status.success() {
-        return Err(observation_failure("observing", container_id, status));
+        return Err(observation_failure(
+            "observing",
+            container_id.as_str(),
+            status,
+        ));
     }
     let status = String::from_utf8_lossy(&status.stdout).trim().to_owned();
     if status.is_empty() {
         return Err(ObserveContainerError::InvalidState {
-            container_id: container_id.to_owned(),
+            container_id: container_id.as_str().to_owned(),
         });
     }
     let state = observed_state(&status);
     if state == ObservedRuntimeState::Running {
-        ContainerObservation::running(observe_endpoint(container_id, container_port)?).map_err(
-            |_| ObserveContainerError::InvalidEndpoint {
-                container_id: container_id.to_owned(),
+        let endpoint = observe_endpoint(container_id.as_str(), container_port.get())?;
+        ContainerObservation::running(endpoint).map_err(|_| {
+            ObserveContainerError::InvalidEndpoint {
+                container_id: container_id.as_str().to_owned(),
                 output: "Podman returned a non-loopback endpoint".to_owned(),
-            },
-        )
+            }
+        })
     } else {
         ContainerObservation::not_running(state).map_err(|_| ObserveContainerError::InvalidState {
-            container_id: container_id.to_owned(),
+            container_id: container_id.as_str().to_owned(),
         })
     }
 }

@@ -3,7 +3,8 @@ use std::fmt;
 use std::io;
 use std::process::Command;
 
-use crate::domain::exposure::is_valid_domain;
+use crate::domain::exposure::DomainName;
+use crate::domain::runtime::{HealthCheckPath, HealthCheckStatus};
 
 #[derive(Debug, PartialEq, Eq)]
 // Captures the confirmed public HTTP status for exposure materialization evidence.
@@ -13,9 +14,6 @@ pub struct ExternalHealthCheck {
 
 #[derive(Debug)]
 pub enum ExternalHealthCheckError {
-    InvalidDomain,
-    InvalidPath,
-    InvalidExpectedStatus,
     Execute { source: io::Error },
     RequestFailed { stderr: String },
     InvalidResponse { stdout: String },
@@ -25,12 +23,6 @@ pub enum ExternalHealthCheckError {
 impl fmt::Display for ExternalHealthCheckError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidDomain => formatter.write_str("external health domain is invalid"),
-            Self::InvalidPath => formatter
-                .write_str("external health path must start with `/` and contain no whitespace"),
-            Self::InvalidExpectedStatus => {
-                formatter.write_str("expected HTTP status must be between 100 and 599")
-            }
             Self::Execute { source } => {
                 write!(
                     formatter,
@@ -59,10 +51,7 @@ impl Error for ExternalHealthCheckError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Execute { source } => Some(source),
-            Self::InvalidDomain
-            | Self::InvalidPath
-            | Self::InvalidExpectedStatus
-            | Self::RequestFailed { .. }
+            Self::RequestFailed { .. }
             | Self::InvalidResponse { .. }
             | Self::UnexpectedStatus { .. } => None,
         }
@@ -71,20 +60,12 @@ impl Error for ExternalHealthCheckError {
 
 // Checks the public HTTPS listener through local Caddy, verifying TLS and routing without external DNS.
 pub fn check_external_health(
-    domain: &str,
-    path: &str,
-    expected_status: u16,
+    domain: &DomainName,
+    path: &HealthCheckPath,
+    expected_status: HealthCheckStatus,
 ) -> Result<ExternalHealthCheck, ExternalHealthCheckError> {
-    if !is_valid_domain(domain) {
-        return Err(ExternalHealthCheckError::InvalidDomain);
-    }
-    if !path.starts_with('/') || path.chars().any(char::is_whitespace) {
-        return Err(ExternalHealthCheckError::InvalidPath);
-    }
-    if !(100..=599).contains(&expected_status) {
-        return Err(ExternalHealthCheckError::InvalidExpectedStatus);
-    }
-
+    let domain = domain.as_str();
+    let path = path.as_str();
     let url = format!("https://{domain}{path}");
     let resolve = format!("{domain}:443:127.0.0.1");
     let output = Command::new("curl")
@@ -128,9 +109,9 @@ pub fn check_external_health(
     let Some(response_status) = response_status else {
         return Err(ExternalHealthCheckError::InvalidResponse { stdout });
     };
-    if response_status != expected_status {
+    if response_status != expected_status.get() {
         return Err(ExternalHealthCheckError::UnexpectedStatus {
-            expected: expected_status,
+            expected: expected_status.get(),
             actual: response_status,
         });
     }

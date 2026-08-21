@@ -32,7 +32,7 @@ use crate::domain::reconciliation::{
     ActiveRuntime, CaddyFragmentObservation, NamedContainerObservation, ReconciliationInput,
     ReconciliationObservation,
 };
-use crate::domain::runtime::ObservedRuntimeState;
+use crate::domain::runtime::{InvalidHostPort, ObservedRuntimeState};
 use crate::use_cases::deployment_runtime_cleanup::cleanup_failed_candidate;
 use crate::use_cases::deployment_transition::fail_deployment;
 
@@ -96,6 +96,9 @@ pub enum ReconciliationReadError {
     ObserveCaddy {
         source: ObserveCaddyFragmentError,
     },
+    InvalidExpectedPort {
+        source: InvalidHostPort,
+    },
     NotConverged {
         reason: String,
     },
@@ -146,6 +149,10 @@ impl fmt::Display for ReconciliationReadError {
             Self::ObserveCaddy { source } => {
                 write!(formatter, "failed to observe Caddy fragment: {source}")
             }
+            Self::InvalidExpectedPort { source } => write!(
+                formatter,
+                "runtime has an invalid expected host port: {source}"
+            ),
             Self::NotConverged { reason } => {
                 write!(formatter, "reconciliation is not yet converged: {reason}")
             }
@@ -167,6 +174,7 @@ impl Error for ReconciliationReadError {
             Self::ObserveNamedContainer { source } => Some(source),
             Self::ObserveQuadlet { source } => Some(source),
             Self::ObserveCaddy { source } => Some(source),
+            Self::InvalidExpectedPort { source } => Some(source),
             Self::ApplicationNotFound { .. } | Self::NotConverged { .. } => None,
         }
     }
@@ -270,12 +278,14 @@ fn rematerialize_missing_runtime(
         return Ok(None);
     };
     let expected_unit = canonical_unit_contents(
-        input.application.name.as_str(),
-        active.deployment.id.as_str(),
-        active.release.artifact.reference(),
-        runtime.container_port.get(),
-        runtime.expected_endpoint.socket_addr().port(),
-        active.release.artifact.digest(),
+        &input.application.name,
+        &active.deployment.id,
+        &active.release.artifact,
+        runtime.container_port,
+        runtime
+            .expected_endpoint
+            .host_port()
+            .map_err(|source| ReconciliationReadError::InvalidExpectedPort { source })?,
     );
     let canonical_source_is_present = observation.quadlet_source
         == (crate::domain::reconciliation::QuadletSourceObservation::Present {
@@ -297,18 +307,17 @@ fn rematerialize_missing_runtime(
     {
         return Ok(None);
     }
-    let unit = unit_name(
-        input.application.name.as_str(),
-        active.deployment.id.as_str(),
-    );
+    let unit = unit_name(&input.application.name, &active.deployment.id);
     if !canonical_source_is_present {
         write_unit(
-            input.application.name.as_str(),
-            active.deployment.id.as_str(),
-            active.release.artifact.reference(),
-            runtime.container_port.get(),
-            runtime.expected_endpoint.socket_addr().port(),
-            active.release.artifact.digest(),
+            &input.application.name,
+            &active.deployment.id,
+            &active.release.artifact,
+            runtime.container_port,
+            runtime
+                .expected_endpoint
+                .host_port()
+                .map_err(|source| ReconciliationReadError::InvalidExpectedPort { source })?,
         )
         .map_err(|source| ReconciliationReadError::ObserveQuadlet { source })?;
         daemon_reload().map_err(|source| ReconciliationReadError::ObserveQuadlet { source })?;
@@ -322,11 +331,8 @@ fn rematerialize_missing_runtime(
         image_digest_label,
         observation: container_observation,
     } = observe_named_container(
-        &container_name(
-            input.application.name.as_str(),
-            active.deployment.id.as_str(),
-        ),
-        runtime.container_port.get(),
+        &container_name(&input.application.name, &active.deployment.id),
+        runtime.container_port,
     )
     .map_err(|source| ReconciliationReadError::ObserveNamedContainer { source })?
     else {
@@ -336,10 +342,7 @@ fn rematerialize_missing_runtime(
     };
     if *container_observation.state() != ObservedRuntimeState::Running
         || name.trim_start_matches('/')
-            != container_name(
-                input.application.name.as_str(),
-                active.deployment.id.as_str(),
-            )
+            != container_name(&input.application.name, &active.deployment.id)
         || image_reference != active.release.artifact.reference()
         || application_label.as_deref() != Some(input.application.name.as_str())
         || image_digest_label.as_deref() != Some(active.release.artifact.digest())
@@ -417,14 +420,16 @@ fn recover_interrupted_deployment(
             };
             let release = release_store::load_release_by_id(connection, &deployment.release_id)
                 .map_err(|source| ReconciliationReadError::Release { source })?;
-            let unit = unit_name(application.name.as_str(), deployment.id.as_str());
+            let unit = unit_name(&application.name, &deployment.id);
             let expected_unit = canonical_unit_contents(
-                application.name.as_str(),
-                deployment.id.as_str(),
-                release.artifact.reference(),
-                runtime.container_port.get(),
-                runtime.expected_endpoint.socket_addr().port(),
-                release.artifact.digest(),
+                &application.name,
+                &deployment.id,
+                &release.artifact,
+                runtime.container_port,
+                runtime
+                    .expected_endpoint
+                    .host_port()
+                    .map_err(|source| ReconciliationReadError::InvalidExpectedPort { source })?,
             );
             let unit_proven = observe_unit_source(&unit)
                 .map_err(|source| ReconciliationReadError::ObserveQuadlet { source })?
@@ -432,8 +437,8 @@ fn recover_interrupted_deployment(
                     contents: expected_unit,
                 };
             let container_proven = match observe_named_container(
-                &container_name(application.name.as_str(), deployment.id.as_str()),
-                runtime.container_port.get(),
+                &container_name(&application.name, &deployment.id),
+                runtime.container_port,
             )
             .map_err(|source| ReconciliationReadError::ObserveNamedContainer { source })?
             {
@@ -448,7 +453,7 @@ fn recover_interrupted_deployment(
                 } => {
                     id == runtime.external_runtime_id
                         && name.trim_start_matches('/')
-                            == container_name(application.name.as_str(), deployment.id.as_str())
+                            == container_name(&application.name, &deployment.id)
                         && image_reference == release.artifact.reference()
                         && application_label.as_deref() == Some(application.name.as_str())
                         && image_digest_label.as_deref() == Some(release.artifact.digest())
@@ -776,9 +781,9 @@ fn reconcile_public_exposure(
                 reason: "application has no deployment specification for public health".to_owned(),
             })?;
     if let Err(source) = check_external_health(
-        domain.as_str(),
-        specification.runtime.health_check().path().as_str(),
-        specification.runtime.health_check().expected_status().get(),
+        domain,
+        specification.runtime.health_check().path(),
+        specification.runtime.health_check().expected_status(),
     ) {
         let recovery_failed =
             restore_materialized_caddy_fragment(&materialized, caddyfile_path).is_err();
@@ -927,10 +932,7 @@ fn repair_recreated_runtime(
     if *observation.recorded_container.state() != ObservedRuntimeState::Missing
         || *container_observation.state() != ObservedRuntimeState::Running
         || name.trim_start_matches('/')
-            != container_name(
-                input.application.name.as_str(),
-                active.deployment.id.as_str(),
-            )
+            != container_name(&input.application.name, &active.deployment.id)
         || image_reference != active.release.artifact.reference()
         || application_label.as_deref() != Some(input.application.name.as_str())
         || image_digest_label.as_deref() != Some(active.release.artifact.digest())
@@ -940,12 +942,14 @@ fn repair_recreated_runtime(
         return Ok(None);
     }
     let expected_unit = canonical_unit_contents(
-        input.application.name.as_str(),
-        active.deployment.id.as_str(),
-        active.release.artifact.reference(),
-        runtime.container_port.get(),
-        runtime.expected_endpoint.socket_addr().port(),
-        active.release.artifact.digest(),
+        &input.application.name,
+        &active.deployment.id,
+        &active.release.artifact,
+        runtime.container_port,
+        runtime
+            .expected_endpoint
+            .host_port()
+            .map_err(|source| ReconciliationReadError::InvalidExpectedPort { source })?,
     );
     if observation.quadlet_source
         != (crate::domain::reconciliation::QuadletSourceObservation::Present {
@@ -1041,21 +1045,13 @@ pub fn observe_reconciliation_input(
     let Some(runtime) = &active.runtime else {
         return Ok(None);
     };
-    let recorded_container = observe_container(
-        runtime.external_runtime_id.as_str(),
-        runtime.container_port.get(),
-    )
-    .map_err(|source| ReconciliationReadError::ObserveContainer { source })?;
-    let name = container_name(
-        input.application.name.as_str(),
-        active.deployment.id.as_str(),
-    );
-    let named_container = observe_named_container(&name, runtime.container_port.get())
+    let recorded_container =
+        observe_container(&runtime.external_runtime_id, runtime.container_port)
+            .map_err(|source| ReconciliationReadError::ObserveContainer { source })?;
+    let name = container_name(&input.application.name, &active.deployment.id);
+    let named_container = observe_named_container(&name, runtime.container_port)
         .map_err(|source| ReconciliationReadError::ObserveNamedContainer { source })?;
-    let unit = unit_name(
-        input.application.name.as_str(),
-        active.deployment.id.as_str(),
-    );
+    let unit = unit_name(&input.application.name, &active.deployment.id);
     let quadlet_source = observe_unit_source(&unit)
         .map_err(|source| ReconciliationReadError::ObserveQuadlet { source })?;
     let systemd_unit = observe_generated_unit(&unit)

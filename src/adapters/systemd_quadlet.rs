@@ -6,8 +6,11 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::domain::application::ApplicationName;
+use crate::domain::identity::DeploymentId;
 use crate::domain::reconciliation::{QuadletSourceObservation, SystemdUnitObservation};
-use crate::domain::runtime::stable_runtime_name;
+use crate::domain::release::OciArtifact;
+use crate::domain::runtime::{ContainerPort, HostPort, stable_runtime_name};
 
 pub const QUADLET_DIRECTORY_ENVIRONMENT_VARIABLE: &str = "PNEUMA_QUADLET_DIR";
 
@@ -104,38 +107,42 @@ impl Error for QuadletError {
 }
 
 // Derives the stable Quadlet unit base name from the logical application and deployment identity.
-pub fn unit_name(application_name: &str, deployment_id: &str) -> String {
-    stable_runtime_name(application_name, deployment_id)
+pub fn unit_name(application_name: &ApplicationName, deployment_id: &DeploymentId) -> String {
+    stable_runtime_name(application_name.as_str(), deployment_id.as_str())
 }
 
 // Keeps the generated Podman container name aligned with the Quadlet unit identity.
-pub fn container_name(application_name: &str, deployment_id: &str) -> String {
-    stable_runtime_name(application_name, deployment_id)
+pub fn container_name(application_name: &ApplicationName, deployment_id: &DeploymentId) -> String {
+    stable_runtime_name(application_name.as_str(), deployment_id.as_str())
 }
 
 // Renders the exact unit representation used for both materialization and reconciliation checks.
 pub fn canonical_unit_contents(
-    application_name: &str,
-    deployment_id: &str,
-    image_reference: &str,
-    container_port: u16,
-    host_port: u16,
-    image_digest: &str,
+    application_name: &ApplicationName,
+    deployment_id: &DeploymentId,
+    artifact: &OciArtifact,
+    container_port: ContainerPort,
+    host_port: HostPort,
 ) -> String {
     format!(
-        "[Unit]\nDescription=Pneuma application {application_name}\n\n[Container]\nContainerName={}\nImage={image_reference}\nPublishPort=127.0.0.1:{host_port}:{container_port}\nLabel=io.pneuma.application={application_name}\nLabel=io.pneuma.image-digest={image_digest}\n\n[Service]\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n",
+        "[Unit]\nDescription=Pneuma application {}\n\n[Container]\nContainerName={}\nImage={}\nPublishPort=127.0.0.1:{}:{}\nLabel=io.pneuma.application={}\nLabel=io.pneuma.image-digest={}\n\n[Service]\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n",
+        application_name.as_str(),
         container_name(application_name, deployment_id),
+        artifact.reference(),
+        host_port.get(),
+        container_port.get(),
+        application_name.as_str(),
+        artifact.digest(),
     )
 }
 
 // Writes a rootless, loopback-bound Quadlet unit that systemd can recreate after Pneuma exits.
 pub fn write_unit(
-    application_name: &str,
-    deployment_id: &str,
-    image_reference: &str,
-    container_port: u16,
-    host_port: u16,
-    image_digest: &str,
+    application_name: &ApplicationName,
+    deployment_id: &DeploymentId,
+    artifact: &OciArtifact,
+    container_port: ContainerPort,
+    host_port: HostPort,
 ) -> Result<String, QuadletError> {
     let unit = unit_name(application_name, deployment_id);
     let directory = quadlet_directory()?;
@@ -144,10 +151,9 @@ pub fn write_unit(
     let content = canonical_unit_contents(
         application_name,
         deployment_id,
-        image_reference,
+        artifact,
         container_port,
         host_port,
-        image_digest,
     );
     fs::write(&path, content).map_err(|source| QuadletError::WriteUnit { path, source })?;
     Ok(unit)
