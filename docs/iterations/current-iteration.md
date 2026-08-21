@@ -2,70 +2,39 @@
 
 **Status:** completed
 
-**Base:** `d643a32` (`chore(release): v0.4.0`)
+**Base:** `d089700` (`docs(iteration): close v0.4.1 domain hardening sweep`)
 
-**Approved design:** [`domain-hardening-sweep.md`](../design/domain-hardening-sweep.md)
+**Approved design:** [`domain-type-closure.md`](../design/domain-type-closure.md)
 
-## Iteration - v0.4.1 Domain Hardening Sweep
+## Iteration - v0.4.2 Domain Type Closure
 
-Objective: strengthen the domain boundary by moving remaining business rules,
-vocabulary, and typed identities into their owning domain modules, eliminating
-primitive round-trips, and removing duplicate or drifted validation.
+Objective: close the remaining gaps where business vocabulary crossed use-case
+and adapter boundaries as primitive strings, even though validated domain types
+already existed, eliminating duplicate validation, re-parsing, and unwrapping.
 
 ## Checkpoints
 
-- [x] Centralize the loopback endpoint invariant and replace raw container-port
-  fields with `ContainerPort`. Make runtime registration accept
-  `ExpectedRuntimeEndpoint` and remove the hardcoded loopback address from
-  port-reservation queries.
-  Result: `RuntimeInstance`/`RuntimeRegistration` now carry `ContainerPort`;
-  `register_candidate_runtime` and `port_is_reserved` accept
-  `ExpectedRuntimeEndpoint`; the IPv6 `::1` drift in internal health checks is
-  fixed; Caddy and local runtime delegate loopback validation to the domain.
-- [x] Pass `&HealthCheckSpecification` into the internal health-check adapter and
-  fix the hardcoded `/` `200` probe used during visibility changes so it uses
-  the persisted runtime health specification.
-  Result: `check_internal_health` now receives `&HealthCheckSpecification`;
-  duplicated path/status validation is removed; `exposure_change` loads the
-  deployment specification and probes the persisted health path/status;
-  `ExposureDiagnostic::new` failures map to `InvalidDiagnostic`.
-- [x] Move `DeploymentTransition`, its edge mapping, and promotion eligibility
-  into `domain/deployment.rs`; move promotion/rollback target types out of
-  `deployment_store`; merge duplicate promoted-candidate types.
-  Result: `DeploymentTransition` and its `edge()` method live in the domain;
-  `PromotionTarget`/`RollbackTarget`/`PromotedCandidate` moved to
-  `domain/deployment.rs`; `PromotionTarget` owns a shared
-  `validate_promotion_candidate()` predicate and `completed_promotion()`; the
-  `PromotionTarget.endpoint` field is now `ExpectedRuntimeEndpoint`.
-- [x] Move public exposure target and outcome types into `domain/exposure.rs`;
-  route public exposure through `ExposureIntent::new`; type `change_exposure`
-  and helpers with `&ApplicationId`.
-  Result: `PublicExposureTarget` and `ExposureOutcome` live in the domain;
-  exposure change and public promotion validate intent through
-  `ExposureIntent::new`; the whole `change_exposure` call chain retains typed
-  `ApplicationId` values without re-wrapping text.
-- [x] Introduce a domain function for stable container/unit naming; move
-  external container identity format rules into the domain; type
-  `runtime_store` external-id functions with `&ContainerId`.
-  Result: `stable_runtime_name` in `domain/runtime.rs` now backs both Quadlet
-  and Podman naming; `ContainerId::is_valid` owns the hex format rule used by
-  registration and Podman adapters; runtime-store external-id APIs accept
-  typed container identities.
-- [x] Type adapter and store boundaries: Caddy fragment APIs, `ApplicationLock`,
-  `operation_store`, `port_allocator`, `oci_image`, internal use-case input
-  structs, and `reconcile_application` with typed identities.
-  Result: Caddy materialization/observation/removal now receive
-  `ApplicationId`, `DomainName`, and `ExpectedRuntimeEndpoint`; locks,
-  operation ownership, port reservations, digest resolution, candidate-start
-  inputs, public-activation inputs, and reconciliation entry points retain
-  validated identities end to end.
-- [x] Align CI dispatch name validation with `ApplicationName::new`; share the
-  catalog-name validator; move `DeliveryType`/`DeliverySpecification` to their
-  canonical domain modules.
-  Result: the SSH dispatcher now rejects names the catalog domain rejects;
-  `ApplicationName` and `SystemName` share one validator in `identity.rs`;
-  `DeliveryType` lives in `manifest.rs` and `DeliverySpecification` in
-  `release.rs`; health failures carry their diagnostics through `Display`.
+- [x] Type runtime lifecycle inputs with `ApplicationName`.
+  Result: `report_application_status`, `stop_application`, `start_application`,
+  `transition_application`, and `retire_previous_runtime` accept
+  `&ApplicationName`; CLI callers pass the typed name directly.
+- [x] Thread `&OciArtifact` through OCI deployment without re-parsing.
+  Result: `deploy_oci*`, `pull_image`, and rollback consume `&OciArtifact`;
+  parsing happens once at the CLI edge or branch-resolution boundary;
+  `PullImageError::InvalidReference` is removed.
+- [x] Accept typed container, health, and Quadlet identities at adapter
+  boundaries.
+  Result: `observe_container(&ContainerId, ContainerPort)`,
+  `resolve_container_id -> ContainerId`, `observe_named_container` takes
+  `ContainerPort`, `check_external_health(&DomainName, &HealthCheckPath,
+  HealthCheckStatus)`, and Quadlet `unit_name`/`container_name`/
+  `canonical_unit_contents`/`write_unit` take `ApplicationName`, `DeploymentId`,
+  `OciArtifact`, and `ContainerPort`; duplicated validation removed.
+- [x] Introduce `HostPort` for published loopback ports.
+  Result: `HostPort` newtype lives in `domain/runtime.rs`;
+  `reserve_port -> HostPort`; `StartedCandidate.port`,
+  `ExpectedRuntimeEndpoint::host_port`, and Quadlet `host_port` parameters are
+  typed; SQLite storage still uses `u16`.
 
 ## Scope and Non-goals
 
@@ -73,34 +42,31 @@ primitive round-trips, and removing duplicate or drifted validation.
   change.
 - No new dependency, async code, trait abstraction, or generic boundary.
 - No reconciliation, networking, topology, or v0.5 work.
-- The only intentional behavior changes are the two approved fixes: loopback
-  health checks reject IPv6 `::1`, and visibility changes use the persisted
-  health path/status.
+- No new domain types for concepts that do not yet exist (`BranchName`, owner
+  token, failure code/message).
 
 ## Acceptance Criteria
 
-- Loopback endpoint validation has a single domain owner.
-- Health-check configuration crosses adapter boundaries as a typed value.
-- Deployment lifecycle, promotion eligibility, and target types live in the
-  domain.
-- Exposure intent and public-exposure targets live in the domain.
-- Container/unit naming and external identity format rules live in the domain.
-- Adapter and store APIs accept typed identities instead of primitive strings.
-- CI dispatch validates application names with the same rule as the domain.
-- The exact CI gates and VM regression are green before closure.
+- Runtime lifecycle use cases accept typed `ApplicationName`.
+- `OciArtifact` is parsed once at the CLI edge and branch-resolution boundary.
+- Local runtime observation and external health checks accept typed identities
+  and no longer duplicate validation.
+- Quadlet rendering consumes typed application, deployment, artifact, and port
+  identities.
+- Reserved loopback host ports are represented by `HostPort` in use cases and
+  adapters.
+- The exact CI gates are green before closure.
 
 ## Closure Evidence
 
 - `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`,
   `cargo test --all-features` (3 ignored environment-dependent Podman cases),
   and `cargo build --workspace --release` passed on the final code commit
-  `7dd2840`.
-- A fresh disposable clone (`pneuma-dev-base-test`, provisioned, binary synced,
-  restricted CI key installed, fixtures rebuilt) passed
-  `scripts/dev-vm/test-all.sh` with 45 PASS, 0 FAIL, and 0 SKIP.
-- The same clone passed `scripts/dev-vm/reconciliation-e2e.sh` with 21 PASS,
-  0 FAIL, and 0 SKIP (R1-R7, E1-E6, I1-I4, C1-C4).
-- The clone was destroyed and undefined with its storage after both runs.
+  `d7b4277`.
+- Implementation delivered in four commits:
+  `d96b6ec`, `b11623a`, `d6dbeaa`, `d7b4277`.
+- No VM regression prerequisite was available for this closure; the 3 ignored
+  Podman environment tests were recorded as SKIP.
 
 ## Blockers
 
