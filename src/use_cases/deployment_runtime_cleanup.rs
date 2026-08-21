@@ -82,6 +82,8 @@ pub enum CandidateCleanupError {
     ReloadUnits { source: QuadletError },
     RemoveContainer { source: ControlContainerError },
     ReleasePort { source: PortAllocationError },
+    RuntimeStore { source: RuntimeStoreError },
+    RuntimeChanged { runtime_id: RuntimeInstanceId },
     Persistence { source: rusqlite::Error },
 }
 
@@ -93,6 +95,15 @@ impl fmt::Display for CandidateCleanupError {
             | Self::RemoveUnit { source }
             | Self::ReloadUnits { source } => write!(formatter, "{source}"),
             Self::ReleasePort { source } => write!(formatter, "{source}"),
+            Self::RuntimeStore { source } => {
+                write!(formatter, "failed to persist candidate removal: {source}")
+            }
+            Self::RuntimeChanged { runtime_id } => {
+                write!(
+                    formatter,
+                    "runtime `{runtime_id}` changed while its candidate was being removed"
+                )
+            }
             Self::Persistence { source } => {
                 write!(formatter, "failed to persist candidate removal: {source}")
             }
@@ -108,7 +119,9 @@ impl Error for CandidateCleanupError {
             | Self::RemoveUnit { source }
             | Self::ReloadUnits { source } => Some(source),
             Self::ReleasePort { source } => Some(source),
+            Self::RuntimeStore { source } => Some(source),
             Self::Persistence { source } => Some(source),
+            Self::RuntimeChanged { .. } => None,
         }
     }
 }
@@ -118,13 +131,8 @@ pub(crate) fn load_previous_runtime(
     connection: &Connection,
     application_id: &str,
     candidate_runtime_id: &str,
-) -> Result<Option<PreviousRuntime>, rusqlite::Error> {
-    runtime_store::load_previous_runtime(connection, application_id, candidate_runtime_id).map_err(
-        |e| match e {
-            RuntimeStoreError::Persistence { source } => source,
-            _ => rusqlite::Error::QueryReturnedNoRows,
-        },
-    )
+) -> Result<Option<PreviousRuntime>, RuntimeStoreError> {
+    runtime_store::load_previous_runtime(connection, application_id, candidate_runtime_id)
 }
 
 // Retires the prior runtime only after promotion; failures remain warnings and do not undo it.
@@ -179,14 +187,8 @@ pub(crate) fn cleanup_failed_candidate(
     runtime_id: Option<&RuntimeInstanceId>,
 ) -> Result<(), CandidateCleanupError> {
     if let Some(runtime_id) = runtime_id {
-        let state = runtime_store::load_runtime_state(connection, runtime_id.as_str()).map_err(
-            |source| CandidateCleanupError::Persistence {
-                source: match source {
-                    RuntimeStoreError::Persistence { source } => source,
-                    _ => rusqlite::Error::QueryReturnedNoRows,
-                },
-            },
-        )?;
+        let state = runtime_store::load_runtime_state(connection, runtime_id.as_str())
+            .map_err(|source| CandidateCleanupError::RuntimeStore { source })?;
         // A promotion error may have an uncertain external outcome. Never remove an
         // already active runtime.
         if state.is_some_and(|state| state != RuntimeState::Starting) {
@@ -205,15 +207,10 @@ pub(crate) fn cleanup_failed_candidate(
     }
     if let Some(runtime_id) = runtime_id {
         let outcome = runtime_store::mark_starting_runtime_missing(connection, runtime_id.as_str())
-            .map_err(|source| CandidateCleanupError::Persistence {
-                source: match source {
-                    RuntimeStoreError::Persistence { source } => source,
-                    _ => rusqlite::Error::QueryReturnedNoRows,
-                },
-            })?;
+            .map_err(|source| CandidateCleanupError::RuntimeStore { source })?;
         if outcome == crate::adapters::stores::PersistenceOutcome::Stale {
-            return Err(CandidateCleanupError::Persistence {
-                source: rusqlite::Error::QueryReturnedNoRows,
+            return Err(CandidateCleanupError::RuntimeChanged {
+                runtime_id: runtime_id.clone(),
             });
         }
     }

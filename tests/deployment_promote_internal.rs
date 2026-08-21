@@ -29,6 +29,15 @@ fn promotes_a_healthy_internal_candidate_idempotently() {
         promote_internal_candidate(&mut connection, &runtime_id, &health_check()).unwrap();
 
     assert_eq!(repeated, promoted);
+    assert_eq!(promoted.runtime_id.as_str(), runtime_id);
+    let deployment_id: String = connection
+        .query_row(
+            "SELECT deployment_id FROM runtime_instances WHERE id = ?1",
+            [&runtime_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(promoted.deployment_id.as_str(), deployment_id);
     let persisted = runtime_and_deployment_state(&connection, &runtime_id);
     assert_eq!(persisted.0, "running");
     assert_eq!(persisted.1, "succeeded");

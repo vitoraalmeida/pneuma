@@ -10,8 +10,15 @@ use crate::domain::system::System;
 
 #[derive(Debug)]
 pub enum ShowError {
-    NotFound { system_name: String },
-    Persistence { source: rusqlite::Error },
+    NotFound {
+        system_name: String,
+    },
+    ApplicationStore {
+        source: application_store::ApplicationStoreError,
+    },
+    Persistence {
+        source: rusqlite::Error,
+    },
 }
 
 impl fmt::Display for ShowError {
@@ -19,6 +26,9 @@ impl fmt::Display for ShowError {
         match self {
             Self::NotFound { system_name } => {
                 write!(formatter, "system `{system_name}` was not found")
+            }
+            Self::ApplicationStore { source } => {
+                write!(formatter, "failed to show system: {source}")
             }
             Self::Persistence { source } => {
                 write!(formatter, "failed to show system: {source}")
@@ -31,6 +41,7 @@ impl Error for ShowError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::NotFound { .. } => None,
+            Self::ApplicationStore { source } => Some(source),
             Self::Persistence { source } => Some(source),
         }
     }
@@ -53,17 +64,9 @@ pub fn show_system(connection: &Connection, system_name: &str) -> Result<SystemD
         .ok_or_else(|| ShowError::NotFound {
             system_name: system_name.to_owned(),
         })?;
-    let applications = application_store::list_application_summaries_for_system(
-        connection, &system.id,
-    )
-    .map_err(|error| match error {
-        application_store::ApplicationStoreError::Persistence { source } => {
-            ShowError::Persistence { source }
-        }
-        _ => ShowError::Persistence {
-            source: rusqlite::Error::QueryReturnedNoRows,
-        },
-    })?;
+    let applications =
+        application_store::list_application_summaries_for_system(connection, &system.id)
+            .map_err(|source| ShowError::ApplicationStore { source })?;
 
     Ok(SystemDetails {
         system,

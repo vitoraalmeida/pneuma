@@ -63,7 +63,9 @@ impl From<ApplicationStoreError> for CreateReleaseError {
 impl From<ReleaseStoreError> for CreateReleaseError {
     fn from(error: ReleaseStoreError) -> Self {
         match error {
-            ReleaseStoreError::NotFound { .. } => Self::ReleaseStore { source: error },
+            ReleaseStoreError::NotFound { .. } | ReleaseStoreError::NotFoundByArtifact { .. } => {
+                Self::ReleaseStore { source: error }
+            }
             ReleaseStoreError::ApplicationNotFound { application_id } => {
                 Self::ApplicationNotFound { application_id }
             }

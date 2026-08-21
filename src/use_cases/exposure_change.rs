@@ -14,17 +14,18 @@ use crate::adapters::local_runtime::{ObserveContainerError, observe_container};
 use crate::adapters::stores::application_store::{self, ApplicationStoreError, ExposureStoreError};
 use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
 use crate::domain::exposure::{
-    Exposure, ExposureConfigurationVersion, ExposureDiagnostic, ExposureMaterializationState,
-    Visibility,
+    DomainName, Exposure, ExposureConfigurationVersion, ExposureDiagnostic,
+    ExposureMaterializationState, Visibility,
 };
+use crate::domain::identity::ApplicationId;
 use crate::domain::runtime::{ContainerObservation, ObservedRuntimeState};
 
 #[derive(Debug, PartialEq, Eq)]
 // Returns the requested visibility after its materialization outcome is confirmed.
 pub struct ExposureChange {
-    pub application_id: String,
+    pub application_id: ApplicationId,
     pub visibility: Visibility,
-    pub domain: Option<String>,
+    pub domain: Option<DomainName>,
 }
 
 #[derive(Debug)]
@@ -197,9 +198,9 @@ pub fn change_exposure(
     };
     if exposure.intent().visibility() == visibility {
         return Ok(ExposureChange {
-            application_id: application_id.to_owned(),
+            application_id: ApplicationId::from(application_id),
             visibility,
-            domain: exposure.intent().domain().map(ToString::to_string),
+            domain: exposure.intent().domain().cloned(),
         });
     }
     if visibility == Visibility::Public && exposure.intent().domain().is_none() {
@@ -224,7 +225,7 @@ pub fn change_exposure(
         Visibility::Internal => make_internal(
             connection,
             application_id,
-            exposure.intent().domain().map(ToString::to_string),
+            exposure.intent().domain().cloned(),
             managed_directory,
             caddyfile_path,
         ),
@@ -413,9 +414,9 @@ fn make_public(
         );
     }
     Ok(ExposureChange {
-        application_id: application_id.to_owned(),
+        application_id: ApplicationId::from(application_id),
         visibility: Visibility::Public,
-        domain: Some(domain.to_string()),
+        domain: Some(domain),
     })
 }
 
@@ -423,7 +424,7 @@ fn make_public(
 fn make_internal(
     connection: &mut Connection,
     application_id: &str,
-    domain: Option<String>,
+    domain: Option<DomainName>,
     managed_directory: &Path,
     caddyfile_path: &Path,
 ) -> Result<ExposureChange, ExposureChangeError> {
@@ -488,7 +489,7 @@ fn make_internal(
         );
     }
     Ok(ExposureChange {
-        application_id: application_id.to_owned(),
+        application_id: ApplicationId::from(application_id),
         visibility: Visibility::Internal,
         domain,
     })

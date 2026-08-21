@@ -9,9 +9,19 @@ use crate::domain::release::{OciArtifact, Release};
 
 #[derive(Debug)]
 pub enum ReleaseStoreError {
-    NotFound { release_id: String },
-    ApplicationNotFound { application_id: String },
-    Persistence { source: rusqlite::Error },
+    NotFound {
+        release_id: String,
+    },
+    NotFoundByArtifact {
+        application_id: String,
+        image_digest: String,
+    },
+    ApplicationNotFound {
+        application_id: String,
+    },
+    Persistence {
+        source: rusqlite::Error,
+    },
 }
 
 impl fmt::Display for ReleaseStoreError {
@@ -20,6 +30,13 @@ impl fmt::Display for ReleaseStoreError {
             Self::NotFound { release_id } => {
                 write!(formatter, "release `{release_id}` not found")
             }
+            Self::NotFoundByArtifact {
+                application_id,
+                image_digest,
+            } => write!(
+                formatter,
+                "release for application `{application_id}` and digest `{image_digest}` not found"
+            ),
             Self::ApplicationNotFound { application_id } => {
                 write!(formatter, "application `{application_id}` not found")
             }
@@ -34,7 +51,9 @@ impl Error for ReleaseStoreError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Persistence { source } => Some(source),
-            Self::NotFound { .. } | Self::ApplicationNotFound { .. } => None,
+            Self::NotFound { .. }
+            | Self::NotFoundByArtifact { .. }
+            | Self::ApplicationNotFound { .. } => None,
         }
     }
 }
@@ -141,8 +160,9 @@ pub fn load_release_by_digest(
         )
         .optional()
         .map_err(|source| ReleaseStoreError::Persistence { source })?
-        .ok_or_else(|| ReleaseStoreError::NotFound {
-            release_id: format!("{application_id}@{image_digest}"),
+        .ok_or_else(|| ReleaseStoreError::NotFoundByArtifact {
+            application_id: application_id.to_owned(),
+            image_digest: image_digest.to_owned(),
         })
 }
 
@@ -200,4 +220,28 @@ pub fn release_exists(
             |row| row.get(0),
         )
         .map_err(|source| ReleaseStoreError::Persistence { source })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use crate::adapters::database;
+
+    use super::{ReleaseStoreError, load_release_by_digest};
+
+    #[test]
+    fn missing_digest_lookup_preserves_its_application_and_artifact_context() {
+        let connection = database::open(Path::new(":memory:")).unwrap();
+        let error =
+            load_release_by_digest(&connection, "application-id", "sha256:missing").unwrap_err();
+
+        assert!(matches!(
+            error,
+            ReleaseStoreError::NotFoundByArtifact {
+                application_id,
+                image_digest,
+            } if application_id == "application-id" && image_digest == "sha256:missing"
+        ));
+    }
 }

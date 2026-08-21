@@ -219,8 +219,9 @@ fn transition_application(
     // The desired state is the operator's intent and is persisted before any external
     // effect, so an interrupted control operation still leaves the intent recorded.
     set_desired_state(connection, application_id, desired_runtime_state)?;
-    let (observation, external_runtime_id) =
-        observe_current_runtime(connection, &runtime, application_name)?;
+    let current = observe_current_runtime(connection, &runtime, application_name)?;
+    let observation = current.observation;
+    let external_runtime_id = current.container_id;
     if *observation.state() == ObservedRuntimeState::Missing {
         // When the operator wants the application stopped and the container is missing
         // (removed by the Quadlet ExecStop), deduce a stopped observation without marking
@@ -231,7 +232,7 @@ fn transition_application(
                 desired_runtime_state,
                 observed_runtime_state: ObservedRuntimeState::Missing,
                 runtime_id: runtime.id,
-                container_id: ContainerId::from(external_runtime_id),
+                container_id: external_runtime_id,
                 observed_endpoint: None,
             });
         }
@@ -249,15 +250,16 @@ fn transition_application(
                     runtime_id: runtime.id.to_string(),
                     source,
                 })?;
-                let (new_observation, new_external_runtime_id) =
-                    observe_current_runtime(connection, &runtime, application_name)?;
+                let current = observe_current_runtime(connection, &runtime, application_name)?;
+                let new_observation = current.observation;
+                let new_external_runtime_id = current.container_id;
                 if *new_observation.state() != ObservedRuntimeState::Missing {
                     persist_observation(connection, &runtime, &new_observation)?;
                     return Ok(RuntimeObservation {
                         desired_runtime_state,
                         observed_runtime_state: new_observation.state().clone(),
                         runtime_id: runtime.id,
-                        container_id: ContainerId::from(new_external_runtime_id),
+                        container_id: new_external_runtime_id,
                         observed_endpoint: new_observation.observed_endpoint(),
                     });
                 }
@@ -291,18 +293,20 @@ fn transition_application(
                 })?;
             }
         } else {
-            control(&external_runtime_id).map_err(|source| RuntimeLifecycleError::Control {
-                operation,
-                runtime_id: runtime.id.to_string(),
-                source: Box::new(source),
+            control(external_runtime_id.as_str()).map_err(|source| {
+                RuntimeLifecycleError::Control {
+                    operation,
+                    runtime_id: runtime.id.to_string(),
+                    source: Box::new(source),
+                }
             })?;
         }
-        observe_container(&external_runtime_id, runtime.container_port).map_err(|source| {
-            RuntimeLifecycleError::Observe {
+        observe_container(external_runtime_id.as_str(), runtime.container_port).map_err(
+            |source| RuntimeLifecycleError::Observe {
                 runtime_id: runtime.id.to_string(),
                 source,
-            }
-        })?
+            },
+        )?
     };
     // When stopping via Quadlet, the ExecStop removes the container, so the observation
     // after stop_unit is Missing. Deduce a stopped observation without marking the runtime
@@ -315,7 +319,7 @@ fn transition_application(
             desired_runtime_state,
             observed_runtime_state: ObservedRuntimeState::Missing,
             runtime_id: runtime.id,
-            container_id: ContainerId::from(external_runtime_id),
+            container_id: external_runtime_id,
             observed_endpoint: None,
         });
     }
@@ -325,7 +329,7 @@ fn transition_application(
         desired_runtime_state,
         observed_runtime_state: observation.state().clone(),
         runtime_id: runtime.id,
-        container_id: ContainerId::from(external_runtime_id),
+        container_id: external_runtime_id,
         observed_endpoint: observation.observed_endpoint(),
     })
 }
@@ -334,11 +338,16 @@ fn transition_application(
 // name with a fresh id whenever its unit restarts (for example, after a reboot). The
 // persisted runtime identity can therefore go stale; reconcile it against the name
 // before concluding the runtime is gone.
+struct CurrentRuntimeObservation {
+    observation: ContainerObservation,
+    container_id: ContainerId,
+}
+
 fn observe_current_runtime(
     connection: &Connection,
     runtime: &RuntimeInstance,
     application_name: &str,
-) -> Result<(ContainerObservation, String), RuntimeLifecycleError> {
+) -> Result<CurrentRuntimeObservation, RuntimeLifecycleError> {
     let observation =
         observe_container(runtime.external_runtime_id.as_str(), runtime.container_port).map_err(
             |source| RuntimeLifecycleError::Observe {
@@ -347,14 +356,22 @@ fn observe_current_runtime(
             },
         )?;
     if *observation.state() != ObservedRuntimeState::Missing {
-        return Ok((observation, runtime.external_runtime_id.to_string()));
+        return Ok(CurrentRuntimeObservation {
+            observation,
+            container_id: runtime.external_runtime_id.clone(),
+        });
     }
     let resolved = match resolve_container_id(&container_name(
         application_name,
         runtime.deployment_id.as_str(),
     )) {
         Ok(id) => id,
-        Err(_) => return Ok((observation, runtime.external_runtime_id.to_string())),
+        Err(_) => {
+            return Ok(CurrentRuntimeObservation {
+                observation,
+                container_id: runtime.external_runtime_id.clone(),
+            });
+        }
     };
     let reconciled = runtime_store::reconcile_external_runtime_id(
         connection,
@@ -374,7 +391,10 @@ fn observe_current_runtime(
             source,
         }
     })?;
-    Ok((observation, resolved))
+    Ok(CurrentRuntimeObservation {
+        observation,
+        container_id: ContainerId::from(resolved),
+    })
 }
 
 // Loads the active successful runtime, rejecting lifecycle commands for undeployed applications.

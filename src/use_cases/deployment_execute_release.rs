@@ -59,7 +59,7 @@ pub enum DeployReleaseError {
         application_id: String,
     },
     LoadApplication {
-        source: rusqlite::Error,
+        source: ApplicationStoreError,
     },
     CreateDeployment {
         source: CreateDeploymentError,
@@ -321,12 +321,7 @@ fn load_specification(
             Err(ApplicationStoreError::NotFound { application_id }) => {
                 return Err(DeployReleaseError::ApplicationNotFound { application_id });
             }
-            Err(ApplicationStoreError::SystemNotFound { .. }) => {
-                return Err(DeployReleaseError::LoadApplication {
-                    source: rusqlite::Error::QueryReturnedNoRows,
-                });
-            }
-            Err(ApplicationStoreError::Persistence { source }) => {
+            Err(source) => {
                 return Err(DeployReleaseError::LoadApplication { source });
             }
         };

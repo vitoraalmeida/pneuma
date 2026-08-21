@@ -30,6 +30,9 @@ pub enum RegisterCandidateRuntimeError {
     EndpointConflict {
         endpoint: SocketAddr,
     },
+    RegistrationNotFound {
+        runtime_id: RuntimeInstanceId,
+    },
     Store {
         source: RuntimeStoreError,
     },
@@ -73,6 +76,12 @@ impl fmt::Display for RegisterCandidateRuntimeError {
             Self::EndpointConflict { endpoint } => {
                 write!(formatter, "runtime endpoint `{endpoint}` is already active")
             }
+            Self::RegistrationNotFound { runtime_id } => {
+                write!(
+                    formatter,
+                    "registered runtime `{runtime_id}` could not be reloaded"
+                )
+            }
             Self::Store { source } => {
                 write!(formatter, "failed to register candidate runtime: {source}")
             }
@@ -99,6 +108,7 @@ impl Error for RegisterCandidateRuntimeError {
             | Self::InvalidDeploymentState { .. }
             | Self::ExternalRuntimeConflict { .. }
             | Self::EndpointConflict { .. } => None,
+            Self::RegistrationNotFound { .. } => None,
         }
     }
 }
@@ -193,8 +203,8 @@ pub fn register_candidate_runtime(
     runtime_store::insert_runtime(&transaction, &registration)?;
 
     let runtime = runtime_store::load_runtime_by_external_id(&transaction, external_runtime_id)?
-        .ok_or_else(|| RegisterCandidateRuntimeError::Persistence {
-            source: rusqlite::Error::QueryReturnedNoRows,
+        .ok_or_else(|| RegisterCandidateRuntimeError::RegistrationNotFound {
+            runtime_id: registration.id.clone(),
         })?;
     transaction
         .commit()

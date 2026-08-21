@@ -3,25 +3,28 @@ use std::fmt;
 
 use rusqlite::{Connection, TransactionBehavior};
 
+use crate::adapters::stores::application_store::ApplicationStoreError;
+use crate::adapters::stores::deployment_store::DeploymentStoreError;
 use crate::domain::deployment::DeploymentStatus;
 use crate::domain::exposure::{
     DomainName, ExposureConfigurationVersion, ExposureDiagnostic, ExposureMaterializationState,
     Visibility,
 };
+use crate::domain::identity::{ApplicationId, DeploymentId, RuntimeInstanceId};
 use crate::domain::runtime::{ObservedRuntimeState, RuntimeState};
 
 #[derive(Debug, PartialEq, Eq)]
 // Supplies the route identity after public exposure enters the applying state.
 pub struct PublicExposureTarget {
-    pub application_id: String,
+    pub application_id: ApplicationId,
     pub domain: DomainName,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 // Identifies a candidate whose runtime, route, and deployment were atomically promoted.
 pub struct PromotedPublicCandidate {
-    pub runtime_id: String,
-    pub deployment_id: String,
+    pub runtime_id: RuntimeInstanceId,
+    pub deployment_id: DeploymentId,
     pub finished_at: String,
 }
 
@@ -50,6 +53,12 @@ pub enum PromotePublicCandidateError {
     },
     InvalidConfigurationVersion,
     InvalidDiagnostic,
+    ApplicationStore {
+        source: ApplicationStoreError,
+    },
+    DeploymentStore {
+        source: DeploymentStoreError,
+    },
     Persistence {
         source: rusqlite::Error,
     },
@@ -83,6 +92,12 @@ impl fmt::Display for PromotePublicCandidateError {
             ),
             Self::InvalidDiagnostic => formatter
                 .write_str("exposure failure code and message must be trimmed and non-empty"),
+            Self::ApplicationStore { source } => {
+                write!(formatter, "failed to persist public promotion: {source}")
+            }
+            Self::DeploymentStore { source } => {
+                write!(formatter, "failed to persist public promotion: {source}")
+            }
             Self::InvalidConfigurationVersion => {
                 formatter.write_str("exposure configuration version must be non-empty")
             }
@@ -97,6 +112,8 @@ impl Error for PromotePublicCandidateError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Persistence { source } => Some(source),
+            Self::ApplicationStore { source } => Some(source),
+            Self::DeploymentStore { source } => Some(source),
             Self::RuntimeNotFound { .. }
             | Self::InvalidRuntime { .. }
             | Self::InvalidDeploymentState { .. }
@@ -139,14 +156,7 @@ pub fn begin_public_exposure(
         connection,
         target.application_id.as_str(),
     )
-    .map_err(|source| PromotePublicCandidateError::Persistence {
-        source: match source {
-            crate::adapters::stores::application_store::ApplicationStoreError::Persistence {
-                source,
-            } => source,
-            _ => rusqlite::Error::QueryReturnedNoRows,
-        },
-    })?;
+    .map_err(|source| PromotePublicCandidateError::ApplicationStore { source })?;
     if updated == crate::adapters::stores::PersistenceOutcome::Stale {
         return Err(PromotePublicCandidateError::InvalidExposure {
             application_id: target.application_id.to_string(),
@@ -155,7 +165,7 @@ pub fn begin_public_exposure(
     }
 
     Ok(PublicExposureTarget {
-        application_id: target.application_id.to_string(),
+        application_id: target.application_id,
         domain,
     })
 }
@@ -177,14 +187,7 @@ pub fn record_public_exposure_failure(
         diagnostic,
         state,
     )
-    .map_err(|source| PromotePublicCandidateError::Persistence {
-        source: match source {
-            crate::adapters::stores::application_store::ApplicationStoreError::Persistence {
-                source,
-            } => source,
-            _ => rusqlite::Error::QueryReturnedNoRows,
-        },
-    })?;
+    .map_err(|source| PromotePublicCandidateError::ApplicationStore { source })?;
     if updated == crate::adapters::stores::PersistenceOutcome::Stale {
         return Err(PromotePublicCandidateError::InvalidExposure {
             application_id: application_id.to_owned(),
@@ -223,14 +226,7 @@ pub fn promote_public_candidate(
         &target,
         configuration_version,
     )
-    .map_err(|source| PromotePublicCandidateError::Persistence {
-        source: match source {
-            crate::adapters::stores::deployment_store::DeploymentStoreError::Persistence {
-                source,
-            } => source,
-            _ => rusqlite::Error::QueryReturnedNoRows,
-        },
-    })?;
+    .map_err(|source| PromotePublicCandidateError::DeploymentStore { source })?;
     if outcome == crate::adapters::stores::PersistenceOutcome::Stale {
         return Err(PromotePublicCandidateError::InvalidRuntime {
             runtime_id: runtime_id.to_owned(),
@@ -241,21 +237,14 @@ pub fn promote_public_candidate(
         &transaction,
         target.deployment_id.as_str(),
     )
-    .map_err(|source| PromotePublicCandidateError::Persistence {
-        source: match source {
-            crate::adapters::stores::deployment_store::DeploymentStoreError::Persistence {
-                source,
-            } => source,
-            _ => rusqlite::Error::QueryReturnedNoRows,
-        },
-    })?;
+    .map_err(|source| PromotePublicCandidateError::DeploymentStore { source })?;
     transaction
         .commit()
         .map_err(|source| PromotePublicCandidateError::Persistence { source })?;
 
     Ok(PromotedPublicCandidate {
-        runtime_id: runtime_id.to_owned(),
-        deployment_id: target.deployment_id.to_string(),
+        runtime_id: target.runtime_id,
+        deployment_id: target.deployment_id,
         finished_at,
     })
 }
@@ -269,14 +258,7 @@ fn load_target(
     runtime_id: &str,
 ) -> Result<PromotionTarget, PromotePublicCandidateError> {
     crate::adapters::stores::deployment_store::load_promotion_target(connection, runtime_id)
-        .map_err(|source| PromotePublicCandidateError::Persistence {
-            source: match source {
-                crate::adapters::stores::deployment_store::DeploymentStoreError::Persistence {
-                    source,
-                } => source,
-                _ => rusqlite::Error::QueryReturnedNoRows,
-            },
-        })?
+        .map_err(|source| PromotePublicCandidateError::DeploymentStore { source })?
         .ok_or_else(|| PromotePublicCandidateError::RuntimeNotFound {
             runtime_id: runtime_id.to_owned(),
         })

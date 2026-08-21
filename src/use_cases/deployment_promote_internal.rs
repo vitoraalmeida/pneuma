@@ -10,14 +10,15 @@ use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
 use crate::domain::application::HealthCheckSpecification;
 use crate::domain::deployment::DeploymentStatus;
 use crate::domain::exposure::Visibility;
+use crate::domain::identity::{DeploymentId, RuntimeInstanceId};
 use crate::domain::runtime::{ObservedRuntimeState, RuntimeState};
 use crate::use_cases::deployment_transition::{TransitionDeploymentError, fail_deployment};
 
 #[derive(Debug, PartialEq, Eq)]
 // Identifies a candidate whose promotion was atomically confirmed.
 pub struct PromotedCandidate {
-    pub runtime_id: String,
-    pub deployment_id: String,
+    pub runtime_id: RuntimeInstanceId,
+    pub deployment_id: DeploymentId,
     pub finished_at: String,
 }
 
@@ -52,6 +53,9 @@ pub enum PromoteInternalCandidateError {
     },
     RecordFailure {
         source: TransitionDeploymentError,
+    },
+    Store {
+        source: DeploymentStoreError,
     },
     Persistence {
         source: rusqlite::Error,
@@ -99,6 +103,9 @@ impl fmt::Display for PromoteInternalCandidateError {
                     "failed to record candidate health failure: {source}"
                 )
             }
+            Self::Store { source } => {
+                write!(formatter, "failed to promote internal candidate: {source}")
+            }
             Self::Persistence { source } => {
                 write!(formatter, "failed to promote internal candidate: {source}")
             }
@@ -111,6 +118,7 @@ impl Error for PromoteInternalCandidateError {
         match self {
             Self::HealthCheck { source } => Some(source),
             Self::RecordFailure { source } => Some(source),
+            Self::Store { source } => Some(source),
             Self::Persistence { source } => Some(source),
             Self::RuntimeNotFound { .. }
             | Self::InvalidRuntimeState { .. }
@@ -168,14 +176,8 @@ pub fn promote_internal_candidate(
     }
     validate_target(&target)?;
 
-    let updated = deployment_store::promote_internal(&transaction, &target).map_err(|source| {
-        PromoteInternalCandidateError::Persistence {
-            source: match source {
-                DeploymentStoreError::Persistence { source } => source,
-                _ => rusqlite::Error::QueryReturnedNoRows,
-            },
-        }
-    })?;
+    let updated = deployment_store::promote_internal(&transaction, &target)
+        .map_err(|source| PromoteInternalCandidateError::Store { source })?;
     if updated == crate::adapters::stores::PersistenceOutcome::Stale {
         return Err(PromoteInternalCandidateError::InvalidDeploymentState {
             deployment_id: target.deployment_id.to_string(),
@@ -183,21 +185,15 @@ pub fn promote_internal_candidate(
         });
     }
     let finished_at =
-        deployment_store::load_finished_at(&transaction, target.deployment_id.as_str()).map_err(
-            |source| PromoteInternalCandidateError::Persistence {
-                source: match source {
-                    DeploymentStoreError::Persistence { source } => source,
-                    _ => rusqlite::Error::QueryReturnedNoRows,
-                },
-            },
-        )?;
+        deployment_store::load_finished_at(&transaction, target.deployment_id.as_str())
+            .map_err(|source| PromoteInternalCandidateError::Store { source })?;
     transaction
         .commit()
         .map_err(|source| PromoteInternalCandidateError::Persistence { source })?;
 
     Ok(PromotedCandidate {
-        runtime_id: runtime_id.to_owned(),
-        deployment_id: target.deployment_id.to_string(),
+        runtime_id: target.runtime_id,
+        deployment_id: target.deployment_id,
         finished_at,
     })
 }
@@ -211,12 +207,7 @@ fn load_target(
     runtime_id: &str,
 ) -> Result<PromotionTarget, PromoteInternalCandidateError> {
     deployment_store::load_promotion_target(connection, runtime_id)
-        .map_err(|source| PromoteInternalCandidateError::Persistence {
-            source: match source {
-                DeploymentStoreError::Persistence { source } => source,
-                _ => rusqlite::Error::QueryReturnedNoRows,
-            },
-        })?
+        .map_err(|source| PromoteInternalCandidateError::Store { source })?
         .ok_or_else(|| PromoteInternalCandidateError::RuntimeNotFound {
             runtime_id: runtime_id.to_owned(),
         })
@@ -233,8 +224,8 @@ fn completed_promotion(target: &PromotionTarget) -> Option<PromotedCandidate> {
         .deployment_finished_at
         .as_ref()
         .map(|finished_at| PromotedCandidate {
-            runtime_id: target.runtime_id.to_string(),
-            deployment_id: target.deployment_id.to_string(),
+            runtime_id: target.runtime_id.clone(),
+            deployment_id: target.deployment_id.clone(),
             finished_at: finished_at.clone(),
         })
 }

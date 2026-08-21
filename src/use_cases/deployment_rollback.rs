@@ -14,11 +14,27 @@ use crate::use_cases::deployment_execute_release::{
 
 #[derive(Debug)]
 pub enum RollbackError {
-    ApplicationNotFound { application_id: String },
-    NoPreviousDeployment { application_id: String },
-    Persistence { source: rusqlite::Error },
-    PullImage { source: PullImageError },
-    DeployRelease { source: DeployReleaseError },
+    ApplicationNotFound {
+        application_id: String,
+    },
+    NoPreviousDeployment {
+        application_id: String,
+    },
+    ApplicationStore {
+        source: application_store::ApplicationStoreError,
+    },
+    DeploymentStore {
+        source: deployment_store::DeploymentStoreError,
+    },
+    Persistence {
+        source: rusqlite::Error,
+    },
+    PullImage {
+        source: PullImageError,
+    },
+    DeployRelease {
+        source: DeployReleaseError,
+    },
 }
 
 impl fmt::Display for RollbackError {
@@ -31,6 +47,12 @@ impl fmt::Display for RollbackError {
                 formatter,
                 "application `{application_id}` has no previous successful deployment to roll back to"
             ),
+            Self::ApplicationStore { source } => {
+                write!(formatter, "failed to load rollback release: {source}")
+            }
+            Self::DeploymentStore { source } => {
+                write!(formatter, "failed to load rollback release: {source}")
+            }
             Self::Persistence { source } => {
                 write!(formatter, "failed to load rollback release: {source}")
             }
@@ -46,6 +68,8 @@ impl Error for RollbackError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Persistence { source } => Some(source),
+            Self::ApplicationStore { source } => Some(source),
+            Self::DeploymentStore { source } => Some(source),
             Self::PullImage { source } => Some(source),
             Self::DeployRelease { source } => Some(source),
             Self::ApplicationNotFound { .. } | Self::NoPreviousDeployment { .. } => None,
@@ -60,14 +84,7 @@ pub fn rollback_deployment(
     public_configuration: Option<&PublicDeploymentConfiguration>,
 ) -> Result<DeploymentResult, RollbackError> {
     let exists = application_store::application_exists(connection, application_id.as_str())
-        .map_err(|error| match error {
-            application_store::ApplicationStoreError::Persistence { source } => {
-                RollbackError::Persistence { source }
-            }
-            _ => RollbackError::Persistence {
-                source: rusqlite::Error::QueryReturnedNoRows,
-            },
-        })?;
+        .map_err(|source| RollbackError::ApplicationStore { source })?;
     if !exists {
         return Err(RollbackError::ApplicationNotFound {
             application_id: application_id.to_string(),
@@ -95,14 +112,7 @@ fn previous_release(
     application_id: &str,
 ) -> Result<RollbackTarget, RollbackError> {
     deployment_store::load_rollback_target(connection, application_id)
-        .map_err(|error| match error {
-            deployment_store::DeploymentStoreError::Persistence { source } => {
-                RollbackError::Persistence { source }
-            }
-            _ => RollbackError::Persistence {
-                source: rusqlite::Error::QueryReturnedNoRows,
-            },
-        })?
+        .map_err(|source| RollbackError::DeploymentStore { source })?
         .ok_or_else(|| RollbackError::NoPreviousDeployment {
             application_id: application_id.to_owned(),
         })
