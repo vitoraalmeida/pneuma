@@ -197,6 +197,8 @@ without selecting a new Release or making destructive changes from ambiguity.
   `cargo test --all-features`, and `cargo build --workspace --release` passed on `3cc404a`.
 - A fresh disposable clone passed `scripts/dev-vm/test-all.sh` with 45 PASS, 0 FAIL,
   and 0 SKIP; the clone and its storage were removed.
+- The final refactor binary passed `scripts/dev-vm/reconciliation-e2e.sh` with 21 PASS,
+  0 FAIL, and 0 SKIP; the clone and its storage were removed.
 
 ## Blockers
 
