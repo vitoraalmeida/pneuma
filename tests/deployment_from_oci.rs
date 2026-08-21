@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use pneuma::adapters::database;
 use pneuma::domain::deployment::SourceRevision;
-use pneuma::domain::identity::ApplicationId;
+use pneuma::domain::release::OciArtifact;
 use pneuma::use_cases::application_import::import_application;
 use pneuma::use_cases::deployment_from_oci::{DeployOciError, deploy_oci};
 
@@ -22,13 +22,14 @@ fn deploys_a_verified_oci_image_and_persists_its_exact_reference() {
         import_application(&mut connection, &fixture_path("another"), None, None, None).unwrap();
     let digest = format!("sha256:{}", "a".repeat(64));
     let reference = format!("registry.example/team/service@{digest}");
+    let artifact = OciArtifact::parse(&reference).unwrap();
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let port = listener.local_addr().unwrap().port();
     let environment = FakePodman::new(port);
     let server = thread::spawn(move || respond_once(&listener));
 
     let deployed =
-        environment.run(|| deploy_oci(&mut connection, &application.id, &reference, None, None));
+        environment.run(|| deploy_oci(&mut connection, &application.id, &artifact, None, None));
     server.join().unwrap();
 
     let release = connection
@@ -73,24 +74,8 @@ fn deploys_a_verified_oci_image_and_persists_its_exact_reference() {
 }
 
 #[test]
-fn rejects_an_unpinned_oci_reference_before_external_work() {
-    let mut connection = database::open(Path::new(":memory:")).unwrap();
-
-    let error = deploy_oci(
-        &mut connection,
-        &ApplicationId::from("application"),
-        "registry.example/service:latest",
-        None,
-        None,
-    )
-    .unwrap_err();
-
-    assert!(matches!(
-        error,
-        DeployOciError::PullImage {
-            source: pneuma::adapters::oci_image::PullImageError::InvalidReference { .. }
-        }
-    ));
+fn rejects_an_unpinned_oci_reference_at_the_validation_boundary() {
+    assert!(OciArtifact::parse("registry.example/service:latest").is_err());
 }
 
 #[test]
@@ -100,8 +85,9 @@ fn rejects_a_repository_not_allowed_by_the_delivery_spec_before_pull() {
         import_application(&mut connection, &fixture_path("another"), None, None, None).unwrap();
     let digest = format!("sha256:{}", "a".repeat(64));
     let reference = format!("registry.example/other/service@{digest}");
+    let artifact = OciArtifact::parse(&reference).unwrap();
 
-    let error = deploy_oci(&mut connection, &application.id, &reference, None, None).unwrap_err();
+    let error = deploy_oci(&mut connection, &application.id, &artifact, None, None).unwrap_err();
 
     assert!(matches!(
         error,

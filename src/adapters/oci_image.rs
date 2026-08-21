@@ -4,7 +4,7 @@ use std::io;
 use std::process::Command;
 
 use crate::domain::git::CommitSha;
-use crate::domain::release::{InvalidOciArtifact, OciArtifact, OciRepository};
+use crate::domain::release::{OciArtifact, OciRepository};
 
 const DIGEST_ALGORITHM: &str = "sha256:";
 const SHA256_HEX_LENGTH: usize = 64;
@@ -17,9 +17,6 @@ pub struct PulledImage {
 
 #[derive(Debug)]
 pub enum PullImageError {
-    InvalidReference {
-        source: InvalidOciArtifact,
-    },
     Execute {
         operation: &'static str,
         source: io::Error,
@@ -48,7 +45,6 @@ pub enum PullImageError {
 impl fmt::Display for PullImageError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidReference { source } => source.fmt(formatter),
             Self::Execute { operation, source } => {
                 write!(
                     formatter,
@@ -92,7 +88,6 @@ impl fmt::Display for PullImageError {
 impl Error for PullImageError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::InvalidReference { source } => Some(source),
             Self::Execute { source, .. } => Some(source),
             Self::Pull { .. }
             | Self::Inspect { .. }
@@ -103,9 +98,7 @@ impl Error for PullImageError {
 }
 
 // Pulls a digest-pinned artifact and confirms Podman resolved exactly that digest.
-pub fn pull_image(reference: &str) -> Result<PulledImage, PullImageError> {
-    let artifact = OciArtifact::parse(reference)
-        .map_err(|source| PullImageError::InvalidReference { source })?;
+pub fn pull_image(artifact: &OciArtifact) -> Result<PulledImage, PullImageError> {
     let pull = Command::new("podman")
         .args(["pull", artifact.reference()])
         .output()
@@ -160,7 +153,9 @@ pub fn pull_image(reference: &str) -> Result<PulledImage, PullImageError> {
         });
     }
 
-    Ok(PulledImage { artifact })
+    Ok(PulledImage {
+        artifact: artifact.clone(),
+    })
 }
 
 #[derive(Debug)]

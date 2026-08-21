@@ -139,7 +139,7 @@ fn deploy_branch_reporting(
         Some(progress) => deploy_oci_with_progress(
             connection,
             application_id,
-            reference.reference(),
+            &reference,
             Some(&commit_sha),
             public_configuration,
             progress,
@@ -147,7 +147,7 @@ fn deploy_branch_reporting(
         None => deploy_oci(
             connection,
             application_id,
-            reference.reference(),
+            &reference,
             Some(&commit_sha),
             public_configuration,
         ),

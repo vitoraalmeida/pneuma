@@ -140,8 +140,8 @@ pub fn run(connection: &Connection, verbose: bool) -> bool {
     match release_store::active_application_image_references(connection) {
         Ok(images) => {
             for image in images {
-                if OciArtifact::parse(&image).is_ok() {
-                    match pull_image(&image) {
+                if let Ok(artifact) = OciArtifact::parse(&image) {
+                    match pull_image(&artifact) {
                         Ok(_) => println!("✓ Active OCI image: {image} (pullable)"),
                         Err(source) => {
                             println!("✗ Active OCI image: {image} (FAILED: {source})");

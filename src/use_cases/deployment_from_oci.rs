@@ -82,14 +82,14 @@ impl Error for DeployOciError {
 pub fn deploy_oci(
     connection: &mut Connection,
     application_id: &ApplicationId,
-    image_reference: &str,
+    artifact: &OciArtifact,
     source_commit: Option<&CommitSha>,
     public_configuration: Option<&PublicDeploymentConfiguration>,
 ) -> Result<DeploymentResult, DeployOciError> {
     deploy_oci_reporting(
         connection,
         application_id,
-        image_reference,
+        artifact,
         source_commit,
         public_configuration,
         None,
@@ -100,7 +100,7 @@ pub fn deploy_oci(
 pub fn deploy_oci_with_progress(
     connection: &mut Connection,
     application_id: &ApplicationId,
-    image_reference: &str,
+    artifact: &OciArtifact,
     source_commit: Option<&CommitSha>,
     public_configuration: Option<&PublicDeploymentConfiguration>,
     progress: &mut dyn FnMut(DeploymentProgress),
@@ -108,7 +108,7 @@ pub fn deploy_oci_with_progress(
     deploy_oci_reporting(
         connection,
         application_id,
-        image_reference,
+        artifact,
         source_commit,
         public_configuration,
         Some(progress),
@@ -118,15 +118,11 @@ pub fn deploy_oci_with_progress(
 fn deploy_oci_reporting(
     connection: &mut Connection,
     application_id: &ApplicationId,
-    image_reference: &str,
+    artifact: &OciArtifact,
     source_commit: Option<&CommitSha>,
     public_configuration: Option<&PublicDeploymentConfiguration>,
     progress: Option<&mut dyn FnMut(DeploymentProgress)>,
 ) -> Result<DeploymentResult, DeployOciError> {
-    let artifact =
-        OciArtifact::parse(image_reference).map_err(|source| DeployOciError::PullImage {
-            source: PullImageError::InvalidReference { source },
-        })?;
     let delivery = application_store::load_delivery_specification(connection, application_id)
         .map_err(|source| DeployOciError::DeliveryConfiguration { source })?;
     let Some(delivery) = delivery else {
@@ -141,8 +137,7 @@ fn deploy_oci_reporting(
             actual: artifact.repository().to_owned(),
         });
     }
-    let image =
-        pull_image(artifact.reference()).map_err(|source| DeployOciError::PullImage { source })?;
+    let image = pull_image(artifact).map_err(|source| DeployOciError::PullImage { source })?;
     let release = create_release(connection, application_id, &image.artifact)
         .map_err(|source| DeployOciError::CreateRelease { source })?;
     let source_revision = source_commit.cloned().map(SourceRevision::from_commit);

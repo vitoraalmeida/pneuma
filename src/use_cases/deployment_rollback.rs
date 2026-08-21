@@ -91,8 +91,7 @@ pub fn rollback_deployment(
         });
     }
     let target = previous_release(connection, application_id)?;
-    pull_image(target.release.artifact.reference())
-        .map_err(|source| RollbackError::PullImage { source })?;
+    pull_image(&target.release.artifact).map_err(|source| RollbackError::PullImage { source })?;
     deploy_release(
         connection,
         application_id,
