@@ -5,7 +5,8 @@
 **Base:** `49b9476` (`docs: refactor documentation architecture`)
 
 **Approved designs:** [`domain-model-hardening.md`](../design/domain-model-hardening.md),
-[`reconciliation.md`](../design/reconciliation.md), and [`tui.md`](../design/tui.md)
+[`reconciliation.md`](../design/reconciliation.md), and
+[`domain-boundary-refactor.md`](../design/domain-boundary-refactor.md)
 
 ## Iteration - v0.4 Reconciliation
 
@@ -130,16 +131,29 @@ without selecting a new Release or making destructive changes from ambiguity.
   until adapter boundaries, without independent reference/digest or health scalars.
   Result: candidate startup and promotion now receive `OciArtifact`, runtime, and
   health-check specifications, extracting scalar values only for adapter calls.
-- [ ] Replace remaining use-case tuple and raw identity operation outputs with
+- [x] Replace remaining use-case tuple and raw identity operation outputs with
   cohesive typed values, and remove invented identifiers from store errors.
-- [ ] Add TUI dashboard read projections for Systems, Applications, details,
-  Deployments, Releases, RuntimeInstances, and read-only runtime observation.
+  Result: runtime, promotion, and exposure results retain typed identities;
+  store failures preserve contextual sources and Release digest lookup reports
+  its real Application and artifact keys.
+- [ ] Realign domain module ownership without behavioral change: move System naming
+  to the System domain, Application desired runtime intent to Application, and
+  runtime and health specifications to Runtime.
+- [ ] Canonicalize immutable Git commit identity as one domain value shared by Git,
+  OCI, and Deployment source revision handling.
+- [ ] Realign store ownership: move System SQL into `system_store`, Application
+  runtime intent into `application_store`, and Deployment-only queries into
+  `deployment_store`; remove obsolete Release-store APIs.
+- [ ] Extract Exposure persistence, hydration, transitions, and reconciliation CAS
+  into `exposure_store`, keeping Application deployment-specification projection
+  in `application_store`.
+- [ ] Move internal and public promotion write ordering from `deployment_store`
+  into their use cases while retaining one atomic transaction and explicit stale
+  outcomes for every persistence primitive.
+- [ ] Move generic Application lookup out of list-specific use cases and retire or
+  explicitly isolate the legacy direct Podman candidate-creation API.
 - [ ] Extract shared remote import, diagnostics, database, and progress-enabled
   deployment orchestration from `main.rs` without changing CLI behavior.
-- [ ] Add `pneuma tui` with Ratatui/Crossterm terminal safety, self-contained
-  tabs, read-only navigation, and renderer/reducer coverage.
-- [ ] Add confirmed forms and serialized background jobs for approved operator
-  actions, then complete TUI terminal and fake-command regression evidence.
 
 ## Scope and Non-goals
 
@@ -159,8 +173,6 @@ without selecting a new Release or making destructive changes from ambiguity.
 - Reconciliation does not create a Release or Deployment, change intent, or
   destructively repair ambiguous drift.
 - Required VM E2E coverage proves the approved reconciliation scenarios.
-- The TUI preserves non-interactive CLI behavior, does not expose CI dispatch,
-  and verifies terminal restoration and approved operator workflows.
 - The exact CI gates and all required VM evidence are green before this
   iteration is closed.
 

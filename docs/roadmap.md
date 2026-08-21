@@ -16,7 +16,7 @@ deliberately do not redefine current architecture.
 
 ## Principles
 
-1. **Core does not know interfaces** - CLI, TUI, and API call the same use cases.
+1. **Core does not know interfaces** - command interfaces call the same use cases.
 2. **Idempotence** - repeating an operation does not duplicate a resource.
 3. **Desired state is not observed state** - SQLite records intent; external
    systems report reality.
@@ -81,8 +81,6 @@ without selecting a new Release or creating a Deployment from drift.
 - [ ] Candidate and activation improvements.
 - [ ] Deployment mutual exclusion per Application.
 - [ ] Non-interactive CLI with structured output and exit codes.
-- [ ] Local Ratatui terminal interface for approved operator workflows after
-  reconciliation and its required VM regression.
 
 Already implemented, not v0.4 work: CI validation and image publishing under the
 full commit-SHA tag; restricted SSH deployment through `pneuma ci dispatch`.

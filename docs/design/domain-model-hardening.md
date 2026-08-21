@@ -65,6 +65,6 @@ persisted combinations with context rather than silently normalizing them.
   decision and migration coverage.
 - No reconciliation command, runtime repair, Caddy repair, or external effect
   in the hardening checkpoints.
-- No TUI implementation or presentation state in domain entities.
+- No user-interface implementation or presentation state in domain entities.
 - No generic ID framework, traits, async runtime, or new dependency for these
   value objects.
