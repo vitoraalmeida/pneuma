@@ -278,7 +278,7 @@ fn rematerialize_missing_runtime(
         input.application.name.as_str(),
         active.deployment.id.as_str(),
         active.release.artifact.reference(),
-        runtime.container_port,
+        runtime.container_port.get(),
         runtime.expected_endpoint.socket_addr().port(),
         active.release.artifact.digest(),
     );
@@ -311,7 +311,7 @@ fn rematerialize_missing_runtime(
             input.application.name.as_str(),
             active.deployment.id.as_str(),
             active.release.artifact.reference(),
-            runtime.container_port,
+            runtime.container_port.get(),
             runtime.expected_endpoint.socket_addr().port(),
             active.release.artifact.digest(),
         )
@@ -331,7 +331,7 @@ fn rematerialize_missing_runtime(
             input.application.name.as_str(),
             active.deployment.id.as_str(),
         ),
-        runtime.container_port,
+        runtime.container_port.get(),
     )
     .map_err(|source| ReconciliationReadError::ObserveNamedContainer { source })?
     else {
@@ -428,7 +428,7 @@ fn recover_interrupted_deployment(
                 application.name.as_str(),
                 deployment.id.as_str(),
                 release.artifact.reference(),
-                runtime.container_port,
+                runtime.container_port.get(),
                 runtime.expected_endpoint.socket_addr().port(),
                 release.artifact.digest(),
             );
@@ -439,7 +439,7 @@ fn recover_interrupted_deployment(
                 };
             let container_proven = match observe_named_container(
                 &container_name(application.name.as_str(), deployment.id.as_str()),
-                runtime.container_port,
+                runtime.container_port.get(),
             )
             .map_err(|source| ReconciliationReadError::ObserveNamedContainer { source })?
             {
@@ -947,7 +947,7 @@ fn repair_recreated_runtime(
         input.application.name.as_str(),
         active.deployment.id.as_str(),
         active.release.artifact.reference(),
-        runtime.container_port,
+        runtime.container_port.get(),
         runtime.expected_endpoint.socket_addr().port(),
         active.release.artifact.digest(),
     );
@@ -1050,14 +1050,16 @@ pub fn observe_reconciliation_input(
     let Some(runtime) = &active.runtime else {
         return Ok(None);
     };
-    let recorded_container =
-        observe_container(runtime.external_runtime_id.as_str(), runtime.container_port)
-            .map_err(|source| ReconciliationReadError::ObserveContainer { source })?;
+    let recorded_container = observe_container(
+        runtime.external_runtime_id.as_str(),
+        runtime.container_port.get(),
+    )
+    .map_err(|source| ReconciliationReadError::ObserveContainer { source })?;
     let name = container_name(
         input.application.name.as_str(),
         active.deployment.id.as_str(),
     );
-    let named_container = observe_named_container(&name, runtime.container_port)
+    let named_container = observe_named_container(&name, runtime.container_port.get())
         .map_err(|source| ReconciliationReadError::ObserveNamedContainer { source })?;
     let unit = unit_name(
         input.application.name.as_str(),

@@ -167,7 +167,7 @@ pub struct RuntimeInstance {
     pub external_runtime_id: ContainerId,
     pub state: RuntimeState,
     pub expected_endpoint: ExpectedRuntimeEndpoint,
-    pub container_port: u16,
+    pub container_port: ContainerPort,
     pub observed_state: ObservedRuntimeState,
     pub observed_at: String,
     pub exit_code: Option<i32>,
@@ -183,7 +183,7 @@ pub struct RuntimeRegistration {
     pub deployment_id: DeploymentId,
     pub external_runtime_id: ContainerId,
     pub expected_endpoint: ExpectedRuntimeEndpoint,
-    pub container_port: u16,
+    pub container_port: ContainerPort,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -331,7 +331,7 @@ impl RuntimeSpecification {
     }
 }
 
-fn validate_loopback_endpoint(endpoint: SocketAddr) -> Result<(), RuntimeEndpointError> {
+pub(crate) fn validate_loopback_endpoint(endpoint: SocketAddr) -> Result<(), RuntimeEndpointError> {
     if endpoint.ip() != IpAddr::V4(Ipv4Addr::LOCALHOST) || endpoint.port() == 0 {
         return Err(RuntimeEndpointError::NotIpv4Loopback { endpoint });
     }

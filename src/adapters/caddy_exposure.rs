@@ -2,12 +2,13 @@ use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::io;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::domain::exposure::is_valid_domain;
 use crate::domain::reconciliation::CaddyFragmentObservation;
+use crate::domain::runtime::validate_loopback_endpoint;
 
 #[derive(Debug, PartialEq, Eq)]
 // Records a newly active fragment and the prior bytes needed to compensate a later route failure.
@@ -498,7 +499,7 @@ fn validate_input(
     if !is_valid_domain(domain) {
         return Err(MaterializeCaddyFragmentError::InvalidDomain);
     }
-    if endpoint.ip() != IpAddr::V4(Ipv4Addr::LOCALHOST) || endpoint.port() == 0 {
+    if validate_loopback_endpoint(endpoint).is_err() {
         return Err(MaterializeCaddyFragmentError::InvalidEndpoint { endpoint });
     }
 

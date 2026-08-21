@@ -1,12 +1,14 @@
 use std::error::Error;
 use std::fmt;
 use std::io;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::process::Command;
 
 use crate::domain::reconciliation::NamedContainerObservation;
 use crate::domain::runtime::ContainerId;
-use crate::domain::runtime::{ContainerObservation, ObservedRuntimeState};
+use crate::domain::runtime::{
+    ContainerObservation, ObservedRuntimeState, validate_loopback_endpoint,
+};
 
 #[derive(Debug, PartialEq, Eq)]
 // Preserves Podman diagnostics from successful lifecycle commands for callers that report effects.
@@ -488,7 +490,7 @@ fn observe_endpoint(
         .lines()
         .next()
         .and_then(|line| line.parse::<SocketAddr>().ok())
-        .filter(|endpoint| endpoint.ip() == IpAddr::V4(Ipv4Addr::LOCALHOST))
+        .filter(|endpoint| validate_loopback_endpoint(*endpoint).is_ok())
         .ok_or_else(|| ObserveContainerError::InvalidEndpoint {
             container_id: container_id.to_owned(),
             output,

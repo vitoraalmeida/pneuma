@@ -9,7 +9,8 @@ use pneuma::domain::identity::RuntimeInstanceId;
 use pneuma::domain::release::OciArtifact;
 use pneuma::domain::runtime::ContainerId;
 use pneuma::domain::runtime::{
-    ContainerPort, HealthCheckPath, HealthCheckSpecification, HealthCheckStatus,
+    ContainerPort, ExpectedRuntimeEndpoint, HealthCheckPath, HealthCheckSpecification,
+    HealthCheckStatus,
 };
 use pneuma::use_cases::application_import::import_application;
 use pneuma::use_cases::deployment_create::create_deployment;
@@ -187,7 +188,7 @@ fn add_verifying_candidate(
         connection,
         &deployment.id,
         &external_runtime_id,
-        endpoint,
+        ExpectedRuntimeEndpoint::new(endpoint).unwrap(),
         ContainerPort::new(8080).unwrap(),
     )
     .unwrap();

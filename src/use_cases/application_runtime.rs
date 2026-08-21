@@ -145,13 +145,14 @@ pub fn report_application_status(
 ) -> Result<RuntimeObservation, RuntimeLifecycleError> {
     let runtime = load_current_runtime(connection, application_id, application_name)?;
     let desired_runtime_state = load_desired_state(connection, application_id)?;
-    let observation =
-        observe_container(runtime.external_runtime_id.as_str(), runtime.container_port).map_err(
-            |source| RuntimeLifecycleError::Observe {
-                runtime_id: runtime.id.to_string(),
-                source,
-            },
-        )?;
+    let observation = observe_container(
+        runtime.external_runtime_id.as_str(),
+        runtime.container_port.get(),
+    )
+    .map_err(|source| RuntimeLifecycleError::Observe {
+        runtime_id: runtime.id.to_string(),
+        source,
+    })?;
     if *observation.state() == ObservedRuntimeState::Missing {
         if desired_runtime_state == DesiredRuntimeState::Stopped {
             persist_observation(connection, &runtime, &observation)?;
@@ -310,7 +311,7 @@ fn transition_application(
                 }
             })?;
         }
-        observe_container(external_runtime_id.as_str(), runtime.container_port).map_err(
+        observe_container(external_runtime_id.as_str(), runtime.container_port.get()).map_err(
             |source| RuntimeLifecycleError::Observe {
                 runtime_id: runtime.id.to_string(),
                 source,
@@ -357,13 +358,14 @@ fn observe_current_runtime(
     runtime: &RuntimeInstance,
     application_name: &str,
 ) -> Result<CurrentRuntimeObservation, RuntimeLifecycleError> {
-    let observation =
-        observe_container(runtime.external_runtime_id.as_str(), runtime.container_port).map_err(
-            |source| RuntimeLifecycleError::Observe {
-                runtime_id: runtime.id.to_string(),
-                source,
-            },
-        )?;
+    let observation = observe_container(
+        runtime.external_runtime_id.as_str(),
+        runtime.container_port.get(),
+    )
+    .map_err(|source| RuntimeLifecycleError::Observe {
+        runtime_id: runtime.id.to_string(),
+        source,
+    })?;
     if *observation.state() != ObservedRuntimeState::Missing {
         return Ok(CurrentRuntimeObservation {
             observation,
@@ -394,12 +396,13 @@ fn observe_current_runtime(
             runtime_id: runtime.id.to_string(),
         });
     }
-    let observation = observe_container(&resolved, runtime.container_port).map_err(|source| {
-        RuntimeLifecycleError::Observe {
-            runtime_id: runtime.id.to_string(),
-            source,
-        }
-    })?;
+    let observation =
+        observe_container(&resolved, runtime.container_port.get()).map_err(|source| {
+            RuntimeLifecycleError::Observe {
+                runtime_id: runtime.id.to_string(),
+                source,
+            }
+        })?;
     Ok(CurrentRuntimeObservation {
         observation,
         container_id: ContainerId::from(resolved),

@@ -8,8 +8,9 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use crate::adapters::stores::PersistenceOutcome;
 use crate::domain::identity::{ApplicationId, DeploymentId, RuntimeInstanceId};
 use crate::domain::runtime::{
-    ContainerId, ContainerObservation, ExpectedRuntimeEndpoint, ObservedRuntimeState,
-    PreviousRuntime, RuntimeInstance, RuntimeRegistration, RuntimeRetirement, RuntimeState,
+    ContainerId, ContainerObservation, ContainerPort, ExpectedRuntimeEndpoint,
+    ObservedRuntimeState, PreviousRuntime, RuntimeInstance, RuntimeRegistration, RuntimeRetirement,
+    RuntimeState,
 };
 
 #[derive(Debug)]
@@ -48,14 +49,14 @@ pub fn generate_id(connection: &Connection) -> Result<RuntimeInstanceId, Runtime
 // Checks whether a non-removed runtime already owns the requested loopback endpoint.
 pub fn port_is_reserved(
     connection: &Connection,
-    host_address: &str,
-    host_port: u16,
+    endpoint: &ExpectedRuntimeEndpoint,
 ) -> Result<bool, RuntimeStoreError> {
+    let socket_addr = endpoint.socket_addr();
     connection
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM runtime_instances
              WHERE host_address = ?1 AND host_port = ?2 AND removed_at IS NULL)",
-            params![host_address, host_port],
+            params![socket_addr.ip().to_string(), socket_addr.port()],
             |row| row.get(0),
         )
         .map_err(|source| RuntimeStoreError::Persistence { source })
@@ -81,7 +82,7 @@ pub fn insert_runtime(
                 runtime_state_value(RuntimeState::Starting),
                 registration.expected_endpoint.socket_addr().ip().to_string(),
                 registration.expected_endpoint.socket_addr().port(),
-                registration.container_port
+                registration.container_port.get()
             ],
         )
         .map_err(|source| RuntimeStoreError::Persistence { source })?;
@@ -409,7 +410,8 @@ fn map_runtime_instance(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeInst
             row.get::<_, u16>(6)?,
         )))
         .map_err(|error| invalid_text_value(6, "runtime endpoint", &error.to_string()))?,
-        container_port: row.get(7)?,
+        container_port: ContainerPort::new(row.get::<_, u16>(7)?)
+            .map_err(|error| invalid_text_value(7, "runtime container port", &error.to_string()))?,
         observed_state: observed_runtime_state_from_value(&observed_state_text),
         observed_at: row.get(9)?,
         exit_code: row.get(10)?,

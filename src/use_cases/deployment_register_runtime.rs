@@ -1,6 +1,6 @@
 use std::error::Error;
 use std::fmt;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 
 use rusqlite::{Connection, TransactionBehavior};
 
@@ -15,9 +15,6 @@ use crate::domain::runtime::{
 #[derive(Debug)]
 pub enum RegisterCandidateRuntimeError {
     InvalidExternalRuntimeId,
-    InvalidEndpoint {
-        endpoint: SocketAddr,
-    },
     DeploymentNotFound {
         deployment_id: String,
     },
@@ -51,10 +48,6 @@ impl fmt::Display for RegisterCandidateRuntimeError {
             Self::InvalidExternalRuntimeId => {
                 formatter.write_str("external runtime ID must be a non-empty hexadecimal value")
             }
-            Self::InvalidEndpoint { endpoint } => write!(
-                formatter,
-                "candidate runtime endpoint must be IPv4 loopback with a nonzero port: {endpoint}"
-            ),
             Self::DeploymentNotFound { deployment_id } => {
                 write!(formatter, "deployment `{deployment_id}` was not found")
             }
@@ -100,7 +93,6 @@ impl Error for RegisterCandidateRuntimeError {
             Self::DeploymentStore { source } => Some(source),
             Self::Persistence { source } => Some(source),
             Self::InvalidExternalRuntimeId
-            | Self::InvalidEndpoint { .. }
             | Self::DeploymentNotFound { .. }
             | Self::InvalidDeploymentState { .. }
             | Self::ExternalRuntimeConflict { .. }
@@ -147,10 +139,10 @@ pub fn register_candidate_runtime(
     connection: &mut Connection,
     deployment_id: &DeploymentId,
     external_runtime_id: &ContainerId,
-    endpoint: SocketAddr,
+    endpoint: ExpectedRuntimeEndpoint,
     container_port: ContainerPort,
 ) -> Result<RuntimeInstance, RegisterCandidateRuntimeError> {
-    validate_runtime(external_runtime_id.as_str(), endpoint)?;
+    validate_external_runtime_id(external_runtime_id.as_str())?;
 
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -159,8 +151,8 @@ pub fn register_candidate_runtime(
         runtime_store::load_runtime_by_external_id(&transaction, external_runtime_id.as_str())?
     {
         if existing.deployment_id == *deployment_id
-            && existing.expected_endpoint.socket_addr() == endpoint
-            && existing.container_port == container_port.get()
+            && existing.expected_endpoint == endpoint
+            && existing.container_port == container_port
         {
             transaction
                 .commit()
@@ -180,10 +172,11 @@ pub fn register_candidate_runtime(
         });
     }
 
-    let port_reserved =
-        runtime_store::port_is_reserved(&transaction, "127.0.0.1", endpoint.port())?;
+    let port_reserved = runtime_store::port_is_reserved(&transaction, &endpoint)?;
     if port_reserved {
-        return Err(RegisterCandidateRuntimeError::EndpointConflict { endpoint });
+        return Err(RegisterCandidateRuntimeError::EndpointConflict {
+            endpoint: endpoint.socket_addr(),
+        });
     }
 
     let runtime_id = runtime_store::generate_id(&transaction)?;
@@ -192,9 +185,8 @@ pub fn register_candidate_runtime(
         application_id: deployment.application_id,
         deployment_id: deployment.id,
         external_runtime_id: external_runtime_id.clone(),
-        expected_endpoint: ExpectedRuntimeEndpoint::new(endpoint)
-            .map_err(|_| RegisterCandidateRuntimeError::InvalidEndpoint { endpoint })?,
-        container_port: container_port.get(),
+        expected_endpoint: endpoint,
+        container_port,
     };
     runtime_store::insert_runtime(&transaction, &registration)?;
 
@@ -210,10 +202,9 @@ pub fn register_candidate_runtime(
     Ok(runtime)
 }
 
-// Enforces the external-ID and loopback endpoint invariants before persistence.
-fn validate_runtime(
+// Enforces the external container-ID invariant before persistence.
+fn validate_external_runtime_id(
     external_runtime_id: &str,
-    endpoint: SocketAddr,
 ) -> Result<(), RegisterCandidateRuntimeError> {
     if external_runtime_id.is_empty()
         || !external_runtime_id
@@ -221,9 +212,6 @@ fn validate_runtime(
             .all(|byte| byte.is_ascii_hexdigit())
     {
         return Err(RegisterCandidateRuntimeError::InvalidExternalRuntimeId);
-    }
-    if endpoint.ip() != IpAddr::V4(Ipv4Addr::LOCALHOST) || endpoint.port() == 0 {
-        return Err(RegisterCandidateRuntimeError::InvalidEndpoint { endpoint });
     }
     Ok(())
 }

@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::fmt;
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::net::{SocketAddr, TcpStream};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::thread;
 use std::time::Duration;
 
@@ -119,7 +119,7 @@ fn validate_request(
     path: &str,
     expected_status: u16,
 ) -> Result<(), HealthCheckError> {
-    if !endpoint.ip().is_loopback() {
+    if endpoint.ip() != IpAddr::V4(Ipv4Addr::LOCALHOST) {
         return Err(HealthCheckError::NonLoopbackEndpoint { endpoint });
     }
     if !path.starts_with('/') || path.chars().any(char::is_whitespace) {
@@ -333,6 +333,15 @@ mod tests {
     #[test]
     fn rejects_a_non_loopback_endpoint_before_connecting() {
         let endpoint = SocketAddr::from(([192, 0, 2, 1], 8080));
+
+        let error = check_internal_health(endpoint, "/healthz", 200).unwrap_err();
+
+        assert_eq!(error, HealthCheckError::NonLoopbackEndpoint { endpoint });
+    }
+
+    #[test]
+    fn rejects_an_ipv6_loopback_endpoint_before_connecting() {
+        let endpoint = SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], 8080));
 
         let error = check_internal_health(endpoint, "/healthz", 200).unwrap_err();
 

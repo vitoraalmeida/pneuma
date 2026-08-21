@@ -11,7 +11,8 @@ use crate::adapters::systemd_quadlet::{
 use crate::domain::identity::{ApplicationId, DeploymentId};
 use crate::domain::release::OciArtifact;
 use crate::domain::runtime::{
-    ContainerId, ObservedRuntimeState, RuntimeInstance, RuntimeSpecification,
+    ContainerId, ExpectedRuntimeEndpoint, ObservedRuntimeState, RuntimeInstance,
+    RuntimeSpecification,
 };
 use crate::use_cases::deployment_register_runtime::register_candidate_runtime;
 use crate::use_cases::deployment_runtime_cleanup::CandidateResources;
@@ -79,6 +80,7 @@ pub(crate) enum CandidateStartError {
 enum RuntimeObservationFailure {
     NotRunning { actual: ObservedRuntimeState },
     MissingEndpoint,
+    InvalidEndpoint,
 }
 
 impl fmt::Display for RuntimeObservationFailure {
@@ -89,6 +91,9 @@ impl fmt::Display for RuntimeObservationFailure {
             }
             Self::MissingEndpoint => {
                 formatter.write_str("running runtime has no loopback endpoint")
+            }
+            Self::InvalidEndpoint => {
+                formatter.write_str("running runtime has an invalid loopback endpoint")
             }
         }
     }
@@ -171,6 +176,12 @@ pub(crate) fn start_candidate(
     let endpoint = observation.observed_endpoint().ok_or_else(|| {
         CandidateStartError::ContainerObservation {
             source: Box::new(RuntimeObservationFailure::MissingEndpoint),
+            resources: Box::new(resources.clone()),
+        }
+    })?;
+    let endpoint = ExpectedRuntimeEndpoint::new(endpoint).map_err(|_| {
+        CandidateStartError::ContainerObservation {
+            source: Box::new(RuntimeObservationFailure::InvalidEndpoint),
             resources: Box::new(resources.clone()),
         }
     })?;

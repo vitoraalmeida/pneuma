@@ -14,11 +14,14 @@ primitive round-trips, and removing duplicate or drifted validation.
 
 ## Checkpoints
 
-- [ ] Centralize the loopback endpoint invariant and replace raw container-port
+- [x] Centralize the loopback endpoint invariant and replace raw container-port
   fields with `ContainerPort`. Make runtime registration accept
   `ExpectedRuntimeEndpoint` and remove the hardcoded loopback address from
   port-reservation queries.
-  Result: TBD.
+  Result: `RuntimeInstance`/`RuntimeRegistration` now carry `ContainerPort`;
+  `register_candidate_runtime` and `port_is_reserved` accept
+  `ExpectedRuntimeEndpoint`; the IPv6 `::1` drift in internal health checks is
+  fixed; Caddy and local runtime delegate loopback validation to the domain.
 - [ ] Pass `&HealthCheckSpecification` into the internal health-check adapter and
   fix the hardcoded `/` `200` probe used during visibility changes so it uses
   the persisted runtime health specification.
