@@ -11,6 +11,7 @@ use crate::adapters::caddy_exposure::{
 };
 use crate::adapters::health_check_external::{ExternalHealthCheckError, check_external_health};
 use crate::adapters::local_runtime::{ObserveContainerError, observe_container};
+use crate::adapters::stores::application_store;
 use crate::adapters::stores::exposure_store::{self, ExposureStoreError};
 use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
 use crate::domain::exposure::{
@@ -52,11 +53,15 @@ pub enum ExposureChangeError {
         reason: String,
     },
     InvalidConfigurationVersion,
+    InvalidDiagnostic,
     Store {
         source: ExposureStoreError,
     },
     RuntimeStore {
         source: RuntimeStoreError,
+    },
+    ApplicationStore {
+        source: crate::adapters::stores::application_store::ApplicationStoreError,
     },
     ObserveFailed {
         source: ObserveContainerError,
@@ -119,9 +124,17 @@ impl fmt::Display for ExposureChangeError {
             Self::InvalidConfigurationVersion => {
                 formatter.write_str("generated exposure configuration version is invalid")
             }
+            Self::InvalidDiagnostic => formatter
+                .write_str("exposure diagnostic code and message must be trimmed and non-empty"),
             Self::Store { source } => write!(formatter, "failed to change exposure: {source}"),
             Self::RuntimeStore { source } => {
-                write!(formatter, "failed to change exposure: {source}")
+                write!(formatter, "failed to read runtime: {source}")
+            }
+            Self::ApplicationStore { source } => {
+                write!(
+                    formatter,
+                    "failed to read application specification: {source}"
+                )
             }
             Self::ObserveFailed { source } => {
                 write!(formatter, "failed to observe runtime: {source}")
@@ -150,6 +163,7 @@ impl Error for ExposureChangeError {
         match self {
             Self::Store { source } => Some(source),
             Self::RuntimeStore { source } => Some(source),
+            Self::ApplicationStore { source } => Some(source),
             Self::ObserveFailed { source } => Some(source),
             Self::MaterializeFailed { source } => Some(source),
             Self::RemoveFragmentFailed { source } => Some(source),
@@ -163,6 +177,7 @@ impl Error for ExposureChangeError {
             | Self::InvalidMaterializationState { .. }
             | Self::InvalidExposure { .. }
             | Self::InvalidConfigurationVersion
+            | Self::InvalidDiagnostic
             | Self::RuntimeNotRunning { .. } => None,
         }
     }
@@ -351,7 +366,19 @@ fn make_public(
             );
         }
     };
-    if let Err(source) = check_external_health(domain.as_str(), "/", 200) {
+    let specification = application_store::load_deployment_specification(
+        connection,
+        &ApplicationId::from(application_id),
+    )
+    .map_err(|source| ExposureChangeError::ApplicationStore { source })?
+    .ok_or_else(|| ExposureChangeError::InvalidExposure {
+        reason: "missing deployment specification".to_owned(),
+    })?;
+    if let Err(source) = check_external_health(
+        domain.as_str(),
+        specification.runtime.health_check().path().as_str(),
+        specification.runtime.health_check().expected_status().get(),
+    ) {
         let recovery_failed =
             restore_materialized_caddy_fragment(&materialized, caddyfile_path).is_err();
         let message = source.to_string();
@@ -561,7 +588,7 @@ fn record_failure(
         ExposureMaterializationState::Failed
     };
     let diagnostic = ExposureDiagnostic::new(code, message)
-        .map_err(|_| ExposureChangeError::InvalidConfigurationVersion)?;
+        .map_err(|_| ExposureChangeError::InvalidDiagnostic)?;
     let updated = exposure_store::record_exposure_change_failure(
         &transaction,
         &ApplicationId::from(application_id),

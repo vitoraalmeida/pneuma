@@ -22,10 +22,13 @@ primitive round-trips, and removing duplicate or drifted validation.
   `register_candidate_runtime` and `port_is_reserved` accept
   `ExpectedRuntimeEndpoint`; the IPv6 `::1` drift in internal health checks is
   fixed; Caddy and local runtime delegate loopback validation to the domain.
-- [ ] Pass `&HealthCheckSpecification` into the internal health-check adapter and
+- [x] Pass `&HealthCheckSpecification` into the internal health-check adapter and
   fix the hardcoded `/` `200` probe used during visibility changes so it uses
   the persisted runtime health specification.
-  Result: TBD.
+  Result: `check_internal_health` now receives `&HealthCheckSpecification`;
+  duplicated path/status validation is removed; `exposure_change` loads the
+  deployment specification and probes the persisted health path/status;
+  `ExposureDiagnostic::new` failures map to `InvalidDiagnostic`.
 - [ ] Move `DeploymentTransition`, its edge mapping, and promotion eligibility
   into `domain/deployment.rs`; move promotion/rollback target types out of
   `deployment_store`; merge duplicate promoted-candidate types.

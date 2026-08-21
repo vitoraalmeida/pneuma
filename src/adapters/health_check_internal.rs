@@ -3,6 +3,8 @@ use std::fmt;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::thread;
+
+use crate::domain::runtime::HealthCheckSpecification;
 use std::time::Duration;
 
 const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -33,8 +35,6 @@ pub enum HealthCheckFailure {
 #[derive(Debug, PartialEq, Eq)]
 pub enum HealthCheckError {
     NonLoopbackEndpoint { endpoint: SocketAddr },
-    InvalidPath,
-    InvalidExpectedStatus,
 }
 
 impl fmt::Display for HealthCheckError {
@@ -46,11 +46,6 @@ impl fmt::Display for HealthCheckError {
                     "internal health endpoint must be loopback: {endpoint}"
                 )
             }
-            Self::InvalidPath => formatter
-                .write_str("health check path must start with `/` and contain no whitespace"),
-            Self::InvalidExpectedStatus => {
-                formatter.write_str("expected HTTP status must be between 100 and 599")
-            }
         }
     }
 }
@@ -60,13 +55,11 @@ impl Error for HealthCheckError {}
 // Checks a candidate's loopback endpoint with the fixed bounded retry policy used before promotion.
 pub fn check_internal_health(
     endpoint: SocketAddr,
-    path: &str,
-    expected_status: u16,
+    specification: &HealthCheckSpecification,
 ) -> Result<HealthCheckResult, HealthCheckError> {
     check_internal_health_with_policy(
         endpoint,
-        path,
-        expected_status,
+        specification,
         HealthCheckPolicy {
             attempt_timeout: ATTEMPT_TIMEOUT,
             retry_interval: RETRY_INTERVAL,
@@ -86,14 +79,20 @@ struct HealthCheckPolicy {
 // Performs retries and returns the final observed failure instead of exposing transient attempt errors.
 fn check_internal_health_with_policy(
     endpoint: SocketAddr,
-    path: &str,
-    expected_status: u16,
+    specification: &HealthCheckSpecification,
     policy: HealthCheckPolicy,
 ) -> Result<HealthCheckResult, HealthCheckError> {
-    validate_request(endpoint, path, expected_status)?;
+    if endpoint.ip() != IpAddr::V4(Ipv4Addr::LOCALHOST) {
+        return Err(HealthCheckError::NonLoopbackEndpoint { endpoint });
+    }
 
     for attempt in 1..=policy.max_attempts {
-        match check_once(endpoint, path, expected_status, policy.attempt_timeout) {
+        match check_once(
+            endpoint,
+            specification.path().as_str(),
+            specification.expected_status().get(),
+            policy.attempt_timeout,
+        ) {
             Ok(response_status) => {
                 return Ok(HealthCheckResult::Healthy {
                     attempts: attempt,
@@ -111,25 +110,6 @@ fn check_internal_health_with_policy(
     }
 
     unreachable!("health check policy always performs at least one attempt")
-}
-
-// Rejects non-loopback or malformed requests before any health-check connection is attempted.
-fn validate_request(
-    endpoint: SocketAddr,
-    path: &str,
-    expected_status: u16,
-) -> Result<(), HealthCheckError> {
-    if endpoint.ip() != IpAddr::V4(Ipv4Addr::LOCALHOST) {
-        return Err(HealthCheckError::NonLoopbackEndpoint { endpoint });
-    }
-    if !path.starts_with('/') || path.chars().any(char::is_whitespace) {
-        return Err(HealthCheckError::InvalidPath);
-    }
-    if !(100..=599).contains(&expected_status) {
-        return Err(HealthCheckError::InvalidExpectedStatus);
-    }
-
-    Ok(())
 }
 
 // Sends one bounded HTTP request and parses only its status line to avoid reading an untrusted response body.
@@ -197,6 +177,15 @@ mod tests {
     use super::*;
     use std::net::{Ipv4Addr, TcpListener};
 
+    use crate::domain::runtime::{HealthCheckPath, HealthCheckSpecification, HealthCheckStatus};
+
+    fn health_check() -> HealthCheckSpecification {
+        HealthCheckSpecification::new(
+            HealthCheckPath::new("/healthz").unwrap(),
+            HealthCheckStatus::new(200).unwrap(),
+        )
+    }
+
     const TEST_POLICY: HealthCheckPolicy = HealthCheckPolicy {
         attempt_timeout: Duration::from_millis(50),
         retry_interval: Duration::from_millis(1),
@@ -208,7 +197,7 @@ mod tests {
         let (endpoint, server) = server_with_responses(&[200]);
 
         let result =
-            check_internal_health_with_policy(endpoint, "/healthz", 200, TEST_POLICY).unwrap();
+            check_internal_health_with_policy(endpoint, &health_check(), TEST_POLICY).unwrap();
 
         server.join().unwrap();
         assert_eq!(
@@ -225,7 +214,7 @@ mod tests {
         let (endpoint, server) = server_with_responses(&[503, 200]);
 
         let result =
-            check_internal_health_with_policy(endpoint, "/healthz", 200, TEST_POLICY).unwrap();
+            check_internal_health_with_policy(endpoint, &health_check(), TEST_POLICY).unwrap();
 
         server.join().unwrap();
         assert_eq!(
@@ -242,7 +231,7 @@ mod tests {
         let (endpoint, server) = server_with_responses(&[503, 502]);
 
         let result =
-            check_internal_health_with_policy(endpoint, "/healthz", 200, TEST_POLICY).unwrap();
+            check_internal_health_with_policy(endpoint, &health_check(), TEST_POLICY).unwrap();
 
         server.join().unwrap();
         assert_eq!(
@@ -267,7 +256,7 @@ mod tests {
             ..TEST_POLICY
         };
 
-        let result = check_internal_health_with_policy(endpoint, "/healthz", 200, policy).unwrap();
+        let result = check_internal_health_with_policy(endpoint, &health_check(), policy).unwrap();
 
         assert!(matches!(
             result,
@@ -292,7 +281,7 @@ mod tests {
             ..TEST_POLICY
         };
 
-        let result = check_internal_health_with_policy(endpoint, "/healthz", 200, policy).unwrap();
+        let result = check_internal_health_with_policy(endpoint, &health_check(), policy).unwrap();
 
         server.join().unwrap();
         assert_eq!(
@@ -318,7 +307,7 @@ mod tests {
             ..TEST_POLICY
         };
 
-        let result = check_internal_health_with_policy(endpoint, "/healthz", 200, policy).unwrap();
+        let result = check_internal_health_with_policy(endpoint, &health_check(), policy).unwrap();
 
         server.join().unwrap();
         assert_eq!(
@@ -334,7 +323,7 @@ mod tests {
     fn rejects_a_non_loopback_endpoint_before_connecting() {
         let endpoint = SocketAddr::from(([192, 0, 2, 1], 8080));
 
-        let error = check_internal_health(endpoint, "/healthz", 200).unwrap_err();
+        let error = check_internal_health(endpoint, &health_check()).unwrap_err();
 
         assert_eq!(error, HealthCheckError::NonLoopbackEndpoint { endpoint });
     }
@@ -343,7 +332,7 @@ mod tests {
     fn rejects_an_ipv6_loopback_endpoint_before_connecting() {
         let endpoint = SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], 8080));
 
-        let error = check_internal_health(endpoint, "/healthz", 200).unwrap_err();
+        let error = check_internal_health(endpoint, &health_check()).unwrap_err();
 
         assert_eq!(error, HealthCheckError::NonLoopbackEndpoint { endpoint });
     }

@@ -160,12 +160,8 @@ pub fn promote_internal_candidate(
     }
     validate_target(&target)?;
 
-    let health = check_internal_health(
-        target.endpoint,
-        health_check.path().as_str(),
-        health_check.expected_status().get(),
-    )
-    .map_err(|source| PromoteInternalCandidateError::HealthCheck { source })?;
+    let health = check_internal_health(target.endpoint, health_check)
+        .map_err(|source| PromoteInternalCandidateError::HealthCheck { source })?;
     match health {
         HealthCheckResult::Healthy { .. } => {}
         HealthCheckResult::Unhealthy { ref failure, .. } => {

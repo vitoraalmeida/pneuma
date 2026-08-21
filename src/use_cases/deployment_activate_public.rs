@@ -99,14 +99,11 @@ pub(crate) fn activate_public_candidate(
         ),
     );
 
-    let internal_health = check_internal_health(
-        endpoint,
-        health_check.path().as_str(),
-        health_check.expected_status().get(),
-    )
-    .map_err(|source| PublicActivationError::InternalHealth {
-        source: Box::new(source),
-        resources: Box::new(resources.clone()),
+    let internal_health = check_internal_health(endpoint, health_check).map_err(|source| {
+        PublicActivationError::InternalHealth {
+            source: Box::new(source),
+            resources: Box::new(resources.clone()),
+        }
     })?;
 
     if !matches!(internal_health, HealthCheckResult::Healthy { .. }) {

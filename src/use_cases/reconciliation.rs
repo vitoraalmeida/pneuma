@@ -358,8 +358,7 @@ fn rematerialize_missing_runtime(
     }
     match check_internal_health(
         runtime.expected_endpoint.socket_addr(),
-        specification.runtime.health_check().path().as_str(),
-        specification.runtime.health_check().expected_status().get(),
+        specification.runtime.health_check(),
     )
     .map_err(|source| ReconciliationReadError::NotConverged {
         reason: source.to_string(),
