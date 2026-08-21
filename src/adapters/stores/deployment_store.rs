@@ -9,7 +9,7 @@ use crate::domain::deployment::{
     Deployment, DeploymentFailure, DeploymentFailureEvidence, DeploymentHistory,
     DeploymentLifecycle, DeploymentStatus, DeploymentType, SourceRevision,
 };
-use crate::domain::exposure::{DomainName, ExposureConfigurationVersion, Visibility};
+use crate::domain::exposure::{DomainName, Visibility};
 use crate::domain::git::CommitSha;
 use crate::domain::identity::{ApplicationId, DeploymentId, ReleaseId, RuntimeInstanceId};
 use crate::domain::release::Release;
@@ -382,46 +382,6 @@ pub fn load_rollback_target(
             Ok(RollbackTarget { release: Release { id: ReleaseId::from(row.get::<_, String>(0)?), application_id: ApplicationId::from(row.get::<_, String>(1)?), artifact, created_at: row.get(6)? }, source_revision })
         },
     ).optional().map_err(persistence)
-}
-
-// Applies every internal promotion write atomically, reporting a lost state race explicitly.
-pub fn promote_internal(
-    transaction: &Transaction<'_>,
-    target: &PromotionTarget,
-) -> Result<PersistenceOutcome, DeploymentStoreError> {
-    transaction.execute("UPDATE runtime_instances SET state = 'stopped', updated_at = CURRENT_TIMESTAMP WHERE application_id = ?1 AND state = 'running' AND removed_at IS NULL AND id != ?2", params![target.application_id.as_str(), target.runtime_id.as_str()]).map_err(persistence)?;
-    if outcome(transaction.execute("UPDATE runtime_instances SET state = 'running', updated_at = CURRENT_TIMESTAMP WHERE id = ?1 AND state = 'starting' AND removed_at IS NULL", [target.runtime_id.as_str()]).map_err(persistence)?) == PersistenceOutcome::Stale { return Ok(PersistenceOutcome::Stale); }
-    if mark_succeeded(
-        transaction,
-        target.deployment_id.as_str(),
-        DeploymentStatus::Verifying,
-    )? == PersistenceOutcome::Stale
-    {
-        return Ok(PersistenceOutcome::Stale);
-    }
-    if outcome(transaction.execute("UPDATE applications SET active_deployment_id = ?1, desired_runtime_state = 'running', updated_at = CURRENT_TIMESTAMP WHERE id = ?2", params![target.deployment_id.as_str(), target.application_id.as_str()]).map_err(persistence)?) == PersistenceOutcome::Stale { return Ok(PersistenceOutcome::Stale); }
-    Ok(PersistenceOutcome::Updated)
-}
-
-// Applies every public promotion write atomically, rolling back the transaction on a stale state.
-pub fn promote_public(
-    transaction: &Transaction<'_>,
-    target: &PromotionTarget,
-    configuration_version: &ExposureConfigurationVersion,
-) -> Result<PersistenceOutcome, DeploymentStoreError> {
-    transaction.execute("UPDATE runtime_instances SET state = 'stopped', updated_at = CURRENT_TIMESTAMP WHERE application_id = ?1 AND state = 'running' AND removed_at IS NULL AND id != ?2", params![target.application_id.as_str(), target.runtime_id.as_str()]).map_err(persistence)?;
-    if outcome(transaction.execute("UPDATE runtime_instances SET state = 'running', updated_at = CURRENT_TIMESTAMP WHERE id = ?1 AND state = 'starting' AND removed_at IS NULL", [target.runtime_id.as_str()]).map_err(persistence)?) == PersistenceOutcome::Stale { return Ok(PersistenceOutcome::Stale); }
-    if outcome(transaction.execute("UPDATE exposures SET active_runtime_id = ?1, materialization_state = 'active', configuration_version = ?2, last_materialized_at = CURRENT_TIMESTAMP, last_error_code = NULL, last_error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?3 AND desired_visibility = 'public' AND materialization_state = 'applying'", params![target.runtime_id.as_str(), configuration_version.as_str(), target.application_id.as_str()]).map_err(persistence)?) == PersistenceOutcome::Stale { return Ok(PersistenceOutcome::Stale); }
-    if mark_succeeded(
-        transaction,
-        target.deployment_id.as_str(),
-        DeploymentStatus::Activating,
-    )? == PersistenceOutcome::Stale
-    {
-        return Ok(PersistenceOutcome::Stale);
-    }
-    if outcome(transaction.execute("UPDATE applications SET active_deployment_id = ?1, desired_runtime_state = 'running', updated_at = CURRENT_TIMESTAMP WHERE id = ?2", params![target.deployment_id.as_str(), target.application_id.as_str()]).map_err(persistence)?) == PersistenceOutcome::Stale { return Ok(PersistenceOutcome::Stale); }
-    Ok(PersistenceOutcome::Updated)
 }
 
 fn deployment_from_row(row: &Row<'_>) -> rusqlite::Result<Deployment> {

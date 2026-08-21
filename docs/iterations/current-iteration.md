@@ -155,9 +155,11 @@ without selecting a new Release or making destructive changes from ambiguity.
   in `application_store`.
   Result: Exposure hydration, visibility transitions, diagnostics, and reconciliation
   reservations now have one store owner; Application retains deployment input projection.
-- [ ] Move internal and public promotion write ordering from `deployment_store`
+- [x] Move internal and public promotion write ordering from `deployment_store`
   into their use cases while retaining one atomic transaction and explicit stale
   outcomes for every persistence primitive.
+  Result: promotion use cases now order aggregate-owned Runtime, Exposure,
+  Deployment, and Application writes while handling each CAS stale result explicitly.
 - [ ] Move generic Application lookup out of list-specific use cases and retire or
   explicitly isolate the legacy direct Podman candidate-creation API.
 - [ ] Extract shared remote import, diagnostics, database, and progress-enabled

@@ -184,6 +184,26 @@ pub fn start_runtime(
     Ok(outcome(updated))
 }
 
+// Stops prior live runtimes during promotion; no matching runtime is a normal outcome.
+pub fn stop_other_running_runtimes(
+    transaction: &Transaction<'_>,
+    application_id: &str,
+    candidate_runtime_id: &str,
+) -> Result<(), RuntimeStoreError> {
+    transaction
+        .execute(
+            "UPDATE runtime_instances
+             SET state = 'stopped', updated_at = CURRENT_TIMESTAMP
+             WHERE application_id = ?1
+               AND state = 'running'
+               AND removed_at IS NULL
+               AND id != ?2",
+            params![application_id, candidate_runtime_id],
+        )
+        .map_err(|source| RuntimeStoreError::Persistence { source })?;
+    Ok(())
+}
+
 // Reads the logical lifecycle state for cleanup and transition decisions.
 pub fn load_runtime_state(
     connection: &Connection,

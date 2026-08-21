@@ -3,8 +3,11 @@ use std::fmt;
 
 use rusqlite::{Connection, TransactionBehavior};
 
+use crate::adapters::stores::PersistenceOutcome;
+use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::adapters::stores::deployment_store::DeploymentStoreError;
 use crate::adapters::stores::exposure_store::{self, ExposureStoreError};
+use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
 use crate::domain::deployment::DeploymentStatus;
 use crate::domain::exposure::{
     DomainName, ExposureConfigurationVersion, ExposureDiagnostic, ExposureMaterializationState,
@@ -59,6 +62,12 @@ pub enum PromotePublicCandidateError {
     DeploymentStore {
         source: DeploymentStoreError,
     },
+    ApplicationStore {
+        source: ApplicationStoreError,
+    },
+    RuntimeStore {
+        source: RuntimeStoreError,
+    },
     Persistence {
         source: rusqlite::Error,
     },
@@ -98,6 +107,12 @@ impl fmt::Display for PromotePublicCandidateError {
             Self::DeploymentStore { source } => {
                 write!(formatter, "failed to persist public promotion: {source}")
             }
+            Self::ApplicationStore { source } => {
+                write!(formatter, "failed to persist public promotion: {source}")
+            }
+            Self::RuntimeStore { source } => {
+                write!(formatter, "failed to persist public promotion: {source}")
+            }
             Self::InvalidConfigurationVersion => {
                 formatter.write_str("exposure configuration version must be non-empty")
             }
@@ -114,6 +129,8 @@ impl Error for PromotePublicCandidateError {
             Self::Persistence { source } => Some(source),
             Self::ExposureStore { source } => Some(source),
             Self::DeploymentStore { source } => Some(source),
+            Self::ApplicationStore { source } => Some(source),
+            Self::RuntimeStore { source } => Some(source),
             Self::RuntimeNotFound { .. }
             | Self::InvalidRuntime { .. }
             | Self::InvalidDeploymentState { .. }
@@ -218,13 +235,56 @@ pub fn promote_public_candidate(
         });
     }
 
-    let outcome = crate::adapters::stores::deployment_store::promote_public(
+    runtime_store::stop_other_running_runtimes(
         &transaction,
-        &target,
+        target.application_id.as_str(),
+        target.runtime_id.as_str(),
+    )
+    .map_err(|source| PromotePublicCandidateError::RuntimeStore { source })?;
+    if runtime_store::start_runtime(&transaction, target.runtime_id.as_str())
+        .map_err(|source| PromotePublicCandidateError::RuntimeStore { source })?
+        == PersistenceOutcome::Stale
+    {
+        return Err(PromotePublicCandidateError::InvalidRuntime {
+            runtime_id: runtime_id.to_owned(),
+            reason: "state changed during promotion".to_owned(),
+        });
+    }
+    if exposure_store::complete_public_exposure_change(
+        &transaction,
+        target.application_id.as_str(),
+        &target.runtime_id,
         configuration_version,
     )
-    .map_err(|source| PromotePublicCandidateError::DeploymentStore { source })?;
-    if outcome == crate::adapters::stores::PersistenceOutcome::Stale {
+    .map_err(|source| PromotePublicCandidateError::ExposureStore { source })?
+        == PersistenceOutcome::Stale
+    {
+        return Err(PromotePublicCandidateError::InvalidRuntime {
+            runtime_id: runtime_id.to_owned(),
+            reason: "state changed during promotion".to_owned(),
+        });
+    }
+    if crate::adapters::stores::deployment_store::mark_succeeded(
+        &transaction,
+        target.deployment_id.as_str(),
+        DeploymentStatus::Activating,
+    )
+    .map_err(|source| PromotePublicCandidateError::DeploymentStore { source })?
+        == PersistenceOutcome::Stale
+    {
+        return Err(PromotePublicCandidateError::InvalidRuntime {
+            runtime_id: runtime_id.to_owned(),
+            reason: "state changed during promotion".to_owned(),
+        });
+    }
+    if application_store::activate_deployment(
+        &transaction,
+        target.application_id.as_str(),
+        target.deployment_id.as_str(),
+    )
+    .map_err(|source| PromotePublicCandidateError::ApplicationStore { source })?
+        == PersistenceOutcome::Stale
+    {
         return Err(PromotePublicCandidateError::InvalidRuntime {
             runtime_id: runtime_id.to_owned(),
             reason: "state changed during promotion".to_owned(),

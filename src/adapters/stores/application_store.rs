@@ -346,8 +346,8 @@ pub fn activate_deployment(
     transaction: &Transaction<'_>,
     application_id: &str,
     deployment_id: &str,
-) -> Result<(), ApplicationStoreError> {
-    transaction
+) -> Result<PersistenceOutcome, ApplicationStoreError> {
+    let updated = transaction
         .execute(
             "UPDATE applications
              SET active_deployment_id = ?1,
@@ -357,7 +357,7 @@ pub fn activate_deployment(
             params![deployment_id, application_id],
         )
         .map_err(|source| ApplicationStoreError::Persistence { source })?;
-    Ok(())
+    Ok(outcome(updated))
 }
 
 // Loads delivery configuration and maps its persisted type into the domain enum.

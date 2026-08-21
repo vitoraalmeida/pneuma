@@ -6,7 +6,10 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::adapters::health_check_internal::{
     HealthCheckError, HealthCheckFailure, HealthCheckResult, check_internal_health,
 };
+use crate::adapters::stores::PersistenceOutcome;
+use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
+use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
 use crate::domain::deployment::DeploymentStatus;
 use crate::domain::exposure::Visibility;
 use crate::domain::identity::{DeploymentId, RuntimeInstanceId};
@@ -57,6 +60,12 @@ pub enum PromoteInternalCandidateError {
     Store {
         source: DeploymentStoreError,
     },
+    ApplicationStore {
+        source: ApplicationStoreError,
+    },
+    RuntimeStore {
+        source: RuntimeStoreError,
+    },
     Persistence {
         source: rusqlite::Error,
     },
@@ -106,6 +115,12 @@ impl fmt::Display for PromoteInternalCandidateError {
             Self::Store { source } => {
                 write!(formatter, "failed to promote internal candidate: {source}")
             }
+            Self::ApplicationStore { source } => {
+                write!(formatter, "failed to promote internal candidate: {source}")
+            }
+            Self::RuntimeStore { source } => {
+                write!(formatter, "failed to promote internal candidate: {source}")
+            }
             Self::Persistence { source } => {
                 write!(formatter, "failed to promote internal candidate: {source}")
             }
@@ -119,6 +134,8 @@ impl Error for PromoteInternalCandidateError {
             Self::HealthCheck { source } => Some(source),
             Self::RecordFailure { source } => Some(source),
             Self::Store { source } => Some(source),
+            Self::ApplicationStore { source } => Some(source),
+            Self::RuntimeStore { source } => Some(source),
             Self::Persistence { source } => Some(source),
             Self::RuntimeNotFound { .. }
             | Self::InvalidRuntimeState { .. }
@@ -176,9 +193,42 @@ pub fn promote_internal_candidate(
     }
     validate_target(&target)?;
 
-    let updated = deployment_store::promote_internal(&transaction, &target)
-        .map_err(|source| PromoteInternalCandidateError::Store { source })?;
-    if updated == crate::adapters::stores::PersistenceOutcome::Stale {
+    runtime_store::stop_other_running_runtimes(
+        &transaction,
+        target.application_id.as_str(),
+        target.runtime_id.as_str(),
+    )
+    .map_err(|source| PromoteInternalCandidateError::RuntimeStore { source })?;
+    if runtime_store::start_runtime(&transaction, target.runtime_id.as_str())
+        .map_err(|source| PromoteInternalCandidateError::RuntimeStore { source })?
+        == PersistenceOutcome::Stale
+    {
+        return Err(PromoteInternalCandidateError::InvalidDeploymentState {
+            deployment_id: target.deployment_id.to_string(),
+            actual: "changed during promotion".to_owned(),
+        });
+    }
+    if deployment_store::mark_succeeded(
+        &transaction,
+        target.deployment_id.as_str(),
+        DeploymentStatus::Verifying,
+    )
+    .map_err(|source| PromoteInternalCandidateError::Store { source })?
+        == PersistenceOutcome::Stale
+    {
+        return Err(PromoteInternalCandidateError::InvalidDeploymentState {
+            deployment_id: target.deployment_id.to_string(),
+            actual: "changed during promotion".to_owned(),
+        });
+    }
+    if application_store::activate_deployment(
+        &transaction,
+        target.application_id.as_str(),
+        target.deployment_id.as_str(),
+    )
+    .map_err(|source| PromoteInternalCandidateError::ApplicationStore { source })?
+        == PersistenceOutcome::Stale
+    {
         return Err(PromoteInternalCandidateError::InvalidDeploymentState {
             deployment_id: target.deployment_id.to_string(),
             actual: "changed during promotion".to_owned(),
