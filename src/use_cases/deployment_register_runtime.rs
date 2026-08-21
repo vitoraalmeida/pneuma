@@ -7,7 +7,7 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
 use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
 use crate::domain::deployment::DeploymentStatus;
-use crate::domain::identity::RuntimeInstanceId;
+use crate::domain::identity::{DeploymentId, RuntimeInstanceId};
 use crate::domain::runtime::{
     ContainerId, ContainerPort, ExpectedRuntimeEndpoint, RuntimeInstance, RuntimeRegistration,
 };
@@ -145,7 +145,7 @@ impl From<RuntimeStoreError> for RegisterCandidateRuntimeError {
 // Registers an observed candidate in one transaction after validating loopback identity.
 pub fn register_candidate_runtime(
     connection: &mut Connection,
-    deployment_id: &str,
+    deployment_id: &DeploymentId,
     external_runtime_id: &ContainerId,
     endpoint: SocketAddr,
     container_port: ContainerPort,
@@ -158,7 +158,7 @@ pub fn register_candidate_runtime(
     if let Some(existing) =
         runtime_store::load_runtime_by_external_id(&transaction, external_runtime_id.as_str())?
     {
-        if existing.deployment_id.as_str() == deployment_id
+        if existing.deployment_id == *deployment_id
             && existing.expected_endpoint.socket_addr() == endpoint
             && existing.container_port == container_port.get()
         {
@@ -175,7 +175,7 @@ pub fn register_candidate_runtime(
     let deployment = deployment_store::load_deployment(&transaction, deployment_id)?;
     if deployment.status() != DeploymentStatus::Starting {
         return Err(RegisterCandidateRuntimeError::InvalidDeploymentState {
-            deployment_id: deployment_id.to_owned(),
+            deployment_id: deployment_id.to_string(),
             actual: deployment.status().to_string(),
         });
     }
@@ -188,7 +188,7 @@ pub fn register_candidate_runtime(
 
     let runtime_id = runtime_store::generate_id(&transaction)?;
     let registration = RuntimeRegistration {
-        id: RuntimeInstanceId::from(runtime_id),
+        id: runtime_id,
         application_id: deployment.application_id,
         deployment_id: deployment.id,
         external_runtime_id: external_runtime_id.clone(),

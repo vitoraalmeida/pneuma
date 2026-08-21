@@ -374,7 +374,7 @@ fn rematerialize_missing_runtime(
     }
     let outcome = runtime_store::reconcile_external_runtime_id(
         connection,
-        runtime.id.as_str(),
+        &runtime.id,
         runtime.external_runtime_id.as_str(),
         id.as_str(),
     )
@@ -413,16 +413,15 @@ fn recover_interrupted_deployment(
         DeploymentStatus::Starting | DeploymentStatus::Verifying => {
             record_interrupted_failure(connection, deployment)?;
             let Some(runtime) =
-                runtime_store::load_runtime_by_deployment(connection, deployment.id.as_str())
+                runtime_store::load_runtime_by_deployment(connection, &deployment.id)
                     .map_err(|source| ReconciliationReadError::Runtime { source })?
             else {
                 return Ok(ReconciliationResult::ManualIntervention {
                     reason: "interrupted deployment has no persisted candidate runtime to prove cleanup ownership".to_owned(),
                 });
             };
-            let release =
-                release_store::load_release_by_id(connection, deployment.release_id.as_str())
-                    .map_err(|source| ReconciliationReadError::Release { source })?;
+            let release = release_store::load_release_by_id(connection, &deployment.release_id)
+                .map_err(|source| ReconciliationReadError::Release { source })?;
             let unit = unit_name(application.name.as_str(), deployment.id.as_str());
             let expected_unit = canonical_unit_contents(
                 application.name.as_str(),
@@ -471,7 +470,7 @@ fn recover_interrupted_deployment(
             }
             cleanup_failed_candidate(
                 connection,
-                deployment.id.as_str(),
+                &deployment.id,
                 unit_proven.then_some(unit.as_str()),
                 container_proven.then_some(&runtime.external_runtime_id),
                 Some(&runtime.id),
@@ -550,7 +549,7 @@ fn record_interrupted_failure(
 ) -> Result<(), ReconciliationReadError> {
     fail_deployment(
         connection,
-        deployment.id.as_str(),
+        &deployment.id,
         "operation_interrupted",
         "operation owner exited before deployment completion",
     )
@@ -958,7 +957,7 @@ fn repair_recreated_runtime(
     }
     let outcome = runtime_store::reconcile_external_runtime_id(
         connection,
-        runtime.id.as_str(),
+        &runtime.id,
         runtime.external_runtime_id.as_str(),
         id.as_str(),
     )
@@ -999,7 +998,7 @@ pub fn load_reconciliation_input(
             application_name: application_name.as_str().to_owned(),
         })?;
     let blocking_deployment =
-        deployment_store::load_nonterminal_deployment(&transaction, application.id.as_str())
+        deployment_store::load_nonterminal_deployment(&transaction, &application.id)
             .map_err(|source| ReconciliationReadError::Deployment { source })?;
     let exposure = exposure_store::load_exposure(&transaction, application.id.as_str())
         .map_err(|source| ReconciliationReadError::Exposure { source })?;
@@ -1008,17 +1007,13 @@ pub fn load_reconciliation_input(
             .map_err(|source| ReconciliationReadError::Application { source })?;
     let active = match &application.active_deployment_id {
         Some(deployment_id) => {
-            let deployment =
-                deployment_store::load_deployment(&transaction, deployment_id.as_str())
-                    .map_err(|source| ReconciliationReadError::Deployment { source })?;
-            let release =
-                release_store::load_release_by_id(&transaction, deployment.release_id.as_str())
-                    .map_err(|source| ReconciliationReadError::Release { source })?;
-            let runtime = runtime_store::load_current_successful_runtime(
-                &transaction,
-                application.id.as_str(),
-            )
-            .map_err(|source| ReconciliationReadError::Runtime { source })?;
+            let deployment = deployment_store::load_deployment(&transaction, deployment_id)
+                .map_err(|source| ReconciliationReadError::Deployment { source })?;
+            let release = release_store::load_release_by_id(&transaction, &deployment.release_id)
+                .map_err(|source| ReconciliationReadError::Release { source })?;
+            let runtime =
+                runtime_store::load_current_successful_runtime(&transaction, &application.id)
+                    .map_err(|source| ReconciliationReadError::Runtime { source })?;
             Some(ActiveRuntime {
                 deployment,
                 release,

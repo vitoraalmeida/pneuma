@@ -51,9 +51,12 @@ impl Error for ReleaseStoreError {
 }
 
 // Allocates a Release ID beside its digest-uniqueness check in the same transaction.
-pub fn generate_id(connection: &Connection) -> Result<String, ReleaseStoreError> {
+pub fn generate_id(connection: &Connection) -> Result<ReleaseId, ReleaseStoreError> {
     connection
-        .query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))
+        .query_row("SELECT lower(hex(randomblob(16)))", [], |row| {
+            row.get::<_, String>(0)
+        })
+        .map(ReleaseId::from)
         .map_err(|source| ReleaseStoreError::Persistence { source })
 }
 
@@ -75,8 +78,8 @@ pub fn active_application_image_references(
 // Inserts an immutable artifact Release and preserves the existing row for the same digest.
 pub fn insert_release(
     transaction: &Transaction<'_>,
-    id: &str,
-    application_id: &str,
+    id: &ReleaseId,
+    application_id: &ApplicationId,
     artifact: &OciArtifact,
 ) -> Result<(), ReleaseStoreError> {
     transaction
@@ -91,8 +94,8 @@ pub fn insert_release(
             ) VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP)
             ON CONFLICT(application_id, image_digest) DO NOTHING",
             params![
-                id,
-                application_id,
+                id.as_str(),
+                application_id.as_str(),
                 artifact.reference(),
                 artifact.repository(),
                 artifact.digest()
@@ -105,7 +108,7 @@ pub fn insert_release(
 // Loads a Release by immutable digest and validates its redundant persisted artifact fields.
 pub fn load_release_by_digest(
     connection: &Connection,
-    application_id: &str,
+    application_id: &ApplicationId,
     image_digest: &str,
 ) -> Result<Release, ReleaseStoreError> {
     connection
@@ -114,7 +117,7 @@ pub fn load_release_by_digest(
                     image_digest, created_at
              FROM releases
              WHERE application_id = ?1 AND image_digest = ?2",
-            params![application_id, image_digest],
+            params![application_id.as_str(), image_digest],
             |row| {
                 let image_reference = row.get::<_, String>(2)?;
                 let image_repository = row.get::<_, String>(3)?;
@@ -139,7 +142,7 @@ pub fn load_release_by_digest(
         .optional()
         .map_err(|source| ReleaseStoreError::Persistence { source })?
         .ok_or_else(|| ReleaseStoreError::NotFoundByArtifact {
-            application_id: application_id.to_owned(),
+            application_id: application_id.to_string(),
             image_digest: image_digest.to_owned(),
         })
 }
@@ -147,12 +150,12 @@ pub fn load_release_by_digest(
 // Loads a Release by durable identity and validates its redundant persisted artifact fields.
 pub fn load_release_by_id(
     connection: &Connection,
-    release_id: &str,
+    release_id: &ReleaseId,
 ) -> Result<Release, ReleaseStoreError> {
     connection
         .query_row(
             "SELECT id, application_id, image_reference, image_repository, image_digest, created_at FROM releases WHERE id = ?1",
-            [release_id],
+            [release_id.as_str()],
             |row| {
                 let reference = row.get::<_, String>(2)?;
                 let repository = row.get::<_, String>(3)?;
@@ -168,7 +171,7 @@ pub fn load_release_by_id(
         )
         .optional()
         .map_err(|source| ReleaseStoreError::Persistence { source })?
-        .ok_or_else(|| ReleaseStoreError::NotFound { release_id: release_id.to_owned() })
+        .ok_or_else(|| ReleaseStoreError::NotFound { release_id: release_id.to_string() })
 }
 
 pub(crate) fn artifact_from_values(
@@ -190,14 +193,19 @@ mod tests {
     use std::path::Path;
 
     use crate::adapters::database;
+    use crate::domain::identity::ApplicationId;
 
     use super::{ReleaseStoreError, load_release_by_digest};
 
     #[test]
     fn missing_digest_lookup_preserves_its_application_and_artifact_context() {
         let connection = database::open(Path::new(":memory:")).unwrap();
-        let error =
-            load_release_by_digest(&connection, "application-id", "sha256:missing").unwrap_err();
+        let error = load_release_by_digest(
+            &connection,
+            &ApplicationId::from("application-id"),
+            "sha256:missing",
+        )
+        .unwrap_err();
 
         assert!(matches!(
             error,

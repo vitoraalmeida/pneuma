@@ -7,7 +7,7 @@ use crate::adapters::local_runtime::{ControlContainerError, remove_container};
 use crate::adapters::port_allocator::{PortAllocationError, release_port};
 use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
 use crate::adapters::systemd_quadlet::{QuadletError, daemon_reload, remove_unit, stop, unit_name};
-use crate::domain::identity::RuntimeInstanceId;
+use crate::domain::identity::{ApplicationId, DeploymentId, RuntimeInstanceId};
 use crate::domain::runtime::{ContainerId, PreviousRuntime, RuntimeState};
 
 #[derive(Debug, Clone)]
@@ -129,8 +129,8 @@ impl Error for CandidateCleanupError {
 // Loads the predecessor retained during candidate activation for post-promotion retirement.
 pub(crate) fn load_previous_runtime(
     connection: &Connection,
-    application_id: &str,
-    candidate_runtime_id: &str,
+    application_id: &ApplicationId,
+    candidate_runtime_id: &RuntimeInstanceId,
 ) -> Result<Option<PreviousRuntime>, RuntimeStoreError> {
     runtime_store::load_previous_runtime(connection, application_id, candidate_runtime_id)
 }
@@ -168,7 +168,7 @@ pub(crate) fn retire_previous_runtime(
         return;
     }
     if !matches!(
-        runtime_store::mark_runtime_removed(connection, previous.runtime_id.as_str()),
+        runtime_store::mark_runtime_removed(connection, &previous.runtime_id),
         Ok(crate::adapters::stores::PersistenceOutcome::Updated)
     ) {
         eprintln!(
@@ -181,13 +181,13 @@ pub(crate) fn retire_previous_runtime(
 // Compensates failed candidates while refusing to remove a runtime that may already be active.
 pub(crate) fn cleanup_failed_candidate(
     connection: &Connection,
-    deployment_id: &str,
+    deployment_id: &DeploymentId,
     unit: Option<&str>,
     container_id: Option<&ContainerId>,
     runtime_id: Option<&RuntimeInstanceId>,
 ) -> Result<(), CandidateCleanupError> {
     if let Some(runtime_id) = runtime_id {
-        let state = runtime_store::load_runtime_state(connection, runtime_id.as_str())
+        let state = runtime_store::load_runtime_state(connection, runtime_id)
             .map_err(|source| CandidateCleanupError::RuntimeStore { source })?;
         // A promotion error may have an uncertain external outcome. Never remove an
         // already active runtime.
@@ -206,7 +206,7 @@ pub(crate) fn cleanup_failed_candidate(
             .map_err(|source| CandidateCleanupError::RemoveContainer { source })?;
     }
     if let Some(runtime_id) = runtime_id {
-        let outcome = runtime_store::mark_starting_runtime_missing(connection, runtime_id.as_str())
+        let outcome = runtime_store::mark_starting_runtime_missing(connection, runtime_id)
             .map_err(|source| CandidateCleanupError::RuntimeStore { source })?;
         if outcome == crate::adapters::stores::PersistenceOutcome::Stale {
             return Err(CandidateCleanupError::RuntimeChanged {
@@ -214,7 +214,7 @@ pub(crate) fn cleanup_failed_candidate(
             });
         }
     }
-    release_port(connection, deployment_id)
+    release_port(connection, deployment_id.as_str())
         .map_err(|source| CandidateCleanupError::ReleasePort { source })?;
     Ok(())
 }

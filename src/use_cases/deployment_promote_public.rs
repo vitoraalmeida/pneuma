@@ -144,7 +144,7 @@ impl Error for PromotePublicCandidateError {
 // Marks public exposure as applying before Caddy effects occur outside SQLite transactions.
 pub fn begin_public_exposure(
     connection: &Connection,
-    runtime_id: &str,
+    runtime_id: &RuntimeInstanceId,
 ) -> Result<PublicExposureTarget, PromotePublicCandidateError> {
     let target = load_target(connection, runtime_id)?;
     validate_runtime(&target)?;
@@ -214,7 +214,7 @@ pub fn record_public_exposure_failure(
 // Atomically confirms a previously materialized and externally healthy public candidate.
 pub fn promote_public_candidate(
     connection: &mut Connection,
-    runtime_id: &str,
+    runtime_id: &RuntimeInstanceId,
     configuration_version: &ExposureConfigurationVersion,
 ) -> Result<PromotedPublicCandidate, PromotePublicCandidateError> {
     let transaction = connection
@@ -237,16 +237,16 @@ pub fn promote_public_candidate(
 
     runtime_store::stop_other_running_runtimes(
         &transaction,
-        target.application_id.as_str(),
-        target.runtime_id.as_str(),
+        &target.application_id,
+        &target.runtime_id,
     )
     .map_err(|source| PromotePublicCandidateError::RuntimeStore { source })?;
-    if runtime_store::start_runtime(&transaction, target.runtime_id.as_str())
+    if runtime_store::start_runtime(&transaction, &target.runtime_id)
         .map_err(|source| PromotePublicCandidateError::RuntimeStore { source })?
         == PersistenceOutcome::Stale
     {
         return Err(PromotePublicCandidateError::InvalidRuntime {
-            runtime_id: runtime_id.to_owned(),
+            runtime_id: runtime_id.to_string(),
             reason: "state changed during promotion".to_owned(),
         });
     }
@@ -260,20 +260,20 @@ pub fn promote_public_candidate(
         == PersistenceOutcome::Stale
     {
         return Err(PromotePublicCandidateError::InvalidRuntime {
-            runtime_id: runtime_id.to_owned(),
+            runtime_id: runtime_id.to_string(),
             reason: "state changed during promotion".to_owned(),
         });
     }
     if crate::adapters::stores::deployment_store::mark_succeeded(
         &transaction,
-        target.deployment_id.as_str(),
+        &target.deployment_id,
         DeploymentStatus::Activating,
     )
     .map_err(|source| PromotePublicCandidateError::DeploymentStore { source })?
         == PersistenceOutcome::Stale
     {
         return Err(PromotePublicCandidateError::InvalidRuntime {
-            runtime_id: runtime_id.to_owned(),
+            runtime_id: runtime_id.to_string(),
             reason: "state changed during promotion".to_owned(),
         });
     }
@@ -286,13 +286,13 @@ pub fn promote_public_candidate(
         == PersistenceOutcome::Stale
     {
         return Err(PromotePublicCandidateError::InvalidRuntime {
-            runtime_id: runtime_id.to_owned(),
+            runtime_id: runtime_id.to_string(),
             reason: "state changed during promotion".to_owned(),
         });
     }
     let finished_at = crate::adapters::stores::deployment_store::load_finished_at(
         &transaction,
-        target.deployment_id.as_str(),
+        &target.deployment_id,
     )
     .map_err(|source| PromotePublicCandidateError::DeploymentStore { source })?;
     transaction
@@ -312,12 +312,12 @@ type PromotionTarget = crate::adapters::stores::deployment_store::PromotionTarge
 // Loads the promotion target so later checks can reject incompatible state before promotion writes.
 fn load_target(
     connection: &Connection,
-    runtime_id: &str,
+    runtime_id: &RuntimeInstanceId,
 ) -> Result<PromotionTarget, PromotePublicCandidateError> {
     crate::adapters::stores::deployment_store::load_promotion_target(connection, runtime_id)
         .map_err(|source| PromotePublicCandidateError::DeploymentStore { source })?
         .ok_or_else(|| PromotePublicCandidateError::RuntimeNotFound {
-            runtime_id: runtime_id.to_owned(),
+            runtime_id: runtime_id.to_string(),
         })
 }
 

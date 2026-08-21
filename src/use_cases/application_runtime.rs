@@ -384,7 +384,7 @@ fn observe_current_runtime(
     };
     let reconciled = runtime_store::reconcile_external_runtime_id(
         connection,
-        runtime.id.as_str(),
+        &runtime.id,
         runtime.external_runtime_id.as_str(),
         &resolved,
     )
@@ -412,7 +412,7 @@ fn load_current_runtime(
     application_id: &ApplicationId,
     application_name: &str,
 ) -> Result<RuntimeInstance, RuntimeLifecycleError> {
-    runtime_store::load_current_successful_runtime(connection, application_id.as_str())
+    runtime_store::load_current_successful_runtime(connection, application_id)
         .map_err(|source| RuntimeLifecycleError::Store { source })?
         .ok_or_else(|| RuntimeLifecycleError::NotDeployed {
             application_name: application_name.to_owned(),
@@ -461,7 +461,7 @@ fn persist_observation(
     runtime: &RuntimeInstance,
     observation: &ContainerObservation,
 ) -> Result<(), RuntimeLifecycleError> {
-    let updated = runtime_store::persist_observation(connection, runtime.id.as_str(), observation)
+    let updated = runtime_store::persist_observation(connection, &runtime.id, observation)
         .map_err(|source| RuntimeLifecycleError::Store { source })?;
     if updated == crate::adapters::stores::PersistenceOutcome::Stale {
         return Err(RuntimeLifecycleError::RuntimeChanged {

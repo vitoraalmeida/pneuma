@@ -36,9 +36,12 @@ impl Error for RuntimeStoreError {
 }
 
 // Allocates a runtime ID beside endpoint registration in the same SQLite transaction.
-pub fn generate_id(connection: &Connection) -> Result<String, RuntimeStoreError> {
+pub fn generate_id(connection: &Connection) -> Result<RuntimeInstanceId, RuntimeStoreError> {
     connection
-        .query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))
+        .query_row("SELECT lower(hex(randomblob(16)))", [], |row| {
+            row.get::<_, String>(0)
+        })
+        .map(RuntimeInstanceId::from)
         .map_err(|source| RuntimeStoreError::Persistence { source })
 }
 
@@ -88,7 +91,7 @@ pub fn insert_runtime(
 // Loads the non-removed runtime belonging to the active successful Deployment.
 pub fn load_current_successful_runtime(
     connection: &Connection,
-    application_id: &str,
+    application_id: &ApplicationId,
 ) -> Result<Option<RuntimeInstance>, RuntimeStoreError> {
     connection
         .query_row(
@@ -114,7 +117,7 @@ pub fn load_current_successful_runtime(
                AND runtime_instances.state IN ('running', 'stopped')
                AND runtime_instances.removed_at IS NULL
                AND deployments.status = 'succeeded'",
-            [application_id],
+            [application_id.as_str()],
             map_runtime_instance,
         )
         .optional()
@@ -124,7 +127,7 @@ pub fn load_current_successful_runtime(
 // Replaces an external container ID only when the logical runtime still has the expected ID.
 pub fn reconcile_external_runtime_id(
     connection: &Connection,
-    runtime_id: &str,
+    runtime_id: &RuntimeInstanceId,
     expected_external_runtime_id: &str,
     replacement_external_runtime_id: &str,
 ) -> Result<PersistenceOutcome, RuntimeStoreError> {
@@ -140,7 +143,7 @@ pub fn reconcile_external_runtime_id(
                AND removed_at IS NULL",
             params![
                 replacement_external_runtime_id,
-                runtime_id,
+                runtime_id.as_str(),
                 expected_external_runtime_id
             ],
         )
@@ -151,7 +154,7 @@ pub fn reconcile_external_runtime_id(
 // Records an observed runtime state without reviving a runtime that has been retired.
 pub fn persist_observation(
     connection: &Connection,
-    runtime_id: &str,
+    runtime_id: &RuntimeInstanceId,
     observation: &ContainerObservation,
 ) -> Result<PersistenceOutcome, RuntimeStoreError> {
     let state = observed_runtime_state_value(observation.state());
@@ -162,7 +165,7 @@ pub fn persist_observation(
               last_observed_at = CURRENT_TIMESTAMP,
               updated_at = CURRENT_TIMESTAMP
          WHERE id = ?1 AND removed_at IS NULL",
-            params![runtime_id, state],
+            params![runtime_id.as_str(), state],
         )
         .map_err(|source| RuntimeStoreError::Persistence { source })?;
     Ok(outcome(updated))
@@ -171,14 +174,14 @@ pub fn persist_observation(
 // Advances a non-removed candidate from starting to running exactly once.
 pub fn start_runtime(
     transaction: &Transaction<'_>,
-    runtime_id: &str,
+    runtime_id: &RuntimeInstanceId,
 ) -> Result<PersistenceOutcome, RuntimeStoreError> {
     let updated = transaction
         .execute(
             "UPDATE runtime_instances
              SET state = 'running', updated_at = CURRENT_TIMESTAMP
              WHERE id = ?1 AND state = 'starting' AND removed_at IS NULL",
-            [runtime_id],
+            [runtime_id.as_str()],
         )
         .map_err(|source| RuntimeStoreError::Persistence { source })?;
     Ok(outcome(updated))
@@ -187,8 +190,8 @@ pub fn start_runtime(
 // Stops prior live runtimes during promotion; no matching runtime is a normal outcome.
 pub fn stop_other_running_runtimes(
     transaction: &Transaction<'_>,
-    application_id: &str,
-    candidate_runtime_id: &str,
+    application_id: &ApplicationId,
+    candidate_runtime_id: &RuntimeInstanceId,
 ) -> Result<(), RuntimeStoreError> {
     transaction
         .execute(
@@ -198,7 +201,7 @@ pub fn stop_other_running_runtimes(
                AND state = 'running'
                AND removed_at IS NULL
                AND id != ?2",
-            params![application_id, candidate_runtime_id],
+            params![application_id.as_str(), candidate_runtime_id.as_str()],
         )
         .map_err(|source| RuntimeStoreError::Persistence { source })?;
     Ok(())
@@ -207,12 +210,12 @@ pub fn stop_other_running_runtimes(
 // Reads the logical lifecycle state for cleanup and transition decisions.
 pub fn load_runtime_state(
     connection: &Connection,
-    runtime_id: &str,
+    runtime_id: &RuntimeInstanceId,
 ) -> Result<Option<RuntimeState>, RuntimeStoreError> {
     connection
         .query_row(
             "SELECT state FROM runtime_instances WHERE id = ?1",
-            [runtime_id],
+            [runtime_id.as_str()],
             |row| {
                 let value: String = row.get(0)?;
                 runtime_state_from_value(&value)
@@ -226,8 +229,8 @@ pub fn load_runtime_state(
 // Finds another live runtime that may need retirement after candidate promotion.
 pub fn load_previous_runtime(
     connection: &Connection,
-    application_id: &str,
-    candidate_runtime_id: &str,
+    application_id: &ApplicationId,
+    candidate_runtime_id: &RuntimeInstanceId,
 ) -> Result<Option<PreviousRuntime>, RuntimeStoreError> {
     connection
         .query_row(
@@ -237,7 +240,7 @@ pub fn load_previous_runtime(
                AND state = 'running'
                AND removed_at IS NULL
                AND id != ?2",
-            [application_id, candidate_runtime_id],
+            [application_id.as_str(), candidate_runtime_id.as_str()],
             |row| {
                 Ok(PreviousRuntime {
                     runtime_id: RuntimeInstanceId::from(row.get::<_, String>(0)?),
@@ -272,7 +275,7 @@ pub fn load_runtime_by_external_id(
 // Finds the candidate runtime registered by one deployment without confusing it with an active runtime.
 pub fn load_runtime_by_deployment(
     connection: &Connection,
-    deployment_id: &str,
+    deployment_id: &DeploymentId,
 ) -> Result<Option<RuntimeInstance>, RuntimeStoreError> {
     connection
         .query_row(
@@ -281,7 +284,7 @@ pub fn load_runtime_by_deployment(
                     last_observed_state, last_observed_at, exit_code,
                     observation_reason, removed_at
              FROM runtime_instances WHERE deployment_id = ?1 AND removed_at IS NULL",
-            [deployment_id],
+            [deployment_id.as_str()],
             map_runtime_instance,
         )
         .optional()
@@ -291,14 +294,14 @@ pub fn load_runtime_by_deployment(
 // Tombstones only a stopped runtime, preserving lifecycle transition ordering.
 pub fn mark_runtime_removed(
     connection: &Connection,
-    runtime_id: &str,
+    runtime_id: &RuntimeInstanceId,
 ) -> Result<PersistenceOutcome, RuntimeStoreError> {
     let updated = connection
         .execute(
             "UPDATE runtime_instances
               SET state = 'stopped', removed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
              WHERE id = ?1 AND state = 'stopped' AND removed_at IS NULL",
-            [runtime_id],
+            [runtime_id.as_str()],
         )
         .map_err(|source| RuntimeStoreError::Persistence { source })?;
     Ok(outcome(updated))
@@ -307,7 +310,7 @@ pub fn mark_runtime_removed(
 // Records failed candidate creation as missing and explicitly retired while it is still starting.
 pub fn mark_starting_runtime_missing(
     connection: &Connection,
-    runtime_id: &str,
+    runtime_id: &RuntimeInstanceId,
 ) -> Result<PersistenceOutcome, RuntimeStoreError> {
     let updated = connection
         .execute(
@@ -318,7 +321,7 @@ pub fn mark_starting_runtime_missing(
                  removed_at = CURRENT_TIMESTAMP,
                  updated_at = CURRENT_TIMESTAMP
              WHERE id = ?1 AND state = 'starting' AND removed_at IS NULL",
-            [runtime_id],
+            [runtime_id.as_str()],
         )
         .map_err(|source| RuntimeStoreError::Persistence { source })?;
     Ok(outcome(updated))
@@ -327,8 +330,8 @@ pub fn mark_starting_runtime_missing(
 // Resolves the live runtime tied to the Application's active Deployment within a transaction.
 pub fn load_active_runtime_for_application(
     transaction: &Transaction<'_>,
-    application_id: &str,
-) -> Result<Option<String>, RuntimeStoreError> {
+    application_id: &ApplicationId,
+) -> Result<Option<RuntimeInstanceId>, RuntimeStoreError> {
     transaction
         .query_row(
             "SELECT ri.id FROM runtime_instances ri
@@ -336,24 +339,25 @@ pub fn load_active_runtime_for_application(
              WHERE ri.application_id = ?1
                AND ri.state = 'running'
                AND ri.removed_at IS NULL",
-            [application_id],
+            [application_id.as_str()],
             |row| row.get::<_, String>(0),
         )
         .optional()
+        .map(|runtime_id| runtime_id.map(RuntimeInstanceId::from))
         .map_err(|source| RuntimeStoreError::Persistence { source })
 }
 
 // Advances a running logical runtime to stopped without marking it retired.
 pub fn stop_runtime(
     transaction: &Transaction<'_>,
-    runtime_id: &str,
+    runtime_id: &RuntimeInstanceId,
 ) -> Result<PersistenceOutcome, RuntimeStoreError> {
     let updated = transaction
         .execute(
             "UPDATE runtime_instances
              SET state = 'stopped', updated_at = CURRENT_TIMESTAMP
              WHERE id = ?1 AND state = 'running'",
-            [runtime_id],
+            [runtime_id.as_str()],
         )
         .map_err(|source| RuntimeStoreError::Persistence { source })?;
     Ok(outcome(updated))
@@ -502,11 +506,11 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            load_runtime_state(&connection, "starting").unwrap(),
+            load_runtime_state(&connection, &RuntimeInstanceId::from("starting")).unwrap(),
             Some(RuntimeState::Starting)
         );
         assert!(matches!(
-            load_runtime_state(&connection, "invalid"),
+            load_runtime_state(&connection, &RuntimeInstanceId::from("invalid")),
             Err(RuntimeStoreError::Persistence { .. })
         ));
     }

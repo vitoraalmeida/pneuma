@@ -151,7 +151,7 @@ impl Error for PromoteInternalCandidateError {
 // Health-checks an internal candidate outside a transaction, then atomically promotes it.
 pub fn promote_internal_candidate(
     connection: &mut Connection,
-    runtime_id: &str,
+    runtime_id: &RuntimeInstanceId,
     health_check: &HealthCheckSpecification,
 ) -> Result<PromotedCandidate, PromoteInternalCandidateError> {
     let target = load_target(connection, runtime_id)?;
@@ -172,7 +172,7 @@ pub fn promote_internal_candidate(
             let message = health_failure_message(failure);
             fail_deployment(
                 connection,
-                target.deployment_id.as_str(),
+                &target.deployment_id,
                 "health_check_failed",
                 &message,
             )
@@ -195,11 +195,11 @@ pub fn promote_internal_candidate(
 
     runtime_store::stop_other_running_runtimes(
         &transaction,
-        target.application_id.as_str(),
-        target.runtime_id.as_str(),
+        &target.application_id,
+        &target.runtime_id,
     )
     .map_err(|source| PromoteInternalCandidateError::RuntimeStore { source })?;
-    if runtime_store::start_runtime(&transaction, target.runtime_id.as_str())
+    if runtime_store::start_runtime(&transaction, &target.runtime_id)
         .map_err(|source| PromoteInternalCandidateError::RuntimeStore { source })?
         == PersistenceOutcome::Stale
     {
@@ -210,7 +210,7 @@ pub fn promote_internal_candidate(
     }
     if deployment_store::mark_succeeded(
         &transaction,
-        target.deployment_id.as_str(),
+        &target.deployment_id,
         DeploymentStatus::Verifying,
     )
     .map_err(|source| PromoteInternalCandidateError::Store { source })?
@@ -234,9 +234,8 @@ pub fn promote_internal_candidate(
             actual: "changed during promotion".to_owned(),
         });
     }
-    let finished_at =
-        deployment_store::load_finished_at(&transaction, target.deployment_id.as_str())
-            .map_err(|source| PromoteInternalCandidateError::Store { source })?;
+    let finished_at = deployment_store::load_finished_at(&transaction, &target.deployment_id)
+        .map_err(|source| PromoteInternalCandidateError::Store { source })?;
     transaction
         .commit()
         .map_err(|source| PromoteInternalCandidateError::Persistence { source })?;
@@ -254,12 +253,12 @@ type PromotionTarget = deployment_store::PromotionTarget;
 // Loads and validates persisted state text before making promotion decisions.
 fn load_target(
     connection: &Connection,
-    runtime_id: &str,
+    runtime_id: &RuntimeInstanceId,
 ) -> Result<PromotionTarget, PromoteInternalCandidateError> {
     deployment_store::load_promotion_target(connection, runtime_id)
         .map_err(|source| PromoteInternalCandidateError::Store { source })?
         .ok_or_else(|| PromoteInternalCandidateError::RuntimeNotFound {
-            runtime_id: runtime_id.to_owned(),
+            runtime_id: runtime_id.to_string(),
         })
 }
 

@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use pneuma::adapters::database;
 use pneuma::domain::deployment::{DeploymentStatus, DeploymentType};
-use pneuma::domain::identity::ApplicationId;
+use pneuma::domain::identity::{ApplicationId, DeploymentId};
 use pneuma::domain::release::OciArtifact;
 use pneuma::use_cases::application_import::import_application;
 use pneuma::use_cases::deployment_create::create_deployment;
@@ -22,7 +22,7 @@ fn advances_in_order_through_internal_verification() {
     let started_at: String = connection
         .query_row(
             "SELECT started_at FROM deployments WHERE id = ?1",
-            [&deployment_id],
+            [deployment_id.as_str()],
             |row| row.get(0),
         )
         .unwrap();
@@ -39,7 +39,7 @@ fn advances_in_order_through_internal_verification() {
     let timestamps = connection
         .query_row(
             "SELECT started_at, finished_at FROM deployments WHERE id = ?1",
-            [&deployment_id],
+            [deployment_id.as_str()],
             |row| {
                 Ok((
                     row.get::<_, Option<String>>(0)?,
@@ -136,7 +136,7 @@ fn records_a_structured_failure_and_allows_a_later_attempt() {
         .query_row(
             "SELECT status, failure_code, failure_stage, failure_message, finished_at
              FROM deployments WHERE id = ?1",
-            [&deployment_id],
+            [deployment_id.as_str()],
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -159,7 +159,6 @@ fn records_a_structured_failure_and_allows_a_later_attempt() {
         )
     );
 
-    let application_id = ApplicationId::from(application_id);
     let release = create_release(&mut connection, &application_id, &artifact('b')).unwrap();
     create_deployment(
         &mut connection,
@@ -190,8 +189,12 @@ fn terminal_and_missing_deployments_cannot_enter_the_flow() {
         "must not replace the original failure",
     )
     .unwrap_err();
-    let missing =
-        advance_deployment(&connection, "missing", DeploymentTransition::Start).unwrap_err();
+    let missing = advance_deployment(
+        &connection,
+        &DeploymentId::from("missing"),
+        DeploymentTransition::Start,
+    )
+    .unwrap_err();
 
     assert!(matches!(
         terminal,
@@ -231,7 +234,7 @@ fn rejects_incomplete_failure_details_without_changing_state() {
     );
 }
 
-fn pending_deployment() -> (rusqlite::Connection, String, String) {
+fn pending_deployment() -> (rusqlite::Connection, DeploymentId, ApplicationId) {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
     let application =
         import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
@@ -243,11 +246,7 @@ fn pending_deployment() -> (rusqlite::Connection, String, String) {
         DeploymentType::Deploy,
     )
     .unwrap();
-    (
-        connection,
-        deployment.id.to_string(),
-        application.id.to_string(),
-    )
+    (connection, deployment.id, application.id)
 }
 
 fn fixture_path(name: &str) -> PathBuf {

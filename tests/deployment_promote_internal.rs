@@ -5,6 +5,7 @@ use std::thread;
 
 use pneuma::adapters::database;
 use pneuma::domain::deployment::DeploymentType;
+use pneuma::domain::identity::RuntimeInstanceId;
 use pneuma::domain::release::OciArtifact;
 use pneuma::domain::runtime::ContainerId;
 use pneuma::domain::runtime::{
@@ -32,11 +33,11 @@ fn promotes_a_healthy_internal_candidate_idempotently() {
         promote_internal_candidate(&mut connection, &runtime_id, &health_check()).unwrap();
 
     assert_eq!(repeated, promoted);
-    assert_eq!(promoted.runtime_id.as_str(), runtime_id);
+    assert_eq!(promoted.runtime_id, runtime_id);
     let deployment_id: String = connection
         .query_row(
             "SELECT deployment_id FROM runtime_instances WHERE id = ?1",
-            [&runtime_id],
+            [runtime_id.as_str()],
             |row| row.get(0),
         )
         .unwrap();
@@ -49,7 +50,7 @@ fn promotes_a_healthy_internal_candidate_idempotently() {
         .query_row(
             "SELECT desired_runtime_state FROM applications
              WHERE id = (SELECT application_id FROM runtime_instances WHERE id = ?1)",
-            [&runtime_id],
+            [runtime_id.as_str()],
             |row| row.get(0),
         )
         .unwrap();
@@ -74,14 +75,14 @@ fn replaces_the_previous_current_runtime_atomically() {
     let first_state: String = connection
         .query_row(
             "SELECT state FROM runtime_instances WHERE id = ?1",
-            [&first_runtime],
+            [first_runtime.as_str()],
             |row| row.get(0),
         )
         .unwrap();
     let second_state: String = connection
         .query_row(
             "SELECT state FROM runtime_instances WHERE id = ?1",
-            [&second_runtime],
+            [second_runtime.as_str()],
             |row| row.get(0),
         )
         .unwrap();
@@ -136,7 +137,7 @@ fn unhealthy_candidate_fails_without_replacing_the_current_runtime() {
         .query_row(
             "SELECT failure_code, failure_stage FROM deployments
              WHERE id = (SELECT deployment_id FROM runtime_instances WHERE id = ?1)",
-            [&candidate],
+            [candidate.as_str()],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
@@ -167,7 +168,7 @@ fn add_verifying_candidate(
     commit_character: char,
     runtime_character: char,
     endpoint: SocketAddr,
-) -> String {
+) -> RuntimeInstanceId {
     let application =
         import_application(connection, &fixture_path(fixture), None, None, None).unwrap();
     let digest = format!("sha256:{}", commit_character.to_string().repeat(64));
@@ -180,16 +181,11 @@ fn add_verifying_candidate(
         DeploymentType::Deploy,
     )
     .unwrap();
-    advance_deployment(
-        connection,
-        deployment.id.as_str(),
-        DeploymentTransition::Start,
-    )
-    .unwrap();
+    advance_deployment(connection, &deployment.id, DeploymentTransition::Start).unwrap();
     let external_runtime_id = ContainerId::from(runtime_character.to_string().repeat(64));
     let runtime = register_candidate_runtime(
         connection,
-        deployment.id.as_str(),
+        &deployment.id,
         &external_runtime_id,
         endpoint,
         ContainerPort::new(8080).unwrap(),
@@ -197,11 +193,11 @@ fn add_verifying_candidate(
     .unwrap();
     advance_deployment(
         connection,
-        deployment.id.as_str(),
+        &deployment.id,
         DeploymentTransition::RuntimeRunning,
     )
     .unwrap();
-    runtime.id.to_string()
+    runtime.id
 }
 
 fn health_check() -> HealthCheckSpecification {
@@ -213,7 +209,7 @@ fn health_check() -> HealthCheckSpecification {
 
 fn runtime_and_deployment_state(
     connection: &rusqlite::Connection,
-    runtime_id: &str,
+    runtime_id: &RuntimeInstanceId,
 ) -> (String, String, Option<String>) {
     connection
         .query_row(
@@ -221,7 +217,7 @@ fn runtime_and_deployment_state(
              FROM runtime_instances
              JOIN deployments ON deployments.id = runtime_instances.deployment_id
              WHERE runtime_instances.id = ?1",
-            [runtime_id],
+            [runtime_id.as_str()],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .unwrap()

@@ -282,8 +282,11 @@ fn make_public(
             );
         }
     };
-    let Some(runtime) = runtime_store::load_current_successful_runtime(connection, application_id)
-        .map_err(|source| ExposureChangeError::RuntimeStore { source })?
+    let Some(runtime) = runtime_store::load_current_successful_runtime(
+        connection,
+        &ApplicationId::from(application_id),
+    )
+    .map_err(|source| ExposureChangeError::RuntimeStore { source })?
     else {
         return fail_public(
             connection,

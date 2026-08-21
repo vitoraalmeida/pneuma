@@ -272,7 +272,7 @@ fn deploy_release_reporting(
 
     let execution = execute_deployment(
         connection,
-        deployment.id.as_str(),
+        &deployment.id,
         &specification,
         &release.artifact,
         public_configuration,
@@ -287,9 +287,7 @@ fn deploy_release_reporting(
             source_revision: deployment.source_revision,
             finished_at: execution.finished_at,
         }),
-        Err(failed) => {
-            finish_failed_deployment(connection, deployment.id.as_str(), failed, progress)
-        }
+        Err(failed) => finish_failed_deployment(connection, &deployment.id, failed, progress),
     }
 }
 
@@ -335,7 +333,7 @@ struct CompletedDeploymentExecution {
 // visibility-specific health checks succeed.
 fn execute_deployment(
     connection: &mut Connection,
-    deployment_id: &str,
+    deployment_id: &DeploymentId,
     specification: &ApplicationDeploymentSpecification,
     artifact: &OciArtifact,
     public_configuration: Option<&PublicDeploymentConfiguration>,
@@ -343,7 +341,7 @@ fn execute_deployment(
 ) -> Result<CompletedDeploymentExecution, FailedExecution> {
     wait_for_test_gate("deployment.pending")
         .map_err(|source| failure_needing_persistence("test_gate_failed", source, None, None))?;
-    progress.state_changed(deployment_id, DeploymentStatus::Starting);
+    progress.state_changed(deployment_id.as_str(), DeploymentStatus::Starting);
     progress.started(
         DeploymentStep::CreateContainer,
         format!("image {}", artifact.reference()),
@@ -352,7 +350,7 @@ fn execute_deployment(
     let input = CandidateStartInput {
         connection,
         deployment_id,
-        application_id: specification.application_id.as_str(),
+        application_id: &specification.application_id,
         application_name: specification.application_name.as_str(),
         artifact,
         runtime: &specification.runtime,
@@ -444,7 +442,7 @@ fn execute_deployment(
             true,
         )
     })?;
-    progress.state_changed(deployment_id, DeploymentStatus::Verifying);
+    progress.state_changed(deployment_id.as_str(), DeploymentStatus::Verifying);
     wait_for_test_gate("deployment.verifying").map_err(|source| {
         candidate_failure(
             "test_gate_failed",
@@ -458,8 +456,8 @@ fn execute_deployment(
 
     let previous_runtime = load_previous_runtime(
         connection,
-        specification.application_id.as_str(),
-        candidate.runtime.id.as_str(),
+        &specification.application_id,
+        &candidate.runtime.id,
     )
     .map_err(|source| {
         candidate_failure(
@@ -574,7 +572,7 @@ fn execute_deployment(
     );
     let promoted = promote_internal_candidate(
         connection,
-        candidate.runtime.id.as_str(),
+        &candidate.runtime.id,
         specification.runtime.health_check(),
     )
     .map_err(|source| {
@@ -603,7 +601,7 @@ fn execute_deployment(
         DeploymentStep::HealthCheckAndPromotion,
         format!("runtime {} promoted to Current", candidate.runtime.id),
     );
-    progress.state_changed(deployment_id, DeploymentStatus::Succeeded);
+    progress.state_changed(deployment_id.as_str(), DeploymentStatus::Succeeded);
     retire_previous_runtime(
         connection,
         specification.application_name.as_str(),
@@ -621,18 +619,18 @@ fn execute_deployment(
 // recovery errors separately so externally diverged state is never hidden.
 fn finish_failed_deployment(
     connection: &mut Connection,
-    deployment_id: &str,
+    deployment_id: &DeploymentId,
     failed: FailedExecution,
     progress: &mut ProgressReporter<'_>,
 ) -> Result<DeploymentResult, DeployReleaseError> {
     let failure = failed.source.to_string();
     let record_error = if failed.failure_persisted {
-        progress.failure_persisted(deployment_id, failed.code);
+        progress.failure_persisted(deployment_id.as_str(), failed.code);
         None
     } else {
         match fail_deployment(connection, deployment_id, failed.code, &failure) {
             Ok(_) => {
-                progress.failure_persisted(deployment_id, failed.code);
+                progress.failure_persisted(deployment_id.as_str(), failed.code);
                 None
             }
             Err(source) => Some(source),
@@ -668,21 +666,21 @@ fn finish_failed_deployment(
 
     if let Some(source) = cleanup_error {
         return Err(DeployReleaseError::Cleanup {
-            deployment_id: deployment_id.to_owned(),
+            deployment_id: deployment_id.to_string(),
             failure,
             source: Box::new(source),
         });
     }
     if let Some(source) = record_error {
         return Err(DeployReleaseError::RecordFailure {
-            deployment_id: deployment_id.to_owned(),
+            deployment_id: deployment_id.to_string(),
             failure,
             source,
         });
     }
 
     Err(DeployReleaseError::DeploymentFailed {
-        deployment_id: deployment_id.to_owned(),
+        deployment_id: deployment_id.to_string(),
         code: failed.code,
         source: failed.source,
     })

@@ -63,6 +63,9 @@ SQLite representation, or reconciliation policy.
 10. Require typed Application, System, Deployment, and name values at the
     `application_store` boundary, converting to SQLite text only in its SQL
     parameters.
+11. Require typed Application, Release, Deployment, and RuntimeInstance values
+    at the Release, Deployment, and Runtime store boundaries, converting to
+    SQLite text only in their SQL parameters.
 
 ## Validation
 

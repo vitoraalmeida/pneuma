@@ -184,6 +184,11 @@ without selecting a new Release or making destructive changes from ambiguity.
   accept Application, System, Deployment, and name domain values at its API.
   Result: Application-store callers retain typed identities and names until the
   SQLite parameter boundary without changing persistence or CLI behavior.
+- [x] Harden Release, Deployment, and Runtime-store typed boundaries: generate
+  typed IDs and require Application, Release, Deployment, and RuntimeInstance
+  values until SQLite parameter boundaries.
+  Result: Release, Deployment, and Runtime stores now retain typed logical IDs
+  without changing SQLite text representation or CLI behavior.
 
 ## Scope and Non-goals
 

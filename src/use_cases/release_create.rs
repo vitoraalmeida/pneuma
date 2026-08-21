@@ -90,13 +90,10 @@ pub fn create_release(
 
     let release_id = release_store::generate_id(&transaction)?;
 
-    release_store::insert_release(&transaction, &release_id, application_id.as_str(), artifact)?;
+    release_store::insert_release(&transaction, &release_id, application_id, artifact)?;
 
-    let release = release_store::load_release_by_digest(
-        &transaction,
-        application_id.as_str(),
-        artifact.digest(),
-    )?;
+    let release =
+        release_store::load_release_by_digest(&transaction, application_id, artifact.digest())?;
 
     transaction
         .commit()

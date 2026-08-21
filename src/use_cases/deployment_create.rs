@@ -147,28 +147,24 @@ fn create_deployment_in_transaction(
             application_id: application_id.to_string(),
         });
     }
-    let release_exists =
-        deployment_store::release_exists(transaction, release_id.as_str(), application_id.as_str())
-            .map_err(|source| CreateDeploymentError::DeploymentStore { source })?;
+    let release_exists = deployment_store::release_exists(transaction, release_id, application_id)
+        .map_err(|source| CreateDeploymentError::DeploymentStore { source })?;
     if !release_exists {
         return Err(CreateDeploymentError::ReleaseNotFound {
             release_id: release_id.to_string(),
         });
     }
-    let blocker =
-        deployment_store::load_nonterminal_deployment(transaction, application_id.as_str())
-            .map_err(|source| CreateDeploymentError::DeploymentStore { source })?;
+    let blocker = deployment_store::load_nonterminal_deployment(transaction, application_id)
+        .map_err(|source| CreateDeploymentError::DeploymentStore { source })?;
     if let Some(deployment) = blocker {
         return Err(CreateDeploymentError::ActiveDeployment {
             deployment: Box::new(deployment),
         });
     }
     let active_release_id =
-        deployment_store::load_active_runtime_release_id(transaction, application_id.as_str())
+        deployment_store::load_active_runtime_release_id(transaction, application_id)
             .map_err(|source| CreateDeploymentError::DeploymentStore { source })?;
-    if active_release_id.as_deref() == Some(release_id.as_str())
-        && deployment_type == DeploymentType::Deploy
-    {
+    if active_release_id.as_ref() == Some(release_id) && deployment_type == DeploymentType::Deploy {
         return Err(CreateDeploymentError::AlreadyActive {
             release_id: release_id.to_string(),
         });
@@ -179,8 +175,8 @@ fn create_deployment_in_transaction(
     deployment_store::insert_pending_deployment(
         transaction,
         &deployment_id,
-        application_id.as_str(),
-        release_id.as_str(),
+        application_id,
+        release_id,
         deployment_type,
         source_revision,
     )

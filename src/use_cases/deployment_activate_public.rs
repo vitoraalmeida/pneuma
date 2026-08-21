@@ -122,12 +122,15 @@ pub(crate) fn activate_public_candidate(
         format!("runtime {runtime_id} is healthy"),
     );
 
-    advance_deployment(connection, deployment_id, DeploymentTransition::Verified).map_err(
-        |source| PublicActivationError::DeploymentTransition {
-            source,
-            resources: Box::new(resources.clone()),
-        },
-    )?;
+    advance_deployment(
+        connection,
+        &runtime.deployment_id,
+        DeploymentTransition::Verified,
+    )
+    .map_err(|source| PublicActivationError::DeploymentTransition {
+        source,
+        resources: Box::new(resources.clone()),
+    })?;
 
     progress.state_changed(
         deployment_id,
@@ -140,7 +143,7 @@ pub(crate) fn activate_public_candidate(
         }
     })?;
 
-    let exposure = begin_public_exposure(connection, runtime_id).map_err(|source| {
+    let exposure = begin_public_exposure(connection, &runtime.id).map_err(|source| {
         PublicActivationError::ExposurePreparation {
             source: Box::new(source),
             resources: Box::new(resources.clone()),
@@ -248,7 +251,7 @@ pub(crate) fn activate_public_candidate(
         format!("runtime {runtime_id}"),
     );
 
-    let promoted = match promote_public_candidate(connection, runtime_id, &configuration_version) {
+    let promoted = match promote_public_candidate(connection, &runtime.id, &configuration_version) {
         Ok(promoted) => promoted,
         Err(source) => {
             let (source, outcome) = rollback_public_route(source, &materialized, caddyfile_path);

@@ -6,6 +6,7 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::adapters::stores::PersistenceOutcome;
 use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
 use crate::domain::deployment::{DeploymentFailure, DeploymentStatus, InvalidDeploymentFailure};
+use crate::domain::identity::DeploymentId;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeploymentTransition {
@@ -140,7 +141,7 @@ impl From<DeploymentStoreError> for TransitionDeploymentError {
 // Advances one expected state with compare-and-set semantics to detect concurrent changes.
 pub fn advance_deployment(
     connection: &Connection,
-    deployment_id: &str,
+    deployment_id: &DeploymentId,
     transition: DeploymentTransition,
 ) -> Result<DeploymentStatus, TransitionDeploymentError> {
     let (expected, next) = transition_states(transition);
@@ -152,7 +153,7 @@ pub fn advance_deployment(
 
     let actual = deployment_store::load_status(connection, deployment_id)?;
     Err(TransitionDeploymentError::Conflict {
-        deployment_id: deployment_id.to_owned(),
+        deployment_id: deployment_id.to_string(),
         expected,
         actual,
     })
@@ -161,7 +162,7 @@ pub fn advance_deployment(
 // Atomically records a terminal failure only while the deployment remains non-terminal.
 pub fn fail_deployment(
     connection: &mut Connection,
-    deployment_id: &str,
+    deployment_id: &DeploymentId,
     code: &str,
     message: &str,
 ) -> Result<DeploymentFailure, TransitionDeploymentError> {
@@ -174,7 +175,7 @@ pub fn fail_deployment(
     let stage = deployment_store::load_status(&transaction, deployment_id)?;
     if !stage.is_nonterminal() {
         return Err(TransitionDeploymentError::CannotFail {
-            deployment_id: deployment_id.to_owned(),
+            deployment_id: deployment_id.to_string(),
             actual: stage,
         });
     }

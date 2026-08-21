@@ -111,23 +111,26 @@ impl Error for DeploymentStoreError {
 }
 
 // Allocates a deployment ID inside the transaction that reserves the Application for activation.
-pub fn generate_id(connection: &Connection) -> Result<String, DeploymentStoreError> {
+pub fn generate_id(connection: &Connection) -> Result<DeploymentId, DeploymentStoreError> {
     connection
-        .query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))
+        .query_row("SELECT lower(hex(randomblob(16)))", [], |row| {
+            row.get::<_, String>(0)
+        })
+        .map(DeploymentId::from)
         .map_err(persistence)
 }
 
 // Loads the in-progress Deployment that currently reserves an Application, if any.
 pub fn load_nonterminal_deployment(
     transaction: &Transaction<'_>,
-    application_id: &str,
+    application_id: &ApplicationId,
 ) -> Result<Option<Deployment>, DeploymentStoreError> {
     let deployment = transaction.query_row(
         "SELECT id, application_id, release_id, type, status, source_revision, requested_at, started_at,
                 finished_at, failure_code, failure_stage, failure_message
          FROM deployments WHERE application_id = ?1
            AND status NOT IN ('succeeded', 'failed')",
-        [application_id], raw_deployment_from_row,
+        [application_id.as_str()], raw_deployment_from_row,
     ).optional().map_err(persistence)?;
     deployment.map(RawDeployment::into_deployment).transpose()
 }
@@ -135,27 +138,27 @@ pub fn load_nonterminal_deployment(
 // Finds the Release of the active Deployment only when its runtime is still live.
 pub fn load_active_runtime_release_id(
     transaction: &Transaction<'_>,
-    application_id: &str,
-) -> Result<Option<String>, DeploymentStoreError> {
+    application_id: &ApplicationId,
+) -> Result<Option<ReleaseId>, DeploymentStoreError> {
     transaction.query_row(
         "SELECT d.release_id FROM deployments d JOIN applications a ON a.active_deployment_id = d.id
          WHERE a.id = ?1 AND EXISTS (
              SELECT 1 FROM runtime_instances ri WHERE ri.deployment_id = d.id
                AND ri.state IN ('running', 'stopped') AND ri.removed_at IS NULL
-         )", [application_id], |row| row.get(0),
-    ).optional().map_err(persistence)
+          )", [application_id.as_str()], |row| row.get::<_, String>(0),
+    ).optional().map(|release_id| release_id.map(ReleaseId::from)).map_err(persistence)
 }
 
 // Confirms that the Release belongs to the Application before creating a Deployment.
 pub fn release_exists(
     transaction: &Transaction<'_>,
-    release_id: &str,
-    application_id: &str,
+    release_id: &ReleaseId,
+    application_id: &ApplicationId,
 ) -> Result<bool, DeploymentStoreError> {
     transaction
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM releases WHERE id = ?1 AND application_id = ?2)",
-            params![release_id, application_id],
+            params![release_id.as_str(), application_id.as_str()],
             |row| row.get(0),
         )
         .map_err(persistence)
@@ -164,16 +167,16 @@ pub fn release_exists(
 // Persists a new activation attempt in its initial pending state.
 pub fn insert_pending_deployment(
     transaction: &Transaction<'_>,
-    deployment_id: &str,
-    application_id: &str,
-    release_id: &str,
+    deployment_id: &DeploymentId,
+    application_id: &ApplicationId,
+    release_id: &ReleaseId,
     deployment_type: DeploymentType,
     source_revision: Option<&SourceRevision>,
 ) -> Result<(), DeploymentStoreError> {
     transaction.execute(
         "INSERT INTO deployments (id, application_id, release_id, type, status, source_revision)
          VALUES (?1, ?2, ?3, ?4, 'pending', ?5)",
-        params![deployment_id, application_id, release_id, deployment_type_value(deployment_type), source_revision.map(SourceRevision::as_str)],
+        params![deployment_id.as_str(), application_id.as_str(), release_id.as_str(), deployment_type_value(deployment_type), source_revision.map(SourceRevision::as_str)],
     ).map_err(persistence)?;
     Ok(())
 }
@@ -181,13 +184,13 @@ pub fn insert_pending_deployment(
 // Hydrates one deployment and validates its lifecycle evidence matrix.
 pub fn load_deployment(
     transaction: &Transaction<'_>,
-    deployment_id: &str,
+    deployment_id: &DeploymentId,
 ) -> Result<Deployment, DeploymentStoreError> {
     let deployment = transaction.query_row(
         "SELECT id, application_id, release_id, type, status, source_revision, requested_at, started_at,
                 finished_at, failure_code, failure_stage, failure_message
-         FROM deployments WHERE id = ?1", [deployment_id], raw_deployment_from_row,
-    ).optional().map_err(persistence)?.ok_or_else(|| DeploymentStoreError::NotFound { deployment_id: deployment_id.to_owned() })?;
+          FROM deployments WHERE id = ?1", [deployment_id.as_str()], raw_deployment_from_row,
+    ).optional().map_err(persistence)?.ok_or_else(|| DeploymentStoreError::NotFound { deployment_id: deployment_id.to_string() })?;
     deployment.into_deployment()
 }
 
@@ -231,21 +234,21 @@ pub fn list_deployment_history(
 // Loads the current Deployment status for transition and recovery decisions.
 pub fn load_status(
     connection: &Connection,
-    deployment_id: &str,
+    deployment_id: &DeploymentId,
 ) -> Result<DeploymentStatus, DeploymentStoreError> {
     let status = connection
         .query_row(
             "SELECT status FROM deployments WHERE id = ?1",
-            [deployment_id],
+            [deployment_id.as_str()],
             |row| row.get::<_, String>(0),
         )
         .optional()
         .map_err(persistence)?
         .ok_or_else(|| DeploymentStoreError::NotFound {
-            deployment_id: deployment_id.to_owned(),
+            deployment_id: deployment_id.to_string(),
         })?;
     deployment_status_from_value(&status).ok_or_else(|| DeploymentStoreError::InvalidStatus {
-        deployment_id: deployment_id.to_owned(),
+        deployment_id: deployment_id.to_string(),
         status,
     })
 }
@@ -253,14 +256,14 @@ pub fn load_status(
 // Advances Deployment status with compare-and-set semantics and timestamps its first start.
 pub fn advance_status(
     connection: &Connection,
-    deployment_id: &str,
+    deployment_id: &DeploymentId,
     expected: DeploymentStatus,
     next: DeploymentStatus,
 ) -> Result<PersistenceOutcome, DeploymentStoreError> {
     let updated = connection.execute(
         "UPDATE deployments SET status = ?1, started_at = CASE WHEN status = 'pending' THEN CURRENT_TIMESTAMP ELSE started_at END,
          updated_at = CURRENT_TIMESTAMP WHERE id = ?2 AND status = ?3",
-        params![deployment_status_value(next), deployment_id, deployment_status_value(expected)],
+        params![deployment_status_value(next), deployment_id.as_str(), deployment_status_value(expected)],
     ).map_err(persistence)?;
     Ok(outcome(updated))
 }
@@ -268,7 +271,7 @@ pub fn advance_status(
 // Records complete terminal failure evidence only from the supplied in-progress stage.
 pub fn mark_failed(
     transaction: &Transaction<'_>,
-    deployment_id: &str,
+    deployment_id: &DeploymentId,
     stage: DeploymentStatus,
     code: &str,
     message: &str,
@@ -276,23 +279,23 @@ pub fn mark_failed(
     let updated = transaction.execute(
         "UPDATE deployments SET status = 'failed', finished_at = CURRENT_TIMESTAMP, failure_code = ?1,
          failure_stage = ?2, failure_message = ?3, updated_at = CURRENT_TIMESTAMP WHERE id = ?4 AND status = ?2",
-        params![code, deployment_status_value(stage), message, deployment_id],
+        params![code, deployment_status_value(stage), message, deployment_id.as_str()],
     ).map_err(persistence)?;
     if outcome(updated) == PersistenceOutcome::Stale {
         return Err(DeploymentStoreError::Stale {
-            deployment_id: deployment_id.to_owned(),
+            deployment_id: deployment_id.to_string(),
         });
     }
     let finished_at: String = transaction
         .query_row(
             "SELECT finished_at FROM deployments WHERE id = ?1",
-            [deployment_id],
+            [deployment_id.as_str()],
             |row| row.get(0),
         )
         .map_err(persistence)?;
     DeploymentFailure::new(code, stage, message, finished_at).map_err(|error| {
         DeploymentStoreError::InvalidEvidence {
-            deployment_id: deployment_id.to_owned(),
+            deployment_id: deployment_id.to_string(),
             reason: error.to_string(),
         }
     })
@@ -301,12 +304,12 @@ pub fn mark_failed(
 // Marks a Deployment successful only when its expected prior stage still holds.
 pub fn mark_succeeded(
     transaction: &Transaction<'_>,
-    deployment_id: &str,
+    deployment_id: &DeploymentId,
     expected_status: DeploymentStatus,
 ) -> Result<PersistenceOutcome, DeploymentStoreError> {
     let updated = transaction.execute(
         "UPDATE deployments SET status = 'succeeded', finished_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-          WHERE id = ?1 AND status = ?2", params![deployment_id, deployment_status_value(expected_status)],
+          WHERE id = ?1 AND status = ?2", params![deployment_id.as_str(), deployment_status_value(expected_status)],
     ).map_err(persistence)?;
     Ok(outcome(updated))
 }
@@ -314,12 +317,12 @@ pub fn mark_succeeded(
 // Reads the terminal timestamp persisted by a completed Deployment transition.
 pub fn load_finished_at(
     transaction: &Transaction<'_>,
-    deployment_id: &str,
+    deployment_id: &DeploymentId,
 ) -> Result<String, DeploymentStoreError> {
     transaction
         .query_row(
             "SELECT finished_at FROM deployments WHERE id = ?1",
-            [deployment_id],
+            [deployment_id.as_str()],
             |row| row.get(0),
         )
         .map_err(persistence)
@@ -328,14 +331,14 @@ pub fn load_finished_at(
 // Loads all runtime, deployment, and exposure facts required by either promotion path.
 pub fn load_promotion_target(
     connection: &Connection,
-    runtime_id: &str,
+    runtime_id: &RuntimeInstanceId,
 ) -> Result<Option<PromotionTarget>, DeploymentStoreError> {
     connection.query_row(
         "SELECT ri.application_id, ri.deployment_id, ri.host_port, ri.state, ri.last_observed_state,
                 ri.removed_at, d.status, d.finished_at, e.desired_visibility, e.domain
          FROM runtime_instances ri JOIN deployments d ON d.id = ri.deployment_id
          JOIN exposures e ON e.application_id = ri.application_id WHERE ri.id = ?1",
-        [runtime_id],
+        [runtime_id.as_str()],
         |row| {
             let state_text: String = row.get(3)?;
             let status_text: String = row.get(6)?;
@@ -349,7 +352,7 @@ pub fn load_promotion_target(
                 })
                 .transpose()?;
             Ok(PromotionTarget {
-                runtime_id: RuntimeInstanceId::from(runtime_id), application_id: ApplicationId::from(row.get::<_, String>(0)?), deployment_id: DeploymentId::from(row.get::<_, String>(1)?),
+                runtime_id: runtime_id.clone(), application_id: ApplicationId::from(row.get::<_, String>(0)?), deployment_id: DeploymentId::from(row.get::<_, String>(1)?),
                 endpoint: SocketAddr::from((Ipv4Addr::LOCALHOST, row.get::<_, u16>(2)?)),
                 state: runtime_state_from_value(&state_text).ok_or_else(|| conversion_error(3, std::io::Error::new(std::io::ErrorKind::InvalidData, format!("invalid runtime state: {state_text}"))))?,
                 observed_state: observed_runtime_state_from_value(&row.get::<_, String>(4)?),
@@ -366,13 +369,13 @@ pub fn load_promotion_target(
 // Selects the most recent succeeded deployment that is no longer active for rollback.
 pub fn load_rollback_target(
     connection: &Connection,
-    application_id: &str,
+    application_id: &ApplicationId,
 ) -> Result<Option<RollbackTarget>, DeploymentStoreError> {
     connection.query_row(
         "SELECT r.id, r.application_id, r.image_reference, r.image_repository, r.image_digest, d.source_revision, r.created_at
          FROM deployments d JOIN releases r ON r.id = d.release_id LEFT JOIN applications a ON a.active_deployment_id = d.id
          WHERE d.application_id = ?1 AND d.status = 'succeeded' AND a.id IS NULL ORDER BY d.finished_at DESC LIMIT 1",
-        [application_id],
+        [application_id.as_str()],
         |row| {
             let reference: String = row.get(2)?;
             let repository: String = row.get(3)?;
@@ -634,6 +637,8 @@ mod tests {
         DeploymentFailureEvidence, DeploymentLifecycle, DeploymentStatus,
     };
 
+    use crate::domain::identity::DeploymentId;
+
     use super::{DeploymentStoreError, advance_status, load_deployment};
 
     #[test]
@@ -652,7 +657,7 @@ mod tests {
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .unwrap();
 
-        let deployment = load_deployment(&transaction, "deployment").unwrap();
+        let deployment = load_deployment(&transaction, &DeploymentId::from("deployment")).unwrap();
 
         assert_eq!(deployment.started_at.as_deref(), Some("started"));
         assert!(
@@ -676,7 +681,7 @@ mod tests {
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .unwrap();
 
-        let deployment = load_deployment(&transaction, "deployment").unwrap();
+        let deployment = load_deployment(&transaction, &DeploymentId::from("deployment")).unwrap();
 
         assert!(matches!(
             deployment.lifecycle,
@@ -702,7 +707,7 @@ mod tests {
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .unwrap();
 
-        let error = load_deployment(&transaction, "deployment").unwrap_err();
+        let error = load_deployment(&transaction, &DeploymentId::from("deployment")).unwrap_err();
 
         assert!(
             matches!(error, DeploymentStoreError::InvalidEvidence { deployment_id, .. } if deployment_id == "deployment")
@@ -717,7 +722,7 @@ mod tests {
         assert_eq!(
             advance_status(
                 &connection,
-                "deployment",
+                &DeploymentId::from("deployment"),
                 DeploymentStatus::Pending,
                 DeploymentStatus::Starting,
             )
@@ -727,7 +732,7 @@ mod tests {
         assert_eq!(
             advance_status(
                 &connection,
-                "deployment",
+                &DeploymentId::from("deployment"),
                 DeploymentStatus::Pending,
                 DeploymentStatus::Starting,
             )

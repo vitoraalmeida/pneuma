@@ -90,7 +90,7 @@ pub fn rollback_deployment(
             application_id: application_id.to_string(),
         });
     }
-    let target = previous_release(connection, application_id.as_str())?;
+    let target = previous_release(connection, application_id)?;
     pull_image(target.release.artifact.reference())
         .map_err(|source| RollbackError::PullImage { source })?;
     deploy_release(
@@ -109,12 +109,12 @@ type RollbackTarget = deployment_store::RollbackTarget;
 
 fn previous_release(
     connection: &Connection,
-    application_id: &str,
+    application_id: &ApplicationId,
 ) -> Result<RollbackTarget, RollbackError> {
     deployment_store::load_rollback_target(connection, application_id)
         .map_err(|source| RollbackError::DeploymentStore { source })?
         .ok_or_else(|| RollbackError::NoPreviousDeployment {
-            application_id: application_id.to_owned(),
+            application_id: application_id.to_string(),
         })
 }
 
@@ -124,6 +124,7 @@ mod tests {
 
     use crate::adapters::database;
     use crate::domain::deployment::SourceRevision;
+    use crate::domain::identity::ApplicationId;
 
     use super::previous_release;
 
@@ -153,7 +154,7 @@ mod tests {
             )
             .unwrap();
 
-        let target = previous_release(&connection, "app-id").unwrap();
+        let target = previous_release(&connection, &ApplicationId::from("app-id")).unwrap();
 
         assert_eq!(target.release.id.as_str(), "release-id");
         assert_eq!(target.release.artifact.repository(), "registry.example/app");

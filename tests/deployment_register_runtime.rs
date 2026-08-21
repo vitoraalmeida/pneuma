@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use pneuma::adapters::database;
 use pneuma::domain::deployment::DeploymentType;
+use pneuma::domain::identity::{ApplicationId, DeploymentId};
 use pneuma::domain::release::OciArtifact;
 use pneuma::domain::runtime::ContainerId;
 use pneuma::domain::runtime::{ContainerPort, ObservedRuntimeState, RuntimeState};
@@ -29,8 +30,8 @@ fn persists_a_running_candidate_linked_to_its_deployment() {
     )
     .unwrap();
 
-    assert_eq!(runtime.application_id.as_str(), application_id);
-    assert_eq!(runtime.deployment_id.as_str(), deployment_id);
+    assert_eq!(runtime.application_id, application_id);
+    assert_eq!(runtime.deployment_id, deployment_id);
     assert_eq!(runtime.external_runtime_id, external_runtime_id);
     assert_eq!(runtime.expected_endpoint.socket_addr(), endpoint);
     assert_eq!(runtime.container_port, 8080);
@@ -125,7 +126,7 @@ fn requires_a_starting_deployment() {
 
     let error = register_candidate_runtime(
         &mut connection,
-        deployment.id.as_str(),
+        &deployment.id,
         &container_id('b'),
         "127.0.0.1:30001".parse().unwrap(),
         port(8080),
@@ -133,7 +134,7 @@ fn requires_a_starting_deployment() {
     .unwrap_err();
     let missing = register_candidate_runtime(
         &mut connection,
-        "missing",
+        &DeploymentId::from("missing"),
         &container_id('c'),
         "127.0.0.1:30002".parse().unwrap(),
         port(8080),
@@ -303,7 +304,7 @@ fn database_rejects_a_runtime_identity_from_another_application() {
     assert!(matches!(error, rusqlite::Error::SqliteFailure(_, _)));
 }
 
-fn starting_deployment(fixture: &str) -> (rusqlite::Connection, String, String) {
+fn starting_deployment(fixture: &str) -> (rusqlite::Connection, ApplicationId, DeploymentId) {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
     let (application_id, deployment_id) = add_starting_deployment(&mut connection, fixture);
     (connection, application_id, deployment_id)
@@ -312,7 +313,7 @@ fn starting_deployment(fixture: &str) -> (rusqlite::Connection, String, String) 
 fn add_starting_deployment(
     connection: &mut rusqlite::Connection,
     fixture: &str,
-) -> (String, String) {
+) -> (ApplicationId, DeploymentId) {
     let application =
         import_application(connection, &fixture_path(fixture), None, None, None).unwrap();
     let artifact = if fixture == "valid" {
@@ -328,13 +329,8 @@ fn add_starting_deployment(
         DeploymentType::Deploy,
     )
     .unwrap();
-    advance_deployment(
-        connection,
-        deployment.id.as_str(),
-        DeploymentTransition::Start,
-    )
-    .unwrap();
-    (application.id.to_string(), deployment.id.to_string())
+    advance_deployment(connection, &deployment.id, DeploymentTransition::Start).unwrap();
+    (application.id, deployment.id)
 }
 
 fn fixture_path(name: &str) -> PathBuf {
