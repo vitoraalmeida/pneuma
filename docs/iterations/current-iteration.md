@@ -1,232 +1,74 @@
 # Current Iteration
 
-**Status:** completed
+**Status:** em andamento
 
-**Base:** `49b9476` (`docs: refactor documentation architecture`)
+**Base:** `d643a32` (`chore(release): v0.4.0`)
 
-**Approved designs:** [`domain-model-hardening.md`](../design/domain-model-hardening.md),
-[`reconciliation.md`](../design/reconciliation.md), and
-[`domain-boundary-refactor.md`](../design/domain-boundary-refactor.md)
+**Approved design:** [`domain-hardening-sweep.md`](../design/domain-hardening-sweep.md)
 
-## Iteration - v0.4 Reconciliation
+## Iteration - v0.4.1 Domain Hardening Sweep
 
-Objective: converge runtime and exposure materialization toward persisted intent
-without selecting a new Release or making destructive changes from ambiguity.
+Objective: strengthen the domain boundary by moving remaining business rules,
+vocabulary, and typed identities into their owning domain modules, eliminating
+primitive round-trips, and removing duplicate or drifted validation.
 
 ## Checkpoints
 
-- [x] Complete the Application domain projection with persisted runtime intent
-  and specification version in every Application read path. This establishes
-  explicit Application intent before the broader reconciliation input model.
-  Result: import, listing, and System details now hydrate typed runtime intent
-  and specification version through one store-owned row mapper.
-- [x] Separate the core Application from catalog summaries and represent source,
-  delivery, runtime, and health configuration with named domain projections.
-  Replace scalar and tuple specification loaders and remove direct SQL from
-  deployment use cases.
-  Result: command lookup loads a core Application directly; catalog output and
-  deployment configuration use named typed projections mapped by the store.
-- [x] Establish Exposure as a domain concept with typed visibility and
-  materialization state, keeping manifest parsing as an input boundary and
-  mapping persisted values in the store.
-  Result: Exposure now carries persisted intent, route state, runtime identity,
-  configuration version, and diagnostics; the store rejects invalid state text.
-- [x] Establish RuntimeInstance and runtime observation as domain concepts,
-  replace runtime tuples and use-case-local runtime entities, and hydrate the
-  persisted observed state instead of inventing `Running` on reload.
-  Result: runtime registration, lifecycle, cleanup, and exposure share typed
-  RuntimeInstance and observation models mapped by the runtime store.
-- [x] Represent immutable OCI artifact identity as one validated value during
-  Release creation, and remove invented identifiers from Release error mapping.
-  Result: Release owns a validated OciArtifact, stores reject inconsistent
-  persisted artifact parts, and errors preserve real identifiers and sources.
-- [x] Add concise reading comments to production structs and functions before
-  reconciliation work. Explain responsibility, relevant constraints, and
-  non-obvious mechanisms without changing behavior or annotating tests.
-  Result: production structs and operational functions now describe their role,
-  transaction or external-effect boundaries, and critical invariants.
-- [x] Harden domain identities across logical and external resources without
-  changing SQLite's persisted text representation.
-  Result: opaque logical and container identities now map through stores without
-  changing SQLite TEXT values.
-- [x] Validate application specification and OCI values at domain boundaries,
-  including shared repository identity and cohesive source representation.
-  Result: validated specification values and cohesive sources now reject invalid
-  input and persisted malformed text maps to contextual store errors.
-- [x] Separate expected runtime identity from external observation, preserve
-  `Missing`, and model retirement explicitly.
-  Result: expected loopback endpoints remain reserved identity, observations
-  preserve Missing and drift, status is read-only for container identity, and
-  retirement derives from explicit removal evidence.
-- [x] Make Exposure intent, confirmed route evidence, and diagnostics valid by
-  construction while retaining compensation-relevant evidence.
-  Result: typed exposure intent, route evidence, and diagnostics reject invalid
-  persisted combinations while preserving confirmed routes through transitions.
-- [x] Add Deployment lifecycle evidence and replace scalar or tuple operation
-  results with cohesive domain values.
-  Result: Deployment hydration now validates lifecycle evidence, preserves incomplete
-  historical failures, exposes typed blockers and history, and uses named execution
-  and rollback targets.
-- [x] Move persisted-value conversion into stores and require explicit stale
-  outcomes from compare-and-set persistence primitives.
-  Result: stores own SQLite mapping and CAS writes return explicit updated or
-  stale outcomes; promotion, catalog, and rollback use typed store values.
-- [x] Convert `reconciliation-e2e.md` into an executable reconciliation test
-  plan before implementation: assign every scenario to a focused Rust test or
-  disposable-VM E2E case, define fixtures, fault injection, persisted-state and
-  external-observation assertions, and add initial failing tests for the first
-  implementation slice.
-  Result: all approved scenarios have named VM cases and supplemental focused
-  coverage, fixtures, injections, and persisted/external assertions; the initial
-  reconciliation tests were demonstrated red before implementation.
-- [x] Define reconciliation input and read-only observation: load persisted
-  Application intent, active Deployment, RuntimeInstance, and Exposure; observe
-  Podman/systemd and Caddy without changing SQLite or external resources.
-  Result: a short SQLite snapshot now loads Application, blocker, active
-  Deployment, Release, RuntimeInstance, Exposure, and specification before
-  read-only container, Quadlet, and Caddy fragment observation.
-- [x] Add `pneuma reconcile <application>` with observable `no-op` and
-  `deferred` results. A non-terminal Deployment must defer reconciliation before
-  any external effect.
-  Result: the top-level command returns `deferred` before external observation
-  for a non-terminal Deployment and reports `no-op` for stopped internal intent
-  with absent runtime and route; runtime repair remains a later checkpoint.
-- [x] Reconcile confirmed runtime drift: recover a missing container only when
-  the persisted RuntimeInstance, deterministic unit/container identity, image
-  digest, labels, and loopback endpoint are unambiguous. Preserve the persisted
-  port and reconcile `external_runtime_id` by compare-and-set.
-  Result: reconcile now CAS-updates only a confirmed recreated Quadlet container
-  restarts an existing canonical Quadlet or rematerializes an absent one from the
-  persisted runtime port;
-  divergent runtime identity or configuration remains manual intervention.
-- [x] Reconcile Caddy exposure drift: repair missing or divergent public
-  fragments only with a healthy confirmed runtime; remove an internal route;
-  validate, reload, externally health-check, and preserve `failed` or `diverged`
-  diagnostics when convergence cannot be confirmed.
-  Result: reconcile CAS-reserves exposure intent, repairs canonical public routes
-  through configured Caddy validation/reload and external health, removes internal
-  fragments after validation/reload, and records failed, diverged, or manual outcomes.
-- [x] Handle interrupted Deployments and concurrency: clean only resources with
-  proven identity, preserve the active healthy runtime and route, and serialize
-  reconcile against reconcile and deployment effects per Application.
-  Result: a free per-Application lock recovers interrupted deployments by stage;
-  pending work fails without effects, proven candidates are cleaned, and uncertain
-  activation routes are retained as diverged without promotion.
-- [x] Complete the approved VM E2E catalog and final regression. Record actual
-  PASS/FAIL/SKIP evidence for bootstrap and reconciliation scenarios; destroy
-  every disposable clone.
-  Result: `reconciliation-e2e.sh` passed all R1-R7, E1-E6, I1-I4, and C1-C4
-  cases (21 PASS, 0 FAIL, 0 SKIP) in 383 seconds on 2026-08-20 after preparing
-  shared fixture inputs once. The disposable clone was removed.
-- [x] Complete runtime cleanup domain adoption: return typed lifecycle state from
-  the store and preserve distinct RuntimeInstance and Container identities through
-  candidate cleanup and compensation.
-  Result: cleanup now receives typed lifecycle and distinct runtime/container IDs;
-  malformed persisted runtime state is rejected by the runtime store.
-- [x] Complete promotion domain adoption: replace raw `PromotionTarget` IDs,
-  domain text, and retirement timestamp with validated domain values.
-  Result: promotion targets now map SQLite values to typed identities, retirement
-  evidence, and domains before the promotion use cases validate them.
-- [x] Preserve artifacts and runtime specifications through candidate orchestration
-  until adapter boundaries, without independent reference/digest or health scalars.
-  Result: candidate startup and promotion now receive `OciArtifact`, runtime, and
-  health-check specifications, extracting scalar values only for adapter calls.
-- [x] Replace remaining use-case tuple and raw identity operation outputs with
-  cohesive typed values, and remove invented identifiers from store errors.
-  Result: runtime, promotion, and exposure results retain typed identities;
-  store failures preserve contextual sources and Release digest lookup reports
-  its real Application and artifact keys.
-- [x] Realign domain module ownership without behavioral change: move System naming
-  to the System domain, Application desired runtime intent to Application, and
-  runtime and health specifications to Runtime.
-  Result: System, Application intent, and runtime/health values now live in their
-  owning modules; System and runtime-registration use cases receive typed inputs.
-- [x] Canonicalize immutable Git commit identity as one domain value shared by Git,
-  OCI, and Deployment source revision handling.
-  Result: a validated `CommitSha` now passes intact from Git resolution through
-  OCI tag lookup to typed Deployment provenance while historical revisions remain readable.
-- [x] Realign store ownership: move System SQL into `system_store`, Application
-  runtime intent into `application_store`, and Deployment-only queries into
-  `deployment_store`; remove obsolete Release-store APIs.
-  Result: import uses the System store, Application owns desired runtime-state
-  persistence, and Deployment owns Release eligibility checks.
-- [x] Extract Exposure persistence, hydration, transitions, and reconciliation CAS
-  into `exposure_store`, keeping Application deployment-specification projection
-  in `application_store`.
-  Result: Exposure hydration, visibility transitions, diagnostics, and reconciliation
-  reservations now have one store owner; Application retains deployment input projection.
-- [x] Move internal and public promotion write ordering from `deployment_store`
-  into their use cases while retaining one atomic transaction and explicit stale
-  outcomes for every persistence primitive.
-  Result: promotion use cases now order aggregate-owned Runtime, Exposure,
-  Deployment, and Application writes while handling each CAS stale result explicitly.
-- [x] Move generic Application lookup out of list-specific use cases and retire or
-  explicitly isolate the legacy direct Podman candidate-creation API.
-  Result: core Application lookup has its own use case and the unused direct
-  Podman candidate-creation flow, including exclusive coverage, is removed.
-- [x] Extract shared remote import, diagnostics, database, and progress-enabled
-  deployment orchestration from `main.rs` without changing CLI behavior except
-  the approved verbose deployment progress output.
-  Result: remote imports, database helpers, diagnostics, and deployment progress
-  now have dedicated owners; `--verbose` deploy reports lifecycle steps on stderr.
-- [x] Preserve validated manifest values through the import use case without
-  changing CLI input, remote import behavior, diagnostics, persistence
-  representation, or checkout cleanup.
-  Result: manifest validation now produces a typed import projection consumed by
-  the import transaction; remote import and all CLI import regressions retain
-  their existing behavior.
-- [x] Complete remaining domain ownership alignment: move Git repository
-  classification and source location to Git, and external container identity to
-  Runtime, without changing CLI behavior or SQLite text.
-  Result: Git source construction and remote classification now share one domain
-  rule; runtime container identity no longer resides with logical identities.
-- [x] Harden the Application-store typed boundary: generate Application IDs and
-  accept Application, System, Deployment, and name domain values at its API.
-  Result: Application-store callers retain typed identities and names until the
-  SQLite parameter boundary without changing persistence or CLI behavior.
-- [x] Harden Release, Deployment, and Runtime-store typed boundaries: generate
-  typed IDs and require Application, Release, Deployment, and RuntimeInstance
-  values until SQLite parameter boundaries.
-  Result: Release, Deployment, and Runtime stores now retain typed logical IDs
-  without changing SQLite text representation or CLI behavior.
-- [x] Harden System and Exposure-store typed boundaries: require System names and
-  Application/RuntimeInstance identities until SQLite parameters, while retaining
-  operation ownership tokens as opaque `String` fencing values rather than domain
-  identities.
-  Result: System and Exposure stores now accept typed values without changing
-  SQLite text or CLI behavior; operation tokens remain `String` by design.
+- [ ] Centralize the loopback endpoint invariant and replace raw container-port
+  fields with `ContainerPort`. Make runtime registration accept
+  `ExpectedRuntimeEndpoint` and remove the hardcoded loopback address from
+  port-reservation queries.
+  Result: TBD.
+- [ ] Pass `&HealthCheckSpecification` into the internal health-check adapter and
+  fix the hardcoded `/` `200` probe used during visibility changes so it uses
+  the persisted runtime health specification.
+  Result: TBD.
+- [ ] Move `DeploymentTransition`, its edge mapping, and promotion eligibility
+  into `domain/deployment.rs`; move promotion/rollback target types out of
+  `deployment_store`; merge duplicate promoted-candidate types.
+  Result: TBD.
+- [ ] Move public exposure target and outcome types into `domain/exposure.rs`;
+  route public exposure through `ExposureIntent::new`; type `change_exposure`
+  and helpers with `&ApplicationId`.
+  Result: TBD.
+- [ ] Introduce a domain function for stable container/unit naming; move
+  external container identity format rules into the domain; type
+  `runtime_store` external-id functions with `&ContainerId`.
+  Result: TBD.
+- [ ] Type adapter and store boundaries: Caddy fragment APIs, `ApplicationLock`,
+  `operation_store`, `port_allocator`, `oci_image`, internal use-case input
+  structs, and `reconcile_application` with typed identities.
+  Result: TBD.
+- [ ] Align CI dispatch name validation with `ApplicationName::new`; share the
+  catalog-name validator; move `DeliveryType`/`DeliverySpecification` to their
+  canonical domain modules.
+  Result: TBD.
 
 ## Scope and Non-goals
 
-- DNS, certificate lifecycle, registry watching, auto-deploy, API, OIDC,
-  RBAC, multiple hosts, and precompiled binary download are out of scope.
-- Reconciliation never creates a Release, selects a registry artifact, or
-  changes desired runtime state or visibility.
-- Domain hardening preserves persisted representation and never silently repairs
-  ambiguous historical values.
-- Ambiguous identity or configuration drift is reported for manual intervention,
-  not repaired destructively.
+- No new feature, CLI command, schema migration, or persisted representation
+  change.
+- No new dependency, async code, trait abstraction, or generic boundary.
+- No reconciliation, networking, topology, or v0.5 work.
+- The only intentional behavior changes are the two approved fixes: loopback
+  health checks reject IPv6 `::1`, and visibility changes use the persisted
+  health path/status.
 
 ## Acceptance Criteria
 
-- Reconciliation converges runtime and exposure materialization only when the
-  identity and desired state are unambiguous.
-- Reconciliation does not create a Release or Deployment, change intent, or
-  destructively repair ambiguous drift.
-- Required VM E2E coverage proves the approved reconciliation scenarios.
-- The exact CI gates and all required VM evidence are green before this
-  iteration is closed.
+- Loopback endpoint validation has a single domain owner.
+- Health-check configuration crosses adapter boundaries as a typed value.
+- Deployment lifecycle, promotion eligibility, and target types live in the
+  domain.
+- Exposure intent and public-exposure targets live in the domain.
+- Container/unit naming and external identity format rules live in the domain.
+- Adapter and store APIs accept typed identities instead of primitive strings.
+- CI dispatch validates application names with the same rule as the domain.
+- The exact CI gates and VM regression are green before closure.
 
 ## Closure Evidence
 
-- `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`,
-  `cargo test --all-features`, and `cargo build --workspace --release` passed on `5cea214`.
-- A fresh disposable clone passed `scripts/dev-vm/test-all.sh` with 45 PASS, 0 FAIL,
-  and 0 SKIP; the clone and its storage were removed.
-- The final refactor binary passed `scripts/dev-vm/reconciliation-e2e.sh` with 21 PASS,
-  0 FAIL, and 0 SKIP; the clone and its storage were removed.
-- The final typed-store binary passed `scripts/dev-vm/reconciliation-e2e.sh` with
-  21 PASS, 0 FAIL, and 0 SKIP; the clone and its storage were removed.
+- TBD.
 
 ## Blockers
 
