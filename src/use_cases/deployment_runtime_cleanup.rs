@@ -7,14 +7,15 @@ use crate::adapters::local_runtime::{ControlContainerError, remove_container};
 use crate::adapters::port_allocator::{PortAllocationError, release_port};
 use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
 use crate::adapters::systemd_quadlet::{QuadletError, daemon_reload, remove_unit, stop, unit_name};
-use crate::domain::runtime::PreviousRuntime;
+use crate::domain::identity::{ContainerId, RuntimeInstanceId};
+use crate::domain::runtime::{PreviousRuntime, RuntimeState};
 
 #[derive(Debug, Clone)]
 // Tracks only resources proven to belong to a candidate for safe compensation.
 pub(crate) struct CandidateResources {
     pub unit_name: Option<String>,
-    pub container_id: Option<String>,
-    pub runtime_id: Option<String>,
+    pub container_id: Option<ContainerId>,
+    pub runtime_id: Option<RuntimeInstanceId>,
     pub port_reserved: bool,
 }
 
@@ -30,18 +31,21 @@ impl CandidateResources {
     }
 
     // Records a resolved container when no persisted runtime exists yet.
-    pub(crate) fn with_container(container_id: &str) -> Self {
+    pub(crate) fn with_container(container_id: &ContainerId) -> Self {
         Self {
-            container_id: Some(container_id.to_owned()),
+            container_id: Some(container_id.clone()),
             ..Self::empty()
         }
     }
 
     // Records a resolved container and its registered runtime for later cleanup.
-    pub(crate) fn with_container_and_runtime(container_id: &str, runtime_id: &str) -> Self {
+    pub(crate) fn with_container_and_runtime(
+        container_id: &ContainerId,
+        runtime_id: &RuntimeInstanceId,
+    ) -> Self {
         Self {
-            container_id: Some(container_id.to_owned()),
-            runtime_id: Some(runtime_id.to_owned()),
+            container_id: Some(container_id.clone()),
+            runtime_id: Some(runtime_id.clone()),
             ..Self::empty()
         }
     }
@@ -59,14 +63,14 @@ impl CandidateResources {
     }
 
     // Updates the tracked container after the runtime is resolved.
-    pub(crate) fn with_container_mut(mut self, container_id: &str) -> Self {
-        self.container_id = Some(container_id.to_owned());
+    pub(crate) fn with_container_mut(mut self, container_id: &ContainerId) -> Self {
+        self.container_id = Some(container_id.clone());
         self
     }
 
     // Updates the tracked runtime after registration succeeds.
-    pub(crate) fn with_runtime_mut(mut self, runtime_id: &str) -> Self {
-        self.runtime_id = Some(runtime_id.to_owned());
+    pub(crate) fn with_runtime_mut(mut self, runtime_id: &RuntimeInstanceId) -> Self {
+        self.runtime_id = Some(runtime_id.clone());
         self
     }
 }
@@ -171,22 +175,21 @@ pub(crate) fn cleanup_failed_candidate(
     connection: &Connection,
     deployment_id: &str,
     unit: Option<&str>,
-    container_id: Option<&str>,
-    runtime_id: Option<&str>,
+    container_id: Option<&ContainerId>,
+    runtime_id: Option<&RuntimeInstanceId>,
 ) -> Result<(), CandidateCleanupError> {
     if let Some(runtime_id) = runtime_id {
-        let state =
-            runtime_store::load_runtime_state(connection, runtime_id).map_err(|source| {
-                CandidateCleanupError::Persistence {
-                    source: match source {
-                        RuntimeStoreError::Persistence { source } => source,
-                        _ => rusqlite::Error::QueryReturnedNoRows,
-                    },
-                }
-            })?;
+        let state = runtime_store::load_runtime_state(connection, runtime_id.as_str()).map_err(
+            |source| CandidateCleanupError::Persistence {
+                source: match source {
+                    RuntimeStoreError::Persistence { source } => source,
+                    _ => rusqlite::Error::QueryReturnedNoRows,
+                },
+            },
+        )?;
         // A promotion error may have an uncertain external outcome. Never remove an
         // already active runtime.
-        if state.as_deref().is_some_and(|state| state != "starting") {
+        if state.is_some_and(|state| state != RuntimeState::Starting) {
             return Ok(());
         }
     }
@@ -197,11 +200,11 @@ pub(crate) fn cleanup_failed_candidate(
         daemon_reload().map_err(|source| CandidateCleanupError::ReloadUnits { source })?;
     }
     if let Some(container_id) = container_id {
-        remove_container(container_id)
+        remove_container(container_id.as_str())
             .map_err(|source| CandidateCleanupError::RemoveContainer { source })?;
     }
     if let Some(runtime_id) = runtime_id {
-        let outcome = runtime_store::mark_starting_runtime_missing(connection, runtime_id)
+        let outcome = runtime_store::mark_starting_runtime_missing(connection, runtime_id.as_str())
             .map_err(|source| CandidateCleanupError::Persistence {
                 source: match source {
                     RuntimeStoreError::Persistence { source } => source,

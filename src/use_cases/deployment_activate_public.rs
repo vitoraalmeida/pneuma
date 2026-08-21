@@ -85,11 +85,11 @@ pub(crate) fn activate_public_candidate(
     } = input;
 
     let runtime_id = runtime.id.as_str();
-    let container_id = runtime.external_runtime_id.as_str();
     let deployment_id = runtime.deployment_id.as_str();
     let endpoint = runtime.expected_endpoint.socket_addr();
 
-    let resources = CandidateResources::with_container_and_runtime(container_id, runtime_id);
+    let resources =
+        CandidateResources::with_container_and_runtime(&runtime.external_runtime_id, &runtime.id);
 
     progress.started(
         DeploymentStep::InternalHealthCheck,

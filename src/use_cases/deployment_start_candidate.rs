@@ -8,6 +8,7 @@ use crate::adapters::port_allocator::{consume_port_reservation, reserve_port};
 use crate::adapters::systemd_quadlet::{
     QuadletError, container_name, daemon_reload, start, write_unit,
 };
+use crate::domain::identity::ContainerId;
 use crate::domain::runtime::{ObservedRuntimeState, RuntimeInstance};
 use crate::use_cases::deployment_register_runtime::register_candidate_runtime;
 use crate::use_cases::deployment_runtime_cleanup::CandidateResources;
@@ -143,19 +144,21 @@ pub(crate) fn start_candidate(
     })?;
 
     let name = container_name(application_name, deployment_id);
-    let container_id =
-        resolve_container_id(&name).map_err(|source| CandidateStartError::ContainerResolution {
-            source: Box::new(source),
-            resources: Box::new(resources.clone()),
-        })?;
-    resources = resources.with_container_mut(&container_id);
-
-    let observation = observe_container(&container_id, container_port).map_err(|source| {
-        CandidateStartError::ContainerObservation {
+    let container_id = ContainerId::from(resolve_container_id(&name).map_err(|source| {
+        CandidateStartError::ContainerResolution {
             source: Box::new(source),
             resources: Box::new(resources.clone()),
         }
-    })?;
+    })?);
+    resources = resources.with_container_mut(&container_id);
+
+    let observation =
+        observe_container(container_id.as_str(), container_port).map_err(|source| {
+            CandidateStartError::ContainerObservation {
+                source: Box::new(source),
+                resources: Box::new(resources.clone()),
+            }
+        })?;
 
     if *observation.state() != ObservedRuntimeState::Running {
         return Err(CandidateStartError::ContainerObservation {
@@ -176,7 +179,7 @@ pub(crate) fn start_candidate(
     let runtime = register_candidate_runtime(
         connection,
         deployment_id,
-        &container_id,
+        container_id.as_str(),
         endpoint,
         container_port,
     )
@@ -184,7 +187,7 @@ pub(crate) fn start_candidate(
         source: Box::new(source),
         resources: Box::new(resources.clone()),
     })?;
-    resources = resources.with_runtime_mut(runtime.id.as_str());
+    resources = resources.with_runtime_mut(&runtime.id);
 
     consume_port_reservation(connection, deployment_id).map_err(|source| {
         CandidateStartError::PortPersistence {

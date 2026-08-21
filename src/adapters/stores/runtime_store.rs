@@ -244,12 +244,16 @@ pub fn start_runtime(
 pub fn load_runtime_state(
     connection: &Connection,
     runtime_id: &str,
-) -> Result<Option<String>, RuntimeStoreError> {
+) -> Result<Option<RuntimeState>, RuntimeStoreError> {
     connection
         .query_row(
             "SELECT state FROM runtime_instances WHERE id = ?1",
             [runtime_id],
-            |row| row.get(0),
+            |row| {
+                let value: String = row.get(0)?;
+                runtime_state_from_value(&value)
+                    .ok_or_else(|| invalid_text_value(0, "runtime state", &value))
+            },
         )
         .optional()
         .map_err(|source| RuntimeStoreError::Persistence { source })
@@ -518,5 +522,41 @@ fn observed_runtime_state_from_value(value: &str) -> ObservedRuntimeState {
         status => ObservedRuntimeState::Unknown {
             status: status.to_owned(),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loads_a_typed_runtime_state_and_rejects_invalid_persisted_text() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE runtime_instances (id TEXT PRIMARY KEY, state TEXT NOT NULL);",
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO runtime_instances (id, state) VALUES ('starting', 'starting')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO runtime_instances (id, state) VALUES ('invalid', 'invalid')",
+                [],
+            )
+            .unwrap();
+
+        assert_eq!(
+            load_runtime_state(&connection, "starting").unwrap(),
+            Some(RuntimeState::Starting)
+        );
+        assert!(matches!(
+            load_runtime_state(&connection, "invalid"),
+            Err(RuntimeStoreError::Persistence { .. })
+        ));
     }
 }

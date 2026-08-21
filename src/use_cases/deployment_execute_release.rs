@@ -459,8 +459,8 @@ fn execute_deployment(
         candidate_failure(
             "test_gate_failed",
             source,
-            Some(candidate.runtime.external_runtime_id.as_str()),
-            Some(candidate.runtime.id.as_str()),
+            Some(&candidate.runtime.external_runtime_id),
+            Some(&candidate.runtime.id),
             Some(&candidate.unit_name),
             true,
         )
@@ -470,8 +470,8 @@ fn execute_deployment(
         candidate_failure(
             "test_gate_failed",
             source,
-            Some(candidate.runtime.external_runtime_id.as_str()),
-            Some(candidate.runtime.id.as_str()),
+            Some(&candidate.runtime.external_runtime_id),
+            Some(&candidate.runtime.id),
             Some(&candidate.unit_name),
             true,
         )
@@ -486,8 +486,8 @@ fn execute_deployment(
         candidate_failure(
             "runtime_reconciliation_failed",
             source,
-            Some(candidate.runtime.external_runtime_id.as_str()),
-            Some(candidate.runtime.id.as_str()),
+            Some(&candidate.runtime.external_runtime_id),
+            Some(&candidate.runtime.id),
             Some(&candidate.unit_name),
             true,
         )
@@ -500,8 +500,8 @@ fn execute_deployment(
                 DeployReleaseError::PublicApplication {
                     application_id: specification.application_id.to_string(),
                 },
-                Some(candidate.runtime.external_runtime_id.as_str()),
-                Some(candidate.runtime.id.as_str()),
+                Some(&candidate.runtime.external_runtime_id),
+                Some(&candidate.runtime.id),
             ));
         };
         let input = PublicActivationInput {
@@ -608,15 +608,15 @@ fn execute_deployment(
             failure_already_persisted(
                 "health_check_failed",
                 source,
-                candidate.runtime.external_runtime_id.as_str(),
-                candidate.runtime.id.as_str(),
+                &candidate.runtime.external_runtime_id,
+                &candidate.runtime.id,
             )
         } else {
             failure_needing_persistence(
                 "candidate_promotion_failed",
                 source,
-                Some(candidate.runtime.external_runtime_id.as_str()),
-                Some(candidate.runtime.id.as_str()),
+                Some(&candidate.runtime.external_runtime_id),
+                Some(&candidate.runtime.id),
             )
         };
         failed.resources = failed.resources.with_unit(&candidate.unit_name).with_port();
@@ -673,8 +673,8 @@ fn finish_failed_deployment(
             connection,
             deployment_id,
             failed.resources.unit_name.as_deref(),
-            failed.resources.container_id.as_deref(),
-            failed.resources.runtime_id.as_deref(),
+            failed.resources.container_id.as_ref(),
+            failed.resources.runtime_id.as_ref(),
         ) {
             Ok(()) => {
                 progress.completed(
@@ -717,8 +717,8 @@ fn finish_failed_deployment(
 fn failure_needing_persistence(
     code: &'static str,
     source: impl Error + 'static,
-    container_id: Option<&str>,
-    runtime_id: Option<&str>,
+    container_id: Option<&crate::domain::identity::ContainerId>,
+    runtime_id: Option<&RuntimeInstanceId>,
 ) -> FailedExecution {
     let resources = match (container_id, runtime_id) {
         (Some(cid), Some(rid)) => CandidateResources::with_container_and_runtime(cid, rid),
@@ -737,8 +737,8 @@ fn failure_needing_persistence(
 fn candidate_failure(
     code: &'static str,
     source: impl Error + 'static,
-    container_id: Option<&str>,
-    runtime_id: Option<&str>,
+    container_id: Option<&crate::domain::identity::ContainerId>,
+    runtime_id: Option<&RuntimeInstanceId>,
     unit_name: Option<&str>,
     port_reserved: bool,
 ) -> FailedExecution {
@@ -767,8 +767,8 @@ fn candidate_failure(
 fn failure_already_persisted(
     code: &'static str,
     source: impl Error + 'static,
-    container_id: &str,
-    runtime_id: &str,
+    container_id: &crate::domain::identity::ContainerId,
+    runtime_id: &RuntimeInstanceId,
 ) -> FailedExecution {
     FailedExecution {
         code,

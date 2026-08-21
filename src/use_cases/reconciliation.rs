@@ -465,8 +465,8 @@ fn recover_interrupted_deployment(
                 connection,
                 deployment.id.as_str(),
                 unit_proven.then_some(unit.as_str()),
-                container_proven.then_some(runtime.external_runtime_id.as_str()),
-                Some(runtime.id.as_str()),
+                container_proven.then_some(&runtime.external_runtime_id),
+                Some(&runtime.id),
             )
             .map_err(|source| ReconciliationReadError::NotConverged {
                 reason: format!("interrupted candidate cleanup was incomplete: {source}"),

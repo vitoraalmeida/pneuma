@@ -117,6 +117,17 @@ without selecting a new Release or making destructive changes from ambiguity.
   Result: `reconciliation-e2e.sh` passed all R1-R7, E1-E6, I1-I4, and C1-C4
   cases (21 PASS, 0 FAIL, 0 SKIP) in 383 seconds on 2026-08-20 after preparing
   shared fixture inputs once. The disposable clone was removed.
+- [x] Complete runtime cleanup domain adoption: return typed lifecycle state from
+  the store and preserve distinct RuntimeInstance and Container identities through
+  candidate cleanup and compensation.
+  Result: cleanup now receives typed lifecycle and distinct runtime/container IDs;
+  malformed persisted runtime state is rejected by the runtime store.
+- [ ] Complete promotion domain adoption: replace raw `PromotionTarget` IDs,
+  domain text, and retirement timestamp with validated domain values.
+- [ ] Preserve artifacts and runtime specifications through candidate orchestration
+  until adapter boundaries, without independent reference/digest or health scalars.
+- [ ] Replace remaining use-case tuple and raw identity operation outputs with
+  cohesive typed values, and remove invented identifiers from store errors.
 - [ ] Add TUI dashboard read projections for Systems, Applications, details,
   Deployments, Releases, RuntimeInstances, and read-only runtime observation.
 - [ ] Extract shared remote import, diagnostics, database, and progress-enabled
