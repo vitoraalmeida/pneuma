@@ -339,7 +339,10 @@ fn public_deploy_succeeds_with_caddy_and_external_health() {
         format!("vitoralmeida.tech {{\n    reverse_proxy 127.0.0.1:{port}\n}}\n")
     );
     assert!(matches!(
-        pneuma::adapters::stores::exposure_store::load_exposure(&connection, &app_id),
+        pneuma::adapters::stores::exposure_store::load_exposure(
+            &connection,
+            &pneuma::domain::identity::ApplicationId::from(app_id.as_str()),
+        ),
         Ok(Some(exposure)) if matches!(
             exposure.materialization(),
             ExposureMaterialization::Active { .. }

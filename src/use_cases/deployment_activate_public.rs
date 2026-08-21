@@ -12,6 +12,7 @@ use crate::adapters::health_check_external::check_external_health;
 use crate::adapters::health_check_internal::{HealthCheckResult, check_internal_health};
 use crate::adapters::test_gate::wait_for_test_gate;
 use crate::domain::exposure::{ExposureConfigurationVersion, ExposureDiagnostic};
+use crate::domain::identity::ApplicationId;
 use crate::domain::runtime::{HealthCheckSpecification, RuntimeInstance};
 use crate::use_cases::deployment_progress::{DeploymentStep, ProgressReporter};
 use crate::use_cases::deployment_promote_public::{
@@ -182,7 +183,7 @@ pub(crate) fn activate_public_candidate(
 
         let source = match record_public_exposure_failure(
             connection,
-            application_id,
+            &ApplicationId::from(application_id),
             &ExposureDiagnostic::new("caddy_materialization_failed", &message)
                 .expect("static diagnostic code and adapter error messages are valid"),
             outcome,
@@ -223,7 +224,7 @@ pub(crate) fn activate_public_candidate(
 
         let source = match record_public_exposure_failure(
             connection,
-            application_id,
+            &ApplicationId::from(application_id),
             &ExposureDiagnostic::new("external_health_check_failed", &source.to_string())
                 .expect("static diagnostic code and adapter error messages are valid"),
             outcome,
@@ -258,7 +259,7 @@ pub(crate) fn activate_public_candidate(
 
             let source = match record_public_exposure_failure(
                 connection,
-                application_id,
+                &ApplicationId::from(application_id),
                 &ExposureDiagnostic::new("candidate_promotion_failed", &source.to_string())
                     .expect("static diagnostic code and promotion error messages are valid"),
                 outcome,

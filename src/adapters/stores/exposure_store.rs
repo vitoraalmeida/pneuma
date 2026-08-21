@@ -73,7 +73,7 @@ impl Error for ExposureStoreError {
 // Persists initial visibility intent; route materialization remains unconfirmed.
 pub fn insert_exposure(
     transaction: &Transaction<'_>,
-    application_id: &str,
+    application_id: &ApplicationId,
     intent: &ExposureIntent,
 ) -> Result<(), ExposureStoreError> {
     transaction
@@ -83,7 +83,7 @@ pub fn insert_exposure(
                 created_at, updated_at
             ) VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
             params![
-                application_id,
+                application_id.as_str(),
                 visibility_value(intent.visibility()),
                 intent.domain().map(DomainName::as_str)
             ],
@@ -95,7 +95,7 @@ pub fn insert_exposure(
 // Loads visibility intent and confirmed route state, rejecting invalid persisted enum values.
 pub fn load_exposure(
     connection: &Connection,
-    application_id: &str,
+    application_id: &ApplicationId,
 ) -> Result<Option<Exposure>, ExposureStoreError> {
     let exposure = connection
         .query_row(
@@ -103,7 +103,7 @@ pub fn load_exposure(
                     materialization_state, configuration_version,
                     last_materialized_at, last_error_code, last_error_message
              FROM exposures WHERE application_id = ?1",
-            [application_id],
+            [application_id.as_str()],
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -134,13 +134,13 @@ pub fn load_exposure(
     };
     let visibility = visibility_from_value(&visibility).ok_or_else(|| {
         ExposureStoreError::InvalidVisibility {
-            application_id: application_id.to_owned(),
+            application_id: application_id.to_string(),
             visibility,
         }
     })?;
     let materialization_state = exposure_materialization_state_from_value(&materialization_state)
         .ok_or_else(|| ExposureStoreError::InvalidMaterializationState {
-        application_id: application_id.to_owned(),
+        application_id: application_id.to_string(),
         state: materialization_state,
     })?;
     let domain = domain
@@ -152,7 +152,7 @@ pub fn load_exposure(
         .transpose()?;
     let intent = ExposureIntent::new(visibility, domain).map_err(|error| {
         ExposureStoreError::InvalidExposure {
-            application_id: application_id.to_owned(),
+            application_id: application_id.to_string(),
             reason: error.reason,
         }
     })?;
@@ -166,7 +166,7 @@ pub fn load_exposure(
         (Some(runtime_id), Some(configuration_version), Some(materialized_at)) => {
             let configuration_version = ExposureConfigurationVersion::new(&configuration_version)
                 .map_err(|error| ExposureStoreError::InvalidExposure {
-                application_id: application_id.to_owned(),
+                application_id: application_id.to_string(),
                 reason: format!("invalid configuration version `{}`", error.value),
             })?;
             Some(
@@ -176,14 +176,14 @@ pub fn load_exposure(
                     materialized_at,
                 )
                 .map_err(|error| ExposureStoreError::InvalidExposure {
-                    application_id: application_id.to_owned(),
+                    application_id: application_id.to_string(),
                     reason: error.reason,
                 })?,
             )
         }
         _ => {
             return Err(ExposureStoreError::InvalidExposure {
-                application_id: application_id.to_owned(),
+                application_id: application_id.to_string(),
                 reason: "confirmed route fields must be all present or all absent".to_owned(),
             });
         }
@@ -193,14 +193,14 @@ pub fn load_exposure(
         (Some(code), Some(message)) => {
             Some(ExposureDiagnostic::new(&code, &message).map_err(|_| {
                 ExposureStoreError::InvalidExposure {
-                    application_id: application_id.to_owned(),
+                    application_id: application_id.to_string(),
                     reason: "diagnostic code and message must be trimmed and non-empty".to_owned(),
                 }
             })?)
         }
         _ => {
             return Err(ExposureStoreError::InvalidExposure {
-                application_id: application_id.to_owned(),
+                application_id: application_id.to_string(),
                 reason: "diagnostic code and message must be present together".to_owned(),
             });
         }
@@ -208,11 +208,11 @@ pub fn load_exposure(
     let materialization =
         ExposureMaterialization::hydrate(materialization_state, confirmed_route, diagnostic)
             .map_err(|error| ExposureStoreError::InvalidExposure {
-                application_id: application_id.to_owned(),
+                application_id: application_id.to_string(),
                 reason: error.reason,
             })?;
     Ok(Some(Exposure::new(
-        ApplicationId::from(application_id),
+        application_id.clone(),
         intent,
         materialization,
     )))
@@ -221,7 +221,7 @@ pub fn load_exposure(
 // Begins a visibility transition with a compare-and-set on the prior intent.
 pub fn begin_exposure_change(
     transaction: &Transaction<'_>,
-    application_id: &str,
+    application_id: &ApplicationId,
     expected_visibility: Visibility,
     desired_visibility: Visibility,
 ) -> Result<PersistenceOutcome, ExposureStoreError> {
@@ -229,92 +229,92 @@ pub fn begin_exposure_change(
         Visibility::Public => ExposureMaterializationState::Applying,
         Visibility::Internal => ExposureMaterializationState::Removing,
     };
-    let updated = transaction.execute("UPDATE exposures SET desired_visibility = ?1, materialization_state = ?2, last_error_code = NULL, last_error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?3 AND desired_visibility = ?4", params![visibility_value(desired_visibility), exposure_materialization_state_value(materialization_state), application_id, visibility_value(expected_visibility)]).map_err(|source| ExposureStoreError::Persistence { source })?;
+    let updated = transaction.execute("UPDATE exposures SET desired_visibility = ?1, materialization_state = ?2, last_error_code = NULL, last_error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?3 AND desired_visibility = ?4", params![visibility_value(desired_visibility), exposure_materialization_state_value(materialization_state), application_id.as_str(), visibility_value(expected_visibility)]).map_err(|source| ExposureStoreError::Persistence { source })?;
     Ok(outcome(updated))
 }
 
 // Confirms public route materialization only while the matching transition remains in progress.
 pub fn complete_public_exposure_change(
     transaction: &Transaction<'_>,
-    application_id: &str,
+    application_id: &ApplicationId,
     runtime_id: &RuntimeInstanceId,
     configuration_version: &ExposureConfigurationVersion,
 ) -> Result<PersistenceOutcome, ExposureStoreError> {
-    let updated = transaction.execute("UPDATE exposures SET active_runtime_id = ?1, materialization_state = 'active', configuration_version = ?2, last_materialized_at = CURRENT_TIMESTAMP, last_error_code = NULL, last_error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?3 AND desired_visibility = 'public' AND materialization_state = 'applying'", params![runtime_id.as_str(), configuration_version.as_str(), application_id]).map_err(|source| ExposureStoreError::Persistence { source })?;
+    let updated = transaction.execute("UPDATE exposures SET active_runtime_id = ?1, materialization_state = 'active', configuration_version = ?2, last_materialized_at = CURRENT_TIMESTAMP, last_error_code = NULL, last_error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?3 AND desired_visibility = 'public' AND materialization_state = 'applying'", params![runtime_id.as_str(), configuration_version.as_str(), application_id.as_str()]).map_err(|source| ExposureStoreError::Persistence { source })?;
     Ok(outcome(updated))
 }
 
 // Confirms route removal only while the matching internal transition remains in progress.
 pub fn complete_internal_exposure_change(
     transaction: &Transaction<'_>,
-    application_id: &str,
+    application_id: &ApplicationId,
 ) -> Result<PersistenceOutcome, ExposureStoreError> {
-    let updated = transaction.execute("UPDATE exposures SET active_runtime_id = NULL, materialization_state = 'not_materialized', configuration_version = NULL, last_materialized_at = NULL, last_error_code = NULL, last_error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?1 AND desired_visibility = 'internal' AND materialization_state = 'removing'", [application_id]).map_err(|source| ExposureStoreError::Persistence { source })?;
+    let updated = transaction.execute("UPDATE exposures SET active_runtime_id = NULL, materialization_state = 'not_materialized', configuration_version = NULL, last_materialized_at = NULL, last_error_code = NULL, last_error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?1 AND desired_visibility = 'internal' AND materialization_state = 'removing'", [application_id.as_str()]).map_err(|source| ExposureStoreError::Persistence { source })?;
     Ok(outcome(updated))
 }
 
 // Records route diagnostics only when the persisted visibility still matches the attempted change.
 pub fn record_exposure_change_failure(
     transaction: &Transaction<'_>,
-    application_id: &str,
+    application_id: &ApplicationId,
     visibility: Visibility,
     state: ExposureMaterializationState,
     diagnostic: &ExposureDiagnostic,
 ) -> Result<PersistenceOutcome, ExposureStoreError> {
-    let updated = transaction.execute("UPDATE exposures SET materialization_state = ?1, last_error_code = ?2, last_error_message = ?3, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?4 AND desired_visibility = ?5", params![exposure_materialization_state_value(state), diagnostic.code(), diagnostic.message(), application_id, visibility_value(visibility)]).map_err(|source| ExposureStoreError::Persistence { source })?;
+    let updated = transaction.execute("UPDATE exposures SET materialization_state = ?1, last_error_code = ?2, last_error_message = ?3, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?4 AND desired_visibility = ?5", params![exposure_materialization_state_value(state), diagnostic.code(), diagnostic.message(), application_id.as_str(), visibility_value(visibility)]).map_err(|source| ExposureStoreError::Persistence { source })?;
     Ok(outcome(updated))
 }
 
 // Marks a public route as applying before its external materialization begins.
 pub fn begin_public_exposure(
     connection: &Connection,
-    application_id: &str,
+    application_id: &ApplicationId,
 ) -> Result<PersistenceOutcome, ExposureStoreError> {
-    let updated = connection.execute("UPDATE exposures SET materialization_state = 'applying', last_error_code = NULL, last_error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?1 AND desired_visibility = 'public'", [application_id]).map_err(|source| ExposureStoreError::Persistence { source })?;
+    let updated = connection.execute("UPDATE exposures SET materialization_state = 'applying', last_error_code = NULL, last_error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?1 AND desired_visibility = 'public'", [application_id.as_str()]).map_err(|source| ExposureStoreError::Persistence { source })?;
     Ok(outcome(updated))
 }
 
 // Reserves a known public exposure snapshot for reconciliation before Caddy effects begin.
 pub fn begin_public_exposure_reconciliation(
     connection: &Connection,
-    application_id: &str,
+    application_id: &ApplicationId,
     expected_state: ExposureMaterializationState,
 ) -> Result<PersistenceOutcome, ExposureStoreError> {
-    let updated = connection.execute("UPDATE exposures SET materialization_state = 'applying', last_error_code = NULL, last_error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?1 AND desired_visibility = 'public' AND materialization_state = ?2", params![application_id, exposure_materialization_state_value(expected_state)]).map_err(|source| ExposureStoreError::Persistence { source })?;
+    let updated = connection.execute("UPDATE exposures SET materialization_state = 'applying', last_error_code = NULL, last_error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?1 AND desired_visibility = 'public' AND materialization_state = ?2", params![application_id.as_str(), exposure_materialization_state_value(expected_state)]).map_err(|source| ExposureStoreError::Persistence { source })?;
     Ok(outcome(updated))
 }
 
 // Reserves a known internal exposure snapshot for reconciliation before Caddy effects begin.
 pub fn begin_internal_exposure_reconciliation(
     connection: &Connection,
-    application_id: &str,
+    application_id: &ApplicationId,
     expected_state: ExposureMaterializationState,
 ) -> Result<PersistenceOutcome, ExposureStoreError> {
-    let updated = connection.execute("UPDATE exposures SET materialization_state = 'removing', last_error_code = NULL, last_error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?1 AND desired_visibility = 'internal' AND materialization_state = ?2", params![application_id, exposure_materialization_state_value(expected_state)]).map_err(|source| ExposureStoreError::Persistence { source })?;
+    let updated = connection.execute("UPDATE exposures SET materialization_state = 'removing', last_error_code = NULL, last_error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?1 AND desired_visibility = 'internal' AND materialization_state = ?2", params![application_id.as_str(), exposure_materialization_state_value(expected_state)]).map_err(|source| ExposureStoreError::Persistence { source })?;
     Ok(outcome(updated))
 }
 
 // Records reconciliation diagnostics only while its external-effect reservation remains current.
 pub fn record_reconciliation_exposure_failure(
     connection: &Connection,
-    application_id: &str,
+    application_id: &ApplicationId,
     visibility: Visibility,
     expected_state: ExposureMaterializationState,
     state: ExposureMaterializationState,
     diagnostic: &ExposureDiagnostic,
 ) -> Result<PersistenceOutcome, ExposureStoreError> {
-    let updated = connection.execute("UPDATE exposures SET materialization_state = ?1, last_error_code = ?2, last_error_message = ?3, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?4 AND desired_visibility = ?5 AND materialization_state = ?6", params![exposure_materialization_state_value(state), diagnostic.code(), diagnostic.message(), application_id, visibility_value(visibility), exposure_materialization_state_value(expected_state)]).map_err(|source| ExposureStoreError::Persistence { source })?;
+    let updated = connection.execute("UPDATE exposures SET materialization_state = ?1, last_error_code = ?2, last_error_message = ?3, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?4 AND desired_visibility = ?5 AND materialization_state = ?6", params![exposure_materialization_state_value(state), diagnostic.code(), diagnostic.message(), application_id.as_str(), visibility_value(visibility), exposure_materialization_state_value(expected_state)]).map_err(|source| ExposureStoreError::Persistence { source })?;
     Ok(outcome(updated))
 }
 
 // Persists the result of public-route compensation without treating a missing row as success.
 pub fn record_public_exposure_failure(
     connection: &Connection,
-    application_id: &str,
+    application_id: &ApplicationId,
     diagnostic: &ExposureDiagnostic,
     state: ExposureMaterializationState,
 ) -> Result<PersistenceOutcome, ExposureStoreError> {
-    let updated = connection.execute("UPDATE exposures SET materialization_state = ?1, last_error_code = ?2, last_error_message = ?3, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?4 AND desired_visibility = 'public'", params![exposure_materialization_state_value(state), diagnostic.code(), diagnostic.message(), application_id]).map_err(|source| ExposureStoreError::Persistence { source })?;
+    let updated = connection.execute("UPDATE exposures SET materialization_state = ?1, last_error_code = ?2, last_error_message = ?3, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?4 AND desired_visibility = 'public'", params![exposure_materialization_state_value(state), diagnostic.code(), diagnostic.message(), application_id.as_str()]).map_err(|source| ExposureStoreError::Persistence { source })?;
     Ok(outcome(updated))
 }
 

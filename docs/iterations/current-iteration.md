@@ -189,6 +189,12 @@ without selecting a new Release or making destructive changes from ambiguity.
   values until SQLite parameter boundaries.
   Result: Release, Deployment, and Runtime stores now retain typed logical IDs
   without changing SQLite text representation or CLI behavior.
+- [x] Harden System and Exposure-store typed boundaries: require System names and
+  Application/RuntimeInstance identities until SQLite parameters, while retaining
+  operation ownership tokens as opaque `String` fencing values rather than domain
+  identities.
+  Result: System and Exposure stores now accept typed values without changing
+  SQLite text or CLI behavior; operation tokens remain `String` by design.
 
 ## Scope and Non-goals
 

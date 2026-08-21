@@ -146,7 +146,7 @@ pub fn import_application(
         return Ok(application);
     }
 
-    let system = system_store::create_or_load(&transaction, resolved_system_name.as_str(), None)?;
+    let system = system_store::create_or_load(&transaction, &resolved_system_name, None)?;
 
     let application_id = application_store::generate_id(&transaction).map_err(ImportError::from)?;
     let inserted = application_store::insert_application(
@@ -227,11 +227,7 @@ fn persist_specification(
         &specification.healthcheck_path,
         specification.expected_status,
     )?;
-    exposure_store::insert_exposure(
-        transaction,
-        application_id.as_str(),
-        &specification.exposure,
-    )?;
+    exposure_store::insert_exposure(transaction, application_id, &specification.exposure)?;
 
     Ok(())
 }

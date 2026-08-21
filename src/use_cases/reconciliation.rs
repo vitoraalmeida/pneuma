@@ -27,6 +27,7 @@ use crate::domain::deployment::{Deployment, DeploymentStatus};
 use crate::domain::exposure::{
     ExposureConfigurationVersion, ExposureDiagnostic, ExposureMaterializationState, Visibility,
 };
+use crate::domain::identity::ApplicationId;
 use crate::domain::reconciliation::{
     ActiveRuntime, CaddyFragmentObservation, NamedContainerObservation, ReconciliationInput,
     ReconciliationObservation,
@@ -513,7 +514,7 @@ fn recover_interrupted_deployment(
             };
             let outcome = exposure_store::record_reconciliation_exposure_failure(
                 connection,
-                application.id.as_str(),
+                &application.id,
                 exposure.intent().visibility(),
                 ExposureMaterializationState::Applying,
                 state,
@@ -635,7 +636,7 @@ fn reconcile_exposure(
             let transaction = connection.transaction().map_err(persistence_error)?;
             let completed = exposure_store::complete_internal_exposure_change(
                 &transaction,
-                input.application.id.as_str(),
+                &input.application.id,
             )
             .map_err(|source| ReconciliationReadError::Exposure { source })?;
             if completed == crate::adapters::stores::PersistenceOutcome::Stale {
@@ -798,7 +799,7 @@ fn reconcile_public_exposure(
     let transaction = connection.transaction().map_err(persistence_error)?;
     let completed = exposure_store::complete_public_exposure_change(
         &transaction,
-        input.application.id.as_str(),
+        &input.application.id,
         &runtime.id,
         &configuration_version,
     )
@@ -828,12 +829,14 @@ fn reserve_exposure(
     state: ExposureMaterializationState,
 ) -> Result<(), ReconciliationReadError> {
     let outcome = match visibility {
-        Visibility::Public => {
-            exposure_store::begin_public_exposure_reconciliation(connection, application_id, state)
-        }
+        Visibility::Public => exposure_store::begin_public_exposure_reconciliation(
+            connection,
+            &ApplicationId::from(application_id),
+            state,
+        ),
         Visibility::Internal => exposure_store::begin_internal_exposure_reconciliation(
             connection,
-            application_id,
+            &ApplicationId::from(application_id),
             state,
         ),
     }
@@ -867,7 +870,7 @@ fn record_exposure_failure(
     };
     let outcome = exposure_store::record_reconciliation_exposure_failure(
         connection,
-        application_id,
+        &ApplicationId::from(application_id),
         visibility,
         expected_state,
         state,
@@ -1000,7 +1003,7 @@ pub fn load_reconciliation_input(
     let blocking_deployment =
         deployment_store::load_nonterminal_deployment(&transaction, &application.id)
             .map_err(|source| ReconciliationReadError::Deployment { source })?;
-    let exposure = exposure_store::load_exposure(&transaction, application.id.as_str())
+    let exposure = exposure_store::load_exposure(&transaction, &application.id)
         .map_err(|source| ReconciliationReadError::Exposure { source })?;
     let specification =
         application_store::load_deployment_specification(&transaction, &application.id)

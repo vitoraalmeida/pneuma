@@ -169,7 +169,7 @@ pub fn begin_public_exposure(
         });
     }
 
-    let updated = exposure_store::begin_public_exposure(connection, target.application_id.as_str())
+    let updated = exposure_store::begin_public_exposure(connection, &target.application_id)
         .map_err(|source| PromotePublicCandidateError::ExposureStore { source })?;
     if updated == crate::adapters::stores::PersistenceOutcome::Stale {
         return Err(PromotePublicCandidateError::InvalidExposure {
@@ -187,7 +187,7 @@ pub fn begin_public_exposure(
 // Records whether failed public-route compensation left a safe or diverged state.
 pub fn record_public_exposure_failure(
     connection: &Connection,
-    application_id: &str,
+    application_id: &ApplicationId,
     diagnostic: &ExposureDiagnostic,
     outcome: ExposureOutcome,
 ) -> Result<(), PromotePublicCandidateError> {
@@ -204,7 +204,7 @@ pub fn record_public_exposure_failure(
     .map_err(|source| PromotePublicCandidateError::ExposureStore { source })?;
     if updated == crate::adapters::stores::PersistenceOutcome::Stale {
         return Err(PromotePublicCandidateError::InvalidExposure {
-            application_id: application_id.to_owned(),
+            application_id: application_id.to_string(),
             reason: "public exposure was not found".to_owned(),
         });
     }
@@ -252,7 +252,7 @@ pub fn promote_public_candidate(
     }
     if exposure_store::complete_public_exposure_change(
         &transaction,
-        target.application_id.as_str(),
+        &target.application_id,
         &target.runtime_id,
         configuration_version,
     )

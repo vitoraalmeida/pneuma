@@ -29,17 +29,17 @@ impl Error for SystemStoreError {
 
 pub fn create_or_load(
     transaction: &Transaction<'_>,
-    name: &str,
+    name: &SystemName,
     description: Option<&str>,
 ) -> Result<System, SystemStoreError> {
     let id: String = transaction
         .query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))
         .map_err(persistence)?;
-    transaction.execute("INSERT INTO systems (id, name, description, created_at) VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP) ON CONFLICT(name) DO NOTHING", params![id, name, description]).map_err(persistence)?;
+    transaction.execute("INSERT INTO systems (id, name, description, created_at) VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP) ON CONFLICT(name) DO NOTHING", params![id, name.as_str(), description]).map_err(persistence)?;
     transaction
         .query_row(
             "SELECT id, name, description FROM systems WHERE name = ?1",
-            [name],
+            [name.as_str()],
             map_system,
         )
         .map_err(persistence)
@@ -58,12 +58,12 @@ pub fn list(connection: &Connection) -> Result<Vec<System>, SystemStoreError> {
 
 pub fn load_by_name(
     connection: &Connection,
-    name: &str,
+    name: &SystemName,
 ) -> Result<Option<System>, SystemStoreError> {
     connection
         .query_row(
             "SELECT id, name, description FROM systems WHERE name = ?1",
-            [name],
+            [name.as_str()],
             map_system,
         )
         .optional()

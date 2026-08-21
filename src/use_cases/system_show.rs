@@ -58,7 +58,7 @@ pub fn show_system(
     connection: &Connection,
     system_name: &SystemName,
 ) -> Result<SystemDetails, ShowError> {
-    let system = system_store::load_by_name(connection, system_name.as_str())
+    let system = system_store::load_by_name(connection, system_name)
         .map_err(|error| match error {
             system_store::SystemStoreError::Persistence { source } => {
                 ShowError::Persistence { source }

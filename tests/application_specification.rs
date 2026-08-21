@@ -7,6 +7,7 @@ use pneuma::adapters::stores::exposure_store;
 use pneuma::domain::delivery::DeliveryType;
 use pneuma::domain::exposure::{ExposureMaterialization, Visibility};
 use pneuma::domain::git::RepositoryKind;
+use pneuma::domain::identity::ApplicationId;
 use pneuma::use_cases::application_import::import_application;
 
 #[test]
@@ -60,7 +61,7 @@ fn loads_named_source_delivery_runtime_and_health_configuration() {
     );
     assert_eq!(deployment.visibility, Visibility::Public);
 
-    let exposure = exposure_store::load_exposure(&connection, application.id.as_str())
+    let exposure = exposure_store::load_exposure(&connection, &application.id)
         .unwrap()
         .unwrap();
     assert_eq!(exposure.application_id, application.id);
@@ -108,7 +109,7 @@ fn rejects_invalid_persisted_exposure_evidence_with_context() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
     let application =
         import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
-    let application_id = application.id.as_str();
+    let application_id = &application.id;
     connection
         .execute_batch("PRAGMA foreign_keys = OFF; PRAGMA ignore_check_constraints = ON;")
         .unwrap();
@@ -207,7 +208,7 @@ fn loads_historical_internal_removal_timestamp_without_a_confirmed_route() {
         )
         .unwrap();
 
-    let exposure = exposure_store::load_exposure(&connection, application.id.as_str())
+    let exposure = exposure_store::load_exposure(&connection, &application.id)
         .unwrap()
         .unwrap();
     assert!(matches!(
@@ -216,7 +217,7 @@ fn loads_historical_internal_removal_timestamp_without_a_confirmed_route() {
     ));
 }
 
-fn assert_invalid_exposure(connection: &rusqlite::Connection, application_id: &str) {
+fn assert_invalid_exposure(connection: &rusqlite::Connection, application_id: &ApplicationId) {
     assert!(matches!(
         exposure_store::load_exposure(connection, application_id),
         Err(exposure_store::ExposureStoreError::InvalidExposure { .. })

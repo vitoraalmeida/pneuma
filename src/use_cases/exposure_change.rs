@@ -176,26 +176,27 @@ pub fn change_exposure(
     managed_directory: &Path,
     caddyfile_path: &Path,
 ) -> Result<ExposureChange, ExposureChangeError> {
-    let exposure = match exposure_store::load_exposure(connection, application_id) {
-        Ok(Some(exposure)) => exposure,
-        Ok(None) => {
-            return Err(ExposureChangeError::ApplicationNotFound {
-                application_id: application_id.to_owned(),
-            });
-        }
-        Err(ExposureStoreError::InvalidVisibility { visibility, .. }) => {
-            return Err(ExposureChangeError::InvalidVisibility { visibility });
-        }
-        Err(ExposureStoreError::InvalidMaterializationState { state, .. }) => {
-            return Err(ExposureChangeError::InvalidMaterializationState { state });
-        }
-        Err(ExposureStoreError::InvalidExposure { reason, .. }) => {
-            return Err(ExposureChangeError::InvalidExposure { reason });
-        }
-        Err(ExposureStoreError::Persistence { source }) => {
-            return Err(ExposureChangeError::Persistence { source });
-        }
-    };
+    let exposure =
+        match exposure_store::load_exposure(connection, &ApplicationId::from(application_id)) {
+            Ok(Some(exposure)) => exposure,
+            Ok(None) => {
+                return Err(ExposureChangeError::ApplicationNotFound {
+                    application_id: application_id.to_owned(),
+                });
+            }
+            Err(ExposureStoreError::InvalidVisibility { visibility, .. }) => {
+                return Err(ExposureChangeError::InvalidVisibility { visibility });
+            }
+            Err(ExposureStoreError::InvalidMaterializationState { state, .. }) => {
+                return Err(ExposureChangeError::InvalidMaterializationState { state });
+            }
+            Err(ExposureStoreError::InvalidExposure { reason, .. }) => {
+                return Err(ExposureChangeError::InvalidExposure { reason });
+            }
+            Err(ExposureStoreError::Persistence { source }) => {
+                return Err(ExposureChangeError::Persistence { source });
+            }
+        };
     if exposure.intent().visibility() == visibility {
         return Ok(ExposureChange {
             application_id: ApplicationId::from(application_id),
@@ -244,7 +245,7 @@ fn begin_change(
         .map_err(|source| ExposureChangeError::Persistence { source })?;
     let updated = exposure_store::begin_exposure_change(
         &transaction,
-        application_id,
+        &ApplicationId::from(application_id),
         current_visibility,
         desired_visibility,
     )
@@ -369,7 +370,7 @@ fn make_public(
         .map_err(|source| ExposureChangeError::Persistence { source })?;
     let completion = exposure_store::complete_public_exposure_change(
         &transaction,
-        application_id,
+        &ApplicationId::from(application_id),
         &runtime.id,
         &configuration_version,
     );
@@ -449,8 +450,10 @@ fn make_internal(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|source| ExposureChangeError::Persistence { source })?;
-    let completion =
-        exposure_store::complete_internal_exposure_change(&transaction, application_id);
+    let completion = exposure_store::complete_internal_exposure_change(
+        &transaction,
+        &ApplicationId::from(application_id),
+    );
     let completed = match completion {
         Ok(completed) => completed,
         Err(source) => {
@@ -559,7 +562,7 @@ fn record_failure(
         .map_err(|_| ExposureChangeError::InvalidConfigurationVersion)?;
     let updated = exposure_store::record_exposure_change_failure(
         &transaction,
-        application_id,
+        &ApplicationId::from(application_id),
         visibility,
         state,
         &diagnostic,

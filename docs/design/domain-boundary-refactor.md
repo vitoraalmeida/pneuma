@@ -38,6 +38,9 @@ SQLite representation, or reconciliation policy.
   their already-defined step-by-step stderr progress output; other CLI behavior is preserved.
 - Manifest parsing retains its serde-facing DTO for input diagnostics, but provides a
   typed import projection so validated values are not reconstructed by use cases.
+- Store APIs retain `SystemName`, `SystemId`, `ApplicationId`, and
+  `RuntimeInstanceId` until SQLite parameters. Operation ownership tokens remain
+  `String`: they are opaque generated fencing values, not domain identities.
 
 ## Checkpoint Order
 
@@ -64,8 +67,10 @@ SQLite representation, or reconciliation policy.
     `application_store` boundary, converting to SQLite text only in its SQL
     parameters.
 11. Require typed Application, Release, Deployment, and RuntimeInstance values
-    at the Release, Deployment, and Runtime store boundaries, converting to
-    SQLite text only in their SQL parameters.
+   at the Release, Deployment, and Runtime store boundaries, converting to
+   SQLite text only in their SQL parameters.
+12. Require typed System and Exposure store identities while retaining operation
+    ownership tokens as opaque `String` values.
 
 ## Validation
 
