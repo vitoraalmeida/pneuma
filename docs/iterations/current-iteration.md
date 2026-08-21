@@ -126,8 +126,10 @@ without selecting a new Release or making destructive changes from ambiguity.
   domain text, and retirement timestamp with validated domain values.
   Result: promotion targets now map SQLite values to typed identities, retirement
   evidence, and domains before the promotion use cases validate them.
-- [ ] Preserve artifacts and runtime specifications through candidate orchestration
+- [x] Preserve artifacts and runtime specifications through candidate orchestration
   until adapter boundaries, without independent reference/digest or health scalars.
+  Result: candidate startup and promotion now receive `OciArtifact`, runtime, and
+  health-check specifications, extracting scalar values only for adapter calls.
 - [ ] Replace remaining use-case tuple and raw identity operation outputs with
   cohesive typed values, and remove invented identifiers from store errors.
 - [ ] Add TUI dashboard read projections for Systems, Applications, details,

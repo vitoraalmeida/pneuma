@@ -8,7 +8,9 @@ use crate::adapters::port_allocator::{consume_port_reservation, reserve_port};
 use crate::adapters::systemd_quadlet::{
     QuadletError, container_name, daemon_reload, start, write_unit,
 };
+use crate::domain::application::RuntimeSpecification;
 use crate::domain::identity::ContainerId;
+use crate::domain::release::OciArtifact;
 use crate::domain::runtime::{ObservedRuntimeState, RuntimeInstance};
 use crate::use_cases::deployment_register_runtime::register_candidate_runtime;
 use crate::use_cases::deployment_runtime_cleanup::CandidateResources;
@@ -30,9 +32,8 @@ pub(crate) struct CandidateStartInput<'a> {
     pub deployment_id: &'a str,
     pub application_id: &'a str,
     pub application_name: &'a str,
-    pub image_reference: &'a str,
-    pub container_port: u16,
-    pub artifact_identity: &'a str,
+    pub artifact: &'a OciArtifact,
+    pub runtime: &'a RuntimeSpecification,
 }
 
 pub(crate) enum CandidateStartError {
@@ -103,9 +104,8 @@ pub(crate) fn start_candidate(
         deployment_id,
         application_id,
         application_name,
-        image_reference,
-        container_port,
-        artifact_identity,
+        artifact,
+        runtime,
     } = input;
 
     advance_deployment(connection, deployment_id, DeploymentTransition::Start).map_err(
@@ -122,10 +122,10 @@ pub(crate) fn start_candidate(
     let unit = write_unit(
         application_name,
         deployment_id,
-        image_reference,
-        container_port,
+        artifact.reference(),
+        runtime.container_port().get(),
         host_port,
-        artifact_identity,
+        artifact.digest(),
     )
     .map_err(|source| CandidateStartError::UnitCreation {
         source,
@@ -152,12 +152,10 @@ pub(crate) fn start_candidate(
     })?);
     resources = resources.with_container_mut(&container_id);
 
-    let observation =
-        observe_container(container_id.as_str(), container_port).map_err(|source| {
-            CandidateStartError::ContainerObservation {
-                source: Box::new(source),
-                resources: Box::new(resources.clone()),
-            }
+    let observation = observe_container(container_id.as_str(), runtime.container_port().get())
+        .map_err(|source| CandidateStartError::ContainerObservation {
+            source: Box::new(source),
+            resources: Box::new(resources.clone()),
         })?;
 
     if *observation.state() != ObservedRuntimeState::Running {
@@ -181,7 +179,7 @@ pub(crate) fn start_candidate(
         deployment_id,
         container_id.as_str(),
         endpoint,
-        container_port,
+        runtime.container_port().get(),
     )
     .map_err(|source| CandidateStartError::RuntimeRegistration {
         source: Box::new(source),

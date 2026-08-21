@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 
 use pneuma::adapters::database;
+use pneuma::domain::application::{HealthCheckPath, HealthCheckSpecification, HealthCheckStatus};
 use pneuma::domain::deployment::DeploymentType;
 use pneuma::domain::release::OciArtifact;
 use pneuma::use_cases::application_import::import_application;
@@ -22,10 +23,10 @@ fn promotes_a_healthy_internal_candidate_idempotently() {
     let runtime_id = add_verifying_candidate(&mut connection, "another", 'a', 'b', endpoint);
 
     let promoted =
-        promote_internal_candidate(&mut connection, &runtime_id, "/healthz", 200).unwrap();
+        promote_internal_candidate(&mut connection, &runtime_id, &health_check()).unwrap();
     server.join().unwrap();
     let repeated =
-        promote_internal_candidate(&mut connection, &runtime_id, "/healthz", 200).unwrap();
+        promote_internal_candidate(&mut connection, &runtime_id, &health_check()).unwrap();
 
     assert_eq!(repeated, promoted);
     let persisted = runtime_and_deployment_state(&connection, &runtime_id);
@@ -49,13 +50,13 @@ fn replaces_the_previous_current_runtime_atomically() {
     let (first_endpoint, first_server) = server_with_statuses(&[200]);
     let first_runtime =
         add_verifying_candidate(&mut connection, "another", 'a', 'b', first_endpoint);
-    promote_internal_candidate(&mut connection, &first_runtime, "/healthz", 200).unwrap();
+    promote_internal_candidate(&mut connection, &first_runtime, &health_check()).unwrap();
     first_server.join().unwrap();
 
     let (second_endpoint, second_server) = server_with_statuses(&[200]);
     let second_runtime =
         add_verifying_candidate(&mut connection, "another", 'c', 'd', second_endpoint);
-    promote_internal_candidate(&mut connection, &second_runtime, "/healthz", 200).unwrap();
+    promote_internal_candidate(&mut connection, &second_runtime, &health_check()).unwrap();
     second_server.join().unwrap();
 
     let first_state: String = connection
@@ -81,7 +82,7 @@ fn replaces_the_previous_current_runtime_atomically() {
         )
         .unwrap();
     let previous_promotion =
-        promote_internal_candidate(&mut connection, &first_runtime, "/healthz", 200).unwrap_err();
+        promote_internal_candidate(&mut connection, &first_runtime, &health_check()).unwrap_err();
     assert_eq!(first_state, "stopped");
     assert_eq!(second_state, "running");
     assert_eq!(running_count, 1);
@@ -98,14 +99,14 @@ fn unhealthy_candidate_fails_without_replacing_the_current_runtime() {
     let (first_endpoint, first_server) = server_with_statuses(&[200]);
     let first_runtime =
         add_verifying_candidate(&mut connection, "another", 'a', 'b', first_endpoint);
-    promote_internal_candidate(&mut connection, &first_runtime, "/healthz", 200).unwrap();
+    promote_internal_candidate(&mut connection, &first_runtime, &health_check()).unwrap();
     first_server.join().unwrap();
 
     let (candidate_endpoint, candidate_server) = server_with_statuses(&[503; 5]);
     let candidate =
         add_verifying_candidate(&mut connection, "another", 'c', 'd', candidate_endpoint);
     let error =
-        promote_internal_candidate(&mut connection, &candidate, "/healthz", 200).unwrap_err();
+        promote_internal_candidate(&mut connection, &candidate, &health_check()).unwrap_err();
     candidate_server.join().unwrap();
 
     assert!(matches!(
@@ -140,7 +141,7 @@ fn refuses_public_application_before_health_check() {
     let runtime_id = add_verifying_candidate(&mut connection, "valid", 'a', 'b', endpoint);
 
     let error =
-        promote_internal_candidate(&mut connection, &runtime_id, "/healthz", 200).unwrap_err();
+        promote_internal_candidate(&mut connection, &runtime_id, &health_check()).unwrap_err();
 
     assert!(matches!(
         error,
@@ -189,6 +190,13 @@ fn add_verifying_candidate(
     )
     .unwrap();
     runtime.id.to_string()
+}
+
+fn health_check() -> HealthCheckSpecification {
+    HealthCheckSpecification::new(
+        HealthCheckPath::new("/healthz").unwrap(),
+        HealthCheckStatus::new(200).unwrap(),
+    )
 }
 
 fn runtime_and_deployment_state(

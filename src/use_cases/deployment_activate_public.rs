@@ -11,6 +11,7 @@ use crate::adapters::caddy_exposure::{
 use crate::adapters::health_check_external::check_external_health;
 use crate::adapters::health_check_internal::{HealthCheckResult, check_internal_health};
 use crate::adapters::test_gate::wait_for_test_gate;
+use crate::domain::application::HealthCheckSpecification;
 use crate::domain::exposure::{ExposureConfigurationVersion, ExposureDiagnostic};
 use crate::domain::runtime::RuntimeInstance;
 use crate::use_cases::deployment_progress::{DeploymentStep, ProgressReporter};
@@ -26,8 +27,7 @@ pub(crate) struct PublicActivationInput<'a> {
     pub connection: &'a mut Connection,
     pub runtime: &'a RuntimeInstance,
     pub application_id: &'a str,
-    pub health_path: &'a str,
-    pub expected_status: u16,
+    pub health_check: &'a HealthCheckSpecification,
     pub managed_caddy_directory: &'a Path,
     pub caddyfile_path: &'a Path,
 }
@@ -78,8 +78,7 @@ pub(crate) fn activate_public_candidate(
         connection,
         runtime,
         application_id,
-        health_path,
-        expected_status,
+        health_check,
         managed_caddy_directory,
         caddyfile_path,
     } = input;
@@ -93,16 +92,22 @@ pub(crate) fn activate_public_candidate(
 
     progress.started(
         DeploymentStep::InternalHealthCheck,
-        format!("runtime {runtime_id}, path {health_path}, expected status {expected_status}"),
+        format!(
+            "runtime {runtime_id}, path {}, expected status {}",
+            health_check.path().as_str(),
+            health_check.expected_status().get()
+        ),
     );
 
-    let internal_health =
-        check_internal_health(endpoint, health_path, expected_status).map_err(|source| {
-            PublicActivationError::InternalHealth {
-                source: Box::new(source),
-                resources: Box::new(resources.clone()),
-            }
-        })?;
+    let internal_health = check_internal_health(
+        endpoint,
+        health_check.path().as_str(),
+        health_check.expected_status().get(),
+    )
+    .map_err(|source| PublicActivationError::InternalHealth {
+        source: Box::new(source),
+        resources: Box::new(resources.clone()),
+    })?;
 
     if !matches!(internal_health, HealthCheckResult::Healthy { .. }) {
         return Err(PublicActivationError::InternalHealth {
@@ -200,12 +205,18 @@ pub(crate) fn activate_public_candidate(
 
     progress.started(
         DeploymentStep::ExternalHealthCheck,
-        format!("https://{}{}", exposure.domain, health_path),
+        format!(
+            "https://{}{}",
+            exposure.domain,
+            health_check.path().as_str()
+        ),
     );
 
-    if let Err(source) =
-        check_external_health(exposure.domain.as_str(), health_path, expected_status)
-    {
+    if let Err(source) = check_external_health(
+        exposure.domain.as_str(),
+        health_check.path().as_str(),
+        health_check.expected_status().get(),
+    ) {
         let (source, outcome) = rollback_public_route(source, &materialized, caddyfile_path);
 
         let source = match record_public_exposure_failure(

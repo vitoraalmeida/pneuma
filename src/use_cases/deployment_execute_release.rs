@@ -285,8 +285,7 @@ fn deploy_release_reporting(
         connection,
         deployment.id.as_str(),
         &specification,
-        release.artifact.reference(),
-        release.artifact.digest(),
+        &release.artifact,
         public_configuration,
         progress,
     );
@@ -356,8 +355,7 @@ fn execute_deployment(
     connection: &mut Connection,
     deployment_id: &str,
     specification: &ApplicationDeploymentSpecification,
-    image_reference: &str,
-    artifact_identity: &str,
+    artifact: &OciArtifact,
     public_configuration: Option<&PublicDeploymentConfiguration>,
     progress: &mut ProgressReporter<'_>,
 ) -> Result<CompletedDeploymentExecution, FailedExecution> {
@@ -366,7 +364,7 @@ fn execute_deployment(
     progress.state_changed(deployment_id, DeploymentStatus::Starting);
     progress.started(
         DeploymentStep::CreateContainer,
-        format!("image {image_reference}"),
+        format!("image {}", artifact.reference()),
     );
 
     let input = CandidateStartInput {
@@ -374,9 +372,8 @@ fn execute_deployment(
         deployment_id,
         application_id: specification.application_id.as_str(),
         application_name: specification.application_name.as_str(),
-        image_reference,
-        container_port: specification.runtime.container_port().get(),
-        artifact_identity,
+        artifact,
+        runtime: &specification.runtime,
     };
 
     let candidate = start_candidate(input).map_err(|err| match err {
@@ -508,8 +505,7 @@ fn execute_deployment(
             connection,
             runtime: &candidate.runtime,
             application_id: specification.application_id.as_str(),
-            health_path: specification.runtime.health_check().path().as_str(),
-            expected_status: specification.runtime.health_check().expected_status().get(),
+            health_check: specification.runtime.health_check(),
             managed_caddy_directory: &public_configuration.managed_caddy_directory,
             caddyfile_path: &public_configuration.caddyfile_path,
         };
@@ -597,8 +593,7 @@ fn execute_deployment(
     let promoted = promote_internal_candidate(
         connection,
         candidate.runtime.id.as_str(),
-        specification.runtime.health_check().path().as_str(),
-        specification.runtime.health_check().expected_status().get(),
+        specification.runtime.health_check(),
     )
     .map_err(|source| {
         let mut failed = if matches!(

@@ -7,6 +7,7 @@ use crate::adapters::health_check_internal::{
     HealthCheckError, HealthCheckFailure, HealthCheckResult, check_internal_health,
 };
 use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
+use crate::domain::application::HealthCheckSpecification;
 use crate::domain::deployment::DeploymentStatus;
 use crate::domain::exposure::Visibility;
 use crate::domain::runtime::{ObservedRuntimeState, RuntimeState};
@@ -126,8 +127,7 @@ impl Error for PromoteInternalCandidateError {
 pub fn promote_internal_candidate(
     connection: &mut Connection,
     runtime_id: &str,
-    health_path: &str,
-    expected_status: u16,
+    health_check: &HealthCheckSpecification,
 ) -> Result<PromotedCandidate, PromoteInternalCandidateError> {
     let target = load_target(connection, runtime_id)?;
     if let Some(promoted) = completed_promotion(&target) {
@@ -135,8 +135,12 @@ pub fn promote_internal_candidate(
     }
     validate_target(&target)?;
 
-    let health = check_internal_health(target.endpoint, health_path, expected_status)
-        .map_err(|source| PromoteInternalCandidateError::HealthCheck { source })?;
+    let health = check_internal_health(
+        target.endpoint,
+        health_check.path().as_str(),
+        health_check.expected_status().get(),
+    )
+    .map_err(|source| PromoteInternalCandidateError::HealthCheck { source })?;
     match health {
         HealthCheckResult::Healthy { .. } => {}
         HealthCheckResult::Unhealthy { ref failure, .. } => {
