@@ -11,7 +11,8 @@ use crate::domain::identity::ApplicationId;
 use crate::use_cases::deployment_execute_release::{
     DeploymentResult, PublicDeploymentConfiguration,
 };
-use crate::use_cases::deployment_from_oci::{DeployOciError, deploy_oci};
+use crate::use_cases::deployment_from_oci::{DeployOciError, deploy_oci, deploy_oci_with_progress};
+use crate::use_cases::deployment_progress::DeploymentProgress;
 
 #[derive(Debug)]
 pub enum DeployBranchError {
@@ -74,6 +75,39 @@ pub fn deploy_branch(
     branch: Option<&str>,
     public_configuration: Option<&PublicDeploymentConfiguration>,
 ) -> Result<DeploymentResult, DeployBranchError> {
+    deploy_branch_reporting(
+        connection,
+        application_id,
+        branch,
+        public_configuration,
+        None,
+    )
+}
+
+// Resolves and deploys a branch while forwarding deployment lifecycle progress to the caller.
+pub fn deploy_branch_with_progress(
+    connection: &mut Connection,
+    application_id: &ApplicationId,
+    branch: Option<&str>,
+    public_configuration: Option<&PublicDeploymentConfiguration>,
+    progress: &mut dyn FnMut(DeploymentProgress),
+) -> Result<DeploymentResult, DeployBranchError> {
+    deploy_branch_reporting(
+        connection,
+        application_id,
+        branch,
+        public_configuration,
+        Some(progress),
+    )
+}
+
+fn deploy_branch_reporting(
+    connection: &mut Connection,
+    application_id: &ApplicationId,
+    branch: Option<&str>,
+    public_configuration: Option<&PublicDeploymentConfiguration>,
+    progress: Option<&mut dyn FnMut(DeploymentProgress)>,
+) -> Result<DeploymentResult, DeployBranchError> {
     let source = application_store::load_source(connection, application_id.as_str())
         .map_err(|source| DeployBranchError::SourceConfiguration { source })?
         .ok_or_else(|| DeployBranchError::NoSourceConfiguration {
@@ -102,12 +136,22 @@ pub fn deploy_branch(
     let reference = resolve_image_digest(delivery.image_repository().as_str(), &commit_sha)
         .map_err(|source| DeployBranchError::ResolveImageDigest { source })?;
 
-    deploy_oci(
-        connection,
-        application_id,
-        reference.reference(),
-        Some(&commit_sha),
-        public_configuration,
-    )
-    .map_err(|source| DeployBranchError::DeployOci { source })
+    let deployed = match progress {
+        Some(progress) => deploy_oci_with_progress(
+            connection,
+            application_id,
+            reference.reference(),
+            Some(&commit_sha),
+            public_configuration,
+            progress,
+        ),
+        None => deploy_oci(
+            connection,
+            application_id,
+            reference.reference(),
+            Some(&commit_sha),
+            public_configuration,
+        ),
+    };
+    deployed.map_err(|source| DeployBranchError::DeployOci { source })
 }

@@ -4,29 +4,28 @@ use std::fmt;
 use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::{Parser, Subcommand, ValueEnum};
 use pneuma::adapters::database::{self, DatabaseError};
-use pneuma::adapters::git_source::{
-    CloneRepositoryError, cleanup_checkout, clone_repository, is_remote_repository,
-};
-use pneuma::adapters::oci_image::pull_image;
+use pneuma::adapters::diagnostics;
 use pneuma::domain::application::Application;
 use pneuma::domain::deployment::{DeploymentFailureEvidence, DeploymentLifecycle};
 use pneuma::domain::exposure::Visibility;
-use pneuma::domain::release::OciArtifact;
 use pneuma::domain::system::{InvalidSystemName, SystemName};
-use pneuma::use_cases::application_import::{ImportError, import_application};
 use pneuma::use_cases::application_list::{ListError, application_is_deployed, list_applications};
 use pneuma::use_cases::application_lookup::{LookupError, find_application_by_name};
+use pneuma::use_cases::application_remote_import::{RemoteImportError, import_remote_application};
 use pneuma::use_cases::application_runtime::{
     RuntimeLifecycleError, report_application_status, start_application, stop_application,
 };
 use pneuma::use_cases::ci_command::{CiCommand, CiDispatchError, parse_ci_command};
 use pneuma::use_cases::deployment_execute_release::PublicDeploymentConfiguration;
-use pneuma::use_cases::deployment_from_oci::{DeployOciError, deploy_oci};
-use pneuma::use_cases::deployment_from_revision::{DeployBranchError, deploy_branch};
+use pneuma::use_cases::deployment_from_oci::{
+    DeployOciError, deploy_oci, deploy_oci_with_progress,
+};
+use pneuma::use_cases::deployment_from_revision::{
+    DeployBranchError, deploy_branch, deploy_branch_with_progress,
+};
 use pneuma::use_cases::deployment_list::{ListDeploymentsError, list_deployments};
 use pneuma::use_cases::deployment_rollback::{RollbackError, rollback_deployment};
 use pneuma::use_cases::exposure_change::{ExposureChangeError, change_exposure};
@@ -37,8 +36,6 @@ use pneuma::use_cases::system_create::create_system;
 use pneuma::use_cases::system_list::list_systems;
 use pneuma::use_cases::system_show::show_system;
 
-const DATABASE_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_DATABASE_PATH";
-const DEFAULT_DATABASE_PATH: &str = "/var/lib/pneuma/database/pneuma.sqlite3";
 const WORKSPACE_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_WORKSPACE_PATH";
 const DEFAULT_WORKSPACE_PATH: &str = "/var/lib/pneuma/checkouts";
 const CADDY_MANAGED_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_CADDY_MANAGED_PATH";
@@ -317,15 +314,8 @@ enum CliError {
         source: DatabaseError,
     },
     Import {
-        source: ImportError,
+        source: RemoteImportError,
     },
-    ImportSource {
-        source: CloneRepositoryError,
-    },
-    ImportWorkspace {
-        source: std::io::Error,
-    },
-    InvalidImportRepository,
     InvalidSystemName {
         source: InvalidSystemName,
     },
@@ -386,19 +376,6 @@ impl fmt::Display for CliError {
         match self {
             Self::Database { source } => write!(formatter, "{source}"),
             Self::Import { source } => write!(formatter, "{source}"),
-            Self::ImportSource { source } => write!(formatter, "{source}"),
-            Self::ImportWorkspace { source } => {
-                write!(
-                    formatter,
-                    "failed to prepare the import workspace: {source}"
-                )
-            }
-            Self::InvalidImportRepository => {
-                write!(
-                    formatter,
-                    "application imports require a Git URL; local paths are not supported"
-                )
-            }
             Self::InvalidSystemName { source } => write!(formatter, "{source}"),
             Self::List { source } => write!(formatter, "{source}"),
             Self::ApplicationLookup { source } => write!(formatter, "{source}"),
@@ -432,8 +409,6 @@ impl Error for CliError {
         match self {
             Self::Database { source } => Some(source),
             Self::Import { source } => Some(source),
-            Self::ImportSource { source } => Some(source),
-            Self::ImportWorkspace { source } => Some(source),
             Self::InvalidSystemName { source } => Some(source),
             Self::List { source } => Some(source),
             Self::ApplicationLookup { source } => Some(source),
@@ -450,7 +425,7 @@ impl Error for CliError {
             Self::SystemShow { source } => Some(source),
             Self::CiDispatch { source } => Some(source),
             Self::Reconcile { source } => Some(source),
-            Self::Doctor | Self::MissingDeployOption | Self::InvalidImportRepository => None,
+            Self::Doctor | Self::MissingDeployOption => None,
         }
     }
 }
@@ -512,10 +487,7 @@ fn run(invocation: Invocation) -> Result<(), CliError> {
             | Command::DatabaseBackup { .. }
             | Command::DatabaseRestore { .. }
     ) {
-        let database_path = env::var_os(DATABASE_PATH_ENVIRONMENT_VARIABLE)
-            .filter(|path| !path.is_empty())
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(DEFAULT_DATABASE_PATH));
+        let database_path = database::configured_path();
 
         if matches!(command, Command::Version) {
             return run_version();
@@ -527,9 +499,7 @@ fn run(invocation: Invocation) -> Result<(), CliError> {
             return Ok(());
         }
         if let Command::DatabaseRestore { path } = command {
-            let pre_restore = database::restore(&database_path, &path)
-                .map_err(|source| CliError::DatabaseRestore { source })?;
-            let _ = database::open(&database_path)
+            let pre_restore = database::restore_and_verify(&database_path, &path)
                 .map_err(|source| CliError::DatabaseRestore { source })?;
             println!("Database restored from {}", path.display());
             println!("Pre-restore backup: {}", pre_restore.display());
@@ -547,17 +517,18 @@ fn run(invocation: Invocation) -> Result<(), CliError> {
                 return Err(CliError::Database { source });
             }
         };
-        return run_doctor(&connection, verbose);
+        return if diagnostics::run(&connection, verbose) {
+            Ok(())
+        } else {
+            Err(CliError::Doctor)
+        };
     }
 
     if matches!(command, Command::CiDispatch) {
         return run_ci_dispatch(verbose);
     }
 
-    let database_path = env::var_os(DATABASE_PATH_ENVIRONMENT_VARIABLE)
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_DATABASE_PATH));
+    let database_path = database::configured_path();
     log_verbose(verbose, format!("database: {}", database_path.display()));
     let mut connection =
         database::open(&database_path).map_err(|source| CliError::Database { source })?;
@@ -640,36 +611,17 @@ fn run_import(
     system_name: Option<&str>,
     manifest_path: Option<&str>,
 ) -> Result<(), CliError> {
-    if !is_remote_repository(repository) {
-        return Err(CliError::InvalidImportRepository);
-    }
-    let system_name = system_name
-        .map(SystemName::new)
-        .transpose()
-        .map_err(|source| CliError::InvalidSystemName { source })?;
-
     log_verbose(verbose, format!("import repository: {repository}"));
     let workspace = configured_path(WORKSPACE_PATH_ENVIRONMENT_VARIABLE, DEFAULT_WORKSPACE_PATH);
-    let temporary_root = workspace.join("imports");
-    fs::create_dir_all(&temporary_root).map_err(|source| CliError::ImportWorkspace { source })?;
-    let checkout = temporary_root.join(unique_suffix());
-    if let Err(source) = clone_repository(repository, &checkout) {
-        let _ = cleanup_checkout(&checkout);
-        return Err(CliError::ImportSource { source });
-    }
-
-    let import_result = import_application(
+    let application = import_remote_application(
         connection,
-        &checkout,
-        system_name.as_ref(),
-        Some(repository),
+        repository,
+        &workspace,
+        system_name,
         manifest_path,
     )
     .map_err(|source| CliError::Import { source });
-
-    let _ = cleanup_checkout(&checkout);
-
-    let application = import_result?;
+    let application = application?;
     println!("Imported {}", application.name);
     println!("Status: Registered");
     if let Some(deployment_id) = &application.active_deployment_id {
@@ -678,15 +630,6 @@ fn run_import(
         println!("Deployment: Not deployed");
     }
     Ok(())
-}
-
-// Avoids import-checkout collisions between concurrent CLI processes.
-fn unique_suffix() -> String {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-    format!("{}-{nanos}", std::process::id())
 }
 
 // Adapts system creation results and errors to the CLI's output contract.
@@ -978,16 +921,7 @@ fn run_deploy_oci(
         format!("resolve application by name: {application_name}"),
     );
     let application = resolve_application(connection, application_name)?;
-    let public_configuration = PublicDeploymentConfiguration {
-        managed_caddy_directory: configured_path(
-            CADDY_MANAGED_PATH_ENVIRONMENT_VARIABLE,
-            DEFAULT_CADDY_MANAGED_PATH,
-        ),
-        caddyfile_path: configured_path(
-            CADDYFILE_PATH_ENVIRONMENT_VARIABLE,
-            DEFAULT_CADDYFILE_PATH,
-        ),
-    };
+    let public_configuration = public_deployment_configuration();
     if verbose {
         log_verbose(
             verbose,
@@ -999,22 +933,29 @@ fn run_deploy_oci(
     } else {
         eprintln!("Deploying {}...", application.name);
     }
-    let deployed = deploy_oci(
-        connection,
-        &application.id,
-        image_reference,
-        None,
-        Some(&public_configuration),
-    )
+    let deployed = if verbose {
+        let mut progress = |event| eprintln!("{event}");
+        deploy_oci_with_progress(
+            connection,
+            &application.id,
+            image_reference,
+            None,
+            Some(&public_configuration),
+            &mut progress,
+        )
+    } else {
+        deploy_oci(
+            connection,
+            &application.id,
+            image_reference,
+            None,
+            Some(&public_configuration),
+        )
+    }
     .map_err(|source| CliError::DeployOci {
         source: Box::new(source),
     })?;
-    println!("Deployed {}", application.name);
-    println!("Image: {}", deployed.artifact.reference());
-    println!("Deployment: {}", deployed.deployment_id);
-    println!("Runtime: {}", deployed.runtime_id);
-    println!("Container: {}", deployed.container_name);
-    println!("Status: Succeeded");
+    print_deployed(&application.name, &deployed);
     Ok(())
 }
 
@@ -1030,16 +971,7 @@ fn run_deploy_branch(
         format!("resolve application by name: {application_name}"),
     );
     let application = resolve_application(connection, application_name)?;
-    let public_configuration = PublicDeploymentConfiguration {
-        managed_caddy_directory: configured_path(
-            CADDY_MANAGED_PATH_ENVIRONMENT_VARIABLE,
-            DEFAULT_CADDY_MANAGED_PATH,
-        ),
-        caddyfile_path: configured_path(
-            CADDYFILE_PATH_ENVIRONMENT_VARIABLE,
-            DEFAULT_CADDYFILE_PATH,
-        ),
-    };
+    let public_configuration = public_deployment_configuration();
     if verbose {
         log_verbose(
             verbose,
@@ -1051,24 +983,27 @@ fn run_deploy_branch(
     } else {
         eprintln!("Deploying {}...", application.name);
     }
-    let deployed = deploy_branch(
-        connection,
-        &application.id,
-        Some(branch),
-        Some(&public_configuration),
-    )
+    let deployed = if verbose {
+        let mut progress = |event| eprintln!("{event}");
+        deploy_branch_with_progress(
+            connection,
+            &application.id,
+            Some(branch),
+            Some(&public_configuration),
+            &mut progress,
+        )
+    } else {
+        deploy_branch(
+            connection,
+            &application.id,
+            Some(branch),
+            Some(&public_configuration),
+        )
+    }
     .map_err(|source| CliError::DeployBranch {
         source: Box::new(source),
     })?;
-    println!("Deployed {}", application.name);
-    println!("Image: {}", deployed.artifact.reference());
-    if let Some(source_revision) = &deployed.source_revision {
-        println!("Source revision: {source_revision}");
-    }
-    println!("Deployment: {}", deployed.deployment_id);
-    println!("Runtime: {}", deployed.runtime_id);
-    println!("Container: {}", deployed.container_name);
-    println!("Status: Succeeded");
+    print_deployed(&application.name, &deployed);
     Ok(())
 }
 
@@ -1165,6 +1100,34 @@ fn configured_path(variable: &str, default: &str) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(default))
 }
 
+fn public_deployment_configuration() -> PublicDeploymentConfiguration {
+    PublicDeploymentConfiguration {
+        managed_caddy_directory: configured_path(
+            CADDY_MANAGED_PATH_ENVIRONMENT_VARIABLE,
+            DEFAULT_CADDY_MANAGED_PATH,
+        ),
+        caddyfile_path: configured_path(
+            CADDYFILE_PATH_ENVIRONMENT_VARIABLE,
+            DEFAULT_CADDYFILE_PATH,
+        ),
+    }
+}
+
+fn print_deployed(
+    application_name: &pneuma::domain::application::ApplicationName,
+    deployed: &pneuma::use_cases::deployment_execute_release::DeploymentResult,
+) {
+    println!("Deployed {application_name}");
+    println!("Image: {}", deployed.artifact.reference());
+    if let Some(source_revision) = &deployed.source_revision {
+        println!("Source revision: {source_revision}");
+    }
+    println!("Deployment: {}", deployed.deployment_id);
+    println!("Runtime: {}", deployed.runtime_id);
+    println!("Container: {}", deployed.container_name);
+    println!("Status: Succeeded");
+}
+
 // Converts expected absence from the store-facing use case into a CLI-specific error.
 fn resolve_application(
     connection: &rusqlite::Connection,
@@ -1225,269 +1188,12 @@ fn run_ci_dispatch(verbose: bool) -> Result<(), CliError> {
             application,
             branch,
         } => {
-            let database_path = env::var_os(DATABASE_PATH_ENVIRONMENT_VARIABLE)
-                .filter(|path| !path.is_empty())
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from(DEFAULT_DATABASE_PATH));
+            let database_path = database::configured_path();
 
             let mut connection =
                 database::open(&database_path).map_err(|source| CliError::Database { source })?;
 
             run_deploy_branch(&mut connection, verbose, &application, &branch)
         }
-    }
-}
-
-// Performs non-mutating host readiness checks, except verifying pullability of active OCI images.
-fn run_doctor(connection: &rusqlite::Connection, verbose: bool) -> Result<(), CliError> {
-    let mut all_ok = true;
-
-    log_verbose(verbose, "checking database connection");
-    match connection.query_row("SELECT 1", [], |_| Ok(())) {
-        Ok(()) => println!("✓ Database connection: OK"),
-        Err(source) => {
-            println!("✗ Database connection: FAILED ({source})");
-            all_ok = false;
-        }
-    }
-
-    log_verbose(verbose, "checking database migrations");
-    match connection.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
-        row.get::<_, i64>(0)
-    }) {
-        Ok(count) => println!("✓ Database migrations: {count} applied"),
-        Err(source) => {
-            println!("✗ Database migrations: FAILED ({source})");
-            all_ok = false;
-        }
-    }
-
-    log_verbose(verbose, "checking workspace directory");
-    let workspace_path = env::var_os(WORKSPACE_PATH_ENVIRONMENT_VARIABLE)
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_WORKSPACE_PATH));
-    if workspace_path.exists() {
-        println!(
-            "✓ Workspace directory: {} (exists)",
-            workspace_path.display()
-        );
-    } else {
-        println!(
-            "✗ Workspace directory: {} (does not exist)",
-            workspace_path.display()
-        );
-        all_ok = false;
-    }
-
-    log_verbose(verbose, "checking Caddy managed directory");
-    let caddy_managed_path = env::var_os(CADDY_MANAGED_PATH_ENVIRONMENT_VARIABLE)
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_CADDY_MANAGED_PATH));
-    if caddy_managed_path.exists() {
-        println!(
-            "✓ Caddy managed directory: {} (exists)",
-            caddy_managed_path.display()
-        );
-    } else {
-        println!(
-            "✗ Caddy managed directory: {} (does not exist)",
-            caddy_managed_path.display()
-        );
-        all_ok = false;
-    }
-
-    log_verbose(verbose, "checking Caddyfile");
-    let caddyfile_path = env::var_os(CADDYFILE_PATH_ENVIRONMENT_VARIABLE)
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_CADDYFILE_PATH));
-    if caddyfile_path.exists() {
-        println!("✓ Caddyfile: {} (exists)", caddyfile_path.display());
-        match std::process::Command::new("caddy")
-            .args(["validate", "--config"])
-            .arg(&caddyfile_path)
-            .args(["--adapter", "caddyfile"])
-            .output()
-        {
-            Ok(output) if output.status.success() => println!("✓ Caddy configuration: valid"),
-            Ok(output) => {
-                println!(
-                    "✗ Caddy configuration: FAILED ({})",
-                    String::from_utf8_lossy(&output.stderr).trim()
-                );
-                all_ok = false;
-            }
-            Err(source) => {
-                println!("✗ Caddy configuration: FAILED ({source})");
-                all_ok = false;
-            }
-        }
-    } else {
-        println!("✗ Caddyfile: {} (does not exist)", caddyfile_path.display());
-        all_ok = false;
-    }
-
-    log_verbose(verbose, "checking Git availability");
-    match std::process::Command::new("git").arg("--version").output() {
-        Ok(output) if output.status.success() => {
-            let version = String::from_utf8_lossy(&output.stdout);
-            println!("✓ Git: {version}");
-        }
-        Ok(_) => {
-            println!("✗ Git: command failed");
-            all_ok = false;
-        }
-        Err(source) => {
-            println!("✗ Git: not found ({source})");
-            all_ok = false;
-        }
-    }
-
-    log_verbose(verbose, "checking Podman availability");
-    match std::process::Command::new("podman")
-        .arg("--version")
-        .output()
-    {
-        Ok(output) if output.status.success() => {
-            let version = String::from_utf8_lossy(&output.stdout);
-            println!("✓ Podman: {version}");
-        }
-        Ok(_) => {
-            println!("✗ Podman: command failed");
-            all_ok = false;
-        }
-        Err(source) => {
-            println!("✗ Podman: not found ({source})");
-            all_ok = false;
-        }
-    }
-
-    match connection.prepare(
-        "SELECT releases.image_reference
-         FROM applications
-         JOIN deployments ON deployments.id = applications.active_deployment_id
-         JOIN releases ON releases.id = deployments.release_id",
-    ) {
-        Ok(mut statement) => match statement.query_map([], |row| row.get::<_, String>(0)) {
-            Ok(images) => {
-                for image in images {
-                    match image {
-                        Ok(image) if OciArtifact::parse(&image).is_ok() => {
-                            match pull_image(&image) {
-                                Ok(_) => println!("✓ Active OCI image: {image} (pullable)"),
-                                Err(source) => {
-                                    println!("✗ Active OCI image: {image} (FAILED: {source})");
-                                    all_ok = false;
-                                }
-                            }
-                        }
-                        Ok(_) => println!("- Active local image: skipped"),
-                        Err(source) => {
-                            println!("✗ Active OCI image: FAILED ({source})");
-                            all_ok = false;
-                        }
-                    }
-                }
-            }
-            Err(source) => {
-                println!("✗ Active OCI images: FAILED ({source})");
-                all_ok = false;
-            }
-        },
-        Err(source) => {
-            println!("✗ Active OCI images: FAILED ({source})");
-            all_ok = false;
-        }
-    }
-
-    let database_path = configured_path(DATABASE_PATH_ENVIRONMENT_VARIABLE, DEFAULT_DATABASE_PATH);
-    for path in [&database_path, &workspace_path] {
-        match std::process::Command::new("df")
-            .args(["-Pk"])
-            .arg(path)
-            .output()
-        {
-            Ok(output) if output.status.success() => {
-                let free_kib = String::from_utf8_lossy(&output.stdout)
-                    .lines()
-                    .nth(1)
-                    .and_then(|line| line.split_whitespace().nth(3))
-                    .and_then(|value| value.parse::<u64>().ok());
-                if free_kib.is_some_and(|value| value >= 1024 * 1024) {
-                    println!("✓ Disk space: {} (at least 1 GiB free)", path.display());
-                } else {
-                    println!("✗ Disk space: {} (less than 1 GiB free)", path.display());
-                    all_ok = false;
-                }
-            }
-            Ok(_) | Err(_) => {
-                println!("✗ Disk space: {} (unable to inspect)", path.display());
-                all_ok = false;
-            }
-        }
-    }
-
-    match std::process::Command::new("podman")
-        .args(["info", "--format", "{{.Host.Security.Rootless}}"])
-        .output()
-    {
-        Ok(output)
-            if output.status.success()
-                && String::from_utf8_lossy(&output.stdout).trim() == "true" =>
-        {
-            println!("✓ Podman rootless: OK")
-        }
-        Ok(output) => {
-            println!(
-                "✗ Podman rootless: FAILED ({})",
-                String::from_utf8_lossy(&output.stdout).trim()
-            );
-            all_ok = false;
-        }
-        Err(source) => {
-            println!("✗ Podman rootless: FAILED ({source})");
-            all_ok = false;
-        }
-    }
-
-    log_verbose(verbose, "checking Podman Quadlet user generator");
-    const QUADLET_GENERATOR_CANDIDATES: &[&str] = &[
-        "/usr/lib/systemd/user-generators/podman-user-generator",
-        "/lib/systemd/user-generators/podman-user-generator",
-    ];
-    let quadlet_generator = QUADLET_GENERATOR_CANDIDATES
-        .iter()
-        .find(|path| std::path::Path::new(path).is_file());
-    if let Some(generator) = quadlet_generator {
-        println!("✓ Podman Quadlet user generator: {generator}");
-    } else {
-        println!("✗ Podman Quadlet user generator: not found (install Podman >= 4.4 or Debian 13)");
-        all_ok = false;
-    }
-
-    log_verbose(verbose, "checking Caddy availability");
-    match std::process::Command::new("caddy").arg("version").output() {
-        Ok(output) if output.status.success() => {
-            let version = String::from_utf8_lossy(&output.stdout);
-            println!("✓ Caddy: {version}");
-        }
-        Ok(_) => {
-            println!("✗ Caddy: command failed");
-            all_ok = false;
-        }
-        Err(source) => {
-            println!("✗ Caddy: not found ({source})");
-            all_ok = false;
-        }
-    }
-
-    if all_ok {
-        println!("\nAll checks passed!");
-        Ok(())
-    } else {
-        println!("\nSome checks failed. Please review the output above.");
-        Err(CliError::Doctor)
     }
 }

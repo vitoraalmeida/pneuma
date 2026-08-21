@@ -1,6 +1,7 @@
 pub mod application_lock;
 pub mod caddy_exposure;
 pub mod database;
+pub mod diagnostics;
 pub mod git_source;
 pub mod health_check_external;
 pub mod health_check_internal;

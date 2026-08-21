@@ -164,8 +164,11 @@ without selecting a new Release or making destructive changes from ambiguity.
   explicitly isolate the legacy direct Podman candidate-creation API.
   Result: core Application lookup has its own use case and the unused direct
   Podman candidate-creation flow, including exclusive coverage, is removed.
-- [ ] Extract shared remote import, diagnostics, database, and progress-enabled
-  deployment orchestration from `main.rs` without changing CLI behavior.
+- [x] Extract shared remote import, diagnostics, database, and progress-enabled
+  deployment orchestration from `main.rs` without changing CLI behavior except
+  the approved verbose deployment progress output.
+  Result: remote imports, database helpers, diagnostics, and deployment progress
+  now have dedicated owners; `--verbose` deploy reports lifecycle steps on stderr.
 
 ## Scope and Non-goals
 

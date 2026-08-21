@@ -33,8 +33,9 @@ SQLite representation, or reconciliation policy.
 - Generic Application lookup is not owned by list-specific use cases. The legacy
   direct Podman candidate-creation API is either removed after migrating its
   callers or isolated as an explicitly legacy boundary.
-- This refactor preserves public CLI behavior, persisted SQLite values, migration
-  history, external-effect ordering, and existing reconciliation decisions.
+- This refactor preserves persisted SQLite values, migration history, external-effect
+  ordering, and existing reconciliation decisions. Verbose deployment commands gain
+  their already-defined step-by-step stderr progress output; other CLI behavior is preserved.
 
 ## Checkpoint Order
 

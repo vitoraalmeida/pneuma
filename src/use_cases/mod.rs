@@ -1,6 +1,7 @@
 pub mod application_import;
 pub mod application_list;
 pub mod application_lookup;
+pub mod application_remote_import;
 pub mod application_runtime;
 pub mod ci_command;
 pub mod deployment_activate_public;

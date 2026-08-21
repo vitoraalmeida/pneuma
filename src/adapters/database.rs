@@ -7,6 +7,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, DatabaseName, OpenFlags};
 
+pub const DATABASE_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_DATABASE_PATH";
+pub const DEFAULT_DATABASE_PATH: &str = "/var/lib/pneuma/database/pneuma.sqlite3";
+
 const INITIAL_MIGRATION: &str = include_str!("../../migrations/0001_application_catalog.sql");
 const DEPLOYMENT_MIGRATION: &str =
     include_str!("../../migrations/0002_revisions_and_deployments.sql");
@@ -210,6 +213,28 @@ pub fn restore(path: &Path, source_path: &Path) -> Result<PathBuf, DatabaseError
     let result = restore_locked(path, source_path);
     let _ = fs::remove_file(&lock_path);
     result
+}
+
+// Restores a database and immediately reopens it so callers do not report success for an unusable file.
+pub fn restore_and_verify(path: &Path, source_path: &Path) -> Result<PathBuf, DatabaseError> {
+    let pre_restore = restore(path, source_path)?;
+    let _ = open(path)?;
+    Ok(pre_restore)
+}
+
+// Resolves the configured database path, treating an empty override as unset.
+pub fn configured_path() -> PathBuf {
+    std::env::var_os(DATABASE_PATH_ENVIRONMENT_VARIABLE)
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_DATABASE_PATH))
+}
+
+// Returns the number of migrations recorded by an already-open database.
+pub fn migration_count(connection: &Connection) -> Result<i64, rusqlite::Error> {
+    connection.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+        row.get(0)
+    })
 }
 
 // Replaces the database only while the create-only lock prevents concurrent restore attempts.

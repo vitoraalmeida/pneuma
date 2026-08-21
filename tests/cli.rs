@@ -294,6 +294,24 @@ fn deploys_an_internal_application_and_prints_its_identity() {
 }
 
 #[test]
+fn verbose_deploy_reports_lifecycle_steps_on_stderr() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || respond_once(&listener, 200));
+
+    let output = environment.deploy(port, true);
+    server.join().unwrap();
+
+    assert_command_succeeded(&output);
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("load application specification: started"));
+    assert!(stderr.contains("create deployment: completed"));
+    assert!(stderr.contains("health check and promotion: completed"));
+}
+
+#[test]
 fn reimport_reports_the_real_state_of_a_deployed_application() {
     let environment = DeploymentEnvironment::new();
     assert_command_succeeded(&environment.import());

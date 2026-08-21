@@ -57,6 +57,21 @@ pub fn generate_id(connection: &Connection) -> Result<String, ReleaseStoreError>
         .map_err(|source| ReleaseStoreError::Persistence { source })
 }
 
+// Lists image references for the Releases selected by each Application's active Deployment.
+pub fn active_application_image_references(
+    connection: &Connection,
+) -> Result<Vec<String>, rusqlite::Error> {
+    let mut statement = connection.prepare(
+        "SELECT releases.image_reference
+         FROM applications
+         JOIN deployments ON deployments.id = applications.active_deployment_id
+         JOIN releases ON releases.id = deployments.release_id",
+    )?;
+    statement
+        .query_map([], |row| row.get(0))?
+        .collect::<Result<Vec<_>, _>>()
+}
+
 // Inserts an immutable artifact Release and preserves the existing row for the same digest.
 pub fn insert_release(
     transaction: &Transaction<'_>,
