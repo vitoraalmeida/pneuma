@@ -4,6 +4,8 @@ use std::fs::{File, OpenOptions};
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 
+use crate::domain::identity::ApplicationId;
+
 #[derive(Debug)]
 pub enum ApplicationLockError {
     DatabasePathUnavailable,
@@ -55,7 +57,7 @@ pub struct ApplicationLock {
 impl ApplicationLock {
     pub fn try_acquire(
         database_path: &Path,
-        application_id: &str,
+        application_id: &ApplicationId,
     ) -> Result<Option<Self>, ApplicationLockError> {
         let path = lock_path(database_path, application_id);
         let file = OpenOptions::new()
@@ -91,7 +93,8 @@ impl Drop for ApplicationLock {
 }
 
 // Names the sidecar from both configured database identity and logical application identity.
-pub fn lock_path(database_path: &Path, application_id: &str) -> PathBuf {
+pub fn lock_path(database_path: &Path, application_id: &ApplicationId) -> PathBuf {
+    let application_id = application_id.as_str();
     if database_path.as_os_str().is_empty() || database_path == Path::new(":memory:") {
         return std::env::temp_dir().join(format!("pneuma-memory-{application_id}.lock"));
     }
@@ -109,6 +112,11 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{ApplicationLock, lock_path};
+    use crate::domain::identity::ApplicationId;
+
+    fn application_id(value: &str) -> ApplicationId {
+        ApplicationId::from(value)
+    }
 
     #[test]
     fn serializes_same_application_and_keeps_different_applications_independent() {
@@ -122,32 +130,32 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         let database = root.join("pneuma.sqlite3");
 
-        let held = ApplicationLock::try_acquire(&database, "application-a")
+        let held = ApplicationLock::try_acquire(&database, &application_id("application-a"))
             .unwrap()
             .unwrap();
         assert!(
-            ApplicationLock::try_acquire(&database, "application-a")
+            ApplicationLock::try_acquire(&database, &application_id("application-a"))
                 .unwrap()
                 .is_none()
         );
         assert!(
-            ApplicationLock::try_acquire(&database, "application-b")
+            ApplicationLock::try_acquire(&database, &application_id("application-b"))
                 .unwrap()
                 .is_some()
         );
         assert_eq!(
-            lock_path(&database, "application-a"),
+            lock_path(&database, &application_id("application-a")),
             root.join("pneuma.sqlite3.application-a.lock")
         );
 
         drop(held);
         assert!(
-            ApplicationLock::try_acquire(&database, "application-a")
+            ApplicationLock::try_acquire(&database, &application_id("application-a"))
                 .unwrap()
                 .is_some()
         );
-        fs::remove_file(lock_path(&database, "application-a")).unwrap();
-        fs::remove_file(lock_path(&database, "application-b")).unwrap();
+        fs::remove_file(lock_path(&database, &application_id("application-a"))).unwrap();
+        fs::remove_file(lock_path(&database, &application_id("application-b"))).unwrap();
         fs::remove_dir_all(root).unwrap();
     }
 }

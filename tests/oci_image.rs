@@ -2,6 +2,11 @@ use std::process::Command;
 
 use pneuma::adapters::oci_image::{self, ResolveImageDigestError};
 use pneuma::domain::git::CommitSha;
+use pneuma::domain::release::OciRepository;
+
+fn oci_repository(value: &str) -> OciRepository {
+    OciRepository::new(value).unwrap()
+}
 
 #[test]
 #[ignore = "requires configured rootless Podman"]
@@ -40,8 +45,12 @@ fn resolve_image_digest_returns_digest_for_existing_tag() {
         String::from_utf8_lossy(&push.stderr)
     );
 
-    let reference = oci_image::resolve_image_digest(repository, &commit_sha).unwrap();
-    assert_eq!(reference.repository(), repository);
+    let reference = oci_image::resolve_image_digest(
+        &oci_repository("localhost:5000/pneuma-oci-test"),
+        &commit_sha,
+    )
+    .unwrap();
+    assert_eq!(reference.repository(), "localhost:5000/pneuma-oci-test");
     assert!(reference.digest().starts_with("sha256:"));
 
     let _ = Command::new("podman")
@@ -53,19 +62,25 @@ fn resolve_image_digest_returns_digest_for_existing_tag() {
 #[test]
 #[ignore = "requires configured rootless Podman"]
 fn resolve_image_digest_fails_for_missing_tag() {
-    let repository = "localhost:5000/pneuma-oci-test";
     let commit_sha = CommitSha::new(&"b".repeat(40)).unwrap();
 
-    let error = oci_image::resolve_image_digest(repository, &commit_sha).unwrap_err();
+    let error = oci_image::resolve_image_digest(
+        &oci_repository("localhost:5000/pneuma-oci-test"),
+        &commit_sha,
+    )
+    .unwrap_err();
     assert!(matches!(error, ResolveImageDigestError::Pull { .. }));
 }
 
 #[test]
 #[ignore = "requires configured rootless Podman"]
 fn resolve_image_digest_fails_for_unreachable_registry() {
-    let repository = "localhost:59999/pneuma-oci-test";
     let commit_sha = CommitSha::new(&"c".repeat(40)).unwrap();
 
-    let error = oci_image::resolve_image_digest(repository, &commit_sha).unwrap_err();
+    let error = oci_image::resolve_image_digest(
+        &oci_repository("localhost:59999/pneuma-oci-test"),
+        &commit_sha,
+    )
+    .unwrap_err();
     assert!(matches!(error, ResolveImageDigestError::Pull { .. }));
 }

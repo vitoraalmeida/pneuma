@@ -4,7 +4,7 @@ use std::io;
 use std::process::Command;
 
 use crate::domain::git::CommitSha;
-use crate::domain::release::{InvalidOciArtifact, OciArtifact};
+use crate::domain::release::{InvalidOciArtifact, OciArtifact, OciRepository};
 
 const DIGEST_ALGORITHM: &str = "sha256:";
 const SHA256_HEX_LENGTH: usize = 64;
@@ -229,10 +229,10 @@ impl Error for ResolveImageDigestError {
 
 // Resolves a CI commit tag to a validated immutable artifact for Release creation.
 pub fn resolve_image_digest(
-    repository: &str,
+    repository: &OciRepository,
     commit_sha: &CommitSha,
 ) -> Result<OciArtifact, ResolveImageDigestError> {
-    let tagged = format!("{repository}:{}", commit_sha.as_str());
+    let tagged = format!("{}:{}", repository.as_str(), commit_sha.as_str());
 
     let pull = Command::new("podman")
         .args(["pull", "--quiet", &tagged])
@@ -275,7 +275,7 @@ pub fn resolve_image_digest(
         });
     };
 
-    OciArtifact::new(repository, digest).map_err(|_| {
+    OciArtifact::new(repository.as_str(), digest).map_err(|_| {
         ResolveImageDigestError::InvalidInspectOutput {
             reference: tagged,
             output: digest.to_owned(),

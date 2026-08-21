@@ -4,6 +4,8 @@ use std::fmt;
 
 use rusqlite::{Connection, TransactionBehavior, params};
 
+use crate::domain::identity::{ApplicationId, DeploymentId};
+
 pub const RUNTIME_PORT_RANGE_ENVIRONMENT_VARIABLE: &str = "PNEUMA_RUNTIME_PORT_RANGE";
 const DEFAULT_RUNTIME_PORT_RANGE: &str = "30000-39999";
 
@@ -46,8 +48,8 @@ impl Error for PortAllocationError {
 // Atomically reserves the first free configured loopback port across live runtimes and candidates.
 pub fn reserve_port(
     connection: &mut Connection,
-    application_id: &str,
-    deployment_id: &str,
+    application_id: &ApplicationId,
+    deployment_id: &DeploymentId,
 ) -> Result<u16, PortAllocationError> {
     let (start, end) = configured_range()?;
     let transaction = connection
@@ -73,7 +75,7 @@ pub fn reserve_port(
             .execute(
                 "INSERT INTO runtime_port_reservations (port, application_id, deployment_id)
                  VALUES (?1, ?2, ?3)",
-                params![port, application_id, deployment_id],
+                params![port, application_id.as_str(), deployment_id.as_str()],
             )
             .map_err(|source| PortAllocationError::Persistence { source })?;
         transaction
@@ -87,12 +89,12 @@ pub fn reserve_port(
 // Releases all reservations owned by a deployment after cleanup or runtime registration.
 pub fn release_port(
     connection: &Connection,
-    deployment_id: &str,
+    deployment_id: &DeploymentId,
 ) -> Result<(), PortAllocationError> {
     connection
         .execute(
             "DELETE FROM runtime_port_reservations WHERE deployment_id = ?1",
-            [deployment_id],
+            [deployment_id.as_str()],
         )
         .map_err(|source| PortAllocationError::Persistence { source })?;
     Ok(())
@@ -101,7 +103,7 @@ pub fn release_port(
 // Consumes a reservation once its port is recorded on a RuntimeInstance.
 pub fn consume_port_reservation(
     connection: &Connection,
-    deployment_id: &str,
+    deployment_id: &DeploymentId,
 ) -> Result<(), PortAllocationError> {
     release_port(connection, deployment_id)
 }

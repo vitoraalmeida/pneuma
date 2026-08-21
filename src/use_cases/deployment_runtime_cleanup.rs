@@ -214,7 +214,7 @@ pub(crate) fn cleanup_failed_candidate(
             });
         }
     }
-    release_port(connection, deployment_id.as_str())
+    release_port(connection, deployment_id)
         .map_err(|source| CandidateCleanupError::ReleasePort { source })?;
     Ok(())
 }

@@ -175,16 +175,11 @@ impl Error for ReconciliationReadError {
 // Reconciles only confirmed runtime and route drift, leaving ambiguous materialization untouched.
 pub fn reconcile_application(
     connection: &mut Connection,
-    application_name: &str,
+    application_name: &ApplicationName,
     managed_caddy_directory: &std::path::Path,
     caddyfile_path: &std::path::Path,
 ) -> Result<ReconciliationResult, ReconciliationReadError> {
-    let application_name = ApplicationName::new(application_name).map_err(|_| {
-        ReconciliationReadError::ApplicationNotFound {
-            application_name: application_name.to_owned(),
-        }
-    })?;
-    let application = application_store::load_application_by_name(connection, &application_name)
+    let application = application_store::load_application_by_name(connection, application_name)
         .map_err(|source| ReconciliationReadError::Application { source })?
         .ok_or_else(|| ReconciliationReadError::ApplicationNotFound {
             application_name: application_name.as_str().to_owned(),
@@ -194,7 +189,7 @@ pub fn reconcile_application(
             source: ApplicationLockError::DatabasePathUnavailable,
         },
     )?;
-    let Some(_lock) = ApplicationLock::try_acquire(&database_path, application.id.as_str())
+    let Some(_lock) = ApplicationLock::try_acquire(&database_path, &application.id)
         .map_err(|source| ReconciliationReadError::OperationLock { source })?
     else {
         return Ok(ReconciliationResult::Deferred {
@@ -204,7 +199,7 @@ pub fn reconcile_application(
     let token = operation_store::generate_token(connection)
         .map_err(|source| ReconciliationReadError::Operation { source })?;
     let transaction = connection.transaction().map_err(persistence_error)?;
-    operation_store::take_ownership(&transaction, application.id.as_str(), &token)
+    operation_store::take_ownership(&transaction, &application.id, &token)
         .map_err(|source| ReconciliationReadError::Operation { source })?;
     transaction.commit().map_err(persistence_error)?;
     wait_for_test_gate("reconciliation.ownership-acquired").map_err(|source| {
@@ -213,7 +208,7 @@ pub fn reconcile_application(
         }
     })?;
 
-    let input = load_reconciliation_input(connection, application_name.as_str())?;
+    let input = load_reconciliation_input(connection, application_name)?;
     if let Some(blocking_deployment) = input.blocking_deployment {
         return recover_interrupted_deployment(
             connection,
@@ -488,7 +483,7 @@ fn recover_interrupted_deployment(
                 active,
                 exposure,
                 managed_caddy_directory,
-                application.id.as_str(),
+                &application.id,
             )?;
             let Some(exposure) = exposure else {
                 return Ok(ReconciliationResult::ManualIntervention {
@@ -563,7 +558,7 @@ fn prior_canonical_route_is_present(
     active: Option<&ActiveRuntime>,
     exposure: Option<&crate::domain::exposure::Exposure>,
     managed_caddy_directory: &std::path::Path,
-    application_id: &str,
+    application_id: &crate::domain::identity::ApplicationId,
 ) -> Result<bool, ReconciliationReadError> {
     let (Some(active), Some(exposure)) = (active, exposure) else {
         return Ok(false);
@@ -616,7 +611,7 @@ fn reconcile_exposure(
             )?;
             let removed = match remove_caddy_fragment(
                 managed_caddy_directory,
-                input.application.id.as_str(),
+                &input.application.id,
                 caddyfile_path,
             ) {
                 Ok(removed) => removed,
@@ -725,8 +720,10 @@ fn reconcile_public_exposure(
             false,
         );
     }
-    let contents =
-        crate::adapters::caddy_exposure::canonical_fragment_contents(domain.as_str(), endpoint);
+    let contents = crate::adapters::caddy_exposure::canonical_fragment_contents(
+        domain,
+        runtime.expected_endpoint,
+    );
     let configuration_version = ExposureConfigurationVersion::new(&contents).map_err(|source| {
         ReconciliationReadError::NotConverged {
             reason: source.to_string(),
@@ -754,9 +751,9 @@ fn reconcile_public_exposure(
     let materialized = match materialize_caddy_fragment(
         managed_caddy_directory,
         caddyfile_path,
-        input.application.id.as_str(),
-        domain.as_str(),
-        endpoint,
+        &input.application.id,
+        domain,
+        runtime.expected_endpoint,
     ) {
         Ok(materialized) => materialized,
         Err(source) => {
@@ -981,7 +978,7 @@ fn repair_recreated_runtime(
 // Loads all persisted reconciliation authorities in a short read transaction before external observation.
 pub fn load_reconciliation_input(
     connection: &mut Connection,
-    application_name: &str,
+    application_name: &ApplicationName,
 ) -> Result<ReconciliationInput, ReconciliationReadError> {
     let transaction =
         connection
@@ -989,12 +986,7 @@ pub fn load_reconciliation_input(
             .map_err(|source| ReconciliationReadError::Application {
                 source: application_store::ApplicationStoreError::Persistence { source },
             })?;
-    let application_name = ApplicationName::new(application_name).map_err(|_| {
-        ReconciliationReadError::ApplicationNotFound {
-            application_name: application_name.to_owned(),
-        }
-    })?;
-    let application = application_store::load_application_by_name(&transaction, &application_name)
+    let application = application_store::load_application_by_name(&transaction, application_name)
         .map_err(|source| ReconciliationReadError::Application { source })?
         .ok_or_else(|| ReconciliationReadError::ApplicationNotFound {
             application_name: application_name.as_str().to_owned(),
@@ -1068,9 +1060,8 @@ pub fn observe_reconciliation_input(
         .map_err(|source| ReconciliationReadError::ObserveQuadlet { source })?;
     let systemd_unit = observe_generated_unit(&unit)
         .map_err(|source| ReconciliationReadError::ObserveQuadlet { source })?;
-    let caddy_fragment =
-        observe_caddy_fragment(managed_caddy_directory, input.application.id.as_str())
-            .map_err(|source| ReconciliationReadError::ObserveCaddy { source })?;
+    let caddy_fragment = observe_caddy_fragment(managed_caddy_directory, &input.application.id)
+        .map_err(|source| ReconciliationReadError::ObserveCaddy { source })?;
     Ok(Some(ReconciliationObservation {
         recorded_container,
         named_container,

@@ -808,9 +808,16 @@ fn run_reconcile(
     );
     let caddyfile_path =
         configured_path(CADDYFILE_PATH_ENVIRONMENT_VARIABLE, DEFAULT_CADDYFILE_PATH);
+    let application_name = pneuma::domain::application::ApplicationName::new(application_name)
+        .map_err(|_| CliError::Reconcile {
+            source:
+                pneuma::use_cases::reconciliation::ReconciliationReadError::ApplicationNotFound {
+                    application_name: application_name.to_owned(),
+                },
+        })?;
     match reconcile_application(
         connection,
-        application_name,
+        &application_name,
         &managed_caddy_directory,
         &caddyfile_path,
     )

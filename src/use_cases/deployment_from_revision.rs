@@ -132,7 +132,7 @@ fn deploy_branch_reporting(
             application_id: application_id.to_string(),
         })?;
 
-    let reference = resolve_image_digest(delivery.image_repository().as_str(), &commit_sha)
+    let reference = resolve_image_digest(delivery.image_repository(), &commit_sha)
         .map_err(|source| DeployBranchError::ResolveImageDigest { source })?;
 
     let deployed = match progress {

@@ -19,7 +19,7 @@ use crate::domain::exposure::{
     ExposureMaterializationState, Visibility,
 };
 use crate::domain::identity::ApplicationId;
-use crate::domain::runtime::{ContainerObservation, ObservedRuntimeState};
+use crate::domain::runtime::{ContainerObservation, ExpectedRuntimeEndpoint, ObservedRuntimeState};
 
 #[derive(Debug, PartialEq, Eq)]
 // Returns the requested visibility after its materialization outcome is confirmed.
@@ -68,6 +68,9 @@ pub enum ExposureChangeError {
     },
     RuntimeNotRunning {
         state: ObservedRuntimeState,
+    },
+    InvalidObservedEndpoint {
+        container_id: String,
     },
     MaterializeFailed {
         source: MaterializeCaddyFragmentError,
@@ -142,6 +145,10 @@ impl fmt::Display for ExposureChangeError {
             Self::RuntimeNotRunning { state } => {
                 write!(formatter, "runtime is not running (state: {state:?})")
             }
+            Self::InvalidObservedEndpoint { container_id } => write!(
+                formatter,
+                "runtime `{container_id}` observed a non-loopback endpoint"
+            ),
             Self::MaterializeFailed { source } => {
                 write!(formatter, "failed to materialize Caddy fragment: {source}")
             }
@@ -178,6 +185,7 @@ impl Error for ExposureChangeError {
             | Self::InvalidExposure { .. }
             | Self::InvalidConfigurationVersion
             | Self::InvalidDiagnostic
+            | Self::InvalidObservedEndpoint { .. }
             | Self::RuntimeNotRunning { .. } => None,
         }
     }
@@ -354,11 +362,16 @@ fn make_public(
             );
         }
     };
+    let endpoint = ExpectedRuntimeEndpoint::new(endpoint).map_err(|_| {
+        ExposureChangeError::InvalidObservedEndpoint {
+            container_id: runtime.external_runtime_id.to_string(),
+        }
+    })?;
     let materialized = match materialize_caddy_fragment(
         managed_directory,
         caddyfile_path,
-        application_id.as_str(),
-        domain.as_str(),
+        application_id,
+        &domain,
         endpoint,
     ) {
         Ok(materialized) => materialized,
@@ -399,7 +412,7 @@ fn make_public(
         );
     }
     let configuration_version =
-        ExposureConfigurationVersion::new(&canonical_fragment_contents(domain.as_str(), endpoint))
+        ExposureConfigurationVersion::new(&canonical_fragment_contents(&domain, endpoint))
             .map_err(|_| ExposureChangeError::InvalidConfigurationVersion)?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -468,22 +481,21 @@ fn make_internal(
     managed_directory: &Path,
     caddyfile_path: &Path,
 ) -> Result<ExposureChange, ExposureChangeError> {
-    let removed =
-        match remove_caddy_fragment(managed_directory, application_id.as_str(), caddyfile_path) {
-            Ok(removed) => removed,
-            Err(source) => {
-                let message = source.to_string();
-                let diverged = source.recovery_failed();
-                return fail_internal(
-                    connection,
-                    application_id,
-                    "caddy_removal_failed",
-                    &message,
-                    diverged,
-                    ExposureChangeError::RemoveFragmentFailed { source },
-                );
-            }
-        };
+    let removed = match remove_caddy_fragment(managed_directory, application_id, caddyfile_path) {
+        Ok(removed) => removed,
+        Err(source) => {
+            let message = source.to_string();
+            let diverged = source.recovery_failed();
+            return fail_internal(
+                connection,
+                application_id,
+                "caddy_removal_failed",
+                &message,
+                diverged,
+                ExposureChangeError::RemoveFragmentFailed { source },
+            );
+        }
+    };
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|source| ExposureChangeError::Persistence { source })?;

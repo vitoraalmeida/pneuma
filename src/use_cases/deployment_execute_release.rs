@@ -241,7 +241,7 @@ fn deploy_release_reporting(
             .ok_or(DeployReleaseError::OperationLock {
                 source: ApplicationLockError::DatabasePathUnavailable,
             })?;
-    let Some(_lock) = ApplicationLock::try_acquire(database_path, application_id.as_str())
+    let Some(_lock) = ApplicationLock::try_acquire(database_path, application_id)
         .map_err(|source| DeployReleaseError::OperationLock { source })?
     else {
         return Err(DeployReleaseError::OperationInProgress {
@@ -351,7 +351,7 @@ fn execute_deployment(
         connection,
         deployment_id,
         application_id: &specification.application_id,
-        application_name: specification.application_name.as_str(),
+        application_name: &specification.application_name,
         artifact,
         runtime: &specification.runtime,
     };
@@ -484,7 +484,7 @@ fn execute_deployment(
         let input = PublicActivationInput {
             connection,
             runtime: &candidate.runtime,
-            application_id: specification.application_id.as_str(),
+            application_id: &specification.application_id,
             health_check: specification.runtime.health_check(),
             managed_caddy_directory: &public_configuration.managed_caddy_directory,
             caddyfile_path: &public_configuration.caddyfile_path,

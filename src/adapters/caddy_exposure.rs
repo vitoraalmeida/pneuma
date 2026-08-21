@@ -2,13 +2,13 @@ use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::io;
-use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::domain::exposure::is_valid_domain;
+use crate::domain::exposure::DomainName;
+use crate::domain::identity::ApplicationId;
 use crate::domain::reconciliation::CaddyFragmentObservation;
-use crate::domain::runtime::validate_loopback_endpoint;
+use crate::domain::runtime::ExpectedRuntimeEndpoint;
 
 #[derive(Debug, PartialEq, Eq)]
 // Records a newly active fragment and the prior bytes needed to compensate a later route failure.
@@ -100,10 +100,6 @@ impl Error for ObserveCaddyFragmentError {
 #[derive(Debug)]
 pub enum MaterializeCaddyFragmentError {
     InvalidApplicationId,
-    InvalidDomain,
-    InvalidEndpoint {
-        endpoint: SocketAddr,
-    },
     InvalidCaddyfile {
         path: PathBuf,
     },
@@ -210,11 +206,6 @@ impl fmt::Display for MaterializeCaddyFragmentError {
             Self::InvalidApplicationId => {
                 formatter.write_str("application ID must be a 32-character hexadecimal value")
             }
-            Self::InvalidDomain => formatter.write_str("domain must be a valid domain name"),
-            Self::InvalidEndpoint { endpoint } => write!(
-                formatter,
-                "Caddy upstream must be a nonzero IPv4 loopback endpoint: {endpoint}"
-            ),
             Self::InvalidCaddyfile { path } => write!(
                 formatter,
                 "main Caddyfile at {} must be a file",
@@ -253,10 +244,7 @@ impl Error for MaterializeCaddyFragmentError {
             Self::ValidateFragment { failure }
             | Self::ValidateConfiguration { failure, .. }
             | Self::Reload { failure, .. } => Some(failure),
-            Self::InvalidApplicationId
-            | Self::InvalidDomain
-            | Self::InvalidEndpoint { .. }
-            | Self::InvalidCaddyfile { .. } => None,
+            Self::InvalidApplicationId | Self::InvalidCaddyfile { .. } => None,
         }
     }
 }
@@ -281,11 +269,13 @@ impl MaterializeCaddyFragmentError {
 pub fn materialize_caddy_fragment(
     managed_directory: &Path,
     caddyfile_path: &Path,
-    application_id: &str,
-    domain: &str,
-    endpoint: SocketAddr,
+    application_id: &ApplicationId,
+    domain: &DomainName,
+    endpoint: ExpectedRuntimeEndpoint,
 ) -> Result<MaterializedCaddyFragment, MaterializeCaddyFragmentError> {
-    validate_input(application_id, domain, endpoint)?;
+    if !is_safe_fragment_stem(application_id.as_str()) {
+        return Err(MaterializeCaddyFragmentError::InvalidApplicationId);
+    }
     let caddyfile_metadata = fs::metadata(caddyfile_path).map_err(|source| {
         MaterializeCaddyFragmentError::Filesystem {
             action: CaddyFilesystemAction::InspectCaddyfile,
@@ -306,8 +296,8 @@ pub fn materialize_caddy_fragment(
             source,
         }
     })?;
-    let fragment_path = managed_directory.join(format!("{application_id}.caddy"));
-    let temporary_path = managed_directory.join(format!(".{application_id}.caddy.tmp"));
+    let fragment_path = managed_directory.join(format!("{}.caddy", application_id.as_str()));
+    let temporary_path = managed_directory.join(format!(".{}.caddy.tmp", application_id.as_str()));
     let previous_fragment = read_previous_fragment(&fragment_path)?;
     let contents = canonical_fragment_contents(domain, endpoint);
     fs::write(&temporary_path, &contents).map_err(|source| {
@@ -381,19 +371,26 @@ pub fn materialize_caddy_fragment(
 }
 
 // Produces the canonical route representation used to detect and repair fragment drift.
-pub fn canonical_fragment_contents(domain: &str, endpoint: SocketAddr) -> String {
-    format!("{domain} {{\n    reverse_proxy {endpoint}\n}}\n")
+pub fn canonical_fragment_contents(
+    domain: &DomainName,
+    endpoint: ExpectedRuntimeEndpoint,
+) -> String {
+    format!(
+        "{} {{\n    reverse_proxy {}\n}}\n",
+        domain.as_str(),
+        endpoint.socket_addr()
+    )
 }
 
 // Reads one managed fragment without creating directories, validating, or reloading Caddy.
 pub fn observe_caddy_fragment(
     managed_directory: &Path,
-    application_id: &str,
+    application_id: &ApplicationId,
 ) -> Result<CaddyFragmentObservation, ObserveCaddyFragmentError> {
-    if application_id.len() != 32 || !application_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    if !is_safe_fragment_stem(application_id.as_str()) {
         return Err(ObserveCaddyFragmentError::InvalidApplicationId);
     }
-    let path = managed_directory.join(format!("{application_id}.caddy"));
+    let path = managed_directory.join(format!("{}.caddy", application_id.as_str()));
     match fs::read_to_string(&path) {
         Ok(contents) => Ok(CaddyFragmentObservation::Present { contents }),
         Err(source) if source.kind() == io::ErrorKind::NotFound => {
@@ -419,11 +416,11 @@ pub fn restore_materialized_caddy_fragment(
 // Removes an application's managed route and reloads Caddy, retaining the previous fragment for recovery.
 pub fn remove_caddy_fragment(
     managed_directory: &Path,
-    application_id: &str,
+    application_id: &ApplicationId,
     caddyfile_path: &Path,
 ) -> Result<RemovedCaddyFragment, CaddyRecoveryError> {
-    let fragment_path = managed_directory.join(format!("{application_id}.caddy"));
-    let temporary_path = managed_directory.join(format!(".{application_id}.caddy.tmp"));
+    let fragment_path = managed_directory.join(format!("{}.caddy", application_id.as_str()));
+    let temporary_path = managed_directory.join(format!(".{}.caddy.tmp", application_id.as_str()));
     let previous_fragment =
         read_previous_fragment(&fragment_path).map_err(|error| match error {
             MaterializeCaddyFragmentError::Filesystem { path, source, .. } => {
@@ -487,23 +484,9 @@ impl CaddyRecoveryError {
     }
 }
 
-// Rejects unsafe route identities and upstreams before any managed Caddy file is changed.
-fn validate_input(
-    application_id: &str,
-    domain: &str,
-    endpoint: SocketAddr,
-) -> Result<(), MaterializeCaddyFragmentError> {
-    if application_id.len() != 32 || !application_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(MaterializeCaddyFragmentError::InvalidApplicationId);
-    }
-    if !is_valid_domain(domain) {
-        return Err(MaterializeCaddyFragmentError::InvalidDomain);
-    }
-    if validate_loopback_endpoint(endpoint).is_err() {
-        return Err(MaterializeCaddyFragmentError::InvalidEndpoint { endpoint });
-    }
-
-    Ok(())
+// Ensures the application identity is safe to embed in managed Caddy file names.
+fn is_safe_fragment_stem(application_id: &str) -> bool {
+    application_id.len() == 32 && application_id.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 // Reads the prior fragment while treating its absence as the expected first-materialization state.

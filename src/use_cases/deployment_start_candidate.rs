@@ -8,6 +8,7 @@ use crate::adapters::port_allocator::{consume_port_reservation, reserve_port};
 use crate::adapters::systemd_quadlet::{
     QuadletError, container_name, daemon_reload, start, write_unit,
 };
+use crate::domain::application::ApplicationName;
 use crate::domain::deployment::DeploymentTransition;
 use crate::domain::identity::{ApplicationId, DeploymentId};
 use crate::domain::release::OciArtifact;
@@ -32,7 +33,7 @@ pub(crate) struct CandidateStartInput<'a> {
     pub connection: &'a mut Connection,
     pub deployment_id: &'a DeploymentId,
     pub application_id: &'a ApplicationId,
-    pub application_name: &'a str,
+    pub application_name: &'a ApplicationName,
     pub artifact: &'a OciArtifact,
     pub runtime: &'a RuntimeSpecification,
 }
@@ -120,12 +121,12 @@ pub(crate) fn start_candidate(
         },
     )?;
 
-    let host_port = reserve_port(connection, application_id.as_str(), deployment_id.as_str())
+    let host_port = reserve_port(connection, application_id, deployment_id)
         .map_err(|source| CandidateStartError::PortAllocation { source })?;
     let mut resources = CandidateResources::empty().with_port();
 
     let unit = write_unit(
-        application_name,
+        application_name.as_str(),
         deployment_id.as_str(),
         artifact.reference(),
         runtime.container_port().get(),
@@ -148,7 +149,7 @@ pub(crate) fn start_candidate(
         resources: Box::new(resources.clone()),
     })?;
 
-    let name = container_name(application_name, deployment_id.as_str());
+    let name = container_name(application_name.as_str(), deployment_id.as_str());
     let container_id = ContainerId::from(resolve_container_id(&name).map_err(|source| {
         CandidateStartError::ContainerResolution {
             source: Box::new(source),
@@ -198,7 +199,7 @@ pub(crate) fn start_candidate(
     })?;
     resources = resources.with_runtime_mut(&runtime.id);
 
-    consume_port_reservation(connection, deployment_id.as_str()).map_err(|source| {
+    consume_port_reservation(connection, deployment_id).map_err(|source| {
         CandidateStartError::PortPersistence {
             source,
             resources: Box::new(resources.clone()),

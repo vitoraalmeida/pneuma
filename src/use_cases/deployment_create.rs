@@ -182,7 +182,7 @@ fn create_deployment_in_transaction(
     )
     .map_err(|source| CreateDeploymentError::DeploymentStore { source })?;
     if let Some(owner_token) = owner_token {
-        operation_store::take_ownership(transaction, application_id.as_str(), owner_token)
+        operation_store::take_ownership(transaction, application_id, owner_token)
             .map_err(|source| CreateDeploymentError::OperationStore { source })?;
     }
     let deployment = deployment_store::load_deployment(transaction, &deployment_id)

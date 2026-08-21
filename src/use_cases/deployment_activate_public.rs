@@ -27,7 +27,7 @@ use crate::use_cases::deployment_transition::advance_deployment;
 pub(crate) struct PublicActivationInput<'a> {
     pub connection: &'a mut Connection,
     pub runtime: &'a RuntimeInstance,
-    pub application_id: &'a str,
+    pub application_id: &'a ApplicationId,
     pub health_check: &'a HealthCheckSpecification,
     pub managed_caddy_directory: &'a Path,
     pub caddyfile_path: &'a Path,
@@ -86,7 +86,7 @@ pub(crate) fn activate_public_candidate(
 
     let runtime_id = runtime.id.as_str();
     let deployment_id = runtime.deployment_id.as_str();
-    let endpoint = runtime.expected_endpoint.socket_addr();
+    let endpoint = runtime.expected_endpoint;
 
     let resources =
         CandidateResources::with_container_and_runtime(&runtime.external_runtime_id, &runtime.id);
@@ -100,12 +100,13 @@ pub(crate) fn activate_public_candidate(
         ),
     );
 
-    let internal_health = check_internal_health(endpoint, health_check).map_err(|source| {
-        PublicActivationError::InternalHealth {
-            source: Box::new(source),
-            resources: Box::new(resources.clone()),
-        }
-    })?;
+    let internal_health =
+        check_internal_health(endpoint.socket_addr(), health_check).map_err(|source| {
+            PublicActivationError::InternalHealth {
+                source: Box::new(source),
+                resources: Box::new(resources.clone()),
+            }
+        })?;
 
     if !matches!(internal_health, HealthCheckResult::Healthy { .. }) {
         return Err(PublicActivationError::InternalHealth {
@@ -151,22 +152,20 @@ pub(crate) fn activate_public_candidate(
 
     progress.started(
         DeploymentStep::ApplyPublicRoute,
-        format!("{} -> {endpoint}", exposure.domain),
+        format!("{} -> {}", exposure.domain, endpoint.socket_addr()),
     );
-    let configuration_version = ExposureConfigurationVersion::new(&canonical_fragment_contents(
-        exposure.domain.as_str(),
-        endpoint,
-    ))
-    .map_err(|source| PublicActivationError::PublicPromotion {
-        source: Box::new(source),
-        resources: Box::new(resources.clone()),
-    })?;
+    let configuration_version =
+        ExposureConfigurationVersion::new(&canonical_fragment_contents(&exposure.domain, endpoint))
+            .map_err(|source| PublicActivationError::PublicPromotion {
+                source: Box::new(source),
+                resources: Box::new(resources.clone()),
+            })?;
 
     let materialized = materialize_caddy_fragment(
         managed_caddy_directory,
         caddyfile_path,
         application_id,
-        exposure.domain.as_str(),
+        &exposure.domain,
         endpoint,
     )
     .map_err(|source| {
@@ -181,7 +180,7 @@ pub(crate) fn activate_public_candidate(
 
         let source = match record_public_exposure_failure(
             connection,
-            &ApplicationId::from(application_id),
+            application_id,
             &ExposureDiagnostic::new("caddy_materialization_failed", &message)
                 .expect("static diagnostic code and adapter error messages are valid"),
             outcome,
@@ -222,7 +221,7 @@ pub(crate) fn activate_public_candidate(
 
         let source = match record_public_exposure_failure(
             connection,
-            &ApplicationId::from(application_id),
+            application_id,
             &ExposureDiagnostic::new("external_health_check_failed", &source.to_string())
                 .expect("static diagnostic code and adapter error messages are valid"),
             outcome,
@@ -257,7 +256,7 @@ pub(crate) fn activate_public_candidate(
 
             let source = match record_public_exposure_failure(
                 connection,
-                &ApplicationId::from(application_id),
+                application_id,
                 &ExposureDiagnostic::new("candidate_promotion_failed", &source.to_string())
                     .expect("static diagnostic code and promotion error messages are valid"),
                 outcome,

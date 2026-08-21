@@ -1,7 +1,6 @@
 use std::env;
 use std::ffi::OsString;
 use std::fs;
-use std::net::{Ipv4Addr, SocketAddr};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -12,12 +11,27 @@ use pneuma::adapters::caddy_exposure::{
     canonical_fragment_contents, materialize_caddy_fragment, remove_caddy_fragment,
     restore_materialized_caddy_fragment,
 };
+use pneuma::domain::exposure::DomainName;
+use pneuma::domain::identity::ApplicationId;
+use pneuma::domain::runtime::ExpectedRuntimeEndpoint;
 
 const CHILD_CASE: &str = "PNEUMA_CADDY_TEST_CASE";
 const MANAGED_DIRECTORY: &str = "PNEUMA_CADDY_TEST_MANAGED_DIRECTORY";
 const CADDYFILE_PATH: &str = "PNEUMA_CADDY_TEST_CADDYFILE";
 const CADDY_LOG: &str = "PNEUMA_CADDY_TEST_LOG";
 const APPLICATION_ID: &str = "0123456789abcdef0123456789abcdef";
+
+fn application_id() -> ApplicationId {
+    ApplicationId::from(APPLICATION_ID)
+}
+
+fn domain_name(value: &str) -> DomainName {
+    DomainName::new(value).unwrap()
+}
+
+fn loopback_endpoint(address: &str) -> ExpectedRuntimeEndpoint {
+    ExpectedRuntimeEndpoint::new(address.parse().unwrap()).unwrap()
+}
 
 #[test]
 fn validates_the_complete_configuration_and_reloads_caddy() {
@@ -53,17 +67,24 @@ fn validates_the_complete_configuration_and_reloads_caddy() {
 
 #[test]
 fn canonical_fragment_contents_changes_with_domain_or_endpoint() {
-    let endpoint: SocketAddr = "127.0.0.1:31000".parse().unwrap();
-
-    let baseline = canonical_fragment_contents("example.com", endpoint);
+    let baseline = canonical_fragment_contents(
+        &domain_name("example.com"),
+        loopback_endpoint("127.0.0.1:31000"),
+    );
 
     assert_ne!(
         baseline,
-        canonical_fragment_contents("other.example.com", endpoint)
+        canonical_fragment_contents(
+            &domain_name("other.example.com"),
+            loopback_endpoint("127.0.0.1:31000")
+        )
     );
     assert_ne!(
         baseline,
-        canonical_fragment_contents("example.com", "127.0.0.1:32000".parse().unwrap())
+        canonical_fragment_contents(
+            &domain_name("example.com"),
+            loopback_endpoint("127.0.0.1:32000")
+        )
     );
 }
 
@@ -162,45 +183,24 @@ fn rejects_untrusted_fragment_coordinates_before_external_work() {
         unique_suffix()
     ));
     let caddyfile_path = root.join("Caddyfile");
-    let loopback: SocketAddr = "127.0.0.1:31000".parse().unwrap();
 
     let invalid_application = materialize_caddy_fragment(
         &root,
         &caddyfile_path,
-        "../application",
-        "example.com",
-        loopback,
+        &ApplicationId::from("../application"),
+        &domain_name("example.com"),
+        loopback_endpoint("127.0.0.1:31000"),
     )
     .unwrap_err();
-    let invalid_domain = materialize_caddy_fragment(
-        &root,
-        &caddyfile_path,
-        APPLICATION_ID,
-        "example..com",
-        loopback,
-    )
-    .unwrap_err();
-    let invalid_endpoint = materialize_caddy_fragment(
-        &root,
-        &caddyfile_path,
-        APPLICATION_ID,
-        "example.com",
-        "0.0.0.0:31000".parse().unwrap(),
-    )
-    .unwrap_err();
+    let invalid_domain = DomainName::new("example..com");
+    let invalid_endpoint = ExpectedRuntimeEndpoint::new("0.0.0.0:31000".parse().unwrap());
 
     assert!(matches!(
         invalid_application,
         MaterializeCaddyFragmentError::InvalidApplicationId
     ));
-    assert!(matches!(
-        invalid_domain,
-        MaterializeCaddyFragmentError::InvalidDomain
-    ));
-    assert!(matches!(
-        invalid_endpoint,
-        MaterializeCaddyFragmentError::InvalidEndpoint { .. }
-    ));
+    assert!(invalid_domain.is_err());
+    assert!(invalid_endpoint.is_err());
     assert!(!root.exists());
 }
 
@@ -217,9 +217,9 @@ fn rejects_a_missing_main_caddyfile_before_creating_the_managed_directory() {
     let error = materialize_caddy_fragment(
         &managed_directory,
         &caddyfile_path,
-        APPLICATION_ID,
-        "example.com",
-        "127.0.0.1:31000".parse().unwrap(),
+        &application_id(),
+        &domain_name("example.com"),
+        loopback_endpoint("127.0.0.1:31000"),
     )
     .unwrap_err();
 
@@ -241,13 +241,12 @@ fn caddy_child_process() {
     let case = case.to_str().unwrap();
     let managed_directory = PathBuf::from(env::var_os(MANAGED_DIRECTORY).unwrap());
     let caddyfile_path = PathBuf::from(env::var_os(CADDYFILE_PATH).unwrap());
-    let endpoint = SocketAddr::from((Ipv4Addr::LOCALHOST, 31000));
     let result = materialize_caddy_fragment(
         &managed_directory,
         &caddyfile_path,
-        APPLICATION_ID,
-        "example.com",
-        endpoint,
+        &application_id(),
+        &domain_name("example.com"),
+        loopback_endpoint("127.0.0.1:31000"),
     );
 
     match case {
@@ -330,7 +329,7 @@ fn caddy_removal_child_process() {
     let caddyfile_path = PathBuf::from(env::var_os(CADDYFILE_PATH).unwrap());
 
     let error =
-        remove_caddy_fragment(&managed_directory, APPLICATION_ID, &caddyfile_path).unwrap_err();
+        remove_caddy_fragment(&managed_directory, &application_id(), &caddyfile_path).unwrap_err();
     assert!(matches!(
         error,
         pneuma::adapters::caddy_exposure::CaddyRecoveryError::Reload { .. }

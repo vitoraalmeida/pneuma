@@ -3,6 +3,8 @@ use std::fmt;
 
 use rusqlite::{Connection, Transaction, params};
 
+use crate::domain::identity::ApplicationId;
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct OperationOwnership {
     pub token: String,
@@ -40,7 +42,7 @@ pub fn generate_token(connection: &Connection) -> Result<String, OperationStoreE
 // Replaces the persisted owner and advances its fencing generation in the caller's short transaction.
 pub fn take_ownership(
     transaction: &Transaction<'_>,
-    application_id: &str,
+    application_id: &ApplicationId,
     token: &str,
 ) -> Result<OperationOwnership, OperationStoreError> {
     transaction
@@ -52,7 +54,7 @@ pub fn take_ownership(
                  generation = application_operations.generation + 1,
                  updated_at = CURRENT_TIMESTAMP
              RETURNING generation",
-            params![application_id, token],
+            params![application_id.as_str(), token],
             |row| {
                 Ok(OperationOwnership {
                     token: token.to_owned(),
@@ -72,6 +74,7 @@ mod tests {
     use std::path::Path;
 
     use crate::adapters::database;
+    use crate::domain::identity::ApplicationId;
 
     use super::{generate_token, take_ownership};
 
@@ -87,14 +90,24 @@ mod tests {
         let first_token = generate_token(&connection).unwrap();
         let first = {
             let transaction = connection.transaction().unwrap();
-            let ownership = take_ownership(&transaction, "application", &first_token).unwrap();
+            let ownership = take_ownership(
+                &transaction,
+                &ApplicationId::from("application"),
+                &first_token,
+            )
+            .unwrap();
             transaction.commit().unwrap();
             ownership
         };
         let second_token = generate_token(&connection).unwrap();
         let second = {
             let transaction = connection.transaction().unwrap();
-            let ownership = take_ownership(&transaction, "application", &second_token).unwrap();
+            let ownership = take_ownership(
+                &transaction,
+                &ApplicationId::from("application"),
+                &second_token,
+            )
+            .unwrap();
             transaction.commit().unwrap();
             ownership
         };

@@ -6,6 +6,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use pneuma::adapters::caddy_exposure::observe_caddy_fragment;
 use pneuma::adapters::database;
+use pneuma::domain::application::ApplicationName;
+use pneuma::domain::identity::ApplicationId;
 use pneuma::domain::reconciliation::{CaddyFragmentObservation, QuadletSourceObservation};
 use pneuma::use_cases::reconciliation::load_reconciliation_input;
 
@@ -49,7 +51,9 @@ fn loads_the_active_reconciliation_snapshot_without_writing_sqlite() {
         .unwrap();
     let before = connection.total_changes();
 
-    let input = load_reconciliation_input(&mut connection, "another").unwrap();
+    let input =
+        load_reconciliation_input(&mut connection, &ApplicationName::new("another").unwrap())
+            .unwrap();
 
     assert_eq!(input.application.id.as_str(), application_id);
     let active = input.active.unwrap();
@@ -67,15 +71,23 @@ fn loads_the_active_reconciliation_snapshot_without_writing_sqlite() {
 #[test]
 fn observes_caddy_fragment_without_creating_it() {
     let root = temporary_directory();
-    let application_id = "1".repeat(32);
+    let application_id = ApplicationId::from("1".repeat(32));
 
     assert_eq!(
         observe_caddy_fragment(&root, &application_id).unwrap(),
         CaddyFragmentObservation::Missing
     );
-    assert!(!root.join(format!("{application_id}.caddy")).exists());
+    assert!(
+        !root
+            .join(format!("{}.caddy", application_id.as_str()))
+            .exists()
+    );
 
-    fs::write(root.join(format!("{application_id}.caddy")), "route\n").unwrap();
+    fs::write(
+        root.join(format!("{}.caddy", application_id.as_str())),
+        "route\n",
+    )
+    .unwrap();
     assert_eq!(
         observe_caddy_fragment(&root, &application_id).unwrap(),
         CaddyFragmentObservation::Present {

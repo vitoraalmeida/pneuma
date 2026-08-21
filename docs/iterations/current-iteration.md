@@ -51,10 +51,14 @@ primitive round-trips, and removing duplicate or drifted validation.
   and Podman naming; `ContainerId::is_valid` owns the hex format rule used by
   registration and Podman adapters; runtime-store external-id APIs accept
   typed container identities.
-- [ ] Type adapter and store boundaries: Caddy fragment APIs, `ApplicationLock`,
+- [x] Type adapter and store boundaries: Caddy fragment APIs, `ApplicationLock`,
   `operation_store`, `port_allocator`, `oci_image`, internal use-case input
   structs, and `reconcile_application` with typed identities.
-  Result: TBD.
+  Result: Caddy materialization/observation/removal now receive
+  `ApplicationId`, `DomainName`, and `ExpectedRuntimeEndpoint`; locks,
+  operation ownership, port reservations, digest resolution, candidate-start
+  inputs, public-activation inputs, and reconciliation entry points retain
+  validated identities end to end.
 - [ ] Align CI dispatch name validation with `ApplicationName::new`; share the
   catalog-name validator; move `DeliveryType`/`DeliverySpecification` to their
   canonical domain modules.
