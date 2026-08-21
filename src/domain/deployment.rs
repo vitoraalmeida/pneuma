@@ -263,9 +263,7 @@ impl PromotionTarget {
     // Rejects candidates that are not observed running or have been removed.
     pub fn validate_promotion_candidate(&self) -> Result<(), PromotionCandidateRejection> {
         if self.state != RuntimeState::Starting {
-            return Err(PromotionCandidateRejection::NotStarting {
-                actual: self.state,
-            });
+            return Err(PromotionCandidateRejection::NotStarting { actual: self.state });
         }
         if self.observed_state != ObservedRuntimeState::Running {
             return Err(PromotionCandidateRejection::NotRunning {

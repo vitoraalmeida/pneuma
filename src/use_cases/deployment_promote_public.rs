@@ -12,23 +12,10 @@ use crate::domain::deployment::{
     DeploymentStatus, PromotedCandidate, PromotionCandidateRejection, PromotionTarget,
 };
 use crate::domain::exposure::{
-    DomainName, ExposureConfigurationVersion, ExposureDiagnostic, ExposureMaterializationState,
-    Visibility,
+    ExposureConfigurationVersion, ExposureDiagnostic, ExposureIntent, ExposureOutcome,
+    PublicExposureTarget,
 };
 use crate::domain::identity::{ApplicationId, RuntimeInstanceId};
-
-#[derive(Debug, PartialEq, Eq)]
-// Supplies the route identity after public exposure enters the applying state.
-pub struct PublicExposureTarget {
-    pub application_id: ApplicationId,
-    pub domain: DomainName,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ExposureOutcome {
-    Failed,
-    Diverged,
-}
 
 #[derive(Debug)]
 pub enum PromotePublicCandidateError {
@@ -160,20 +147,21 @@ pub fn begin_public_exposure(
             actual: target.deployment_status.to_string(),
         });
     }
-    let domain =
-        target
-            .domain
-            .clone()
-            .ok_or_else(|| PromotePublicCandidateError::InvalidExposure {
+    let domain = match ExposureIntent::new(target.visibility, target.domain.clone()) {
+        Ok(ExposureIntent::Public { domain }) => domain,
+        Ok(ExposureIntent::Internal { .. }) => {
+            return Err(PromotePublicCandidateError::InvalidExposure {
                 application_id: target.application_id.to_string(),
-                reason: "public visibility requires a domain".to_owned(),
-            })?;
-    if target.visibility != Visibility::Public {
-        return Err(PromotePublicCandidateError::InvalidExposure {
-            application_id: target.application_id.to_string(),
-            reason: format!("visibility is `{}`", target.visibility),
-        });
-    }
+                reason: format!("visibility is `{}`", target.visibility),
+            });
+        }
+        Err(error) => {
+            return Err(PromotePublicCandidateError::InvalidExposure {
+                application_id: target.application_id.to_string(),
+                reason: error.reason,
+            });
+        }
+    };
 
     let updated = exposure_store::begin_public_exposure(connection, &target.application_id)
         .map_err(|source| PromotePublicCandidateError::ExposureStore { source })?;
@@ -197,15 +185,11 @@ pub fn record_public_exposure_failure(
     diagnostic: &ExposureDiagnostic,
     outcome: ExposureOutcome,
 ) -> Result<(), PromotePublicCandidateError> {
-    let state = match outcome {
-        ExposureOutcome::Failed => ExposureMaterializationState::Failed,
-        ExposureOutcome::Diverged => ExposureMaterializationState::Diverged,
-    };
     let updated = exposure_store::record_public_exposure_failure(
         connection,
         application_id,
         diagnostic,
-        state,
+        outcome.state(),
     )
     .map_err(|source| PromotePublicCandidateError::ExposureStore { source })?;
     if updated == crate::adapters::stores::PersistenceOutcome::Stale {
@@ -247,7 +231,10 @@ pub fn promote_public_candidate(
             actual: target.deployment_status.to_string(),
         });
     }
-    if target.visibility != Visibility::Public || target.domain.is_none() {
+    if !matches!(
+        ExposureIntent::new(target.visibility, target.domain.clone()),
+        Ok(ExposureIntent::Public { .. })
+    ) {
         return Err(PromotePublicCandidateError::InvalidExposure {
             application_id: target.application_id.to_string(),
             reason: "visibility or domain changed during deployment".to_owned(),

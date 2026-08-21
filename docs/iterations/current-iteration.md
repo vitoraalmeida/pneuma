@@ -37,10 +37,13 @@ primitive round-trips, and removing duplicate or drifted validation.
   `domain/deployment.rs`; `PromotionTarget` owns a shared
   `validate_promotion_candidate()` predicate and `completed_promotion()`; the
   `PromotionTarget.endpoint` field is now `ExpectedRuntimeEndpoint`.
-- [ ] Move public exposure target and outcome types into `domain/exposure.rs`;
+- [x] Move public exposure target and outcome types into `domain/exposure.rs`;
   route public exposure through `ExposureIntent::new`; type `change_exposure`
   and helpers with `&ApplicationId`.
-  Result: TBD.
+  Result: `PublicExposureTarget` and `ExposureOutcome` live in the domain;
+  exposure change and public promotion validate intent through
+  `ExposureIntent::new`; the whole `change_exposure` call chain retains typed
+  `ApplicationId` values without re-wrapping text.
 - [ ] Introduce a domain function for stable container/unit naming; move
   external container identity format rules into the domain; type
   `runtime_store` external-id functions with `&ContainerId`.

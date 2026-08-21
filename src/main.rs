@@ -1072,7 +1072,7 @@ fn run_visibility_set(
     );
     let exposure_change = change_exposure(
         connection,
-        application.id.as_str(),
+        &application.id,
         visibility,
         &managed_directory,
         &caddyfile_path,

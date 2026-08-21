@@ -67,6 +67,29 @@ impl ExposureIntent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+// Supplies the route identity after public exposure enters the applying state.
+pub struct PublicExposureTarget {
+    pub application_id: ApplicationId,
+    pub domain: DomainName,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+// Records whether failed public-route compensation left a safe or diverged state.
+pub enum ExposureOutcome {
+    Failed,
+    Diverged,
+}
+
+impl ExposureOutcome {
+    pub fn state(self) -> ExposureMaterializationState {
+        match self {
+            Self::Failed => ExposureMaterializationState::Failed,
+            Self::Diverged => ExposureMaterializationState::Diverged,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExposureConfigurationVersion(String);
 
 impl ExposureConfigurationVersion {

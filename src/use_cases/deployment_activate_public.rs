@@ -12,12 +12,12 @@ use crate::adapters::health_check_external::check_external_health;
 use crate::adapters::health_check_internal::{HealthCheckResult, check_internal_health};
 use crate::adapters::test_gate::wait_for_test_gate;
 use crate::domain::deployment::DeploymentTransition;
-use crate::domain::exposure::{ExposureConfigurationVersion, ExposureDiagnostic};
+use crate::domain::exposure::{ExposureConfigurationVersion, ExposureDiagnostic, ExposureOutcome};
 use crate::domain::identity::ApplicationId;
 use crate::domain::runtime::{HealthCheckSpecification, RuntimeInstance};
 use crate::use_cases::deployment_progress::{DeploymentStep, ProgressReporter};
 use crate::use_cases::deployment_promote_public::{
-    ExposureOutcome, PromotePublicCandidateError, begin_public_exposure, promote_public_candidate,
+    PromotePublicCandidateError, begin_public_exposure, promote_public_candidate,
     record_public_exposure_failure,
 };
 use crate::use_cases::deployment_runtime_cleanup::CandidateResources;
