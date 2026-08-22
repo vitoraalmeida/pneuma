@@ -117,6 +117,44 @@ external-input rule already lands in a domain-owned validated type at the
 manifest, Git, or OCI boundary. Exit criterion met: every candidate listed by
 iteration 02 has an explicit decision.
 
+## Struct Role Classification
+
+Recorded by consolidation iteration 12 so every public struct and enum carries
+an explicit role instead of an accidental one. Categories:
+
+- **Entity** - durable identity plus lifecycle; the invariant authority for its
+  aggregate.
+- **Value Object** - validated or restricted construction (see the audit above).
+- **Domain state** - closed set, decision output, or evidence bundle owned by
+  the domain.
+- **Read model** - query/projection shape for display; never carries invariant
+  authority.
+- **Use-case input/output** - workflow input, output, progress, or error type.
+- **Adapter DTO** - external representation exchanged with one adapter.
+- **Persistence row** - private store-level row mapping.
+
+| Type | Role | Notes |
+|---|---|---|
+| `Application`, `System`, `Release`, `Deployment`, `RuntimeInstance`, `Exposure` (`src/domain/`) | Entity | The only invariant authorities for their aggregates. Every mutation path loads one of these (e.g. `load_application_by_name`) before deciding; no use case decides from a projection. |
+| `ApplicationSummary` (`src/domain/application.rs`) | Read model | Catalog projection hydrated by `application_store` and returned only by list/import/remote-import/show flows. Marked in code as carrying no invariant authority. |
+| `DeploymentHistory` (`src/domain/deployment.rs`) | Read model | Deployment + Release + active marker for `app deployments`. Transitions/promotions load persisted status through CAS primitives, never this view. |
+| `SystemDetails` (`src/use_cases/system_show.rs`) | Read model | System entity plus its catalog summaries for one show flow. |
+| Value Objects and intentional primitives | Value Object | All rows of the "Primitive And Value Object Audit" above. |
+| `DesiredRuntimeState`, `DeploymentStatus`, `DeploymentLifecycle`, `DeploymentEvent`, `DeploymentType`, `RuntimeState`, `ObservedRuntimeState`, `Visibility`, `ExposureIntent`, `ExposureOutcome`, `ExposureMaterializationState`, `RepositoryKind`, `DeliveryType` | Domain state | Closed sets owned by the domain; adapters classify into them, stores persist exactly their values. |
+| `DeploymentFailure`, `DeploymentFailureEvidence`, `SourceRevision`, `ConfirmedRoute`, `ExposureDiagnostic`, `ExposureMaterialization`, `PromotionTarget`, `PromotedCandidate`, `PromotionCandidateRejection`, `RollbackTarget`, `RuntimeRetirement`, `RuntimeRegistration`, `PreviousRuntime`, `ExpectedRuntimeEndpoint`, `ActiveRuntime`, `ReconciliationInput`, observation enums (`src/domain/reconciliation.rs`, `ContainerObservation`) | Domain state / evidence bundle | Pure facts and decision outputs; produced by hydration or observation, consumed by domain gates and use cases without infrastructure. |
+| `ImportSpecification`, `CiCommand` | Use-case input | Boundary-validated inputs; TOML-free and effect-free. |
+| `ApplicationDeploymentSpecification` (`src/domain/application.rs`) | Use-case input | Persisted fact bundle loaded whole for deploy/promote/reconciliation; not an entity — intent writes stay ID-keyed in store primitives. |
+| Use-case outputs and errors (`DeploymentResult`, `PublicActivationOutput/Input`, `CandidateStartInput/StartedCandidate`, `CandidateResources`, `ProgressReporter`, `DeploymentStep/Progress`, `RuntimeObservation`, all `*Error` enums) | Use-case input/output | Owned by the orchestrating flow; private unless a genuine library API. |
+| `ManifestDocument` and section structs (`src/adapters/manifest.rs`), `PulledImage`, `ExternalHealthCheck`, `MaterializedCaddyFragment`, `RemovedCaddyFragment`, `CaddyFilesystemAction`, `CaddyCommandOutput`, `ContainerCommandOutput`, `HealthCheckResult/Failure` | Adapter DTO | Private or adapter-scoped external representations; converted once at the boundary into domain types. |
+| `RawDeployment` (`src/adapters/stores/deployment_store.rs`), `OperationOwnership` (`operation_store.rs`), `PersistenceOutcome` | Persistence row / store primitive | Store-private encoding; never escapes the stores layer. |
+| CLI types (`Cli`, command enums, `Invocation` in `src/main.rs`) | Use-case input (CLI edge) | Converted to use-case inputs; hold no domain rules. |
+
+Exit criterion met: no code path consumes a read model where an entity is
+required — mutation and transition flows load entities or persisted status via
+store primitives (`application_lookup`, reconciliation reads, promote/rollback
+gates), while `ApplicationSummary`, `DeploymentHistory`, and `SystemDetails`
+are returned only by query/display flows.
+
 ## Known Coverage Gaps
 
 Recorded here so later iterations can schedule them; none blocks this

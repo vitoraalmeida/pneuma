@@ -113,7 +113,9 @@ impl fmt::Display for InvalidDeploymentFailure {
 impl Error for InvalidDeploymentFailure {}
 
 #[derive(Debug, PartialEq, Eq)]
-// Couples a hydrated deployment with its immutable artifact and active marker for history views.
+// Read model (projection): couples a hydrated deployment with its immutable artifact
+// and active marker for history views only. Transitions and promotions must load the
+// persisted status through the store CAS primitives, never decide from this view.
 pub struct DeploymentHistory {
     pub deployment: Deployment,
     pub release: Release,

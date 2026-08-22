@@ -131,6 +131,11 @@ the logical materialization; its Podman container ID can change when Quadlet
 recreates the container. The deterministic base name is
 `pneuma-<application>-<deployment-id>`: the Podman container uses the base name,
 the Quadlet file uses `<base>.container`, and systemd controls `<base>.service`.
+Every struct and enum has an explicit role (entity, value object, domain state,
+read model, use-case input/output, adapter DTO, persistence row); the full
+classification lives in the
+[struct role classification](invariants.md#struct-role-classification) of the
+invariant inventory, and read models never carry invariant authority.
 
 ## Authority and Persistence
 

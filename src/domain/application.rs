@@ -22,7 +22,9 @@ pub struct Application {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-// Provides catalog fields without requiring callers to load the full specification.
+// Read model (projection): catalog fields for list/import/show outputs. It carries
+// no invariant authority — every decision or mutation path must load the
+// `Application` entity instead of consuming this projection.
 pub struct ApplicationSummary {
     pub id: ApplicationId,
     // Same legacy-only None semantics as `Application::system_id`.
@@ -79,7 +81,9 @@ pub enum DesiredRuntimeState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-// Collects the application settings needed to activate a deployment.
+// Use-case input (persisted fact bundle): the application settings needed to
+// activate a deployment, loaded as a whole by deploy/promote/reconciliation
+// flows. It is not an entity; intent changes stay in ID-keyed store primitives.
 pub struct ApplicationDeploymentSpecification {
     pub application_id: ApplicationId,
     pub application_name: ApplicationName,
