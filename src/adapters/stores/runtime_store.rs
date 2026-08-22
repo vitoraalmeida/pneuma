@@ -246,7 +246,7 @@ pub fn load_previous_runtime(
                 Ok(PreviousRuntime {
                     runtime_id: RuntimeInstanceId::from(row.get::<_, String>(0)?),
                     deployment_id: DeploymentId::from(row.get::<_, String>(1)?),
-                    external_runtime_id: ContainerId::from(row.get::<_, String>(2)?),
+                    external_runtime_id: hydrate_container_id(2, &row.get::<_, String>(2)?)?,
                 })
             },
         )
@@ -403,7 +403,7 @@ fn map_runtime_instance(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeInst
         id: RuntimeInstanceId::from(row.get::<_, String>(0)?),
         application_id: ApplicationId::from(row.get::<_, String>(1)?),
         deployment_id: DeploymentId::from(row.get::<_, String>(2)?),
-        external_runtime_id: ContainerId::from(row.get::<_, String>(3)?),
+        external_runtime_id: hydrate_container_id(3, &row.get::<_, String>(3)?)?,
         state,
         expected_endpoint: ExpectedRuntimeEndpoint::new(SocketAddr::from((
             Ipv4Addr::LOCALHOST,
@@ -430,6 +430,14 @@ fn invalid_text_value(column: usize, field: &str, value: &str) -> rusqlite::Erro
             format!("invalid {field}: {value}"),
         )),
     )
+}
+
+// Hydrates a persisted container identity only when it satisfies the domain invariant.
+fn hydrate_container_id(column: usize, value: &str) -> rusqlite::Result<ContainerId> {
+    if !ContainerId::is_valid(value) {
+        return Err(invalid_text_value(column, "external runtime id", value));
+    }
+    Ok(ContainerId::from(value.to_owned()))
 }
 fn outcome(updated: usize) -> PersistenceOutcome {
     if updated == 1 {
@@ -515,5 +523,42 @@ mod tests {
             load_runtime_state(&connection, &RuntimeInstanceId::from("invalid")),
             Err(RuntimeStoreError::Persistence { .. })
         ));
+    }
+
+    #[test]
+    fn rejects_a_corrupt_persisted_external_runtime_id_instead_of_hydrating_it() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE runtime_instances (
+                    id TEXT PRIMARY KEY,
+                    application_id TEXT NOT NULL,
+                    deployment_id TEXT NOT NULL,
+                    external_runtime_id TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    host_address TEXT NOT NULL,
+                    host_port INTEGER NOT NULL,
+                    container_port INTEGER NOT NULL,
+                    last_observed_state TEXT NOT NULL,
+                    last_observed_at TEXT NOT NULL,
+                    exit_code INTEGER,
+                    observation_reason TEXT,
+                    removed_at TEXT
+                );",
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO runtime_instances VALUES
+                 ('runtime', 'application', 'deployment', 'not a container id',
+                  'running', '127.0.0.1', 30000, 8080, 'running', 'now', NULL, NULL, NULL)",
+                [],
+            )
+            .unwrap();
+
+        let error =
+            load_runtime_by_external_id(&connection, &ContainerId::from("not a container id"))
+                .expect_err("corrupt persisted identity must not hydrate");
+        assert!(error.to_string().contains("external runtime id"));
     }
 }

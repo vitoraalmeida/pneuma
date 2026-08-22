@@ -4,10 +4,7 @@ use std::io;
 use std::process::Command;
 
 use crate::domain::git::CommitSha;
-use crate::domain::release::{OciArtifact, OciRepository};
-
-const DIGEST_ALGORITHM: &str = "sha256:";
-const SHA256_HEX_LENGTH: usize = 64;
+use crate::domain::release::{OciArtifact, OciRepository, is_sha256_digest};
 
 #[derive(Debug, PartialEq, Eq)]
 // Represents an OCI artifact that Podman pulled and verified against its immutable digest.
@@ -276,18 +273,6 @@ pub fn resolve_image_digest(
             output: digest.to_owned(),
         }
     })
-}
-
-// Accepts only canonical lowercase SHA-256 digests returned by Podman inspection.
-fn is_sha256_digest(digest: &str) -> bool {
-    digest
-        .strip_prefix(DIGEST_ALGORITHM)
-        .is_some_and(|hex| hex.len() == SHA256_HEX_LENGTH && hex.bytes().all(is_lowercase_hex))
-}
-
-// Validates one digest byte without accepting uppercase normalization variants.
-fn is_lowercase_hex(byte: u8) -> bool {
-    byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')
 }
 
 // Trims command output and returns a digest only when it is safe to persist as artifact identity.

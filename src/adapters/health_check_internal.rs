@@ -4,7 +4,7 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::thread;
 
-use crate::domain::runtime::HealthCheckSpecification;
+use crate::domain::runtime::{HealthCheckSpecification, HealthCheckStatus};
 use std::time::Duration;
 
 const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -171,18 +171,18 @@ fn check_once(
     if !matches!(protocol, Some("HTTP/1.0" | "HTTP/1.1")) {
         return Err(HealthCheckFailure::InvalidResponse);
     }
-    let Some(response_status) = response_status.filter(|status| (100..=599).contains(status))
-    else {
+    let response_status = response_status.and_then(|status| HealthCheckStatus::new(status).ok());
+    let Some(response_status) = response_status else {
         return Err(HealthCheckFailure::InvalidResponse);
     };
-    if response_status != expected_status {
+    if response_status.get() != expected_status {
         return Err(HealthCheckFailure::UnexpectedStatus {
             expected: expected_status,
-            actual: response_status,
+            actual: response_status.get(),
         });
     }
 
-    Ok(response_status)
+    Ok(response_status.get())
 }
 
 // Maps timeout-class I/O failures separately so retries report actionable health diagnostics.

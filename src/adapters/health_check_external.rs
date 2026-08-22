@@ -105,16 +105,18 @@ pub fn check_external_health(
         .trim()
         .parse::<u16>()
         .ok()
-        .filter(|status| (100..=599).contains(status));
+        .and_then(|status| HealthCheckStatus::new(status).ok());
     let Some(response_status) = response_status else {
         return Err(ExternalHealthCheckError::InvalidResponse { stdout });
     };
-    if response_status != expected_status.get() {
+    if response_status.get() != expected_status.get() {
         return Err(ExternalHealthCheckError::UnexpectedStatus {
             expected: expected_status.get(),
-            actual: response_status,
+            actual: response_status.get(),
         });
     }
 
-    Ok(ExternalHealthCheck { response_status })
+    Ok(ExternalHealthCheck {
+        response_status: response_status.get(),
+    })
 }

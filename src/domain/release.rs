@@ -182,7 +182,8 @@ fn is_repository_component(component: &str, registry: bool) -> bool {
 }
 
 // Requires a sha256 prefix followed by exactly 64 lowercase hexadecimal characters.
-fn is_sha256_digest(digest: &str) -> bool {
+// Shared with the OCI adapter so Podman output uses this single digest authority.
+pub(crate) fn is_sha256_digest(digest: &str) -> bool {
     digest
         .strip_prefix(DIGEST_ALGORITHM)
         .is_some_and(|hex| hex.len() == SHA256_HEX_LENGTH && hex.bytes().all(is_lowercase_hex))

@@ -33,6 +33,27 @@ fn validates_application_specification_value_objects() {
 }
 
 #[test]
+fn enforces_catalog_name_length_limits() {
+    let longest_allowed = format!("a{}b", "c".repeat(61));
+    assert_eq!(longest_allowed.len(), 63);
+    assert!(ApplicationName::new(&longest_allowed).is_ok());
+    assert!(SystemName::new(&longest_allowed).is_ok());
+
+    let too_long = format!("{longest_allowed}c");
+    assert_eq!(too_long.len(), 64);
+    assert!(ApplicationName::new(&too_long).is_err());
+    assert!(SystemName::new(&too_long).is_err());
+}
+
+#[test]
+fn accepts_only_the_http_status_range_for_health_checks() {
+    assert!(HealthCheckStatus::new(99).is_err());
+    assert!(HealthCheckStatus::new(100).is_ok());
+    assert!(HealthCheckStatus::new(599).is_ok());
+    assert!(HealthCheckStatus::new(0).is_err());
+}
+
+#[test]
 fn validates_immutable_git_commit_identity() {
     assert!(CommitSha::new(&"a".repeat(40)).is_ok());
     assert!(CommitSha::new(&"A".repeat(40)).is_err());
@@ -180,4 +201,22 @@ fn validates_source_and_oci_repository_boundaries() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn parses_only_digest_pinned_oci_artifact_references() {
+    let digest = format!("sha256:{}", "a".repeat(64));
+    let artifact = OciArtifact::parse(&format!("registry.example/app@{digest}")).unwrap();
+    assert_eq!(artifact.repository(), "registry.example/app");
+    assert_eq!(artifact.digest(), digest);
+
+    for invalid in [
+        "registry.example/app",
+        "registry.example/app@sha256:aaaa",
+        &format!("registry.example/app@sha256:{}", "A".repeat(64)),
+        &format!("registry.example/app@sha512:{}", "a".repeat(64)),
+        &format!("@sha256:{}", "a".repeat(64)),
+    ] {
+        assert!(OciArtifact::parse(invalid).is_err(), "{invalid}");
+    }
 }
