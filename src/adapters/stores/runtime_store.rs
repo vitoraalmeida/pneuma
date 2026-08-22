@@ -561,4 +561,68 @@ mod tests {
                 .expect_err("corrupt persisted identity must not hydrate");
         assert!(error.to_string().contains("external runtime id"));
     }
+
+    #[test]
+    fn identity_cas_is_stale_unless_the_recorded_container_id_matches() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE runtime_instances (
+                    id TEXT PRIMARY KEY,
+                    external_runtime_id TEXT NOT NULL,
+                    last_observed_state TEXT NOT NULL DEFAULT 'running',
+                    last_observed_at TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL DEFAULT '',
+                    removed_at TEXT);",
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO runtime_instances (id, external_runtime_id, removed_at)
+                 VALUES ('runtime', 'current', NULL)",
+                [],
+            )
+            .unwrap();
+
+        let outcome = reconcile_external_runtime_id(
+            &connection,
+            &RuntimeInstanceId::from("runtime"),
+            &ContainerId::from("current"),
+            &ContainerId::from("replacement"),
+        )
+        .unwrap();
+        assert_eq!(outcome, PersistenceOutcome::Updated);
+
+        let outcome = reconcile_external_runtime_id(
+            &connection,
+            &RuntimeInstanceId::from("runtime"),
+            &ContainerId::from("current"),
+            &ContainerId::from("other"),
+        )
+        .unwrap();
+        assert_eq!(outcome, PersistenceOutcome::Stale);
+        let recorded: String = connection
+            .query_row(
+                "SELECT external_runtime_id FROM runtime_instances WHERE id = 'runtime'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(recorded, "replacement");
+
+        connection
+            .execute(
+                "UPDATE runtime_instances SET removed_at = '2026-01-01' WHERE id = 'runtime'",
+                [],
+            )
+            .unwrap();
+        let outcome = reconcile_external_runtime_id(
+            &connection,
+            &RuntimeInstanceId::from("runtime"),
+            &ContainerId::from("replacement"),
+            &ContainerId::from("next"),
+        )
+        .unwrap();
+        assert_eq!(outcome, PersistenceOutcome::Stale);
+    }
 }

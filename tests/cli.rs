@@ -1333,6 +1333,58 @@ fn reconcile_removes_an_internal_caddy_fragment() {
 }
 
 #[test]
+fn lost_removal_completion_cas_restores_the_fragment_and_records_failure_during_reconcile() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    environment.deploy_current_revision();
+    let application_id: String = database::open(&environment.database_path)
+        .unwrap()
+        .query_row("SELECT id FROM applications", [], |row| row.get(0))
+        .unwrap();
+    fs::create_dir_all(&environment.managed_caddy_directory).unwrap();
+    let fragment = environment
+        .managed_caddy_directory
+        .join(format!("{application_id}.caddy"));
+    fs::write(&fragment, "unexpected route\n").unwrap();
+
+    let connection = database::open(&environment.database_path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TRIGGER reject_internal_exposure_completion
+             BEFORE UPDATE OF active_runtime_id ON exposures
+             BEGIN
+                 SELECT RAISE(IGNORE);
+             END",
+        )
+        .unwrap();
+    drop(connection);
+
+    let output = environment.run_reconcile();
+
+    assert_command_succeeded(&output);
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("Result: failed")
+    );
+    assert_eq!(
+        fs::read_to_string(&fragment).unwrap(),
+        "unexpected route\n",
+        "a lost completion CAS must restore the removed fragment"
+    );
+    let (state, code): (String, String) = database::open(&environment.database_path)
+        .unwrap()
+        .query_row(
+            "SELECT materialization_state, last_error_code FROM exposures",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(state, "failed");
+    assert_eq!(code, "exposure_changed");
+}
+
+#[test]
 fn reconcile_reports_manual_intervention_for_diverged_exposure_intent() {
     let environment = DeploymentEnvironment::new();
     assert_command_succeeded(&environment.import());

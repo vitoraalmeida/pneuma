@@ -210,6 +210,148 @@ fn reconcile_marks_an_interrupted_activation_route_diverged_when_prior_route_is_
 }
 
 #[test]
+fn reconcile_reports_manual_intervention_when_a_candidate_identity_cannot_be_proven() {
+    let root = temporary_directory();
+    let database_path = root.join("pneuma.sqlite3");
+    let connection = database::open(&database_path).unwrap();
+    seed_interrupted_deployment(&connection, "verifying", true);
+    install_cleanup_commands(&root.join("bin"));
+
+    let output = reconcile_command(&root, &database_path).output().unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Result: manual-intervention"),
+        "unexpected stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("interrupted candidate identity cannot be proven"),
+        "unexpected stdout: {stdout}"
+    );
+    assert_eq!(
+        connection
+            .query_row("SELECT status FROM deployments", [], |row| row
+                .get::<_, String>(0))
+            .unwrap(),
+        "failed"
+    );
+    assert!(
+        !connection
+            .query_row(
+                "SELECT removed_at IS NOT NULL FROM runtime_instances",
+                [],
+                |row| row.get::<_, bool>(0)
+            )
+            .unwrap(),
+        "an unproven candidate runtime must not be cleaned up"
+    );
+}
+
+#[test]
+fn reconcile_reports_manual_intervention_when_an_interrupted_candidate_has_no_persisted_runtime() {
+    let root = temporary_directory();
+    let database_path = root.join("pneuma.sqlite3");
+    let connection = database::open(&database_path).unwrap();
+    seed_interrupted_deployment(&connection, "verifying", false);
+
+    let output = reconcile_command(&root, &database_path).output().unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Result: manual-intervention"),
+        "unexpected stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("no persisted candidate runtime to prove cleanup ownership"),
+        "unexpected stdout: {stdout}"
+    );
+    assert_eq!(
+        connection
+            .query_row("SELECT status FROM deployments", [], |row| row
+                .get::<_, String>(0))
+            .unwrap(),
+        "failed"
+    );
+}
+
+#[test]
+fn reconcile_preserves_a_proven_prior_route_when_an_activation_was_interrupted() {
+    let root = temporary_directory();
+    let database_path = root.join("pneuma.sqlite3");
+    let connection = database::open(&database_path).unwrap();
+    let application_id = "1".repeat(32);
+    let release_id = "2".repeat(32);
+    let active_deployment_id = "3".repeat(32);
+    let active_runtime_id = "4".repeat(32);
+    let interrupted_deployment_id = "5".repeat(32);
+    let digest = format!("sha256:{}", "a".repeat(64));
+    let prior_route = "prior canonical route\n";
+    connection
+        .execute_batch(&format!(
+            "INSERT INTO applications (id, name, desired_runtime_state, spec_version, created_at, updated_at)
+             VALUES ('{application_id}', 'another', 'running', 3, '2026-01-01', '2026-01-01');
+             INSERT INTO releases (id, application_id, image_reference, image_repository, image_digest, created_at)
+             VALUES ('{release_id}', '{application_id}', 'registry.example/team/another@{digest}', 'registry.example/team/another', '{digest}', '2026-01-01');
+             INSERT INTO deployments (id, application_id, release_id, type, status, requested_at, started_at, finished_at)
+             VALUES ('{active_deployment_id}', '{application_id}', '{release_id}', 'deploy', 'succeeded', '2026-01-01', '2026-01-01', '2026-01-01');
+             INSERT INTO runtime_instances (id, application_id, deployment_id, external_runtime_id, state, host_address, host_port, container_port, last_observed_state, last_observed_at)
+             VALUES ('{active_runtime_id}', '{application_id}', '{active_deployment_id}', '{}', 'running', '127.0.0.1', 30000, 8080, 'running', '2026-01-01');
+             INSERT INTO exposures (application_id, desired_visibility, domain, materialization_state, active_runtime_id, configuration_version, last_materialized_at, created_at, updated_at)
+             VALUES ('{application_id}', 'public', 'another.example', 'applying', '{active_runtime_id}', '{prior_route}', '2026-01-01', '2026-01-01', '2026-01-01');
+             INSERT INTO deployments (id, application_id, release_id, type, status, requested_at, started_at)
+             VALUES ('{interrupted_deployment_id}', '{application_id}', '{release_id}', 'deploy', 'activating', '2026-01-02', '2026-01-02');
+             UPDATE applications SET active_deployment_id = '{active_deployment_id}' WHERE id = '{application_id}';",
+            "b".repeat(64)
+        ))
+        .unwrap();
+    fs::create_dir_all(root.join("caddy")).unwrap();
+    fs::write(
+        root.join("caddy").join(format!("{application_id}.caddy")),
+        prior_route,
+    )
+    .unwrap();
+
+    let output = reconcile_command(&root, &database_path).output().unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Result: failed"),
+        "unexpected stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("the prior route is preserved"),
+        "unexpected stdout: {stdout}"
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT status FROM deployments WHERE id = ?1",
+                [interrupted_deployment_id],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+        "failed"
+    );
+    assert_eq!(
+        connection
+            .query_row("SELECT materialization_state FROM exposures", [], |row| row
+                .get::<_, String>(0))
+            .unwrap(),
+        "failed"
+    );
+    assert_eq!(
+        connection
+            .query_row("SELECT last_error_code FROM exposures", [], |row| row
+                .get::<_, Option<String>>(0))
+            .unwrap(),
+        Some("interrupted_activation".to_owned())
+    );
+}
+
+#[test]
 fn only_nonterminal_deployments_block_reconciliation_dispatch() {
     for (status, blocks) in [
         ("pending", true),

@@ -56,8 +56,9 @@ ownership gap; identical entries mean the rule already lives where it belongs.
 | INV-EXP-002 | Materialization evidence combinations are legal only as encoded: Active requires a ConfirmedRoute; Failed/Diverged require a diagnostic; route triple (runtime id, config version, timestamp) is all-or-none. | Entity invariant | `ExposureMaterialization::hydrate` - `src/domain/exposure.rs:235-270`; `ConfirmedRoute::new` - `118-134` | Same (domain) | Store load enforces presence triples before calling hydrate (`exposure_store.rs:96-219`) | `tests/application_specification.rs::rejects_invalid_persisted_exposure_values`; `migrations` CHECK/FK test `exposure_materialization_columns_enforce_state_and_runtime_identity` | Keep |
 | INV-EXP-003 | Configuration version is the canonical fragment content (domain + loopback endpoint), never a Release or Deployment ID. | Cross-object rule | Fragment builder + `ExposureConfigurationVersion` - `src/adapters/caddy_exposure.rs`, `src/domain/exposure.rs:92-108` | Same split (adapter computes content, domain types it) | Reconciliation compares fragment contents to detect divergence | `tests/caddy_exposure.rs`; reconcile repair tests in `tests/cli.rs` | Keep |
 | INV-REC-001 | Reconciliation loads persisted facts in a short transaction and closes it before observing Podman, Quadlet, and Caddy; decisions consume typed observation inputs. The input type groups facts by authority: `DesiredState` (intent), `PersistedState` (bookkeeping), and observed facts stay in `ReconciliationObservation`. The drift answer is a pure domain function: `decide(input, observation, expectations) -> ReconciliationDecision` classifies InSync, runtime identity repair, rematerialization, internal-route removal, public-route materialization, public-exposure failure records, or manual intervention with no store, filesystem, Podman, systemd, Caddy, clock, or randomness access; the use case only acquires ownership, observes, decides, then executes the decided variant (interrupted-deployment recovery remains use-case compensation orchestration). | Workflow invariant | Input loading - `src/use_cases/reconciliation/load.rs`; pipeline orchestration - `src/use_cases/reconciliation/mod.rs`; input types - `src/domain/reconciliation.rs:16-45`, observation types `84-93`; decision function - `decide` in `src/domain/reconciliation.rs` | Same split (use case orders, domain decides and shapes facts; adapters render canonical expectations) | Per-application kernel lock defers concurrent reconcile | `tests/cli.rs::reconcile_defers_before_external_observation`; `tests/reconciliation.rs::loads_active_snapshot_without_writing_sqlite`; in-file decision matrix in `src/domain/reconciliation.rs` | Public route confirmation compares against boundary-rendered canonical fragments; the unreachable `domain_missing` failure classification was removed because validated `ExposureIntent::Public` guarantees a domain |
-| INV-REC-002 | After lock release, an interrupted non-terminal Deployment is recorded failed without external effects; candidate cleanup requires provable persisted+external identity. | Workflow invariant | `recover_interrupted_deployment` - `src/use_cases/reconciliation/recover.rs` | Same (use case) | CAS-guarded writes; identity match before cleanup | `tests/reconciliation.rs::reconcile_marks_interrupted_pending_failed_without_external_effects`; repair/rematerialize family in `tests/cli.rs` | Keep |
-| INV-REC-003 | `Missing` is an observation, not a tombstone; `removed_at` is reserved for candidate cleanup, retirement, and intentional removal. Reconcile never creates a new Deployment/RuntimeInstance because a container is missing. | Cross-object rule | Design contract - `docs/design/reconciliation.md` (Invariants 1–2); current implementation honors it | Same (future decision owner: pure domain policy) | Store retirement semantics (`INV-RUN-004`) | Indirect via reconcile tests | Explicit assertion when full reconciliation decision policy is implemented |
+| INV-REC-002 | After lock release, an interrupted non-terminal Deployment is recorded failed without external effects; candidate cleanup requires provable persisted+external identity. | Workflow invariant | `recover_interrupted_deployment` - `src/use_cases/reconciliation/recover.rs` | Same (use case) | CAS-guarded writes; identity match before cleanup | `tests/reconciliation.rs::reconcile_marks_an_interrupted_pending_deployment_failed_without_external_effects`, `reconcile_cleans_a_verified_candidate_only_after_unit_identity_is_proven`, `reconcile_reports_manual_intervention_when_a_candidate_identity_cannot_be_proven`, `reconcile_reports_manual_intervention_when_an_interrupted_candidate_has_no_persisted_runtime`, `reconcile_marks_an_interrupted_activation_route_diverged_when_prior_route_is_unproven`, `reconcile_preserves_a_proven_prior_route_when_an_activation_was_interrupted`; repair/rematerialize family in `tests/cli.rs` | Keep |
+| INV-REC-003 | `Missing` is an observation, not a tombstone; `removed_at` is reserved for candidate cleanup, retirement, and intentional removal. Reconcile never creates a new Deployment/RuntimeInstance because a container is missing. | Cross-object rule | Decision owner - pure domain policy (`classify_runtime_rematerialization` refuses to invent resources) - `src/domain/reconciliation.rs`; design contract - `docs/design/reconciliation.md` (Invariants 1–2) | Same (domain decides, use case executes) | Store retirement semantics (`INV-RUN-004`) | In-file decision matrix in `src/domain/reconciliation.rs` (rematerialization only for Missing containers of the confirmed identity); reconcile repair tests in `tests/cli.rs` | Keep |
+| INV-REC-004 | Every reconciliation recovery/repair action follows the documented contract ("Reconciliation Recovery And Compensation Contract" below): persistence reservation before external effect, explicit confirmation after observation, CAS-guarded persistence, defined partial-failure compensation that is never silent success, and re-runnable idempotent effects. | Workflow invariant | `src/use_cases/reconciliation/recover.rs`, `execute.rs`; store CAS primitives in `runtime_store.rs`/`exposure_store.rs` | Same split (use cases order, adapters persist/execute) | Operation generation fencing (INV-DB-005); kernel lock (INV-WF-007) | Tests listed per action in the contract section below | Keep |
 | INV-WF-001 | Persist intent before external effect; persist confirmed completion after observing the effect (deploy intent, start/stop intent, exposure applying/removing). | Workflow invariant | Use-case sequencing - `src/use_cases/application_runtime.rs`, `exposure_change.rs`, `deployment_start_candidate.rs` | Same (use cases) | Guarded store transitions make out-of-order writes stale | `tests/cli.rs::public_visibility_without_a_domain_is_rejected_before_external_effects`; lifecycle idempotency tests | Keep; ordering assertions remain scenario-level |
 | INV-WF-002 | No SQLite transaction remains open during Git, OCI, Podman, systemd, Caddy, or HTTP work. | Workflow invariant | Use-case structure (transactions scoped to store calls only) across `src/use_cases/` | Same (use cases) | Writer-lock acquisition inside immediate transactions only (`tests/deployment_create.rs::immediate_transaction_acquires_the_writer_lock_before_reading`) | Proxy coverage only | Dedicated structural/scenario test proving transactions close before external calls (known gap) |
 | INV-WF-003 | Public promotion atomically records succeeded Deployment, active Deployment ID, current RuntimeInstance, and active Exposure in one transaction. | Workflow invariant | Promotion transactions - `src/use_cases/deployment_promote_public.rs`, `deployment_promote_internal.rs` | Same (use cases own transaction boundaries) | Unique indexes catch partial states (`one_current_runtime_per_application`) | `tests/deployment_promote_internal.rs::replaces_the_previous_current_runtime_atomically`, `promotes_healthy_candidate_idempotently` | Keep |
@@ -154,6 +155,117 @@ required — mutation and transition flows load entities or persisted status via
 store primitives (`application_lookup`, reconciliation reads, promote/rollback
 gates), while `ApplicationSummary`, `DeploymentHistory`, and `SystemDetails`
 are returned only by query/display flows.
+
+## Reconciliation Recovery And Compensation Contract
+
+Recorded by consolidation iteration 17 so every repair and recovery action has
+an explicit rule and test (INV-REC-004). Facts shared by all paths:
+
+- **Ownership** - the per-application kernel lock plus monotonic operation
+  generation serialize all work (INV-WF-007, INV-DB-005); every persistence
+  write inside a path is compare-and-set (INV-DB-004).
+- **Retry** - every path is safe to re-run: decisions are re-derived from fresh
+  observation on each reconcile, reservations are consumed once, and effects
+  are either naturally idempotent or guarded so a repeat converges.
+- **Transactions** - never held across external effects (INV-WF-002).
+
+Per action (rule owner first, then test):
+
+1. **Interrupted Pending deployment** (`recover.rs`, Pending arm;
+   `tests/reconciliation.rs::reconcile_marks_an_interrupted_pending_deployment_failed_without_external_effects`).
+   Pré-condição: lock released with a non-terminal Pending Deployment. Efeito:
+   none external. Confirmação: not applicable. Persistência: CAS
+   `fail_deployment` records Failed with code `operation_interrupted`. Falha
+   parcial: stale CAS surfaces as an error, next reconcile retries. Retry/
+   idempotência: terminal after one success; later runs skip via the
+   non-terminal gate. Compensação: none needed — nothing was materialized.
+
+2. **Interrupted candidate (Starting/Verifying)** (`recover.rs`;
+   `tests/reconciliation.rs::reconcile_cleans_a_verified_candidate_only_after_unit_identity_is_proven`,
+   `reconcile_reports_manual_intervention_when_a_candidate_identity_cannot_be_proven`,
+   `reconcile_reports_manual_intervention_when_an_interrupted_candidate_has_no_persisted_runtime`).
+   Pré-condição: non-terminal candidate plus its persisted runtime row; without
+   that row cleanup ownership cannot be proven ⇒ ManualIntervention. Efeito:
+   stop/remove proven unit, remove proven container, mark runtime missing,
+   release port. Confirmação: unit bytes equal the canonical unit AND full
+   container identity match (id, name, image reference, application/digest
+   labels, endpoint) before any removal; unprovable identity ⇒ ManualIntervention
+   with zero cleanup. Persistência: failure recorded first, retirement after the
+   external effects (`mark_starting_runtime_missing` CAS). Falha parcial:
+   cleanup errors abort as NotConverged leaving partial resources for the next
+   run (each step individually idempotent). Ownership: use case orchestrates;
+   `cleanup_failed_candidate` owns adapter effects. Compensação: deliberately
+   none — nothing unproven is ever removed.
+
+3. **Interrupted activation (Activating)** (`recover.rs`;
+   `tests/reconciliation.rs::reconcile_marks_an_interrupted_activation_route_diverged_when_prior_route_is_unproven`,
+   `reconcile_preserves_a_proven_prior_route_when_an_activation_was_interrupted`).
+   Pré-condição: non-terminal Activating Deployment. Efeito: none external —
+   the prior route is never touched. Confirmação: prior canonical route proven
+   only when the confirmed route matches the active runtime AND the on-disk
+   fragment equals the recorded configuration version. Persistência: deployment
+   marked failed; exposure failure recorded from the Applying reservation —
+   Failed when the prior route is proven preserved, Diverged otherwise; stale
+   exposure ⇒ ManualIntervention. Retry: re-records only while the reservation
+   still matches. Compensação: none required because no new effect happened.
+
+4. **Runtime identity repair** (`execute.rs::confirm_runtime_identity`;
+   `src/adapters/stores/runtime_store.rs::identity_cas_is_stale_unless_the_recorded_container_id_matches`;
+   `tests/cli.rs::reconcile_repairs_a_confirmed_quadlet_container_recreation`).
+   Pré-condição: pure decision proved a recreated container's full identity.
+   Efeito: none external. Persistência: single CAS swap of
+   `external_runtime_id`. Falha parcial: stale ⇒ NotConverged, retried by the
+   next reconcile. Idempotência: repeating with the same observation converges.
+
+5. **Runtime rematerialization** (`execute.rs::rematerialize_runtime`;
+   `tests/cli.rs::reconcile_rematerializes_a_missing_quadlet_and_container`,
+   `reconcile_restarts_a_canonical_quadlet_after_its_container_is_removed`,
+   `reconcile_reports_manual_intervention_for_a_divergent_recreated_container`).
+   Pré-condição: decision proved container Missing (and optionally divergent
+   Quadlet bytes) with a startable generated unit. Efeito: canonical unit write
+   + daemon-reload only when needed, then systemd start. Confirmação: full
+   container identity re-observed and matched, then internal health check.
+   Persistência: identity CAS confirm strictly after healthy observation.
+   Falha parcial: absent/divergent rematerialization ⇒ Failed/ManualIntervention
+   without persistence; health failure ⇒ Failed; stale CAS ⇒ NotConverged.
+   Idempotência: canonical-byte writes and systemd start are idempotent.
+   Compensação: none automatic — remaining drift is re-decided next run.
+
+6. **Internal route removal** (`execute.rs::remove_internal_route`;
+   `tests/cli.rs::reconcile_removes_an_internal_caddy_fragment`,
+   `lost_removal_completion_cas_restores_the_fragment_and_records_failure_during_reconcile`).
+   Pré-condição: decision RemoveInternalRoute carrying the persisted snapshot
+   state. Persistência-first: CAS reservation to Removing before any effect.
+   Efeito: managed fragment removal + Caddy validate/reload. Confirmação/
+   persistência: atomic completion CAS Removing→NotMaterialized clearing the
+   route triple. Falha parcial: removal error ⇒ failure record flagged by
+   `recovery_failed()`; lost completion CAS ⇒ restore removed fragment, then
+   record `exposure_changed` (Diverged if restoration also failed). Idempotência:
+   removing an already-absent fragment is decided away before any effect.
+   Ownership: use case orders reserve→effect→confirm; adapter owns files/Caddy.
+   Compensação: `restore_removed_caddy_fragment`.
+
+7. **Public route materialization** (`execute.rs::materialize_public_route`;
+   `tests/cli.rs::reconcile_repairs_a_missing_public_caddy_fragment_with_configured_caddyfile`,
+   `reconcile_records_failed_public_exposure_when_external_health_cannot_confirm_it`).
+   Pré-condição: decision MaterializePublicRoute for public intent with an
+   active runtime. Persistência-first: CAS reservation to Applying. Efeito:
+   canonical fragment materialize + Caddy validate/reload, then external health
+   check pinned to loopback. Confirmação/persistência: completion CAS
+   Applying→Active writing the route triple. Falha parcial: materialization
+   error ⇒ failure record; health failure ⇒ restore previous fragment + record;
+   lost completion CAS ⇒ restore + record. Idempotência: canonical bytes are
+   deterministic. Compensação: `restore_materialized_caddy_fragment`; incomplete
+   compensation records Diverged, never silent success (INV-WF-005).
+
+8. **Public exposure failure record**
+   (`execute.rs::record_public_exposure_failure`; unhealthy/missing-runtime
+   scenarios in `tests/cli.rs`). Pré-condição: pure decision classified
+   RuntimeMissing/RuntimeNotHealthy carrying exact persisted codes. Efeito:
+   none external. Persistência: single CAS diagnostic record valid only while
+   the expected reservation is current; stale ⇒ NotConverged surfaced as error.
+   Idempotência: bounded by the reservation; a stale record defers to whatever
+   changed the state.
 
 ## Known Coverage Gaps
 

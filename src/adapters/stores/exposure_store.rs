@@ -374,3 +374,189 @@ fn exposure_materialization_state_from_value(value: &str) -> Option<ExposureMate
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn connection_with_exposure(visibility: &str, state: &str) -> Connection {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE exposures (
+                    application_id TEXT PRIMARY KEY,
+                    desired_visibility TEXT NOT NULL,
+                    domain TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    active_runtime_id TEXT,
+                    materialization_state TEXT NOT NULL,
+                    configuration_version TEXT,
+                    last_materialized_at TEXT,
+                    last_error_code TEXT,
+                    last_error_message TEXT);",
+            )
+            .unwrap();
+        connection
+            .execute(
+                &format!(
+                    "INSERT INTO exposures (application_id, desired_visibility, domain, created_at, updated_at, materialization_state)
+                     VALUES ('app', '{visibility}', NULL, '2026-01-01', '2026-01-01', '{state}')"
+                ),
+                [],
+            )
+            .unwrap();
+        connection
+    }
+
+    #[test]
+    fn reconciliation_reservation_is_stale_unless_the_persisted_snapshot_matches() {
+        let connection = connection_with_exposure("internal", "not_materialized");
+
+        assert_eq!(
+            begin_internal_exposure_reconciliation(
+                &connection,
+                &ApplicationId::from("app"),
+                ExposureMaterializationState::Active,
+            )
+            .unwrap(),
+            PersistenceOutcome::Stale
+        );
+        assert_eq!(
+            begin_internal_exposure_reconciliation(
+                &connection,
+                &ApplicationId::from("app"),
+                ExposureMaterializationState::NotMaterialized,
+            )
+            .unwrap(),
+            PersistenceOutcome::Updated
+        );
+        assert_eq!(
+            begin_internal_exposure_reconciliation(
+                &connection,
+                &ApplicationId::from("app"),
+                ExposureMaterializationState::NotMaterialized,
+            )
+            .unwrap(),
+            PersistenceOutcome::Stale
+        );
+    }
+
+    #[test]
+    fn internal_completion_requires_the_removing_reservation_and_clears_the_route_triple() {
+        let connection = connection_with_exposure("internal", "removing");
+        connection
+            .execute(
+                "UPDATE exposures SET active_runtime_id = 'runtime',
+                 configuration_version = 'route bytes\n', last_materialized_at = '2026-01-01'",
+                [],
+            )
+            .unwrap();
+
+        let transaction = connection.unchecked_transaction().unwrap();
+        assert_eq!(
+            complete_internal_exposure_change(&transaction, &ApplicationId::from("app")).unwrap(),
+            PersistenceOutcome::Updated
+        );
+        transaction.commit().unwrap();
+
+        let (state, runtime): (String, Option<String>) = connection
+            .query_row(
+                "SELECT materialization_state, active_runtime_id FROM exposures",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(state, "not_materialized");
+        assert_eq!(runtime, None);
+
+        let transaction = connection.unchecked_transaction().unwrap();
+        assert_eq!(
+            complete_internal_exposure_change(&transaction, &ApplicationId::from("app")).unwrap(),
+            PersistenceOutcome::Stale
+        );
+    }
+
+    #[test]
+    fn public_completion_requires_the_applying_reservation() {
+        let connection = connection_with_exposure("public", "not_materialized");
+
+        let transaction = connection.unchecked_transaction().unwrap();
+        assert_eq!(
+            complete_public_exposure_change(
+                &transaction,
+                &ApplicationId::from("app"),
+                &RuntimeInstanceId::from("runtime"),
+                &ExposureConfigurationVersion::new("route bytes\n").unwrap(),
+            )
+            .unwrap(),
+            PersistenceOutcome::Stale
+        );
+        drop(transaction);
+
+        connection
+            .execute(
+                "UPDATE exposures SET materialization_state = 'applying'",
+                [],
+            )
+            .unwrap();
+        let transaction = connection.unchecked_transaction().unwrap();
+        assert_eq!(
+            complete_public_exposure_change(
+                &transaction,
+                &ApplicationId::from("app"),
+                &RuntimeInstanceId::from("runtime"),
+                &ExposureConfigurationVersion::new("route bytes\n").unwrap(),
+            )
+            .unwrap(),
+            PersistenceOutcome::Updated
+        );
+    }
+
+    #[test]
+    fn failure_recording_is_stale_when_the_expected_reservation_changed() {
+        let connection = connection_with_exposure("internal", "not_materialized");
+        let diagnostic = ExposureDiagnostic::new("caddy_removal_failed", "reload failed").unwrap();
+
+        assert_eq!(
+            record_reconciliation_exposure_failure(
+                &connection,
+                &ApplicationId::from("app"),
+                Visibility::Internal,
+                ExposureMaterializationState::Removing,
+                ExposureMaterializationState::Diverged,
+                &diagnostic,
+            )
+            .unwrap(),
+            PersistenceOutcome::Stale
+        );
+
+        begin_internal_exposure_reconciliation(
+            &connection,
+            &ApplicationId::from("app"),
+            ExposureMaterializationState::NotMaterialized,
+        )
+        .unwrap();
+        assert_eq!(
+            record_reconciliation_exposure_failure(
+                &connection,
+                &ApplicationId::from("app"),
+                Visibility::Internal,
+                ExposureMaterializationState::Removing,
+                ExposureMaterializationState::Diverged,
+                &diagnostic,
+            )
+            .unwrap(),
+            PersistenceOutcome::Updated
+        );
+        let (code, state): (String, String) = connection
+            .query_row(
+                "SELECT last_error_code, materialization_state FROM exposures",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(code, "caddy_removal_failed");
+        assert_eq!(state, "diverged");
+    }
+}
