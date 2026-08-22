@@ -37,7 +37,7 @@ fn finds_a_core_application_by_name_without_loading_the_catalog() {
         application.desired_runtime_state,
         DesiredRuntimeState::Stopped
     );
-    assert_eq!(application.specification_version, 3);
+    assert_eq!(application.manifest_schema_version, 3);
     assert!(
         find_application_by_name(&connection, &ApplicationName::new("missing").unwrap())
             .unwrap()
@@ -86,7 +86,7 @@ fn returns_registered_applications_ordered_by_name() {
         applications[1].desired_runtime_state,
         DesiredRuntimeState::Stopped
     );
-    assert_eq!(applications[1].specification_version, 3);
+    assert_eq!(applications[1].manifest_schema_version, 3);
 }
 
 #[test]
@@ -109,7 +109,7 @@ fn lists_legacy_applications_without_a_system() {
         applications[0].desired_runtime_state,
         DesiredRuntimeState::Stopped
     );
-    assert_eq!(applications[0].specification_version, 1);
+    assert_eq!(applications[0].manifest_schema_version, 1);
 }
 
 fn fixture_path(name: &str) -> PathBuf {

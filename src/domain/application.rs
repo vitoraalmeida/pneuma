@@ -14,7 +14,11 @@ pub struct Application {
     pub name: ApplicationName,
     pub desired_runtime_state: DesiredRuntimeState,
     pub active_deployment_id: Option<DeploymentId>,
-    pub specification_version: u32,
+    // Immutable copy of the manifest `schema_version` recorded at import time
+    // (`insert_application`); never updated, compared, or incremented afterwards.
+    // Legacy rows imported before the field carried a value may persist older
+    // schema versions (e.g. 1) and are tolerated at hydration.
+    pub manifest_schema_version: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,7 +32,8 @@ pub struct ApplicationSummary {
     pub default_branch: Option<String>,
     pub desired_runtime_state: DesiredRuntimeState,
     pub active_deployment_id: Option<DeploymentId>,
-    pub specification_version: u32,
+    // Same immutable manifest `schema_version` copy as `Application`.
+    pub manifest_schema_version: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

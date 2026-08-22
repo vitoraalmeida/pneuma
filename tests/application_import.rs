@@ -29,7 +29,7 @@ fn imports_and_persists_the_application_specification() {
         application.desired_runtime_state,
         DesiredRuntimeState::Stopped
     );
-    assert_eq!(application.specification_version, 3);
+    assert_eq!(application.manifest_schema_version, 3);
 
     let specification = connection
         .query_row(

@@ -81,7 +81,7 @@ pub fn insert_application(
     application_id: &ApplicationId,
     system_id: &SystemId,
     name: &ApplicationName,
-    spec_version: u32,
+    manifest_schema_version: u32,
 ) -> Result<bool, ApplicationStoreError> {
     let inserted = transaction
         .execute(
@@ -94,7 +94,7 @@ pub fn insert_application(
                 application_id.as_str(),
                 system_id.as_str(),
                 name.as_str(),
-                spec_version
+                manifest_schema_version
             ],
         )
         .map_err(|source| ApplicationStoreError::Persistence { source })?;
@@ -141,7 +141,7 @@ pub(crate) fn map_application_row(row: &Row<'_>) -> rusqlite::Result<Application
             .map_err(|error| invalid_text_value(2, "application name", &error.value))?,
         desired_runtime_state,
         active_deployment_id: row.get::<_, Option<String>>(4)?.map(DeploymentId::from),
-        specification_version: row.get(5)?,
+        manifest_schema_version: row.get(5)?,
     })
 }
 
@@ -156,7 +156,7 @@ pub(crate) fn map_application_summary_row(row: &Row<'_>) -> rusqlite::Result<App
         default_branch: row.get(7)?,
         desired_runtime_state: application.desired_runtime_state,
         active_deployment_id: application.active_deployment_id,
-        specification_version: application.specification_version,
+        manifest_schema_version: application.manifest_schema_version,
     })
 }
 

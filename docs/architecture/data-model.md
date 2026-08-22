@@ -58,7 +58,7 @@ It is logical identity, not a Podman container ID.
 | `name` | Unique command-facing name. |
 | `desired_runtime_state` | Operator intent: `running` or `stopped`. |
 | `active_deployment_id` | Active successful Deployment, when one exists. |
-| `spec_version` | Persisted manifest specification version. |
+| `spec_version` | Copy of the manifest `schema_version` recorded once at import; immutable, never compared or incremented (INV-APP-004). |
 
 The core domain `Application` represents durable identity and intent. Catalog
 queries return an `ApplicationSummary` that additionally exposes the imported
