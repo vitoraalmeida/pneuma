@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use pneuma::adapters::database;
-use pneuma::use_cases::application_import::import_application;
+use pneuma::use_cases::application::import_application;
 
 #[test]
 fn typed_application_identity_preserves_its_sqlite_text_value() {

@@ -9,11 +9,11 @@ use pneuma::domain::runtime::ContainerId;
 use pneuma::domain::runtime::{
     ContainerPort, ExpectedRuntimeEndpoint, ObservedRuntimeState, RuntimeState,
 };
-use pneuma::use_cases::application_import::import_application;
+use pneuma::use_cases::application::import_application;
 use pneuma::use_cases::deployment::advance_deployment;
 use pneuma::use_cases::deployment::create_deployment;
 use pneuma::use_cases::deployment::{RegisterCandidateRuntimeError, register_candidate_runtime};
-use pneuma::use_cases::release_create::create_release;
+use pneuma::use_cases::release::create_release;
 
 #[test]
 fn persists_a_running_candidate_linked_to_its_deployment() {

@@ -13,12 +13,12 @@ use pneuma::domain::runtime::{
     ContainerPort, ExpectedRuntimeEndpoint, HealthCheckPath, HealthCheckSpecification,
     HealthCheckStatus,
 };
-use pneuma::use_cases::application_import::import_application;
+use pneuma::use_cases::application::import_application;
 use pneuma::use_cases::deployment::advance_deployment;
 use pneuma::use_cases::deployment::create_deployment;
 use pneuma::use_cases::deployment::register_candidate_runtime;
 use pneuma::use_cases::deployment::{PromoteInternalCandidateError, promote_internal_candidate};
-use pneuma::use_cases::release_create::create_release;
+use pneuma::use_cases::release::create_release;
 
 #[test]
 fn promotes_a_healthy_internal_candidate_idempotently() {

@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use pneuma::adapters::database;
 use pneuma::domain::identity::ApplicationId;
-use pneuma::use_cases::application_import::import_application;
+use pneuma::use_cases::application::import_application;
 use pneuma::use_cases::deployment::{RollbackError, rollback_deployment};
 
 #[test]

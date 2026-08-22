@@ -3,10 +3,10 @@ use std::path::{Path, PathBuf};
 use pneuma::adapters::database;
 use pneuma::domain::deployment::{DeploymentStatus, DeploymentType};
 use pneuma::domain::release::OciArtifact;
-use pneuma::use_cases::application_import::import_application;
+use pneuma::use_cases::application::import_application;
 use pneuma::use_cases::deployment::create_deployment;
 use pneuma::use_cases::deployment::list_deployments;
-use pneuma::use_cases::release_create::create_release;
+use pneuma::use_cases::release::create_release;
 
 #[test]
 fn returns_an_empty_list_for_an_application_without_deployments() {

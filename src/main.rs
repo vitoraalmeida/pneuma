@@ -13,25 +13,22 @@ use pneuma::domain::deployment::{DeploymentFailureEvidence, DeploymentLifecycle}
 use pneuma::domain::exposure::Visibility;
 use pneuma::domain::release::{InvalidOciArtifact, OciArtifact};
 use pneuma::domain::system::{InvalidSystemName, SystemName};
-use pneuma::use_cases::application_list::{ListError, application_is_deployed, list_applications};
-use pneuma::use_cases::application_lookup::{LookupError, find_application_by_name};
-use pneuma::use_cases::application_remote_import::{RemoteImportError, import_remote_application};
-use pneuma::use_cases::application_runtime::{
-    RuntimeLifecycleError, report_application_status, start_application, stop_application,
+use pneuma::use_cases::application::{
+    ListError, LookupError, RemoteImportError, RuntimeLifecycleError, application_is_deployed,
+    find_application_by_name, import_remote_application, list_applications,
+    report_application_status, start_application, stop_application,
 };
-use pneuma::use_cases::ci_command::{CiCommand, CiDispatchError, parse_ci_command};
+use pneuma::use_cases::ci::{CiCommand, CiDispatchError, parse_ci_command};
 use pneuma::use_cases::deployment::{
     DeployBranchError, DeployOciError, DeploymentResult, ListDeploymentsError,
     PublicDeploymentConfiguration, RollbackError, deploy_branch, deploy_branch_with_progress,
     deploy_oci, deploy_oci_with_progress, list_deployments, rollback_deployment,
 };
-use pneuma::use_cases::exposure_change::{ExposureChangeError, change_exposure};
+use pneuma::use_cases::exposure::{ExposureChangeError, change_exposure};
 use pneuma::use_cases::reconciliation::{
     ReconciliationReadError, ReconciliationResult, reconcile_application,
 };
-use pneuma::use_cases::system_create::create_system;
-use pneuma::use_cases::system_list::list_systems;
-use pneuma::use_cases::system_show::show_system;
+use pneuma::use_cases::system::{create_system, list_systems, show_system};
 
 const WORKSPACE_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_WORKSPACE_PATH";
 const DEFAULT_WORKSPACE_PATH: &str = "/var/lib/pneuma/checkouts";
@@ -353,13 +350,13 @@ enum CliError {
         source: DatabaseError,
     },
     SystemCreate {
-        source: pneuma::use_cases::system_create::CreateError,
+        source: pneuma::use_cases::system::CreateError,
     },
     SystemList {
-        source: pneuma::use_cases::system_list::ListSystemsError,
+        source: pneuma::use_cases::system::ListSystemsError,
     },
     SystemShow {
-        source: pneuma::use_cases::system_show::ShowError,
+        source: pneuma::use_cases::system::ShowError,
     },
     CiDispatch {
         source: CiDispatchError,

@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use pneuma::adapters::database;
 use pneuma::domain::identity::ApplicationId;
 use pneuma::domain::release::OciArtifact;
-use pneuma::use_cases::application_import::import_application;
-use pneuma::use_cases::release_create::{CreateReleaseError, create_release};
+use pneuma::use_cases::application::import_application;
+use pneuma::use_cases::release::{CreateReleaseError, create_release};
 
 #[test]
 fn creates_and_reuses_a_release_from_one_validated_artifact() {

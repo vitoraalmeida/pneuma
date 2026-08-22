@@ -7,11 +7,11 @@ use pneuma::domain::deployment::{DeploymentStatus, DeploymentType};
 use pneuma::domain::git::CommitSha;
 use pneuma::domain::identity::{ApplicationId, ReleaseId};
 use pneuma::domain::release::OciArtifact;
-use pneuma::use_cases::application_import::import_application;
+use pneuma::use_cases::application::import_application;
 use pneuma::use_cases::deployment::{
     CreateDeploymentError, create_deployment, create_deployment_with_source_revision,
 };
-use pneuma::use_cases::release_create::create_release;
+use pneuma::use_cases::release::create_release;
 use rusqlite::{ErrorCode, TransactionBehavior};
 
 #[test]

@@ -4,12 +4,12 @@ use pneuma::adapters::database;
 use pneuma::domain::deployment::{DeploymentEvent, DeploymentStatus, DeploymentType};
 use pneuma::domain::identity::{ApplicationId, DeploymentId};
 use pneuma::domain::release::OciArtifact;
-use pneuma::use_cases::application_import::import_application;
+use pneuma::use_cases::application::import_application;
 use pneuma::use_cases::deployment::create_deployment;
 use pneuma::use_cases::deployment::{
     TransitionDeploymentError, advance_deployment, fail_deployment,
 };
-use pneuma::use_cases::release_create::create_release;
+use pneuma::use_cases::release::create_release;
 
 #[test]
 fn advances_in_order_through_internal_verification() {

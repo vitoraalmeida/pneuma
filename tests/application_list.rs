@@ -2,9 +2,9 @@ use std::path::{Path, PathBuf};
 
 use pneuma::adapters::database;
 use pneuma::domain::application::{ApplicationName, DesiredRuntimeState};
-use pneuma::use_cases::application_import::import_application;
-use pneuma::use_cases::application_list::list_applications;
-use pneuma::use_cases::application_lookup::find_application_by_name;
+use pneuma::use_cases::application::find_application_by_name;
+use pneuma::use_cases::application::import_application;
+use pneuma::use_cases::application::list_applications;
 
 #[test]
 fn returns_an_empty_list_for_an_empty_catalog() {

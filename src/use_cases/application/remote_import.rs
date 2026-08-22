@@ -6,11 +6,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::Connection;
 
+use super::import::{ImportError, import_application};
 use crate::adapters::git_source::{CloneRepositoryError, cleanup_checkout, clone_repository};
 use crate::domain::application::ApplicationSummary;
 use crate::domain::git::RepositoryKind;
 use crate::domain::system::{InvalidSystemName, SystemName};
-use crate::use_cases::application_import::{ImportError, import_application};
 
 #[derive(Debug)]
 pub enum RemoteImportError {

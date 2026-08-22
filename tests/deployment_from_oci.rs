@@ -11,7 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use pneuma::adapters::database;
 use pneuma::domain::deployment::SourceRevision;
 use pneuma::domain::release::OciArtifact;
-use pneuma::use_cases::application_import::import_application;
+use pneuma::use_cases::application::import_application;
 use pneuma::use_cases::deployment::{DeployOciError, deploy_oci};
 
 #[test]

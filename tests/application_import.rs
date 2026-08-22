@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use pneuma::adapters::database;
 use pneuma::domain::application::DesiredRuntimeState;
 use pneuma::domain::system::SystemName;
-use pneuma::use_cases::application_import::{ImportError, import_application};
-use pneuma::use_cases::application_list::list_applications;
+use pneuma::use_cases::application::list_applications;
+use pneuma::use_cases::application::{ImportError, import_application};
 
 #[test]
 fn imports_and_persists_the_application_specification() {

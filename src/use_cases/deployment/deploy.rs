@@ -17,7 +17,7 @@ use crate::domain::deployment::{DeploymentType, SourceRevision};
 use crate::domain::git::CommitSha;
 use crate::domain::identity::ApplicationId;
 use crate::domain::release::OciArtifact;
-use crate::use_cases::release_create::{CreateReleaseError, create_release};
+use crate::use_cases::release::{CreateReleaseError, create_release};
 
 #[derive(Debug)]
 pub enum DeployBranchError {

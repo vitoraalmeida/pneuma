@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use pneuma::adapters::database;
 use pneuma::domain::application::DesiredRuntimeState;
 use pneuma::domain::system::SystemName;
-use pneuma::use_cases::application_import::import_application;
-use pneuma::use_cases::system_show::show_system;
+use pneuma::use_cases::application::import_application;
+use pneuma::use_cases::system::show_system;
 
 #[test]
 fn returns_application_runtime_intent_and_manifest_schema_version() {

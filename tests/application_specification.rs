@@ -10,7 +10,7 @@ use pneuma::domain::exposure::{ExposureMaterialization, Visibility};
 use pneuma::domain::git::RepositoryKind;
 use pneuma::domain::identity::{ApplicationId, DeploymentId};
 use pneuma::domain::release::DeliveryType;
-use pneuma::use_cases::application_import::import_application;
+use pneuma::use_cases::application::import_application;
 
 #[test]
 fn loads_named_source_delivery_runtime_and_health_configuration() {
