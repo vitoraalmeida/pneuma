@@ -78,6 +78,41 @@ ownership gap; identical entries mean the rule already lives where it belongs.
 | INV-EXT-004 | Port allocation respects the configured `PNEUMA_RUNTIME_PORT_RANGE`; malformed ranges (zero, inverted, non-numeric bounds) are rejected. | External-boundary invariant | `src/adapters/port_allocator.rs:10-11,116-130` | Same (adapter) | Reservation exclusivity in SQLite (`INV-DB-003`) | None directly | Allocator tests covering boundary values of the configured range (known gap) |
 | INV-CI-001 | The restricted SSH dispatcher permits only `version` and `deploy <application> <branch-or-tag>`; both arguments are validated with domain rules; injection attempts are rejected. | Entity invariant | `parse_ci_command` - `src/use_cases/ci_command.rs` (rules in library, correct owner); `src/main.rs:1196-1219` only plumbs `SSH_ORIGINAL_COMMAND` | Same | Dispatcher key reaches only this restricted path (security model) | 13 in-file unit tests incl. `parse_injection_attempts_rejected`, `valid/invalid_application_names` | Keep |
 
+## Primitive And Value Object Audit
+
+Recorded by consolidation iteration 02 so every recurring primitive carries an
+explicit classification instead of an accidental one. Categories:
+
+- **Value Object** - validated or otherwise restricted construction; the type,
+  not call sites, guarantees the rule.
+- **Intentional Primitive** - stays a primitive on purpose; its one rule is
+  enforced once where the value is produced.
+- **Boundary-only Type** - exists only at an external edge to convert input
+  into domain-safe types.
+- **Read-model Primitive** - presentation/projection text that never re-enters
+  domain rules.
+
+| Candidate | Classification | Decision and owner |
+|---|---|---|
+| `ApplicationName` | Value Object | Catalog-name rule owned by `ApplicationName::new` (`src/domain/application.rs`) over the shared predicate `is_valid_catalog_name` (`src/domain/identity.rs:144`). |
+| `SystemName` | Value Object | Same shared rule owned by `SystemName::new` (`src/domain/system.rs`). |
+| `SystemId`, `ApplicationId`, `ReleaseId`, `DeploymentId`, `RuntimeInstanceId` | Value Object | Newtypes for semantic distinction and argument-mixup prevention (`src/domain/identity.rs`; see the non-interchangeability test in `src/domain/runtime.rs`). By explicit decision they impose no format rule so legacy SQLite text round-trips unchanged; construction stays via `From` impls and APIs must not widen back to raw `String`. |
+| OCI repository | Value Object | `OciRepository` owns the repository grammar (`src/domain/release.rs`); consumed through `OciArtifact` and `DeliverySpecification`, never re-parsed downstream. |
+| Image digest | Intentional Primitive | No standalone type: the sha256 digest is validated exactly once inside `OciArtifact::parse` (`is_sha256_digest`, `src/domain/release.rs`) and has no behavior or independent lifecycle; adapters only compare it against the artifact (`src/adapters/oci_image.rs`). Revisit only if a digest ever flows separately from its artifact. |
+| Healthcheck path | Value Object | `HealthCheckPath` requires an absolute whitespace-free path starting `/` (`src/domain/runtime.rs`). |
+| Expected HTTP status | Value Object | `HealthCheckStatus` accepts only 100–599 (`src/domain/runtime.rs`). |
+| Container port | Value Object | `ContainerPort` rejects zero (`src/domain/runtime.rs`). |
+| Host port | Value Object | `HostPort` rejects zero (`src/domain/runtime.rs`). |
+| Domain/hostname | Value Object | `DomainName` owns the domain grammar (`src/domain/exposure.rs`). |
+| Source revision | Value Object + Read-model Primitive | New revisions must be a validated `CommitSha` (40-char lowercase hex, `src/domain/git.rs`). Historical rows hydrate through `SourceRevision::Legacy` (`src/domain/deployment.rs`), the documented legacy tolerance of INV-DB-006 that is never accepted as a new commit value. |
+| Manifest path | Value Object | `RelativeManifestPath` rejects empty, absolute, root, prefix, and parent components (`src/domain/git.rs`); used both by the manifest loader and persisted sources. |
+| Specification version | Intentional Primitive | `schema_version: u32` is compared once against `SUPPORTED_SCHEMA_VERSION` at the manifest boundary (`src/domain/manifest.rs`); equality-only semantics give a dedicated type nothing to own. |
+
+No audited candidate qualifies as a Boundary-only Type today: every
+external-input rule already lands in a domain-owned validated type at the
+manifest, Git, or OCI boundary. Exit criterion met: every candidate listed by
+iteration 02 has an explicit decision.
+
 ## Known Coverage Gaps
 
 Recorded here so later iterations can schedule them; none blocks this
