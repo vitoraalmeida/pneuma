@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use pneuma::adapters::database;
 use pneuma::domain::identity::ApplicationId;
 use pneuma::use_cases::application_import::import_application;
-use pneuma::use_cases::deployment_rollback::{RollbackError, rollback_deployment};
+use pneuma::use_cases::deployment::{RollbackError, rollback_deployment};
 
 #[test]
 fn rollback_fails_when_no_previous_deployment_exists() {

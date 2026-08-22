@@ -4,6 +4,13 @@ use std::path::Path;
 
 use rusqlite::Connection;
 
+use super::cleanup::CandidateResources;
+use super::progress::{DeploymentStep, ProgressReporter};
+use super::promotion::{
+    PromotePublicCandidateError, begin_public_exposure, promote_public_candidate,
+    record_public_exposure_failure,
+};
+use super::transition::{TransitionDeploymentError, advance_deployment};
 use crate::adapters::caddy_exposure::{
     MaterializedCaddyFragment, canonical_fragment_contents, materialize_caddy_fragment,
     restore_materialized_caddy_fragment,
@@ -11,17 +18,10 @@ use crate::adapters::caddy_exposure::{
 use crate::adapters::health_check_external::check_external_health;
 use crate::adapters::health_check_internal::{HealthCheckResult, check_internal_health};
 use crate::adapters::test_gate::wait_for_test_gate;
-use crate::domain::deployment::DeploymentEvent;
+use crate::domain::deployment::{DeploymentEvent, DeploymentStatus};
 use crate::domain::exposure::{ExposureConfigurationVersion, ExposureDiagnostic, ExposureOutcome};
 use crate::domain::identity::ApplicationId;
 use crate::domain::runtime::{HealthCheckSpecification, RuntimeInstance};
-use crate::use_cases::deployment_progress::{DeploymentStep, ProgressReporter};
-use crate::use_cases::deployment_promote_public::{
-    PromotePublicCandidateError, begin_public_exposure, promote_public_candidate,
-    record_public_exposure_failure,
-};
-use crate::use_cases::deployment_runtime_cleanup::CandidateResources;
-use crate::use_cases::deployment_transition::advance_deployment;
 
 // Carries the persisted candidate and host paths needed to expose it after internal validation.
 pub(crate) struct PublicActivationInput<'a> {
@@ -44,7 +44,7 @@ pub(crate) enum PublicActivationError {
         resources: Box<CandidateResources>,
     },
     DeploymentTransition {
-        source: crate::use_cases::deployment_transition::TransitionDeploymentError,
+        source: TransitionDeploymentError,
         resources: Box<CandidateResources>,
     },
     ExposurePreparation {
@@ -132,10 +132,7 @@ pub(crate) fn activate_public_candidate(
         resources: Box::new(resources.clone()),
     })?;
 
-    progress.state_changed(
-        deployment_id,
-        crate::domain::deployment::DeploymentStatus::Activating,
-    );
+    progress.state_changed(deployment_id, DeploymentStatus::Activating);
     wait_for_test_gate("deployment.activating").map_err(|source| {
         PublicActivationError::TestGate {
             source: Box::new(source),
@@ -280,10 +277,7 @@ pub(crate) fn activate_public_candidate(
         format!("runtime {runtime_id} promoted to Current"),
     );
 
-    progress.state_changed(
-        deployment_id,
-        crate::domain::deployment::DeploymentStatus::Succeeded,
-    );
+    progress.state_changed(deployment_id, DeploymentStatus::Succeeded);
 
     Ok(PublicActivationOutput {
         finished_at: promoted.finished_at,

@@ -20,15 +20,11 @@ use pneuma::use_cases::application_runtime::{
     RuntimeLifecycleError, report_application_status, start_application, stop_application,
 };
 use pneuma::use_cases::ci_command::{CiCommand, CiDispatchError, parse_ci_command};
-use pneuma::use_cases::deployment_execute_release::PublicDeploymentConfiguration;
-use pneuma::use_cases::deployment_from_oci::{
-    DeployOciError, deploy_oci, deploy_oci_with_progress,
+use pneuma::use_cases::deployment::{
+    DeployBranchError, DeployOciError, DeploymentResult, ListDeploymentsError,
+    PublicDeploymentConfiguration, RollbackError, deploy_branch, deploy_branch_with_progress,
+    deploy_oci, deploy_oci_with_progress, list_deployments, rollback_deployment,
 };
-use pneuma::use_cases::deployment_from_revision::{
-    DeployBranchError, deploy_branch, deploy_branch_with_progress,
-};
-use pneuma::use_cases::deployment_list::{ListDeploymentsError, list_deployments};
-use pneuma::use_cases::deployment_rollback::{RollbackError, rollback_deployment};
 use pneuma::use_cases::exposure_change::{ExposureChangeError, change_exposure};
 use pneuma::use_cases::reconciliation::{
     ReconciliationReadError, ReconciliationResult, reconcile_application,
@@ -1132,7 +1128,7 @@ fn public_deployment_configuration() -> PublicDeploymentConfiguration {
 
 fn print_deployed(
     application_name: &pneuma::domain::application::ApplicationName,
-    deployed: &pneuma::use_cases::deployment_execute_release::DeploymentResult,
+    deployed: &DeploymentResult,
 ) {
     println!("Deployed {application_name}");
     println!("Image: {}", deployed.artifact.reference());

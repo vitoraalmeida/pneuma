@@ -10,11 +10,9 @@ use pneuma::domain::runtime::{
     ContainerPort, ExpectedRuntimeEndpoint, ObservedRuntimeState, RuntimeState,
 };
 use pneuma::use_cases::application_import::import_application;
-use pneuma::use_cases::deployment_create::create_deployment;
-use pneuma::use_cases::deployment_register_runtime::{
-    RegisterCandidateRuntimeError, register_candidate_runtime,
-};
-use pneuma::use_cases::deployment_transition::advance_deployment;
+use pneuma::use_cases::deployment::advance_deployment;
+use pneuma::use_cases::deployment::create_deployment;
+use pneuma::use_cases::deployment::{RegisterCandidateRuntimeError, register_candidate_runtime};
 use pneuma::use_cases::release_create::create_release;
 
 #[test]

@@ -13,8 +13,7 @@ use crate::domain::identity::ApplicationId;
 use crate::domain::reconciliation::{
     ActiveRuntime, CaddyFragmentObservation, NamedContainerObservation, QuadletSourceObservation,
 };
-use crate::use_cases::deployment_runtime_cleanup::cleanup_failed_candidate;
-use crate::use_cases::deployment_transition::fail_deployment;
+use crate::use_cases::deployment::{cleanup_failed_candidate, fail_deployment};
 
 use super::{ReconciliationReadError, ReconciliationResult};
 

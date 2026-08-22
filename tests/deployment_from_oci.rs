@@ -12,7 +12,7 @@ use pneuma::adapters::database;
 use pneuma::domain::deployment::SourceRevision;
 use pneuma::domain::release::OciArtifact;
 use pneuma::use_cases::application_import::import_application;
-use pneuma::use_cases::deployment_from_oci::{DeployOciError, deploy_oci};
+use pneuma::use_cases::deployment::{DeployOciError, deploy_oci};
 
 #[test]
 fn deploys_a_verified_oci_image_and_persists_its_exact_reference() {

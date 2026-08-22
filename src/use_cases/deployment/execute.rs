@@ -4,6 +4,16 @@ use std::path::PathBuf;
 
 use rusqlite::Connection;
 
+use super::activation::{PublicActivationError, PublicActivationInput, activate_public_candidate};
+use super::candidate::{CandidateStartError, CandidateStartInput, start_candidate};
+use super::cleanup::{
+    CandidateCleanupError, CandidateResources, cleanup_failed_candidate, load_previous_runtime,
+    retire_previous_runtime,
+};
+use super::create::{CreateDeploymentError, create_deployment_with_source_revision_and_ownership};
+use super::progress::{DeploymentProgress, DeploymentStep, ProgressReporter};
+use super::promotion::{PromoteInternalCandidateError, promote_internal_candidate};
+use super::transition::{TransitionDeploymentError, fail_deployment};
 use crate::adapters::application_lock::{ApplicationLock, ApplicationLockError};
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::adapters::stores::operation_store;
@@ -13,24 +23,6 @@ use crate::domain::deployment::{DeploymentStatus, DeploymentType, SourceRevision
 use crate::domain::exposure::Visibility;
 use crate::domain::identity::{ApplicationId, DeploymentId, RuntimeInstanceId};
 use crate::domain::release::{OciArtifact, Release};
-use crate::use_cases::deployment_activate_public::{
-    PublicActivationError, PublicActivationInput, activate_public_candidate,
-};
-use crate::use_cases::deployment_create::{
-    CreateDeploymentError, create_deployment_with_source_revision_and_ownership,
-};
-use crate::use_cases::deployment_progress::{DeploymentProgress, DeploymentStep, ProgressReporter};
-use crate::use_cases::deployment_promote_internal::{
-    PromoteInternalCandidateError, promote_internal_candidate,
-};
-use crate::use_cases::deployment_runtime_cleanup::{
-    CandidateCleanupError, CandidateResources, cleanup_failed_candidate, load_previous_runtime,
-    retire_previous_runtime,
-};
-use crate::use_cases::deployment_start_candidate::{
-    CandidateStartError, CandidateStartInput, start_candidate,
-};
-use crate::use_cases::deployment_transition::{TransitionDeploymentError, fail_deployment};
 
 #[derive(Debug, PartialEq, Eq)]
 // Describes the successfully promoted runtime returned to deployment callers.

@@ -87,7 +87,7 @@ pub fn create_deployment(
 }
 
 // Creates the pending deployment and replaces operation ownership in one transaction.
-pub fn create_deployment_with_source_revision_and_ownership(
+pub(crate) fn create_deployment_with_source_revision_and_ownership(
     connection: &mut Connection,
     application_id: &ApplicationId,
     release_id: &ReleaseId,

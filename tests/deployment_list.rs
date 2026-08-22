@@ -4,8 +4,8 @@ use pneuma::adapters::database;
 use pneuma::domain::deployment::{DeploymentStatus, DeploymentType};
 use pneuma::domain::release::OciArtifact;
 use pneuma::use_cases::application_import::import_application;
-use pneuma::use_cases::deployment_create::create_deployment;
-use pneuma::use_cases::deployment_list::list_deployments;
+use pneuma::use_cases::deployment::create_deployment;
+use pneuma::use_cases::deployment::list_deployments;
 use pneuma::use_cases::release_create::create_release;
 
 #[test]

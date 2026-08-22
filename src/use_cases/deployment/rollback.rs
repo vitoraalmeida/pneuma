@@ -3,14 +3,14 @@ use std::fmt;
 
 use rusqlite::Connection;
 
+use super::execute::{
+    DeployReleaseError, DeploymentResult, PublicDeploymentConfiguration, deploy_release,
+};
 use crate::adapters::oci_image::{PullImageError, pull_image};
 use crate::adapters::stores::application_store;
 use crate::adapters::stores::deployment_store;
 use crate::domain::deployment::{DeploymentType, RollbackTarget};
 use crate::domain::identity::ApplicationId;
-use crate::use_cases::deployment_execute_release::{
-    DeployReleaseError, DeploymentResult, PublicDeploymentConfiguration, deploy_release,
-};
 
 #[derive(Debug)]
 pub enum RollbackError {
