@@ -130,7 +130,7 @@ fn deploy_oci_reporting(
             application_id: application_id.to_string(),
         });
     };
-    if artifact.repository() != delivery.image_repository().as_str() {
+    if !delivery.permits(artifact) {
         return Err(DeployOciError::RepositoryMismatch {
             application_id: application_id.to_string(),
             allowed: delivery.image_repository().as_str().to_owned(),

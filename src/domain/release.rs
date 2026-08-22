@@ -101,6 +101,12 @@ impl DeliverySpecification {
     pub fn image_repository(&self) -> &OciRepository {
         &self.image_repository
     }
+
+    // Cross-object rule: an artifact is deployable only when its repository
+    // matches the single repository permitted by this delivery specification.
+    pub fn permits(&self, artifact: &OciArtifact) -> bool {
+        self.image_repository.as_str() == artifact.repository()
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -192,4 +198,39 @@ pub(crate) fn is_sha256_digest(digest: &str) -> bool {
 // Recognizes the lowercase hexadecimal alphabet required by OCI sha256 digests.
 fn is_lowercase_hex(byte: u8) -> bool {
     byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::domain::manifest::DeliveryType;
+
+    use super::{DeliverySpecification, OciArtifact, OciRepository};
+
+    fn artifact(repository: &str) -> OciArtifact {
+        OciArtifact::new(
+            repository,
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .expect("test artifact is valid")
+    }
+
+    fn delivery(repository: &str) -> DeliverySpecification {
+        DeliverySpecification::new(
+            DeliveryType::Oci,
+            OciRepository::new(repository).expect("test repository is valid"),
+        )
+    }
+
+    #[test]
+    fn permits_the_exact_configured_repository() {
+        assert!(delivery("registry.example/app").permits(&artifact("registry.example/app")));
+    }
+
+    #[test]
+    fn rejects_foreign_and_prefix_repositories() {
+        let allowed = delivery("registry.example/app");
+        assert!(!allowed.permits(&artifact("registry.example/other")));
+        assert!(!allowed.permits(&artifact("registry.example/app/subpath")));
+        assert!(!allowed.permits(&artifact("other.example/app")));
+    }
 }
