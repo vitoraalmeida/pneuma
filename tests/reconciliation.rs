@@ -55,14 +55,18 @@ fn loads_the_active_reconciliation_snapshot_without_writing_sqlite() {
         load_reconciliation_input(&mut connection, &ApplicationName::new("another").unwrap())
             .unwrap();
 
-    assert_eq!(input.application.id.as_str(), application_id);
-    let active = input.active.unwrap();
+    assert_eq!(input.desired.application.id.as_str(), application_id);
+    assert_eq!(
+        input.desired.application.desired_runtime_state,
+        pneuma::domain::application::DesiredRuntimeState::Running
+    );
+    let active = input.persisted.active.unwrap();
     assert_eq!(active.deployment.id.as_str(), deployment_id);
     assert_eq!(active.release.id.as_str(), release_id);
     assert_eq!(active.release.artifact.digest(), digest);
     assert_eq!(active.runtime.unwrap().id.as_str(), runtime_id);
-    assert!(input.blocking_deployment.is_none());
-    assert!(input.exposure.is_some());
+    assert!(input.persisted.blocking_deployment.is_none());
+    assert!(input.desired.exposure.is_some());
     assert_eq!(connection.total_changes(), before);
     drop(connection);
     fs::remove_dir_all(root).unwrap();

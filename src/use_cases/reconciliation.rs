@@ -29,8 +29,8 @@ use crate::domain::exposure::{
 };
 use crate::domain::identity::ApplicationId;
 use crate::domain::reconciliation::{
-    ActiveRuntime, CaddyFragmentObservation, NamedContainerObservation, ReconciliationInput,
-    ReconciliationObservation,
+    ActiveRuntime, CaddyFragmentObservation, DesiredState, NamedContainerObservation,
+    PersistedState, ReconciliationInput, ReconciliationObservation,
 };
 use crate::domain::runtime::{InvalidHostPort, ObservedRuntimeState};
 use crate::use_cases::deployment_runtime_cleanup::cleanup_failed_candidate;
@@ -217,12 +217,12 @@ pub fn reconcile_application(
     })?;
 
     let input = load_reconciliation_input(connection, application_name)?;
-    if let Some(blocking_deployment) = input.blocking_deployment {
+    if let Some(blocking_deployment) = input.persisted.blocking_deployment {
         return recover_interrupted_deployment(
             connection,
-            &input.application,
-            input.active.as_ref(),
-            input.exposure.as_ref(),
+            &input.desired.application,
+            input.persisted.active.as_ref(),
+            input.desired.exposure.as_ref(),
             &blocking_deployment,
             managed_caddy_directory,
         );
@@ -233,7 +233,7 @@ pub fn reconcile_application(
             reason: "application has no active runtime".to_owned(),
         });
     };
-    if input.application.desired_runtime_state == DesiredRuntimeState::Stopped
+    if input.desired.application.desired_runtime_state == DesiredRuntimeState::Stopped
         && *observation.recorded_container.state() == ObservedRuntimeState::Missing
         && observation.named_container == NamedContainerObservation::Missing
         && observation.caddy_fragment == CaddyFragmentObservation::Missing
@@ -255,7 +255,7 @@ pub fn reconcile_application(
     )? {
         return Ok(result);
     }
-    if input.application.desired_runtime_state == DesiredRuntimeState::Running {
+    if input.desired.application.desired_runtime_state == DesiredRuntimeState::Running {
         return Ok(ReconciliationResult::ManualIntervention {
             reason: "runtime identity or configuration differs from persisted intent".to_owned(),
         });
@@ -271,14 +271,16 @@ fn rematerialize_missing_runtime(
     input: &ReconciliationInput,
     observation: &ReconciliationObservation,
 ) -> Result<Option<ReconciliationResult>, ReconciliationReadError> {
-    let (Some(active), Some(specification)) = (&input.active, &input.specification) else {
+    let (Some(active), Some(specification)) =
+        (&input.persisted.active, &input.persisted.specification)
+    else {
         return Ok(None);
     };
     let Some(runtime) = &active.runtime else {
         return Ok(None);
     };
     let expected_unit = canonical_unit_contents(
-        &input.application.name,
+        &input.desired.application.name,
         &active.deployment.id,
         &active.release.artifact,
         runtime.container_port,
@@ -297,7 +299,7 @@ fn rematerialize_missing_runtime(
             active_state != "active"
         }
     };
-    if input.application.desired_runtime_state != DesiredRuntimeState::Running
+    if input.desired.application.desired_runtime_state != DesiredRuntimeState::Running
         || *observation.recorded_container.state() != ObservedRuntimeState::Missing
         || observation.named_container != NamedContainerObservation::Missing
         || (observation.quadlet_source
@@ -307,10 +309,10 @@ fn rematerialize_missing_runtime(
     {
         return Ok(None);
     }
-    let unit = unit_name(&input.application.name, &active.deployment.id);
+    let unit = unit_name(&input.desired.application.name, &active.deployment.id);
     if !canonical_source_is_present {
         write_unit(
-            &input.application.name,
+            &input.desired.application.name,
             &active.deployment.id,
             &active.release.artifact,
             runtime.container_port,
@@ -331,7 +333,7 @@ fn rematerialize_missing_runtime(
         image_digest_label,
         observation: container_observation,
     } = observe_named_container(
-        &container_name(&input.application.name, &active.deployment.id),
+        &container_name(&input.desired.application.name, &active.deployment.id),
         runtime.container_port,
     )
     .map_err(|source| ReconciliationReadError::ObserveNamedContainer { source })?
@@ -342,9 +344,9 @@ fn rematerialize_missing_runtime(
     };
     if *container_observation.state() != ObservedRuntimeState::Running
         || name.trim_start_matches('/')
-            != container_name(&input.application.name, &active.deployment.id)
+            != container_name(&input.desired.application.name, &active.deployment.id)
         || image_reference != active.release.artifact.reference()
-        || application_label.as_deref() != Some(input.application.name.as_str())
+        || application_label.as_deref() != Some(input.desired.application.name.as_str())
         || image_digest_label.as_deref() != Some(active.release.artifact.digest())
         || container_observation.observed_endpoint()
             != Some(runtime.expected_endpoint.socket_addr())
@@ -594,7 +596,7 @@ fn reconcile_exposure(
     managed_caddy_directory: &std::path::Path,
     caddyfile_path: &std::path::Path,
 ) -> Result<Option<ReconciliationResult>, ReconciliationReadError> {
-    let Some(exposure) = &input.exposure else {
+    let Some(exposure) = &input.desired.exposure else {
         return Ok(None);
     };
     let state = exposure.materialization().state();
@@ -610,20 +612,20 @@ fn reconcile_exposure(
             }
             reserve_exposure(
                 connection,
-                input.application.id.as_str(),
+                input.desired.application.id.as_str(),
                 Visibility::Internal,
                 state,
             )?;
             let removed = match remove_caddy_fragment(
                 managed_caddy_directory,
-                &input.application.id,
+                &input.desired.application.id,
                 caddyfile_path,
             ) {
                 Ok(removed) => removed,
                 Err(source) => {
                     return record_exposure_failure(
                         connection,
-                        input.application.id.as_str(),
+                        input.desired.application.id.as_str(),
                         Visibility::Internal,
                         ExposureMaterializationState::Removing,
                         "caddy_removal_failed",
@@ -635,7 +637,7 @@ fn reconcile_exposure(
             let transaction = connection.transaction().map_err(persistence_error)?;
             let completed = exposure_store::complete_internal_exposure_change(
                 &transaction,
-                &input.application.id,
+                &input.desired.application.id,
             )
             .map_err(|source| ReconciliationReadError::Exposure { source })?;
             if completed == crate::adapters::stores::PersistenceOutcome::Stale {
@@ -644,7 +646,7 @@ fn reconcile_exposure(
                     restore_removed_caddy_fragment(&removed, caddyfile_path).is_err();
                 return record_exposure_failure(
                     connection,
-                    input.application.id.as_str(),
+                    input.desired.application.id.as_str(),
                     Visibility::Internal,
                     ExposureMaterializationState::Removing,
                     "exposure_changed",
@@ -674,13 +676,13 @@ fn reconcile_public_exposure(
     caddyfile_path: &std::path::Path,
     state: ExposureMaterializationState,
 ) -> Result<Option<ReconciliationResult>, ReconciliationReadError> {
-    let Some(exposure) = &input.exposure else {
+    let Some(exposure) = &input.desired.exposure else {
         return Ok(None);
     };
     let Some(domain) = exposure.intent().domain() else {
         return record_exposure_failure(
             connection,
-            input.application.id.as_str(),
+            input.desired.application.id.as_str(),
             Visibility::Public,
             state,
             "domain_missing",
@@ -688,10 +690,10 @@ fn reconcile_public_exposure(
             false,
         );
     };
-    let Some(active) = &input.active else {
+    let Some(active) = &input.persisted.active else {
         return record_exposure_failure(
             connection,
-            input.application.id.as_str(),
+            input.desired.application.id.as_str(),
             Visibility::Public,
             state,
             "runtime_missing",
@@ -702,7 +704,7 @@ fn reconcile_public_exposure(
     let Some(runtime) = &active.runtime else {
         return record_exposure_failure(
             connection,
-            input.application.id.as_str(),
+            input.desired.application.id.as_str(),
             Visibility::Public,
             state,
             "runtime_missing",
@@ -711,13 +713,13 @@ fn reconcile_public_exposure(
         );
     };
     let endpoint = runtime.expected_endpoint.socket_addr();
-    if input.application.desired_runtime_state != DesiredRuntimeState::Running
+    if input.desired.application.desired_runtime_state != DesiredRuntimeState::Running
         || *observation.recorded_container.state() != ObservedRuntimeState::Running
         || observation.recorded_container.observed_endpoint() != Some(endpoint)
     {
         return record_exposure_failure(
             connection,
-            input.application.id.as_str(),
+            input.desired.application.id.as_str(),
             Visibility::Public,
             state,
             "runtime_not_healthy",
@@ -749,14 +751,14 @@ fn reconcile_public_exposure(
     }
     reserve_exposure(
         connection,
-        input.application.id.as_str(),
+        input.desired.application.id.as_str(),
         Visibility::Public,
         state,
     )?;
     let materialized = match materialize_caddy_fragment(
         managed_caddy_directory,
         caddyfile_path,
-        &input.application.id,
+        &input.desired.application.id,
         domain,
         runtime.expected_endpoint,
     ) {
@@ -764,7 +766,7 @@ fn reconcile_public_exposure(
         Err(source) => {
             return record_exposure_failure(
                 connection,
-                input.application.id.as_str(),
+                input.desired.application.id.as_str(),
                 Visibility::Public,
                 ExposureMaterializationState::Applying,
                 "caddy_materialization_failed",
@@ -773,13 +775,11 @@ fn reconcile_public_exposure(
             );
         }
     };
-    let specification =
-        input
-            .specification
-            .as_ref()
-            .ok_or_else(|| ReconciliationReadError::NotConverged {
-                reason: "application has no deployment specification for public health".to_owned(),
-            })?;
+    let specification = input.persisted.specification.as_ref().ok_or_else(|| {
+        ReconciliationReadError::NotConverged {
+            reason: "application has no deployment specification for public health".to_owned(),
+        }
+    })?;
     if let Err(source) = check_external_health(
         domain,
         specification.runtime.health_check().path(),
@@ -789,7 +789,7 @@ fn reconcile_public_exposure(
             restore_materialized_caddy_fragment(&materialized, caddyfile_path).is_err();
         return record_exposure_failure(
             connection,
-            input.application.id.as_str(),
+            input.desired.application.id.as_str(),
             Visibility::Public,
             ExposureMaterializationState::Applying,
             "external_health_check_failed",
@@ -800,7 +800,7 @@ fn reconcile_public_exposure(
     let transaction = connection.transaction().map_err(persistence_error)?;
     let completed = exposure_store::complete_public_exposure_change(
         &transaction,
-        &input.application.id,
+        &input.desired.application.id,
         &runtime.id,
         &configuration_version,
     )
@@ -811,7 +811,7 @@ fn reconcile_public_exposure(
             restore_materialized_caddy_fragment(&materialized, caddyfile_path).is_err();
         return record_exposure_failure(
             connection,
-            input.application.id.as_str(),
+            input.desired.application.id.as_str(),
             Visibility::Public,
             ExposureMaterializationState::Applying,
             "exposure_changed",
@@ -907,7 +907,7 @@ fn repair_recreated_runtime(
     input: &ReconciliationInput,
     observation: &ReconciliationObservation,
 ) -> Result<Option<ReconciliationResult>, ReconciliationReadError> {
-    if input.application.desired_runtime_state != DesiredRuntimeState::Running
+    if input.desired.application.desired_runtime_state != DesiredRuntimeState::Running
         || observation.caddy_fragment != CaddyFragmentObservation::Missing
     {
         return Ok(None);
@@ -922,7 +922,7 @@ fn repair_recreated_runtime(
             image_digest_label,
             observation: container_observation,
         },
-    ) = (&input.active, &observation.named_container)
+    ) = (&input.persisted.active, &observation.named_container)
     else {
         return Ok(None);
     };
@@ -932,9 +932,9 @@ fn repair_recreated_runtime(
     if *observation.recorded_container.state() != ObservedRuntimeState::Missing
         || *container_observation.state() != ObservedRuntimeState::Running
         || name.trim_start_matches('/')
-            != container_name(&input.application.name, &active.deployment.id)
+            != container_name(&input.desired.application.name, &active.deployment.id)
         || image_reference != active.release.artifact.reference()
-        || application_label.as_deref() != Some(input.application.name.as_str())
+        || application_label.as_deref() != Some(input.desired.application.name.as_str())
         || image_digest_label.as_deref() != Some(active.release.artifact.digest())
         || container_observation.observed_endpoint()
             != Some(runtime.expected_endpoint.socket_addr())
@@ -942,7 +942,7 @@ fn repair_recreated_runtime(
         return Ok(None);
     }
     let expected_unit = canonical_unit_contents(
-        &input.application.name,
+        &input.desired.application.name,
         &active.deployment.id,
         &active.release.artifact,
         runtime.container_port,
@@ -979,7 +979,7 @@ fn repair_recreated_runtime(
     }))
 }
 
-// Loads all persisted reconciliation authorities in a short read transaction before external observation.
+// Loads desired intent and persisted bookkeeping from SQLite in one short read transaction before external observation.
 pub fn load_reconciliation_input(
     connection: &mut Connection,
     application_name: &ApplicationName,
@@ -1026,11 +1026,15 @@ pub fn load_reconciliation_input(
             source: application_store::ApplicationStoreError::Persistence { source },
         })?;
     Ok(ReconciliationInput {
-        application,
-        blocking_deployment,
-        active,
-        exposure,
-        specification,
+        desired: DesiredState {
+            application,
+            exposure,
+        },
+        persisted: PersistedState {
+            blocking_deployment,
+            active,
+            specification,
+        },
     })
 }
 
@@ -1039,7 +1043,7 @@ pub fn observe_reconciliation_input(
     input: &ReconciliationInput,
     managed_caddy_directory: &std::path::Path,
 ) -> Result<Option<ReconciliationObservation>, ReconciliationReadError> {
-    let Some(active) = &input.active else {
+    let Some(active) = &input.persisted.active else {
         return Ok(None);
     };
     let Some(runtime) = &active.runtime else {
@@ -1048,16 +1052,17 @@ pub fn observe_reconciliation_input(
     let recorded_container =
         observe_container(&runtime.external_runtime_id, runtime.container_port)
             .map_err(|source| ReconciliationReadError::ObserveContainer { source })?;
-    let name = container_name(&input.application.name, &active.deployment.id);
+    let name = container_name(&input.desired.application.name, &active.deployment.id);
     let named_container = observe_named_container(&name, runtime.container_port)
         .map_err(|source| ReconciliationReadError::ObserveNamedContainer { source })?;
-    let unit = unit_name(&input.application.name, &active.deployment.id);
+    let unit = unit_name(&input.desired.application.name, &active.deployment.id);
     let quadlet_source = observe_unit_source(&unit)
         .map_err(|source| ReconciliationReadError::ObserveQuadlet { source })?;
     let systemd_unit = observe_generated_unit(&unit)
         .map_err(|source| ReconciliationReadError::ObserveQuadlet { source })?;
-    let caddy_fragment = observe_caddy_fragment(managed_caddy_directory, &input.application.id)
-        .map_err(|source| ReconciliationReadError::ObserveCaddy { source })?;
+    let caddy_fragment =
+        observe_caddy_fragment(managed_caddy_directory, &input.desired.application.id)
+            .map_err(|source| ReconciliationReadError::ObserveCaddy { source })?;
     Ok(Some(ReconciliationObservation {
         recorded_container,
         named_container,

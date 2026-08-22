@@ -4,14 +4,29 @@ use crate::domain::exposure::Exposure;
 use crate::domain::release::Release;
 use crate::domain::runtime::{ContainerId, ContainerObservation, RuntimeInstance};
 
-// Collects the persisted authorities needed to classify reconciliation without retaining a SQLite transaction.
+// Desired intent as recorded in SQLite: which runtime state and route Pneuma should converge to.
 #[derive(Debug)]
-pub struct ReconciliationInput {
+pub struct DesiredState {
     pub application: Application,
+    pub exposure: Option<Exposure>,
+}
+
+// Persisted bookkeeping recorded in SQLite: coordination and confirmation facts
+// that describe workflow state rather than requested intent.
+#[derive(Debug)]
+pub struct PersistedState {
     pub blocking_deployment: Option<Deployment>,
     pub active: Option<ActiveRuntime>,
-    pub exposure: Option<Exposure>,
     pub specification: Option<ApplicationDeploymentSpecification>,
+}
+
+// Groups SQLite-produced facts by origin so intent is distinguishable from
+// persisted bookkeeping; observed Podman/systemd/Caddy facts stay separate in
+// `ReconciliationObservation`.
+#[derive(Debug)]
+pub struct ReconciliationInput {
+    pub desired: DesiredState,
+    pub persisted: PersistedState,
 }
 
 // Couples the active logical deployment with its immutable artifact and retained runtime identity.
@@ -58,7 +73,9 @@ pub enum CaddyFragmentObservation {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-// Captures the read-only external facts needed by future reconciliation classification.
+// Captures the read-only external facts observed from each authority:
+// Podman (recorded and named containers), systemd/Quadlet (unit source and
+// generated unit), and Caddy (materialized fragment).
 pub struct ReconciliationObservation {
     pub recorded_container: ContainerObservation,
     pub named_container: NamedContainerObservation,

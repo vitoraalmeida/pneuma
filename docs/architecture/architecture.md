@@ -103,8 +103,14 @@ The library now has a read-only reconciliation input path. It loads the
 persisted Application, any non-terminal Deployment, active Deployment and
 Release, RuntimeInstance, Exposure, and specification in a short SQLite
 transaction, then closes that transaction before observing Podman, Quadlet, and
-Caddy fragment state. The library input path does not change SQLite or control
-external resources. `pneuma reconcile <application>` defers while a non-terminal
+Caddy fragment state. The input groups facts by authority so intent is
+distinguishable from persisted bookkeeping: `DesiredState` carries the
+Application intent and Exposure route decision, `PersistedState` carries the
+blocking Deployment, confirmed active materialization, and specification
+snapshot, and observed Podman/systemd/Caddy facts stay separate in
+`ReconciliationObservation`. The library input path does not change SQLite or
+control external resources. `pneuma reconcile <application>` defers while a
+non-terminal
 Deployment is held by a live per-Application kernel lock. After the lock holder
 exits, reconcile records an interrupted deployment as failed and cleans only a
 candidate whose persisted and external identity can be proven. It repairs a
