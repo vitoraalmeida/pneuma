@@ -5,8 +5,9 @@ use rusqlite::Connection;
 
 use crate::adapters::application_lock::{ApplicationLock, ApplicationLockError};
 use crate::adapters::caddy_exposure::{
-    ObserveCaddyFragmentError, materialize_caddy_fragment, observe_caddy_fragment,
-    remove_caddy_fragment, restore_materialized_caddy_fragment, restore_removed_caddy_fragment,
+    ObserveCaddyFragmentError, canonical_fragment_contents, materialize_caddy_fragment,
+    observe_caddy_fragment, remove_caddy_fragment, restore_materialized_caddy_fragment,
+    restore_removed_caddy_fragment,
 };
 use crate::adapters::health_check_external::check_external_health;
 use crate::adapters::health_check_internal::{HealthCheckResult, check_internal_health};
@@ -22,17 +23,20 @@ use crate::adapters::systemd_quadlet::{
     observe_unit_source, start, unit_name, write_unit,
 };
 use crate::adapters::test_gate::wait_for_test_gate;
-use crate::domain::application::{ApplicationName, DesiredRuntimeState};
+use crate::domain::application::ApplicationName;
 use crate::domain::deployment::{Deployment, DeploymentStatus};
 use crate::domain::exposure::{
-    ExposureConfigurationVersion, ExposureDiagnostic, ExposureMaterializationState, Visibility,
+    ExposureConfigurationVersion, ExposureDiagnostic, ExposureIntent, ExposureMaterializationState,
+    Visibility,
 };
 use crate::domain::identity::ApplicationId;
 use crate::domain::reconciliation::{
     ActiveRuntime, CaddyFragmentObservation, DesiredState, NamedContainerObservation,
-    PersistedState, ReconciliationInput, ReconciliationObservation,
+    PersistedState, PublicExposureFailure, ReconciliationDecision, ReconciliationDecisionError,
+    ReconciliationExpectations, ReconciliationInput, ReconciliationObservation,
+    RuntimeIdentityRepair, RuntimeRematerialization, decide,
 };
-use crate::domain::runtime::{InvalidHostPort, ObservedRuntimeState};
+use crate::domain::runtime::{InvalidHostPort, ObservedRuntimeState, RuntimeInstance};
 use crate::use_cases::deployment_runtime_cleanup::cleanup_failed_candidate;
 use crate::use_cases::deployment_transition::fail_deployment;
 
@@ -227,99 +231,184 @@ pub fn reconcile_application(
             managed_caddy_directory,
         );
     }
-    let observation = observe_reconciliation_input(&input, managed_caddy_directory)?;
-    let Some(observation) = observation else {
+    let Some(observation) = observe_reconciliation_input(&input, managed_caddy_directory)? else {
         return Err(ReconciliationReadError::NotConverged {
             reason: "application has no active runtime".to_owned(),
         });
     };
-    if input.desired.application.desired_runtime_state == DesiredRuntimeState::Stopped
-        && *observation.recorded_container.state() == ObservedRuntimeState::Missing
-        && observation.named_container == NamedContainerObservation::Missing
-        && observation.caddy_fragment == CaddyFragmentObservation::Missing
-    {
-        return Ok(ReconciliationResult::NoOp);
-    }
-    if let Some(repaired) = repair_recreated_runtime(connection, &input, &observation)? {
-        return Ok(repaired);
-    }
-    if let Some(repaired) = rematerialize_missing_runtime(connection, &input, &observation)? {
-        return Ok(repaired);
-    }
-    if let Some(result) = reconcile_exposure(
+    let expectations = reconciliation_expectations(&input)?;
+    let decision = decide(&input, &observation, &expectations).map_err(|error| {
+        ReconciliationReadError::NotConverged {
+            reason: reconciliation_decision_reason(error),
+        }
+    })?;
+    execute_reconciliation_decision(
         connection,
         &input,
-        &observation,
+        &expectations,
+        decision,
         managed_caddy_directory,
         caddyfile_path,
-    )? {
-        return Ok(result);
-    }
-    if input.desired.application.desired_runtime_state == DesiredRuntimeState::Running {
-        return Ok(ReconciliationResult::ManualIntervention {
-            reason: "runtime identity or configuration differs from persisted intent".to_owned(),
-        });
-    }
-    Err(ReconciliationReadError::NotConverged {
-        reason: "runtime repair and public-route confirmation are not implemented".to_owned(),
-    })
+    )
 }
 
-// Recreates an absent canonical Quadlet only from the active runtime's persisted identity.
-fn rematerialize_missing_runtime(
-    connection: &Connection,
-    input: &ReconciliationInput,
-    observation: &ReconciliationObservation,
-) -> Result<Option<ReconciliationResult>, ReconciliationReadError> {
-    let (Some(active), Some(specification)) =
-        (&input.persisted.active, &input.persisted.specification)
-    else {
-        return Ok(None);
-    };
-    let Some(runtime) = &active.runtime else {
-        return Ok(None);
-    };
-    let expected_unit = canonical_unit_contents(
-        &input.desired.application.name,
-        &active.deployment.id,
-        &active.release.artifact,
-        runtime.container_port,
-        runtime
-            .expected_endpoint
-            .host_port()
-            .map_err(|source| ReconciliationReadError::InvalidExpectedPort { source })?,
-    );
-    let canonical_source_is_present = observation.quadlet_source
-        == (crate::domain::reconciliation::QuadletSourceObservation::Present {
-            contents: expected_unit,
-        });
-    let generated_unit_can_start = match &observation.systemd_unit {
-        crate::domain::reconciliation::SystemdUnitObservation::Missing => true,
-        crate::domain::reconciliation::SystemdUnitObservation::Present { active_state } => {
-            active_state != "active"
+// Translates a pure decision refusal into the read error surface without changing its message.
+fn reconciliation_decision_reason(error: ReconciliationDecisionError) -> String {
+    match error {
+        ReconciliationDecisionError::UnhandledDrift => {
+            "runtime repair and public-route confirmation are not implemented".to_owned()
         }
-    };
-    if input.desired.application.desired_runtime_state != DesiredRuntimeState::Running
-        || *observation.recorded_container.state() != ObservedRuntimeState::Missing
-        || observation.named_container != NamedContainerObservation::Missing
-        || (observation.quadlet_source
-            != crate::domain::reconciliation::QuadletSourceObservation::Missing
-            && !canonical_source_is_present)
-        || !generated_unit_can_start
-    {
-        return Ok(None);
+        ReconciliationDecisionError::InvalidRouteFragment(source) => source.to_string(),
     }
-    let unit = unit_name(&input.desired.application.name, &active.deployment.id);
-    if !canonical_source_is_present {
-        write_unit(
-            &input.desired.application.name,
+}
+
+// Renders the boundary representations the pure decision compares observations against.
+fn reconciliation_expectations(
+    input: &ReconciliationInput,
+) -> Result<ReconciliationExpectations, ReconciliationReadError> {
+    let application = &input.desired.application;
+    let (active, runtime) = required_active_runtime(input)?;
+    Ok(ReconciliationExpectations {
+        container_name: container_name(&application.name, &active.deployment.id),
+        canonical_quadlet_contents: canonical_unit_contents(
+            &application.name,
             &active.deployment.id,
             &active.release.artifact,
             runtime.container_port,
-            runtime
-                .expected_endpoint
-                .host_port()
-                .map_err(|source| ReconciliationReadError::InvalidExpectedPort { source })?,
+            host_port(runtime)?,
+        ),
+        canonical_route_fragment: match input
+            .desired
+            .exposure
+            .as_ref()
+            .map(crate::domain::exposure::Exposure::intent)
+        {
+            Some(ExposureIntent::Public { domain }) => Some(canonical_fragment_contents(
+                domain,
+                runtime.expected_endpoint,
+            )),
+            _ => None,
+        },
+    })
+}
+
+// Returns the confirmed active deployment and its retained runtime identity.
+fn required_active_runtime(
+    input: &ReconciliationInput,
+) -> Result<(&ActiveRuntime, &RuntimeInstance), ReconciliationReadError> {
+    let missing_runtime = || ReconciliationReadError::NotConverged {
+        reason: "application has no active runtime".to_owned(),
+    };
+    let active = input
+        .persisted
+        .active
+        .as_ref()
+        .ok_or_else(missing_runtime)?;
+    let runtime = active.runtime.as_ref().ok_or_else(missing_runtime)?;
+    Ok((active, runtime))
+}
+
+fn host_port(
+    runtime: &RuntimeInstance,
+) -> Result<crate::domain::runtime::HostPort, ReconciliationReadError> {
+    runtime
+        .expected_endpoint
+        .host_port()
+        .map_err(|source| ReconciliationReadError::InvalidExpectedPort { source })
+}
+
+// Executes one decided action; every effect below corresponds to exactly one decision variant.
+fn execute_reconciliation_decision(
+    connection: &mut Connection,
+    input: &ReconciliationInput,
+    expectations: &ReconciliationExpectations,
+    decision: ReconciliationDecision,
+    managed_caddy_directory: &std::path::Path,
+    caddyfile_path: &std::path::Path,
+) -> Result<ReconciliationResult, ReconciliationReadError> {
+    match decision {
+        ReconciliationDecision::InSync => Ok(ReconciliationResult::NoOp),
+        ReconciliationDecision::RepairRuntime(repair) => {
+            confirm_runtime_identity(connection, input, &repair)
+        }
+        ReconciliationDecision::RematerializeRuntime(plan) => {
+            rematerialize_runtime(connection, input, expectations, plan)
+        }
+        ReconciliationDecision::RemoveInternalRoute { expected_state } => remove_internal_route(
+            connection,
+            input,
+            expected_state,
+            managed_caddy_directory,
+            caddyfile_path,
+        ),
+        ReconciliationDecision::MaterializePublicRoute { expected_state } => {
+            materialize_public_route(
+                connection,
+                input,
+                expected_state,
+                managed_caddy_directory,
+                caddyfile_path,
+            )
+        }
+        ReconciliationDecision::RecordPublicExposureFailure(failure) => {
+            record_public_exposure_failure(connection, input, &failure)
+        }
+        ReconciliationDecision::RequireManualIntervention(reason) => {
+            Ok(ReconciliationResult::ManualIntervention { reason })
+        }
+    }
+}
+
+// Confirms a proven recreated container by swapping the recorded container id under CAS.
+fn confirm_runtime_identity(
+    connection: &Connection,
+    input: &ReconciliationInput,
+    repair: &RuntimeIdentityRepair,
+) -> Result<ReconciliationResult, ReconciliationReadError> {
+    let (_active, runtime) = required_active_runtime(input)?;
+    let outcome = runtime_store::reconcile_external_runtime_id(
+        connection,
+        &runtime.id,
+        &runtime.external_runtime_id,
+        &repair.container_id,
+    )
+    .map_err(|source| ReconciliationReadError::Runtime { source })?;
+    if outcome == crate::adapters::stores::PersistenceOutcome::Stale {
+        return Err(ReconciliationReadError::NotConverged {
+            reason: format!(
+                "runtime `{}` changed before identity reconciliation",
+                runtime.id
+            ),
+        });
+    }
+    Ok(ReconciliationResult::Repaired {
+        runtime_id: repair.runtime_id.to_string(),
+        container_id: repair.container_id.to_string(),
+    })
+}
+
+// Rematerializes the decided runtime from persisted identity and confirms it before persisting.
+fn rematerialize_runtime(
+    connection: &Connection,
+    input: &ReconciliationInput,
+    expectations: &ReconciliationExpectations,
+    plan: RuntimeRematerialization,
+) -> Result<ReconciliationResult, ReconciliationReadError> {
+    let application = &input.desired.application;
+    let (active, runtime) = required_active_runtime(input)?;
+    let specification = input.persisted.specification.as_ref().ok_or_else(|| {
+        ReconciliationReadError::NotConverged {
+            reason: "application has no persisted deployment specification".to_owned(),
+        }
+    })?;
+    let unit = unit_name(&application.name, &active.deployment.id);
+    if plan.unit_needs_write {
+        write_unit(
+            &application.name,
+            &active.deployment.id,
+            &active.release.artifact,
+            runtime.container_port,
+            host_port(runtime)?,
         )
         .map_err(|source| ReconciliationReadError::ObserveQuadlet { source })?;
         daemon_reload().map_err(|source| ReconciliationReadError::ObserveQuadlet { source })?;
@@ -333,28 +422,27 @@ fn rematerialize_missing_runtime(
         image_digest_label,
         observation: container_observation,
     } = observe_named_container(
-        &container_name(&input.desired.application.name, &active.deployment.id),
+        &container_name(&application.name, &active.deployment.id),
         runtime.container_port,
     )
     .map_err(|source| ReconciliationReadError::ObserveNamedContainer { source })?
     else {
-        return Ok(Some(ReconciliationResult::Failed {
+        return Ok(ReconciliationResult::Failed {
             reason: "rematerialized Quadlet did not create its expected container".to_owned(),
-        }));
+        });
     };
     if *container_observation.state() != ObservedRuntimeState::Running
-        || name.trim_start_matches('/')
-            != container_name(&input.desired.application.name, &active.deployment.id)
+        || name.trim_start_matches('/') != expectations.container_name
         || image_reference != active.release.artifact.reference()
-        || application_label.as_deref() != Some(input.desired.application.name.as_str())
+        || application_label.as_deref() != Some(application.name.as_str())
         || image_digest_label.as_deref() != Some(active.release.artifact.digest())
         || container_observation.observed_endpoint()
             != Some(runtime.expected_endpoint.socket_addr())
     {
-        return Ok(Some(ReconciliationResult::ManualIntervention {
+        return Ok(ReconciliationResult::ManualIntervention {
             reason: "rematerialized container identity or endpoint differs from persisted intent"
                 .to_owned(),
-        }));
+        });
     }
     match check_internal_health(
         runtime.expected_endpoint.socket_addr(),
@@ -365,11 +453,11 @@ fn rematerialize_missing_runtime(
     })? {
         HealthCheckResult::Healthy { .. } => {}
         HealthCheckResult::Unhealthy { failure, .. } => {
-            return Ok(Some(ReconciliationResult::Failed {
+            return Ok(ReconciliationResult::Failed {
                 reason: format!(
                     "rematerialized runtime failed its internal health check: {failure:?}"
                 ),
-            }));
+            });
         }
     }
     let outcome = runtime_store::reconcile_external_runtime_id(
@@ -387,10 +475,180 @@ fn rematerialize_missing_runtime(
             ),
         });
     }
-    Ok(Some(ReconciliationResult::Repaired {
+    Ok(ReconciliationResult::Repaired {
         runtime_id: runtime.id.to_string(),
         container_id: id.to_string(),
-    }))
+    })
+}
+
+// Removes a stale managed route from an internally exposed application after CAS reservation.
+fn remove_internal_route(
+    connection: &mut Connection,
+    input: &ReconciliationInput,
+    expected_state: ExposureMaterializationState,
+    managed_caddy_directory: &std::path::Path,
+    caddyfile_path: &std::path::Path,
+) -> Result<ReconciliationResult, ReconciliationReadError> {
+    reserve_exposure(
+        connection,
+        input.desired.application.id.as_str(),
+        Visibility::Internal,
+        expected_state,
+    )?;
+    let removed = match remove_caddy_fragment(
+        managed_caddy_directory,
+        &input.desired.application.id,
+        caddyfile_path,
+    ) {
+        Ok(removed) => removed,
+        Err(source) => {
+            return record_exposure_failure(
+                connection,
+                input.desired.application.id.as_str(),
+                Visibility::Internal,
+                ExposureMaterializationState::Removing,
+                "caddy_removal_failed",
+                &source.to_string(),
+                source.recovery_failed(),
+            );
+        }
+    };
+    let transaction = connection.transaction().map_err(persistence_error)?;
+    let completed = exposure_store::complete_internal_exposure_change(
+        &transaction,
+        &input.desired.application.id,
+    )
+    .map_err(|source| ReconciliationReadError::Exposure { source })?;
+    if completed == crate::adapters::stores::PersistenceOutcome::Stale {
+        drop(transaction);
+        let recovery_failed = restore_removed_caddy_fragment(&removed, caddyfile_path).is_err();
+        return record_exposure_failure(
+            connection,
+            input.desired.application.id.as_str(),
+            Visibility::Internal,
+            ExposureMaterializationState::Removing,
+            "exposure_changed",
+            "exposure changed while Caddy route removal was being confirmed",
+            recovery_failed,
+        );
+    }
+    transaction.commit().map_err(persistence_error)?;
+    Ok(ReconciliationResult::ExposureRepaired)
+}
+
+// Materializes the canonical public route, verifies external health, then persists confirmation.
+fn materialize_public_route(
+    connection: &mut Connection,
+    input: &ReconciliationInput,
+    expected_state: ExposureMaterializationState,
+    managed_caddy_directory: &std::path::Path,
+    caddyfile_path: &std::path::Path,
+) -> Result<ReconciliationResult, ReconciliationReadError> {
+    let Some(exposure) = &input.desired.exposure else {
+        return Err(inconsistent_input(
+            "public route materialization requires an exposure",
+        ));
+    };
+    let ExposureIntent::Public { domain } = exposure.intent() else {
+        return Err(inconsistent_input(
+            "public route materialization requires public intent",
+        ));
+    };
+    let (_, runtime) = required_active_runtime(input)?;
+    let contents = canonical_fragment_contents(domain, runtime.expected_endpoint);
+    let configuration_version = ExposureConfigurationVersion::new(&contents).map_err(|source| {
+        ReconciliationReadError::NotConverged {
+            reason: source.to_string(),
+        }
+    })?;
+    reserve_exposure(
+        connection,
+        input.desired.application.id.as_str(),
+        Visibility::Public,
+        expected_state,
+    )?;
+    let materialized = match materialize_caddy_fragment(
+        managed_caddy_directory,
+        caddyfile_path,
+        &input.desired.application.id,
+        domain,
+        runtime.expected_endpoint,
+    ) {
+        Ok(materialized) => materialized,
+        Err(source) => {
+            return record_exposure_failure(
+                connection,
+                input.desired.application.id.as_str(),
+                Visibility::Public,
+                ExposureMaterializationState::Applying,
+                "caddy_materialization_failed",
+                &source.to_string(),
+                source.recovery_failed(),
+            );
+        }
+    };
+    let specification = input.persisted.specification.as_ref().ok_or_else(|| {
+        ReconciliationReadError::NotConverged {
+            reason: "application has no deployment specification for public health".to_owned(),
+        }
+    })?;
+    if let Err(source) = check_external_health(
+        domain,
+        specification.runtime.health_check().path(),
+        specification.runtime.health_check().expected_status(),
+    ) {
+        let recovery_failed =
+            restore_materialized_caddy_fragment(&materialized, caddyfile_path).is_err();
+        return record_exposure_failure(
+            connection,
+            input.desired.application.id.as_str(),
+            Visibility::Public,
+            ExposureMaterializationState::Applying,
+            "external_health_check_failed",
+            &source.to_string(),
+            recovery_failed,
+        );
+    }
+    let transaction = connection.transaction().map_err(persistence_error)?;
+    let completed = exposure_store::complete_public_exposure_change(
+        &transaction,
+        &input.desired.application.id,
+        &runtime.id,
+        &configuration_version,
+    )
+    .map_err(|source| ReconciliationReadError::Exposure { source })?;
+    if completed == crate::adapters::stores::PersistenceOutcome::Stale {
+        drop(transaction);
+        let recovery_failed =
+            restore_materialized_caddy_fragment(&materialized, caddyfile_path).is_err();
+        return record_exposure_failure(
+            connection,
+            input.desired.application.id.as_str(),
+            Visibility::Public,
+            ExposureMaterializationState::Applying,
+            "exposure_changed",
+            "exposure changed while Caddy route materialization was being confirmed",
+            recovery_failed,
+        );
+    }
+    transaction.commit().map_err(persistence_error)?;
+    Ok(ReconciliationResult::ExposureRepaired)
+}
+
+fn record_public_exposure_failure(
+    connection: &Connection,
+    input: &ReconciliationInput,
+    failure: &PublicExposureFailure,
+) -> Result<ReconciliationResult, ReconciliationReadError> {
+    record_exposure_failure(
+        connection,
+        input.desired.application.id.as_str(),
+        Visibility::Public,
+        failure.expected_state,
+        failure.kind.code(),
+        failure.kind.message(),
+        false,
+    )
 }
 
 // Terminates work left by a dead lock holder without treating an incomplete candidate as promotable.
@@ -588,241 +846,6 @@ fn prior_canonical_route_is_present(
     )
 }
 
-// Reconciles a managed route only after the persisted snapshot has been CAS-reserved.
-fn reconcile_exposure(
-    connection: &mut Connection,
-    input: &ReconciliationInput,
-    observation: &ReconciliationObservation,
-    managed_caddy_directory: &std::path::Path,
-    caddyfile_path: &std::path::Path,
-) -> Result<Option<ReconciliationResult>, ReconciliationReadError> {
-    let Some(exposure) = &input.desired.exposure else {
-        return Ok(None);
-    };
-    let state = exposure.materialization().state();
-    if state == ExposureMaterializationState::Diverged {
-        return Ok(Some(ReconciliationResult::ManualIntervention {
-            reason: "exposure materialization diverged and requires manual intervention".to_owned(),
-        }));
-    }
-    match exposure.intent().visibility() {
-        Visibility::Internal => {
-            if observation.caddy_fragment == CaddyFragmentObservation::Missing {
-                return Ok(None);
-            }
-            reserve_exposure(
-                connection,
-                input.desired.application.id.as_str(),
-                Visibility::Internal,
-                state,
-            )?;
-            let removed = match remove_caddy_fragment(
-                managed_caddy_directory,
-                &input.desired.application.id,
-                caddyfile_path,
-            ) {
-                Ok(removed) => removed,
-                Err(source) => {
-                    return record_exposure_failure(
-                        connection,
-                        input.desired.application.id.as_str(),
-                        Visibility::Internal,
-                        ExposureMaterializationState::Removing,
-                        "caddy_removal_failed",
-                        &source.to_string(),
-                        source.recovery_failed(),
-                    );
-                }
-            };
-            let transaction = connection.transaction().map_err(persistence_error)?;
-            let completed = exposure_store::complete_internal_exposure_change(
-                &transaction,
-                &input.desired.application.id,
-            )
-            .map_err(|source| ReconciliationReadError::Exposure { source })?;
-            if completed == crate::adapters::stores::PersistenceOutcome::Stale {
-                drop(transaction);
-                let recovery_failed =
-                    restore_removed_caddy_fragment(&removed, caddyfile_path).is_err();
-                return record_exposure_failure(
-                    connection,
-                    input.desired.application.id.as_str(),
-                    Visibility::Internal,
-                    ExposureMaterializationState::Removing,
-                    "exposure_changed",
-                    "exposure changed while Caddy route removal was being confirmed",
-                    recovery_failed,
-                );
-            }
-            transaction.commit().map_err(persistence_error)?;
-            Ok(Some(ReconciliationResult::ExposureRepaired))
-        }
-        Visibility::Public => reconcile_public_exposure(
-            connection,
-            input,
-            observation,
-            managed_caddy_directory,
-            caddyfile_path,
-            state,
-        ),
-    }
-}
-
-fn reconcile_public_exposure(
-    connection: &mut Connection,
-    input: &ReconciliationInput,
-    observation: &ReconciliationObservation,
-    managed_caddy_directory: &std::path::Path,
-    caddyfile_path: &std::path::Path,
-    state: ExposureMaterializationState,
-) -> Result<Option<ReconciliationResult>, ReconciliationReadError> {
-    let Some(exposure) = &input.desired.exposure else {
-        return Ok(None);
-    };
-    let Some(domain) = exposure.intent().domain() else {
-        return record_exposure_failure(
-            connection,
-            input.desired.application.id.as_str(),
-            Visibility::Public,
-            state,
-            "domain_missing",
-            "public exposure has no configured domain",
-            false,
-        );
-    };
-    let Some(active) = &input.persisted.active else {
-        return record_exposure_failure(
-            connection,
-            input.desired.application.id.as_str(),
-            Visibility::Public,
-            state,
-            "runtime_missing",
-            "public exposure has no active runtime",
-            false,
-        );
-    };
-    let Some(runtime) = &active.runtime else {
-        return record_exposure_failure(
-            connection,
-            input.desired.application.id.as_str(),
-            Visibility::Public,
-            state,
-            "runtime_missing",
-            "public exposure has no active runtime",
-            false,
-        );
-    };
-    let endpoint = runtime.expected_endpoint.socket_addr();
-    if input.desired.application.desired_runtime_state != DesiredRuntimeState::Running
-        || *observation.recorded_container.state() != ObservedRuntimeState::Running
-        || observation.recorded_container.observed_endpoint() != Some(endpoint)
-    {
-        return record_exposure_failure(
-            connection,
-            input.desired.application.id.as_str(),
-            Visibility::Public,
-            state,
-            "runtime_not_healthy",
-            "public exposure requires a confirmed healthy running runtime",
-            false,
-        );
-    }
-    let contents = crate::adapters::caddy_exposure::canonical_fragment_contents(
-        domain,
-        runtime.expected_endpoint,
-    );
-    let configuration_version = ExposureConfigurationVersion::new(&contents).map_err(|source| {
-        ReconciliationReadError::NotConverged {
-            reason: source.to_string(),
-        }
-    })?;
-    let route_is_confirmed = exposure
-        .materialization()
-        .confirmed_route()
-        .is_some_and(|route| {
-            route.runtime_id() == &runtime.id
-                && route.configuration_version() == &configuration_version
-        });
-    if observation.caddy_fragment == (CaddyFragmentObservation::Present { contents })
-        && state == ExposureMaterializationState::Active
-        && route_is_confirmed
-    {
-        return Ok(Some(ReconciliationResult::NoOp));
-    }
-    reserve_exposure(
-        connection,
-        input.desired.application.id.as_str(),
-        Visibility::Public,
-        state,
-    )?;
-    let materialized = match materialize_caddy_fragment(
-        managed_caddy_directory,
-        caddyfile_path,
-        &input.desired.application.id,
-        domain,
-        runtime.expected_endpoint,
-    ) {
-        Ok(materialized) => materialized,
-        Err(source) => {
-            return record_exposure_failure(
-                connection,
-                input.desired.application.id.as_str(),
-                Visibility::Public,
-                ExposureMaterializationState::Applying,
-                "caddy_materialization_failed",
-                &source.to_string(),
-                source.recovery_failed(),
-            );
-        }
-    };
-    let specification = input.persisted.specification.as_ref().ok_or_else(|| {
-        ReconciliationReadError::NotConverged {
-            reason: "application has no deployment specification for public health".to_owned(),
-        }
-    })?;
-    if let Err(source) = check_external_health(
-        domain,
-        specification.runtime.health_check().path(),
-        specification.runtime.health_check().expected_status(),
-    ) {
-        let recovery_failed =
-            restore_materialized_caddy_fragment(&materialized, caddyfile_path).is_err();
-        return record_exposure_failure(
-            connection,
-            input.desired.application.id.as_str(),
-            Visibility::Public,
-            ExposureMaterializationState::Applying,
-            "external_health_check_failed",
-            &source.to_string(),
-            recovery_failed,
-        );
-    }
-    let transaction = connection.transaction().map_err(persistence_error)?;
-    let completed = exposure_store::complete_public_exposure_change(
-        &transaction,
-        &input.desired.application.id,
-        &runtime.id,
-        &configuration_version,
-    )
-    .map_err(|source| ReconciliationReadError::Exposure { source })?;
-    if completed == crate::adapters::stores::PersistenceOutcome::Stale {
-        drop(transaction);
-        let recovery_failed =
-            restore_materialized_caddy_fragment(&materialized, caddyfile_path).is_err();
-        return record_exposure_failure(
-            connection,
-            input.desired.application.id.as_str(),
-            Visibility::Public,
-            ExposureMaterializationState::Applying,
-            "exposure_changed",
-            "exposure changed while Caddy route materialization was being confirmed",
-            recovery_failed,
-        );
-    }
-    transaction.commit().map_err(persistence_error)?;
-    Ok(Some(ReconciliationResult::ExposureRepaired))
-}
-
 fn reserve_exposure(
     connection: &Connection,
     application_id: &str,
@@ -858,7 +881,7 @@ fn record_exposure_failure(
     code: &str,
     message: &str,
     diverged: bool,
-) -> Result<Option<ReconciliationResult>, ReconciliationReadError> {
+) -> Result<ReconciliationResult, ReconciliationReadError> {
     let diagnostic = ExposureDiagnostic::new(code, message).map_err(|_| {
         ReconciliationReadError::NotConverged {
             reason: "reconciliation produced an invalid exposure diagnostic".to_owned(),
@@ -883,16 +906,15 @@ fn record_exposure_failure(
             reason: "exposure changed before reconciliation failure could be recorded".to_owned(),
         });
     }
-    let result = if diverged {
-        ReconciliationResult::Diverged {
+    if diverged {
+        Ok(ReconciliationResult::Diverged {
             reason: message.to_owned(),
-        }
+        })
     } else {
-        ReconciliationResult::Failed {
+        Ok(ReconciliationResult::Failed {
             reason: message.to_owned(),
-        }
-    };
-    Ok(Some(result))
+        })
+    }
 }
 
 fn persistence_error(source: rusqlite::Error) -> ReconciliationReadError {
@@ -901,82 +923,12 @@ fn persistence_error(source: rusqlite::Error) -> ReconciliationReadError {
     }
 }
 
-// Reconciles only a fully confirmed Quadlet recreation; all other drift remains non-destructive.
-fn repair_recreated_runtime(
-    connection: &Connection,
-    input: &ReconciliationInput,
-    observation: &ReconciliationObservation,
-) -> Result<Option<ReconciliationResult>, ReconciliationReadError> {
-    if input.desired.application.desired_runtime_state != DesiredRuntimeState::Running
-        || observation.caddy_fragment != CaddyFragmentObservation::Missing
-    {
-        return Ok(None);
+// Marks an executor precondition the pure decision already guaranteed; refusing
+// to guess keeps impossible states explicit instead of silently proceeding.
+fn inconsistent_input(reason: &'static str) -> ReconciliationReadError {
+    ReconciliationReadError::NotConverged {
+        reason: reason.to_owned(),
     }
-    let (
-        Some(active),
-        NamedContainerObservation::Present {
-            id,
-            name,
-            image_reference,
-            application_label,
-            image_digest_label,
-            observation: container_observation,
-        },
-    ) = (&input.persisted.active, &observation.named_container)
-    else {
-        return Ok(None);
-    };
-    let Some(runtime) = &active.runtime else {
-        return Ok(None);
-    };
-    if *observation.recorded_container.state() != ObservedRuntimeState::Missing
-        || *container_observation.state() != ObservedRuntimeState::Running
-        || name.trim_start_matches('/')
-            != container_name(&input.desired.application.name, &active.deployment.id)
-        || image_reference != active.release.artifact.reference()
-        || application_label.as_deref() != Some(input.desired.application.name.as_str())
-        || image_digest_label.as_deref() != Some(active.release.artifact.digest())
-        || container_observation.observed_endpoint()
-            != Some(runtime.expected_endpoint.socket_addr())
-    {
-        return Ok(None);
-    }
-    let expected_unit = canonical_unit_contents(
-        &input.desired.application.name,
-        &active.deployment.id,
-        &active.release.artifact,
-        runtime.container_port,
-        runtime
-            .expected_endpoint
-            .host_port()
-            .map_err(|source| ReconciliationReadError::InvalidExpectedPort { source })?,
-    );
-    if observation.quadlet_source
-        != (crate::domain::reconciliation::QuadletSourceObservation::Present {
-            contents: expected_unit,
-        })
-    {
-        return Ok(None);
-    }
-    let outcome = runtime_store::reconcile_external_runtime_id(
-        connection,
-        &runtime.id,
-        &runtime.external_runtime_id,
-        id,
-    )
-    .map_err(|source| ReconciliationReadError::Runtime { source })?;
-    if outcome == crate::adapters::stores::PersistenceOutcome::Stale {
-        return Err(ReconciliationReadError::NotConverged {
-            reason: format!(
-                "runtime `{}` changed before identity reconciliation",
-                runtime.id
-            ),
-        });
-    }
-    Ok(Some(ReconciliationResult::Repaired {
-        runtime_id: runtime.id.to_string(),
-        container_id: id.to_string(),
-    }))
 }
 
 // Loads desired intent and persisted bookkeeping from SQLite in one short read transaction before external observation.

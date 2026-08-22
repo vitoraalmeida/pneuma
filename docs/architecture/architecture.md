@@ -109,7 +109,12 @@ Application intent and Exposure route decision, `PersistedState` carries the
 blocking Deployment, confirmed active materialization, and specification
 snapshot, and observed Podman/systemd/Caddy facts stay separate in
 `ReconciliationObservation`. The library input path does not change SQLite or
-control external resources. `pneuma reconcile <application>` defers while a
+control external resources. After observation, a pure domain function
+(`decide` in `src/domain/reconciliation.rs`) classifies the next action into a
+`ReconciliationDecision` from persisted facts, observations, and
+boundary-rendered canonical expectations, without touching SQLite, Podman,
+systemd, Caddy, the filesystem, or clocks; the use case then executes exactly
+the decided variant. `pneuma reconcile <application>` defers while a
 non-terminal
 Deployment is held by a live per-Application kernel lock. After the lock holder
 exits, reconcile records an interrupted deployment as failed and cleans only a
