@@ -552,16 +552,32 @@ mod tests {
         }
     }
 
-    fn named_present(container_observation: ContainerObservation) -> NamedContainerObservation {
-        let artifact = release().artifact;
+    fn recreated_container(
+        name: String,
+        image_reference: String,
+        application_label: Option<String>,
+        image_digest_label: Option<String>,
+        container_observation: ContainerObservation,
+    ) -> NamedContainerObservation {
         NamedContainerObservation::Present {
             id: ContainerId::from(CONTAINER_ID),
-            name: format!("/pneuma-app-{DEPLOYMENT_ID}"),
-            image_reference: artifact.reference().to_owned(),
-            application_label: Some("app".to_owned()),
-            image_digest_label: Some(artifact.digest().to_owned()),
+            name,
+            image_reference,
+            application_label,
+            image_digest_label,
             observation: container_observation,
         }
+    }
+
+    fn named_present(container_observation: ContainerObservation) -> NamedContainerObservation {
+        let artifact = release().artifact;
+        recreated_container(
+            format!("/pneuma-app-{DEPLOYMENT_ID}"),
+            artifact.reference().to_owned(),
+            Some("app".to_owned()),
+            Some(artifact.digest().to_owned()),
+            container_observation,
+        )
     }
 
     fn quadlet(contents: &str) -> QuadletSourceObservation {
@@ -878,5 +894,300 @@ mod tests {
         };
         let error = decide(&input, &observed, &expectations(None)).unwrap_err();
         assert!(matches!(error, ReconciliationDecisionError::UnhandledDrift));
+    }
+
+    #[test]
+    fn recreated_container_under_a_foreign_name_is_not_silently_adopted() {
+        let input = input(DesiredRuntimeState::Running, None);
+        let observed = observation(
+            ContainerObservation::missing(),
+            recreated_container(
+                "/pneuma-app-foreign".to_owned(),
+                release().artifact.reference().to_owned(),
+                Some("app".to_owned()),
+                Some(release().artifact.digest().to_owned()),
+                ContainerObservation::running(socket_addr()).unwrap(),
+            ),
+            quadlet(CANONICAL_UNIT),
+            SystemdUnitObservation::Missing,
+            CaddyFragmentObservation::Missing,
+        );
+        let decision = decide(&input, &observed, &expectations(None)).unwrap();
+        assert!(matches!(
+            decision,
+            ReconciliationDecision::RequireManualIntervention(_)
+        ));
+    }
+
+    #[test]
+    fn recreated_container_from_a_foreign_image_is_not_silently_adopted() {
+        let input = input(DesiredRuntimeState::Running, None);
+        let observed = observation(
+            ContainerObservation::missing(),
+            recreated_container(
+                format!("/pneuma-app-{DEPLOYMENT_ID}"),
+                format!("registry.example/team/app@sha256:{}", "b".repeat(64)),
+                Some("app".to_owned()),
+                Some(release().artifact.digest().to_owned()),
+                ContainerObservation::running(socket_addr()).unwrap(),
+            ),
+            quadlet(CANONICAL_UNIT),
+            SystemdUnitObservation::Missing,
+            CaddyFragmentObservation::Missing,
+        );
+        let decision = decide(&input, &observed, &expectations(None)).unwrap();
+        assert!(matches!(
+            decision,
+            ReconciliationDecision::RequireManualIntervention(_)
+        ));
+    }
+
+    #[test]
+    fn recreated_container_without_the_application_label_is_not_silently_adopted() {
+        let input = input(DesiredRuntimeState::Running, None);
+        let observed = observation(
+            ContainerObservation::missing(),
+            recreated_container(
+                format!("/pneuma-app-{DEPLOYMENT_ID}"),
+                release().artifact.reference().to_owned(),
+                None,
+                Some(release().artifact.digest().to_owned()),
+                ContainerObservation::running(socket_addr()).unwrap(),
+            ),
+            quadlet(CANONICAL_UNIT),
+            SystemdUnitObservation::Missing,
+            CaddyFragmentObservation::Missing,
+        );
+        let decision = decide(&input, &observed, &expectations(None)).unwrap();
+        assert!(matches!(
+            decision,
+            ReconciliationDecision::RequireManualIntervention(_)
+        ));
+    }
+
+    #[test]
+    fn recreated_container_without_the_artifact_digest_label_is_not_silently_adopted() {
+        let input = input(DesiredRuntimeState::Running, None);
+        let observed = observation(
+            ContainerObservation::missing(),
+            recreated_container(
+                format!("/pneuma-app-{DEPLOYMENT_ID}"),
+                release().artifact.reference().to_owned(),
+                Some("app".to_owned()),
+                None,
+                ContainerObservation::running(socket_addr()).unwrap(),
+            ),
+            quadlet(CANONICAL_UNIT),
+            SystemdUnitObservation::Missing,
+            CaddyFragmentObservation::Missing,
+        );
+        let decision = decide(&input, &observed, &expectations(None)).unwrap();
+        assert!(matches!(
+            decision,
+            ReconciliationDecision::RequireManualIntervention(_)
+        ));
+    }
+
+    #[test]
+    fn recreated_container_on_a_foreign_endpoint_is_not_silently_adopted() {
+        let input = input(DesiredRuntimeState::Running, None);
+        let foreign_endpoint = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 30001);
+        let observed = observation(
+            ContainerObservation::missing(),
+            named_present(ContainerObservation::running(foreign_endpoint).unwrap()),
+            quadlet(CANONICAL_UNIT),
+            SystemdUnitObservation::Missing,
+            CaddyFragmentObservation::Missing,
+        );
+        let decision = decide(&input, &observed, &expectations(None)).unwrap();
+        assert!(matches!(
+            decision,
+            ReconciliationDecision::RequireManualIntervention(_)
+        ));
+    }
+
+    #[test]
+    fn known_stopped_recorded_runtime_is_not_silently_restarted_while_running_is_desired() {
+        let input = input(DesiredRuntimeState::Running, None);
+        let observed = observation(
+            ContainerObservation::not_running(ObservedRuntimeState::Stopped).unwrap(),
+            NamedContainerObservation::Missing,
+            QuadletSourceObservation::Missing,
+            SystemdUnitObservation::Missing,
+            CaddyFragmentObservation::Missing,
+        );
+        let decision = decide(&input, &observed, &expectations(None)).unwrap();
+        assert!(matches!(
+            decision,
+            ReconciliationDecision::RequireManualIntervention(_)
+        ));
+    }
+
+    #[test]
+    fn unknown_recorded_runtime_state_requires_manual_intervention_while_running_is_desired() {
+        let input = input(DesiredRuntimeState::Running, None);
+        let observed = observation(
+            ContainerObservation::not_running(ObservedRuntimeState::Unknown {
+                status: "restarting".to_owned(),
+            })
+            .unwrap(),
+            NamedContainerObservation::Missing,
+            QuadletSourceObservation::Missing,
+            SystemdUnitObservation::Missing,
+            CaddyFragmentObservation::Missing,
+        );
+        let decision = decide(&input, &observed, &expectations(None)).unwrap();
+        assert!(matches!(
+            decision,
+            ReconciliationDecision::RequireManualIntervention(_)
+        ));
+    }
+
+    #[test]
+    fn unknown_recorded_runtime_state_is_refused_when_stopped_is_desired() {
+        let input = input(DesiredRuntimeState::Stopped, None);
+        let observed = observation(
+            ContainerObservation::not_running(ObservedRuntimeState::Unknown {
+                status: "restarting".to_owned(),
+            })
+            .unwrap(),
+            NamedContainerObservation::Missing,
+            QuadletSourceObservation::Missing,
+            SystemdUnitObservation::Missing,
+            CaddyFragmentObservation::Missing,
+        );
+        let error = decide(&input, &observed, &expectations(None)).unwrap_err();
+        assert!(matches!(error, ReconciliationDecisionError::UnhandledDrift));
+    }
+
+    // Pins the preserved precedence of the externally relied-on flow: only a
+    // confirmed public route reaches `InSync`, so a fully healthy running
+    // internal application still falls through to manual intervention.
+    #[test]
+    fn converged_running_internal_runtime_reports_manual_intervention_instead_of_a_silent_no_op() {
+        let input = input(
+            DesiredRuntimeState::Running,
+            Some(internal_exposure(
+                ExposureMaterializationState::NotMaterialized,
+            )),
+        );
+        let observed = observation(
+            ContainerObservation::running(socket_addr()).unwrap(),
+            named_present(ContainerObservation::running(socket_addr()).unwrap()),
+            quadlet(CANONICAL_UNIT),
+            SystemdUnitObservation::Present {
+                active_state: "active".to_owned(),
+            },
+            CaddyFragmentObservation::Missing,
+        );
+        let decision = decide(&input, &observed, &expectations(None)).unwrap();
+        assert_eq!(
+            decision,
+            ReconciliationDecision::RequireManualIntervention(
+                "runtime identity or configuration differs from persisted intent".to_owned()
+            )
+        );
+    }
+
+    #[test]
+    fn public_exposure_with_an_active_bundle_missing_its_runtime_records_failure() {
+        let mut input = input(
+            DesiredRuntimeState::Running,
+            Some(public_exposure(
+                ExposureMaterializationState::NotMaterialized,
+                false,
+            )),
+        );
+        input.persisted.active.as_mut().unwrap().runtime = None;
+        // An active generated unit blocks rematerialization so the public rule is reached.
+        let observed = observation(
+            ContainerObservation::missing(),
+            NamedContainerObservation::Missing,
+            QuadletSourceObservation::Missing,
+            SystemdUnitObservation::Present {
+                active_state: "active".to_owned(),
+            },
+            CaddyFragmentObservation::Missing,
+        );
+        let decision = decide(
+            &input,
+            &observed,
+            &expectations(Some(CANONICAL_ROUTE.to_owned())),
+        )
+        .unwrap();
+        assert_eq!(
+            decision,
+            ReconciliationDecision::RecordPublicExposureFailure(PublicExposureFailure {
+                expected_state: ExposureMaterializationState::NotMaterialized,
+                kind: PublicExposureFailureKind::RuntimeMissing,
+            })
+        );
+    }
+
+    #[test]
+    fn canonical_public_fragment_with_an_unconfirmed_route_materializes_it() {
+        // An applying materialization has no confirmed route yet; matching bytes
+        // still require an explicit confirmation pass.
+        let input = input(
+            DesiredRuntimeState::Running,
+            Some(public_exposure(
+                ExposureMaterializationState::Applying,
+                false,
+            )),
+        );
+        let observed = observation(
+            ContainerObservation::running(socket_addr()).unwrap(),
+            named_present(ContainerObservation::running(socket_addr()).unwrap()),
+            quadlet(CANONICAL_UNIT),
+            SystemdUnitObservation::Present {
+                active_state: "active".to_owned(),
+            },
+            CaddyFragmentObservation::Present {
+                contents: CANONICAL_ROUTE.to_owned(),
+            },
+        );
+        let decision = decide(
+            &input,
+            &observed,
+            &expectations(Some(CANONICAL_ROUTE.to_owned())),
+        )
+        .unwrap();
+        assert_eq!(
+            decision,
+            ReconciliationDecision::MaterializePublicRoute {
+                expected_state: ExposureMaterializationState::Applying,
+            }
+        );
+    }
+
+    #[test]
+    fn divergent_public_fragment_contents_are_rematerialed_from_the_canonical_bytes() {
+        let input = input(
+            DesiredRuntimeState::Running,
+            Some(public_exposure(ExposureMaterializationState::Active, true)),
+        );
+        let observed = observation(
+            ContainerObservation::running(socket_addr()).unwrap(),
+            named_present(ContainerObservation::running(socket_addr()).unwrap()),
+            quadlet(CANONICAL_UNIT),
+            SystemdUnitObservation::Present {
+                active_state: "active".to_owned(),
+            },
+            CaddyFragmentObservation::Present {
+                contents: "divergent-route".to_owned(),
+            },
+        );
+        let decision = decide(
+            &input,
+            &observed,
+            &expectations(Some(CANONICAL_ROUTE.to_owned())),
+        )
+        .unwrap();
+        assert_eq!(
+            decision,
+            ReconciliationDecision::MaterializePublicRoute {
+                expected_state: ExposureMaterializationState::Active,
+            }
+        );
     }
 }

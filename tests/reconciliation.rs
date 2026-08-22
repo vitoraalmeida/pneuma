@@ -209,6 +209,66 @@ fn reconcile_marks_an_interrupted_activation_route_diverged_when_prior_route_is_
     fs::remove_dir_all(root).unwrap();
 }
 
+#[test]
+fn only_nonterminal_deployments_block_reconciliation_dispatch() {
+    for (status, blocks) in [
+        ("pending", true),
+        ("starting", true),
+        ("verifying", true),
+        ("activating", true),
+        ("succeeded", false),
+        ("failed", false),
+    ] {
+        let root = temporary_directory();
+        let database_path = root.join("pneuma.sqlite3");
+        let mut connection = database::open(&database_path).unwrap();
+        let application_id = "1".repeat(32);
+        let release_id = "2".repeat(32);
+        let deployment_id = "3".repeat(32);
+        let digest = format!("sha256:{}", "a".repeat(64));
+        connection
+            .execute_batch(&format!(
+                "INSERT INTO applications (id, name, desired_runtime_state, spec_version, created_at, updated_at)
+                 VALUES ('{application_id}', 'another', 'running', 3, '2026-01-01', '2026-01-01');
+                 INSERT INTO releases (id, application_id, image_reference, image_repository, image_digest, created_at)
+                 VALUES ('{release_id}', '{application_id}', 'registry.example/team/another@{digest}', 'registry.example/team/another', '{digest}', '2026-01-01');
+                 INSERT INTO deployments (id, application_id, release_id, type, status, requested_at, started_at)
+                 VALUES ('{deployment_id}', '{application_id}', '{release_id}', 'deploy', '{status}', '2026-01-01', '2026-01-01');"
+            ))
+            .unwrap();
+
+        let input =
+            load_reconciliation_input(&mut connection, &ApplicationName::new("another").unwrap())
+                .unwrap();
+
+        assert_eq!(
+            input.persisted.blocking_deployment.is_some(),
+            blocks,
+            "deployment status `{status}` must block reconciliation: {blocks}"
+        );
+        drop(connection);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    let root = temporary_directory();
+    let database_path = root.join("pneuma.sqlite3");
+    let mut connection = database::open(&database_path).unwrap();
+    connection
+        .execute_batch(
+            "INSERT INTO applications (id, name, desired_runtime_state, spec_version, created_at, updated_at)
+             VALUES ('11111111111111111111111111111111', 'another', 'running', 3, '2026-01-01', '2026-01-01');",
+        )
+        .unwrap();
+
+    let input =
+        load_reconciliation_input(&mut connection, &ApplicationName::new("another").unwrap())
+            .unwrap();
+
+    assert!(input.persisted.blocking_deployment.is_none());
+    drop(connection);
+    fs::remove_dir_all(root).unwrap();
+}
+
 fn reconcile_command(root: &std::path::Path, database_path: &std::path::Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_pneuma"));
     command
