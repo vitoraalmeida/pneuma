@@ -9,7 +9,7 @@ use crate::adapters::systemd_quadlet::{
     QuadletError, container_name, daemon_reload, start, write_unit,
 };
 use crate::domain::application::ApplicationName;
-use crate::domain::deployment::DeploymentTransition;
+use crate::domain::deployment::DeploymentEvent;
 use crate::domain::identity::{ApplicationId, DeploymentId};
 use crate::domain::release::OciArtifact;
 use crate::domain::runtime::{
@@ -113,12 +113,12 @@ pub(crate) fn start_candidate(
         runtime,
     } = input;
 
-    advance_deployment(connection, deployment_id, DeploymentTransition::Start).map_err(
-        |source| CandidateStartError::DeploymentTransition {
+    advance_deployment(connection, deployment_id, DeploymentEvent::Start).map_err(|source| {
+        CandidateStartError::DeploymentTransition {
             source,
             resources: Box::new(CandidateResources::empty()),
-        },
-    )?;
+        }
+    })?;
 
     let host_port = reserve_port(connection, application_id, deployment_id)
         .map_err(|source| CandidateStartError::PortAllocation { source })?;
@@ -205,15 +205,12 @@ pub(crate) fn start_candidate(
         }
     })?;
 
-    advance_deployment(
-        connection,
-        deployment_id,
-        DeploymentTransition::RuntimeRunning,
-    )
-    .map_err(|source| CandidateStartError::DeploymentTransition {
-        source,
-        resources: Box::new(resources.clone()),
-    })?;
+    advance_deployment(connection, deployment_id, DeploymentEvent::RuntimeRunning).map_err(
+        |source| CandidateStartError::DeploymentTransition {
+            source,
+            resources: Box::new(resources.clone()),
+        },
+    )?;
 
     Ok(StartedCandidate {
         runtime,

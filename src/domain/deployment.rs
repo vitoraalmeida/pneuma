@@ -25,10 +25,6 @@ impl Deployment {
     pub fn status(&self) -> DeploymentStatus {
         self.lifecycle.status()
     }
-
-    pub fn is_nonterminal(&self) -> bool {
-        self.lifecycle.is_nonterminal()
-    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -52,13 +48,6 @@ impl DeploymentLifecycle {
             Self::Succeeded { .. } => DeploymentStatus::Succeeded,
             Self::Failed { .. } => DeploymentStatus::Failed,
         }
-    }
-
-    pub fn is_nonterminal(&self) -> bool {
-        matches!(
-            self,
-            Self::Pending | Self::Starting | Self::Verifying | Self::Activating
-        )
     }
 }
 
@@ -184,32 +173,81 @@ impl fmt::Display for DeploymentStatus {
     }
 }
 
-impl DeploymentStatus {
-    pub fn is_nonterminal(self) -> bool {
-        matches!(
-            self,
-            Self::Pending | Self::Starting | Self::Verifying | Self::Activating
-        )
-    }
-}
-
+// Names one external fact or workflow decision that asks a Deployment to change state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-// Drives the compare-and-set state advance from one non-terminal Deployment status to the next.
-pub enum DeploymentTransition {
+pub enum DeploymentEvent {
     Start,
     RuntimeRunning,
     Verified,
+    Activated,
+    Fail,
 }
 
-impl DeploymentTransition {
-    pub fn edge(self) -> (DeploymentStatus, DeploymentStatus) {
+impl fmt::Display for DeploymentEvent {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Start => (DeploymentStatus::Pending, DeploymentStatus::Starting),
-            Self::RuntimeRunning => (DeploymentStatus::Starting, DeploymentStatus::Verifying),
-            Self::Verified => (DeploymentStatus::Verifying, DeploymentStatus::Activating),
+            Self::Start => formatter.write_str("start"),
+            Self::RuntimeRunning => formatter.write_str("runtime running"),
+            Self::Verified => formatter.write_str("verified"),
+            Self::Activated => formatter.write_str("activated"),
+            Self::Fail => formatter.write_str("fail"),
         }
     }
 }
+
+impl DeploymentStatus {
+    // Applies one event to the current status, returning the next status or rejecting the pair.
+    pub fn transition(
+        self,
+        event: DeploymentEvent,
+    ) -> Result<DeploymentStatus, InvalidDeploymentTransition> {
+        let next = match (self, event) {
+            (Self::Pending, DeploymentEvent::Start) => Self::Starting,
+            (Self::Starting, DeploymentEvent::RuntimeRunning) => Self::Verifying,
+            (Self::Verifying, DeploymentEvent::Verified) => Self::Activating,
+            (Self::Verifying | Self::Activating, DeploymentEvent::Activated) => Self::Succeeded,
+            (status, DeploymentEvent::Fail) if status.can_fail() => Self::Failed,
+            _ => {
+                return Err(InvalidDeploymentTransition {
+                    current: self,
+                    event,
+                });
+            }
+        };
+        Ok(next)
+    }
+
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Succeeded | Self::Failed)
+    }
+
+    pub fn is_nonterminal(self) -> bool {
+        !self.is_terminal()
+    }
+
+    // Only a Deployment still performing activation work may record a terminal failure.
+    pub fn can_fail(self) -> bool {
+        self.is_nonterminal()
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+// Rejects an event that has no legal edge from the current Deployment status.
+pub struct InvalidDeploymentTransition {
+    pub current: DeploymentStatus,
+    pub event: DeploymentEvent,
+}
+
+impl fmt::Display for InvalidDeploymentTransition {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "cannot apply deployment event `{}` while in state `{}`",
+            self.event, self.current
+        )
+    }
+}
+impl Error for InvalidDeploymentTransition {}
 
 #[derive(Debug, PartialEq, Eq)]
 // Identifies a candidate whose runtime, route, and deployment were atomically promoted.
@@ -282,4 +320,137 @@ impl PromotionTarget {
 pub struct RollbackTarget {
     pub release: Release,
     pub source_revision: Option<SourceRevision>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DeploymentEvent, DeploymentStatus};
+
+    const STATUSES: [DeploymentStatus; 6] = [
+        DeploymentStatus::Pending,
+        DeploymentStatus::Starting,
+        DeploymentStatus::Verifying,
+        DeploymentStatus::Activating,
+        DeploymentStatus::Succeeded,
+        DeploymentStatus::Failed,
+    ];
+
+    const EVENTS: [DeploymentEvent; 5] = [
+        DeploymentEvent::Start,
+        DeploymentEvent::RuntimeRunning,
+        DeploymentEvent::Verified,
+        DeploymentEvent::Activated,
+        DeploymentEvent::Fail,
+    ];
+
+    #[test]
+    fn applies_every_valid_transition() {
+        let valid = [
+            (
+                DeploymentStatus::Pending,
+                DeploymentEvent::Start,
+                DeploymentStatus::Starting,
+            ),
+            (
+                DeploymentStatus::Pending,
+                DeploymentEvent::Fail,
+                DeploymentStatus::Failed,
+            ),
+            (
+                DeploymentStatus::Starting,
+                DeploymentEvent::RuntimeRunning,
+                DeploymentStatus::Verifying,
+            ),
+            (
+                DeploymentStatus::Starting,
+                DeploymentEvent::Fail,
+                DeploymentStatus::Failed,
+            ),
+            (
+                DeploymentStatus::Verifying,
+                DeploymentEvent::Verified,
+                DeploymentStatus::Activating,
+            ),
+            (
+                DeploymentStatus::Verifying,
+                DeploymentEvent::Activated,
+                DeploymentStatus::Succeeded,
+            ),
+            (
+                DeploymentStatus::Verifying,
+                DeploymentEvent::Fail,
+                DeploymentStatus::Failed,
+            ),
+            (
+                DeploymentStatus::Activating,
+                DeploymentEvent::Activated,
+                DeploymentStatus::Succeeded,
+            ),
+            (
+                DeploymentStatus::Activating,
+                DeploymentEvent::Fail,
+                DeploymentStatus::Failed,
+            ),
+        ];
+        for (current, event, expected) in valid {
+            assert_eq!(
+                current.transition(event),
+                Ok(expected),
+                "{current} on {event}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_every_invalid_transition_with_current_and_event() {
+        let valid = [
+            (DeploymentStatus::Pending, DeploymentEvent::Start),
+            (DeploymentStatus::Pending, DeploymentEvent::Fail),
+            (DeploymentStatus::Starting, DeploymentEvent::RuntimeRunning),
+            (DeploymentStatus::Starting, DeploymentEvent::Fail),
+            (DeploymentStatus::Verifying, DeploymentEvent::Verified),
+            (DeploymentStatus::Verifying, DeploymentEvent::Activated),
+            (DeploymentStatus::Verifying, DeploymentEvent::Fail),
+            (DeploymentStatus::Activating, DeploymentEvent::Activated),
+            (DeploymentStatus::Activating, DeploymentEvent::Fail),
+        ];
+        for current in STATUSES {
+            for event in EVENTS {
+                if valid.contains(&(current, event)) {
+                    continue;
+                }
+                let error = match current.transition(event) {
+                    Err(error) => error,
+                    Ok(next) => panic!("{current} on {event} must be rejected, got {next}"),
+                };
+                assert_eq!(error.current, current);
+                assert_eq!(error.event, event);
+            }
+        }
+    }
+
+    #[test]
+    fn terminal_states_report_terminal_and_cannot_fail() {
+        for status in STATUSES {
+            let terminal = matches!(
+                status,
+                DeploymentStatus::Succeeded | DeploymentStatus::Failed
+            );
+            assert_eq!(status.is_terminal(), terminal, "{status}");
+            assert_eq!(status.is_nonterminal(), !terminal, "{status}");
+            assert_eq!(status.can_fail(), !terminal, "{status}");
+        }
+    }
+
+    #[test]
+    fn transition_error_names_current_state_and_event() {
+        let error = match DeploymentStatus::Failed.transition(DeploymentEvent::Start) {
+            Err(error) => error,
+            Ok(next) => panic!("failed deployments cannot restart, got {next}"),
+        };
+        assert_eq!(
+            error.to_string(),
+            "cannot apply deployment event `start` while in state `failed`"
+        );
+    }
 }

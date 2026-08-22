@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use pneuma::adapters::database;
-use pneuma::domain::deployment::DeploymentTransition;
+use pneuma::domain::deployment::DeploymentEvent;
 use pneuma::domain::deployment::DeploymentType;
 use pneuma::domain::identity::{ApplicationId, DeploymentId};
 use pneuma::domain::release::OciArtifact;
@@ -321,7 +321,7 @@ fn add_starting_deployment(
         DeploymentType::Deploy,
     )
     .unwrap();
-    advance_deployment(connection, &deployment.id, DeploymentTransition::Start).unwrap();
+    advance_deployment(connection, &deployment.id, DeploymentEvent::Start).unwrap();
     (application.id, deployment.id)
 }
 

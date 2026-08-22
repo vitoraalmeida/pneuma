@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 
 use pneuma::adapters::database;
-use pneuma::domain::deployment::DeploymentTransition;
+use pneuma::domain::deployment::DeploymentEvent;
 use pneuma::domain::deployment::DeploymentType;
 use pneuma::domain::identity::RuntimeInstanceId;
 use pneuma::domain::release::OciArtifact;
@@ -183,7 +183,7 @@ fn add_verifying_candidate(
         DeploymentType::Deploy,
     )
     .unwrap();
-    advance_deployment(connection, &deployment.id, DeploymentTransition::Start).unwrap();
+    advance_deployment(connection, &deployment.id, DeploymentEvent::Start).unwrap();
     let external_runtime_id = ContainerId::from(runtime_character.to_string().repeat(64));
     let runtime = register_candidate_runtime(
         connection,
@@ -193,12 +193,7 @@ fn add_verifying_candidate(
         ContainerPort::new(8080).unwrap(),
     )
     .unwrap();
-    advance_deployment(
-        connection,
-        &deployment.id,
-        DeploymentTransition::RuntimeRunning,
-    )
-    .unwrap();
+    advance_deployment(connection, &deployment.id, DeploymentEvent::RuntimeRunning).unwrap();
     runtime.id
 }
 

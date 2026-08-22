@@ -9,7 +9,8 @@ use crate::adapters::stores::deployment_store::DeploymentStoreError;
 use crate::adapters::stores::exposure_store::{self, ExposureStoreError};
 use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
 use crate::domain::deployment::{
-    DeploymentStatus, PromotedCandidate, PromotionCandidateRejection, PromotionTarget,
+    DeploymentEvent, DeploymentStatus, PromotedCandidate, PromotionCandidateRejection,
+    PromotionTarget,
 };
 use crate::domain::exposure::{
     ExposureConfigurationVersion, ExposureDiagnostic, ExposureIntent, ExposureOutcome,
@@ -225,12 +226,13 @@ pub fn promote_public_candidate(
             },
         }
     })?;
-    if target.deployment_status != DeploymentStatus::Activating {
-        return Err(PromotePublicCandidateError::InvalidDeploymentState {
+    target
+        .deployment_status
+        .transition(DeploymentEvent::Activated)
+        .map_err(|_| PromotePublicCandidateError::InvalidDeploymentState {
             deployment_id: target.deployment_id.to_string(),
             actual: target.deployment_status.to_string(),
-        });
-    }
+        })?;
     if !matches!(
         ExposureIntent::new(target.visibility, target.domain.clone()),
         Ok(ExposureIntent::Public { .. })
@@ -273,7 +275,7 @@ pub fn promote_public_candidate(
     if crate::adapters::stores::deployment_store::mark_succeeded(
         &transaction,
         &target.deployment_id,
-        DeploymentStatus::Activating,
+        target.deployment_status,
     )
     .map_err(|source| PromotePublicCandidateError::DeploymentStore { source })?
         == PersistenceOutcome::Stale

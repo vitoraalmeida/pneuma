@@ -11,7 +11,7 @@ use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
 use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
 use crate::domain::deployment::{
-    DeploymentStatus, PromotedCandidate, PromotionCandidateRejection, PromotionTarget,
+    DeploymentEvent, PromotedCandidate, PromotionCandidateRejection, PromotionTarget,
 };
 use crate::domain::exposure::Visibility;
 use crate::domain::identity::RuntimeInstanceId;
@@ -170,12 +170,7 @@ pub fn promote_internal_candidate(
                 runtime_id: target.runtime_id.to_string(),
             },
         })?;
-    if target.deployment_status != DeploymentStatus::Verifying {
-        return Err(PromoteInternalCandidateError::InvalidDeploymentState {
-            deployment_id: target.deployment_id.to_string(),
-            actual: target.deployment_status.to_string(),
-        });
-    }
+    ensure_activation_ready(&target)?;
     if target.visibility != Visibility::Internal {
         return Err(PromoteInternalCandidateError::PublicApplication {
             application_id: target.application_id.to_string(),
@@ -228,12 +223,7 @@ pub fn promote_internal_candidate(
                 runtime_id: target.runtime_id.to_string(),
             },
         })?;
-    if target.deployment_status != DeploymentStatus::Verifying {
-        return Err(PromoteInternalCandidateError::InvalidDeploymentState {
-            deployment_id: target.deployment_id.to_string(),
-            actual: target.deployment_status.to_string(),
-        });
-    }
+    ensure_activation_ready(&target)?;
     if target.visibility != Visibility::Internal {
         return Err(PromoteInternalCandidateError::PublicApplication {
             application_id: target.application_id.to_string(),
@@ -258,7 +248,7 @@ pub fn promote_internal_candidate(
     if deployment_store::mark_succeeded(
         &transaction,
         &target.deployment_id,
-        DeploymentStatus::Verifying,
+        target.deployment_status,
     )
     .map_err(|source| PromoteInternalCandidateError::Store { source })?
         == PersistenceOutcome::Stale
@@ -292,6 +282,18 @@ pub fn promote_internal_candidate(
         deployment_id: target.deployment_id,
         finished_at,
     })
+}
+
+// Asks the domain whether the loaded deployment may record its candidate activation.
+fn ensure_activation_ready(target: &PromotionTarget) -> Result<(), PromoteInternalCandidateError> {
+    target
+        .deployment_status
+        .transition(DeploymentEvent::Activated)
+        .map_err(|_| PromoteInternalCandidateError::InvalidDeploymentState {
+            deployment_id: target.deployment_id.to_string(),
+            actual: target.deployment_status.to_string(),
+        })?;
+    Ok(())
 }
 
 // Loads and validates persisted state text before making promotion decisions.

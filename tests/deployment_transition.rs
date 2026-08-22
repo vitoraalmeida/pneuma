@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use pneuma::adapters::database;
-use pneuma::domain::deployment::{DeploymentStatus, DeploymentTransition, DeploymentType};
+use pneuma::domain::deployment::{DeploymentEvent, DeploymentStatus, DeploymentType};
 use pneuma::domain::identity::{ApplicationId, DeploymentId};
 use pneuma::domain::release::OciArtifact;
 use pneuma::use_cases::application_import::import_application;
@@ -16,7 +16,7 @@ fn advances_in_order_through_internal_verification() {
     let (mut connection, deployment_id, _) = pending_deployment();
 
     assert_eq!(
-        advance_deployment(&connection, &deployment_id, DeploymentTransition::Start).unwrap(),
+        advance_deployment(&connection, &deployment_id, DeploymentEvent::Start).unwrap(),
         DeploymentStatus::Starting
     );
     let started_at: String = connection
@@ -27,12 +27,7 @@ fn advances_in_order_through_internal_verification() {
         )
         .unwrap();
     assert_eq!(
-        advance_deployment(
-            &connection,
-            &deployment_id,
-            DeploymentTransition::RuntimeRunning
-        )
-        .unwrap(),
+        advance_deployment(&connection, &deployment_id, DeploymentEvent::RuntimeRunning).unwrap(),
         DeploymentStatus::Verifying
     );
 
@@ -65,9 +60,9 @@ fn advances_in_order_through_internal_verification() {
 fn advances_through_public_verification_and_can_fail_there() {
     let (mut connection, deployment_id, _) = pending_deployment();
     for transition in [
-        DeploymentTransition::Start,
-        DeploymentTransition::RuntimeRunning,
-        DeploymentTransition::Verified,
+        DeploymentEvent::Start,
+        DeploymentEvent::RuntimeRunning,
+        DeploymentEvent::Verified,
     ] {
         advance_deployment(&connection, &deployment_id, transition).unwrap();
     }
@@ -87,38 +82,30 @@ fn advances_through_public_verification_and_can_fail_there() {
 fn rejects_skipped_and_repeated_transitions_without_changing_state() {
     let (connection, deployment_id, _) = pending_deployment();
 
-    let skipped = advance_deployment(
-        &connection,
-        &deployment_id,
-        DeploymentTransition::RuntimeRunning,
-    )
-    .unwrap_err();
+    let skipped = advance_deployment(&connection, &deployment_id, DeploymentEvent::RuntimeRunning)
+        .unwrap_err();
     assert!(matches!(
         skipped,
-        TransitionDeploymentError::Conflict {
-            expected: DeploymentStatus::Starting,
-            actual: DeploymentStatus::Pending,
-            ..
-        }
+        TransitionDeploymentError::InvalidTransition { ref source, .. }
+            if source.current == DeploymentStatus::Pending
+                && source.event == DeploymentEvent::RuntimeRunning
     ));
 
-    advance_deployment(&connection, &deployment_id, DeploymentTransition::Start).unwrap();
+    advance_deployment(&connection, &deployment_id, DeploymentEvent::Start).unwrap();
     let repeated =
-        advance_deployment(&connection, &deployment_id, DeploymentTransition::Start).unwrap_err();
+        advance_deployment(&connection, &deployment_id, DeploymentEvent::Start).unwrap_err();
     assert!(matches!(
         repeated,
-        TransitionDeploymentError::Conflict {
-            expected: DeploymentStatus::Pending,
-            actual: DeploymentStatus::Starting,
-            ..
-        }
+        TransitionDeploymentError::InvalidTransition { ref source, .. }
+            if source.current == DeploymentStatus::Starting
+                && source.event == DeploymentEvent::Start
     ));
 }
 
 #[test]
 fn records_a_structured_failure_and_allows_a_later_attempt() {
     let (mut connection, deployment_id, application_id) = pending_deployment();
-    advance_deployment(&connection, &deployment_id, DeploymentTransition::Start).unwrap();
+    advance_deployment(&connection, &deployment_id, DeploymentEvent::Start).unwrap();
 
     let failure = fail_deployment(
         &mut connection,
@@ -181,7 +168,7 @@ fn terminal_and_missing_deployments_cannot_enter_the_flow() {
     .unwrap();
 
     let terminal =
-        advance_deployment(&connection, &deployment_id, DeploymentTransition::Start).unwrap_err();
+        advance_deployment(&connection, &deployment_id, DeploymentEvent::Start).unwrap_err();
     let repeated_failure = fail_deployment(
         &mut connection,
         &deployment_id,
@@ -192,16 +179,15 @@ fn terminal_and_missing_deployments_cannot_enter_the_flow() {
     let missing = advance_deployment(
         &connection,
         &DeploymentId::from("missing"),
-        DeploymentTransition::Start,
+        DeploymentEvent::Start,
     )
     .unwrap_err();
 
     assert!(matches!(
         terminal,
-        TransitionDeploymentError::Conflict {
-            actual: DeploymentStatus::Failed,
-            ..
-        }
+        TransitionDeploymentError::InvalidTransition { ref source, .. }
+            if source.current == DeploymentStatus::Failed
+                && source.event == DeploymentEvent::Start
     ));
     assert!(matches!(
         repeated_failure,
@@ -229,7 +215,7 @@ fn rejects_incomplete_failure_details_without_changing_state() {
         ));
     }
     assert_eq!(
-        advance_deployment(&connection, &deployment_id, DeploymentTransition::Start).unwrap(),
+        advance_deployment(&connection, &deployment_id, DeploymentEvent::Start).unwrap(),
         DeploymentStatus::Starting
     );
 }

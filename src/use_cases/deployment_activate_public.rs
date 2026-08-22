@@ -11,7 +11,7 @@ use crate::adapters::caddy_exposure::{
 use crate::adapters::health_check_external::check_external_health;
 use crate::adapters::health_check_internal::{HealthCheckResult, check_internal_health};
 use crate::adapters::test_gate::wait_for_test_gate;
-use crate::domain::deployment::DeploymentTransition;
+use crate::domain::deployment::DeploymentEvent;
 use crate::domain::exposure::{ExposureConfigurationVersion, ExposureDiagnostic, ExposureOutcome};
 use crate::domain::identity::ApplicationId;
 use crate::domain::runtime::{HealthCheckSpecification, RuntimeInstance};
@@ -125,7 +125,7 @@ pub(crate) fn activate_public_candidate(
     advance_deployment(
         connection,
         &runtime.deployment_id,
-        DeploymentTransition::Verified,
+        DeploymentEvent::Verified,
     )
     .map_err(|source| PublicActivationError::DeploymentTransition {
         source,

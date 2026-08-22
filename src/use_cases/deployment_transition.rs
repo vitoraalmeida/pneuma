@@ -6,7 +6,8 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::adapters::stores::PersistenceOutcome;
 use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
 use crate::domain::deployment::{
-    DeploymentFailure, DeploymentStatus, DeploymentTransition, InvalidDeploymentFailure,
+    DeploymentEvent, DeploymentFailure, DeploymentStatus, InvalidDeploymentFailure,
+    InvalidDeploymentTransition,
 };
 use crate::domain::identity::DeploymentId;
 
@@ -23,6 +24,10 @@ pub enum TransitionDeploymentError {
     CannotFail {
         deployment_id: String,
         actual: DeploymentStatus,
+    },
+    InvalidTransition {
+        deployment_id: String,
+        source: InvalidDeploymentTransition,
     },
     InvalidPersistedStatus {
         deployment_id: String,
@@ -61,6 +66,10 @@ impl fmt::Display for TransitionDeploymentError {
                 formatter,
                 "deployment `{deployment_id}` cannot fail from state {actual:?}"
             ),
+            Self::InvalidTransition {
+                deployment_id,
+                source,
+            } => write!(formatter, "deployment `{deployment_id}`: {source}"),
             Self::InvalidPersistedStatus {
                 deployment_id,
                 status,
@@ -87,6 +96,7 @@ impl Error for TransitionDeploymentError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Persistence { source } => Some(source),
+            Self::InvalidTransition { source, .. } => Some(source),
             Self::DeploymentNotFound { .. }
             | Self::Conflict { .. }
             | Self::CannotFail { .. }
@@ -133,25 +143,32 @@ impl From<DeploymentStoreError> for TransitionDeploymentError {
     }
 }
 
-// Advances one expected state with compare-and-set semantics to detect concurrent changes.
+// Loads the current state, asks the domain for the transition, and persists it under
+// compare-and-set so concurrent changes surface as conflicts instead of overwritten state.
 pub fn advance_deployment(
     connection: &Connection,
     deployment_id: &DeploymentId,
-    transition: DeploymentTransition,
+    event: DeploymentEvent,
 ) -> Result<DeploymentStatus, TransitionDeploymentError> {
-    let (expected, next) = transition.edge();
-    let advanced = deployment_store::advance_status(connection, deployment_id, expected, next)?;
-    match advanced {
-        PersistenceOutcome::Updated => return Ok(next),
-        PersistenceOutcome::Stale => {}
-    }
+    let current = deployment_store::load_status(connection, deployment_id)?;
+    let next = current.transition(event).map_err(|source| {
+        TransitionDeploymentError::InvalidTransition {
+            deployment_id: deployment_id.to_string(),
+            source,
+        }
+    })?;
 
-    let actual = deployment_store::load_status(connection, deployment_id)?;
-    Err(TransitionDeploymentError::Conflict {
-        deployment_id: deployment_id.to_string(),
-        expected,
-        actual,
-    })
+    match deployment_store::advance_status(connection, deployment_id, current, next)? {
+        PersistenceOutcome::Updated => Ok(next),
+        PersistenceOutcome::Stale => {
+            let actual = deployment_store::load_status(connection, deployment_id)?;
+            Err(TransitionDeploymentError::Conflict {
+                deployment_id: deployment_id.to_string(),
+                expected: current,
+                actual,
+            })
+        }
+    }
 }
 
 // Atomically records a terminal failure only while the deployment remains non-terminal.
@@ -168,7 +185,7 @@ pub fn fail_deployment(
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|source| TransitionDeploymentError::Persistence { source })?;
     let stage = deployment_store::load_status(&transaction, deployment_id)?;
-    if !stage.is_nonterminal() {
+    if !stage.can_fail() {
         return Err(TransitionDeploymentError::CannotFail {
             deployment_id: deployment_id.to_string(),
             actual: stage,
