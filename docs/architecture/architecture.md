@@ -16,7 +16,8 @@ specified separately in [`../design/reconciliation.md`](../design/reconciliation
 
 Read [`system-context.md`](system-context.md) for motivation, scope, and
 constraints; [`../decisions/`](../decisions/) for architectural rationale;
-[`data-model.md`](data-model.md) for persisted semantics; and
+[`data-model.md`](data-model.md) for persisted semantics;
+[`invariants.md`](invariants.md) for the authoritative invariant inventory; and
 [`security-model.md`](security-model.md) for trust boundaries. Architecture-level
 abuse and failure scenarios are in [`threat-model.md`](threat-model.md). This
 document answers how the current implementation works.
