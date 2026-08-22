@@ -8,6 +8,8 @@ use crate::domain::identity::{ApplicationId, DeploymentId, SystemId};
 // Captures durable application identity and persisted runtime intent.
 pub struct Application {
     pub id: ApplicationId,
+    // None only for rows persisted before Systems existed (migration 0005);
+    // every import writes exactly one System (`insert_application` takes `&SystemId`).
     pub system_id: Option<SystemId>,
     pub name: ApplicationName,
     pub desired_runtime_state: DesiredRuntimeState,
@@ -19,6 +21,7 @@ pub struct Application {
 // Provides catalog fields without requiring callers to load the full specification.
 pub struct ApplicationSummary {
     pub id: ApplicationId,
+    // Same legacy-only None semantics as `Application::system_id`.
     pub system_id: Option<SystemId>,
     pub name: ApplicationName,
     pub repository: Option<String>,
