@@ -9,7 +9,8 @@ use pneuma::domain::identity::RuntimeInstanceId;
 use pneuma::domain::release::{OciArtifact, OciRepository};
 use pneuma::domain::runtime::{
     ContainerObservation, ContainerPort, ExpectedRuntimeEndpoint, HealthCheckPath,
-    HealthCheckSpecification, HealthCheckStatus, ObservedRuntimeState, RuntimeSpecification,
+    HealthCheckSpecification, HealthCheckStatus, HostPort, ObservedRuntimeState,
+    RuntimeSpecification,
 };
 use pneuma::domain::system::SystemName;
 
@@ -54,10 +55,65 @@ fn accepts_only_the_http_status_range_for_health_checks() {
 }
 
 #[test]
+fn rejects_zero_for_published_host_ports() {
+    assert!(HostPort::new(0).is_err());
+    assert!(HostPort::new(1).is_ok());
+    assert!(HostPort::new(u16::MAX).is_ok());
+}
+
+#[test]
+fn rejects_whitespace_inside_health_check_paths() {
+    for invalid in [
+        "",
+        "/health check",
+        "/health\tcheck",
+        "/healthz\n",
+        " /healthz",
+        "/healthz ",
+    ] {
+        assert!(HealthCheckPath::new(invalid).is_err(), "{invalid:?}");
+    }
+}
+
+#[test]
 fn validates_immutable_git_commit_identity() {
     assert!(CommitSha::new(&"a".repeat(40)).is_ok());
     assert!(CommitSha::new(&"A".repeat(40)).is_err());
     assert!(CommitSha::new("short").is_err());
+    assert!(CommitSha::new(&"g".repeat(40)).is_err());
+}
+
+#[test]
+fn enforces_domain_name_label_grammar() {
+    assert!(DomainName::new("a").is_ok());
+    assert!(DomainName::new("example.test").is_ok());
+    let longest_label = format!("{}.test", "a".repeat(63));
+    assert_eq!(longest_label.len(), 68);
+    assert!(DomainName::new(&longest_label).is_ok());
+
+    let label_too_long = format!("{}.test", "a".repeat(64));
+    let domain_too_long = format!(
+        "{}.{}.{}.{}",
+        "a".repeat(63),
+        "a".repeat(63),
+        "a".repeat(63),
+        "a".repeat(62)
+    );
+    assert_eq!(domain_too_long.len(), 254);
+    for invalid in [
+        "",
+        ".example.test",
+        "example.test.",
+        "example..test",
+        "-example.test",
+        "example-.test",
+        "exam_ple.test",
+        "exámple.test",
+        &label_too_long,
+        &domain_too_long,
+    ] {
+        assert!(DomainName::new(invalid).is_err(), "{invalid}");
+    }
 }
 
 #[test]
@@ -163,6 +219,7 @@ fn runtime_observations_require_a_running_loopback_endpoint() {
 #[test]
 fn validates_source_and_oci_repository_boundaries() {
     let manifest_path = RelativeManifestPath::new("deploy/pneuma.toml").unwrap();
+    assert!(RelativeManifestPath::new("").is_err());
     assert!(RelativeManifestPath::new("/etc/pneuma.toml").is_err());
     assert!(RelativeManifestPath::new("../pneuma.toml").is_err());
     assert!(
