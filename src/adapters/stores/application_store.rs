@@ -351,7 +351,9 @@ pub fn application_exists(
         .map_err(|source| ApplicationStoreError::Persistence { source })
 }
 
-// Atomically records the active Deployment and its running runtime intent.
+// Atomically records the active Deployment and its running runtime intent, but only
+// when the Deployment belongs to this Application and has already succeeded; anything
+// else leaves the persisted state untouched and reports a stale outcome.
 pub fn activate_deployment(
     transaction: &Transaction<'_>,
     application_id: &ApplicationId,
@@ -363,7 +365,13 @@ pub fn activate_deployment(
              SET active_deployment_id = ?1,
                  desired_runtime_state = 'running',
                  updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?2",
+             WHERE id = ?2
+               AND EXISTS (
+                   SELECT 1 FROM deployments
+                   WHERE deployments.id = ?1
+                     AND deployments.application_id = applications.id
+                     AND deployments.status = 'succeeded'
+               )",
             params![deployment_id.as_str(), application_id.as_str()],
         )
         .map_err(|source| ApplicationStoreError::Persistence { source })?;

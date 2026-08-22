@@ -1,12 +1,14 @@
 use std::path::{Path, PathBuf};
 
 use pneuma::adapters::database;
+use pneuma::adapters::stores::PersistenceOutcome;
 use pneuma::adapters::stores::application_store;
 use pneuma::adapters::stores::application_store::ApplicationStoreError;
 use pneuma::adapters::stores::exposure_store;
+use pneuma::domain::application::DesiredRuntimeState;
 use pneuma::domain::exposure::{ExposureMaterialization, Visibility};
 use pneuma::domain::git::RepositoryKind;
-use pneuma::domain::identity::ApplicationId;
+use pneuma::domain::identity::{ApplicationId, DeploymentId};
 use pneuma::domain::manifest::DeliveryType;
 use pneuma::use_cases::application_import::import_application;
 
@@ -215,6 +217,130 @@ fn loads_historical_internal_removal_timestamp_without_a_confirmed_route() {
         exposure.materialization(),
         ExposureMaterialization::NotMaterialized
     ));
+}
+
+#[test]
+fn activates_a_succeeded_deployment_of_the_application_with_running_intent() {
+    let mut connection = database::open(Path::new(":memory:")).unwrap();
+    let application =
+        import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
+    seed_deployment(
+        &connection,
+        &application.id,
+        "succeeded-deployment",
+        "succeeded",
+    );
+
+    let transaction = connection.transaction().unwrap();
+    let outcome = application_store::activate_deployment(
+        &transaction,
+        &application.id,
+        &DeploymentId::from("succeeded-deployment"),
+    )
+    .unwrap();
+    transaction.commit().unwrap();
+
+    assert_eq!(outcome, PersistenceOutcome::Updated);
+    let stored = load_application(&connection, &application.name);
+    assert_eq!(
+        stored
+            .active_deployment_id
+            .as_ref()
+            .map(DeploymentId::as_str),
+        Some("succeeded-deployment")
+    );
+    assert_eq!(stored.desired_runtime_state, DesiredRuntimeState::Running);
+}
+
+#[test]
+fn rejects_foreign_or_unsucceeded_activation_without_changing_application_state() {
+    let mut connection = database::open(Path::new(":memory:")).unwrap();
+    let application =
+        import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
+    seed_deployment(
+        &connection,
+        &application.id,
+        "pending-deployment",
+        "verifying",
+    );
+    connection
+        .execute(
+            "INSERT INTO applications (
+                id, name, desired_runtime_state, spec_version, created_at, updated_at
+             ) VALUES ('other-application', 'other-application', 'stopped', 1, 'now', 'now')",
+            [],
+        )
+        .unwrap();
+    seed_deployment(
+        &connection,
+        &ApplicationId::from("other-application"),
+        "foreign-deployment",
+        "succeeded",
+    );
+
+    for deployment in [
+        "pending-deployment",
+        "foreign-deployment",
+        "missing-deployment",
+    ] {
+        let transaction = connection.transaction().unwrap();
+        let outcome = application_store::activate_deployment(
+            &transaction,
+            &application.id,
+            &DeploymentId::from(deployment),
+        )
+        .unwrap();
+        transaction.commit().unwrap();
+        assert_eq!(
+            outcome,
+            PersistenceOutcome::Stale,
+            "activation of {deployment}"
+        );
+    }
+
+    let stored = load_application(&connection, &application.name);
+    assert_eq!(stored.active_deployment_id, None);
+    assert_eq!(stored.desired_runtime_state, DesiredRuntimeState::Stopped);
+}
+
+fn seed_deployment(
+    connection: &rusqlite::Connection,
+    application_id: &ApplicationId,
+    deployment_id: &str,
+    status: &str,
+) {
+    connection
+        .execute(
+            "INSERT INTO releases (
+                id, application_id, image_repository, image_digest, image_reference, created_at
+             ) VALUES (?1, ?2, 'registry.example/app',
+                       'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                       'registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                       'now')",
+            rusqlite::params![format!("release-{deployment_id}"), application_id.as_str()],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO deployments (id, application_id, release_id, type, status)
+             VALUES (?1, ?2, ?3, 'deploy', ?4)",
+            rusqlite::params![
+                deployment_id,
+                application_id.as_str(),
+                format!("release-{deployment_id}"),
+                status
+            ],
+        )
+        .unwrap();
+}
+
+fn load_application(
+    connection: &rusqlite::Connection,
+    name: &pneuma::domain::application::ApplicationName,
+) -> pneuma::domain::application::Application {
+    application_store::load_application_by_name(connection, name)
+        .unwrap()
+        .unwrap()
 }
 
 fn assert_invalid_exposure(connection: &rusqlite::Connection, application_id: &ApplicationId) {
