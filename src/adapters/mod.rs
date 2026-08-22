@@ -6,6 +6,7 @@ pub mod git_source;
 pub mod health_check_external;
 pub mod health_check_internal;
 pub mod local_runtime;
+pub mod manifest;
 pub mod oci_image;
 pub mod port_allocator;
 pub mod stores;

@@ -89,10 +89,10 @@ runtime path without the Caddy traffic path.
 | Layer | Owns | Does not own |
 |---|---|---|
 | `src/main.rs` | CLI parsing, host configuration, temporary import checkout preparation, and use-case dispatch | Domain decisions or persistence rules |
-| `src/domain/` | Domain entities, closed state sets, manifest parsing and validation | External effects or SQL |
+| `src/domain/` | Domain entities, closed state sets, and value invariants | External effects, SQL, or external file formats |
 | `src/use_cases/` | Business decisions, effect ordering, short transaction boundaries, and compensation | SQL mapping or process invocation details |
 | `src/adapters/stores/` | SQL, row-to-domain mapping, migrations, and compare-and-set writes | Deployment policy or external effects |
-| Other `src/adapters/` modules | Git, OCI, Podman, systemd Quadlet, Caddy, health, ports, filesystem, and diagnostics | Logical identity and workflow decisions |
+| Other `src/adapters/` modules | Git, OCI, manifest file parsing and conversion, Podman, systemd Quadlet, Caddy, health, ports, filesystem, and diagnostics | Logical identity and workflow decisions |
 
 The project uses concrete synchronous Rust code. The constraints in
 [`docs/rust-guidelines.md`](../rust-guidelines.md) apply to every change.
@@ -238,6 +238,11 @@ Rationale for these boundaries is in [`../decisions/`](../decisions/) and
 - Manifests use schema version `3` and reject unknown fields. System and
   Application names are 1-63 lowercase ASCII letters, digits, or hyphens, with
   alphanumeric first and last characters.
+- The TOML document is a private adapter detail: parsing, structural validation,
+  and conversion into the validated `ImportSpecification` happen in one boundary
+  step (`src/adapters/manifest.rs`). The domain never sees serde structs or the
+  file schema; delivery type is owned by Release
+  (`src/domain/release.rs::DeliveryType`).
 - Delivery is OCI-only. Its image value is a repository, not a digest reference,
   and must not contain surrounding whitespace.
 - Runtime configuration requires a nonzero container port, an absolute

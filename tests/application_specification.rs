@@ -9,7 +9,7 @@ use pneuma::domain::application::DesiredRuntimeState;
 use pneuma::domain::exposure::{ExposureMaterialization, Visibility};
 use pneuma::domain::git::RepositoryKind;
 use pneuma::domain::identity::{ApplicationId, DeploymentId};
-use pneuma::domain::manifest::DeliveryType;
+use pneuma::domain::release::DeliveryType;
 use pneuma::use_cases::application_import::import_application;
 
 #[test]

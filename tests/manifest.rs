@@ -1,8 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use pneuma::adapters::manifest::{ManifestError, load_manifest, load_manifest_at, parse_manifest};
 use pneuma::domain::exposure::Visibility;
-use pneuma::domain::manifest::DeliveryType;
-use pneuma::domain::manifest::{ManifestError, load_manifest, load_manifest_at, parse_manifest};
 
 const VALID_MANIFEST: &str = include_str!("fixtures/valid/pneuma.toml");
 
@@ -10,20 +9,23 @@ const VALID_MANIFEST: &str = include_str!("fixtures/valid/pneuma.toml");
 fn loads_and_validates_a_repository_manifest() {
     let repository = fixture_path("valid");
 
-    let manifest = load_manifest(&repository).expect("valid fixture should load");
+    let specification = load_manifest(&repository).expect("valid fixture should load");
 
-    assert_eq!(manifest.schema_version, 3);
-    assert_eq!(manifest.application.name, "personal-site");
-    assert_eq!(manifest.delivery.delivery_type, DeliveryType::Oci);
+    assert_eq!(specification.schema_version, 3);
+    assert_eq!(specification.application_name.as_str(), "personal-site");
     assert_eq!(
-        manifest.delivery.image,
+        specification.repository.as_str(),
         "ghcr.io/vitoraalmeida/vitoralmeida.tech"
     );
-    assert_eq!(manifest.runtime.container_port, 8080);
-    assert_eq!(manifest.runtime.healthcheck_path, "/healthz");
-    assert_eq!(manifest.exposure.default_visibility, Visibility::Public);
+    assert_eq!(specification.container_port.get(), 8080);
+    assert_eq!(specification.healthcheck_path.as_str(), "/healthz");
+    assert_eq!(specification.expected_status.get(), 200);
+    assert_eq!(specification.exposure.visibility(), Visibility::Public);
     assert_eq!(
-        manifest.exposure.domain.as_deref(),
+        specification
+            .exposure
+            .domain()
+            .map(|domain| domain.as_str()),
         Some("vitoralmeida.tech")
     );
 }
@@ -178,14 +180,17 @@ fn accepts_name_domain_and_status_boundaries() {
                 &format!("expected_status = {expected_status}"),
             );
 
-        let manifest = parse_manifest(&contents).expect("boundary values should be valid");
+        let specification = parse_manifest(&contents).expect("boundary values should be valid");
 
-        assert_eq!(manifest.application.name, maximum_name);
+        assert_eq!(specification.application_name.as_str(), maximum_name);
         assert_eq!(
-            manifest.exposure.domain.as_deref(),
+            specification
+                .exposure
+                .domain()
+                .map(|domain| domain.as_str()),
             Some(maximum_domain.as_str())
         );
-        assert_eq!(manifest.runtime.expected_status, expected_status);
+        assert_eq!(specification.expected_status.get(), expected_status);
     }
 }
 
@@ -246,10 +251,11 @@ fn allows_internal_exposure_without_a_domain() {
         )
         .replace("domain = \"vitoralmeida.tech\"\n", "");
 
-    let manifest = parse_manifest(&contents).expect("internal exposure should not need a domain");
+    let specification =
+        parse_manifest(&contents).expect("internal exposure should not need a domain");
 
-    assert_eq!(manifest.exposure.default_visibility, Visibility::Internal);
-    assert_eq!(manifest.exposure.domain, None);
+    assert_eq!(specification.exposure.visibility(), Visibility::Internal);
+    assert_eq!(specification.exposure.domain(), None);
 }
 
 #[test]

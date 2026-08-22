@@ -1,10 +1,19 @@
 use std::error::Error;
 use std::fmt;
 
+use serde::Deserialize;
+
 use crate::domain::identity::{ApplicationId, ReleaseId};
 
 const DIGEST_ALGORITHM: &str = "sha256:";
 const SHA256_HEX_LENGTH: usize = 64;
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+// Names the delivery mechanism a Release artifact is supplied through.
+pub enum DeliveryType {
+    Oci,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 // Represents a validated immutable repository-and-digest OCI artifact identity.
@@ -81,21 +90,18 @@ impl OciRepository {
 #[derive(Debug, Clone, PartialEq, Eq)]
 // Defines the immutable repository boundary allowed for application artifacts.
 pub struct DeliverySpecification {
-    delivery_type: crate::domain::manifest::DeliveryType,
+    delivery_type: DeliveryType,
     image_repository: OciRepository,
 }
 
 impl DeliverySpecification {
-    pub fn new(
-        delivery_type: crate::domain::manifest::DeliveryType,
-        image_repository: OciRepository,
-    ) -> Self {
+    pub fn new(delivery_type: DeliveryType, image_repository: OciRepository) -> Self {
         Self {
             delivery_type,
             image_repository,
         }
     }
-    pub fn delivery_type(&self) -> crate::domain::manifest::DeliveryType {
+    pub fn delivery_type(&self) -> DeliveryType {
         self.delivery_type
     }
     pub fn image_repository(&self) -> &OciRepository {
@@ -202,9 +208,7 @@ fn is_lowercase_hex(byte: u8) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use crate::domain::manifest::DeliveryType;
-
-    use super::{DeliverySpecification, OciArtifact, OciRepository};
+    use super::{DeliverySpecification, DeliveryType, OciArtifact, OciRepository};
 
     fn artifact(repository: &str) -> OciArtifact {
         OciArtifact::new(

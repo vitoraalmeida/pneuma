@@ -4,13 +4,14 @@ use std::path::Path;
 
 use rusqlite::Connection;
 
+use crate::adapters::manifest::{ManifestError, load_manifest_at};
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::adapters::stores::exposure_store::{self, ExposureStoreError};
 use crate::adapters::stores::system_store::{self, SystemStoreError};
 use crate::domain::application::ApplicationSummary;
 use crate::domain::git::{ApplicationSource, RelativeManifestPath};
 use crate::domain::identity::ApplicationId;
-use crate::domain::manifest::{ImportSpecification, ManifestError, load_manifest_at};
+use crate::domain::manifest::ImportSpecification;
 use crate::domain::system::SystemName;
 
 const DEFAULT_MANIFEST_PATH: &str = "pneuma.toml";
@@ -115,10 +116,7 @@ pub fn import_application(
     manifest_path: Option<&str>,
 ) -> Result<ApplicationSummary, ImportError> {
     let manifest_path = manifest_path.unwrap_or(DEFAULT_MANIFEST_PATH);
-    let manifest = load_manifest_at(repository_path, manifest_path)
-        .map_err(|source| ImportError::Manifest { source })?;
-    let specification = manifest
-        .import_specification()
+    let specification = load_manifest_at(repository_path, manifest_path)
         .map_err(|source| ImportError::Manifest { source })?;
 
     let resolved_system_name = match system_name {
