@@ -15,6 +15,15 @@ use pneuma::use_cases::release_create::create_release;
 fn advances_in_order_through_internal_verification() {
     let (mut connection, deployment_id, _) = pending_deployment();
 
+    let initial_started_at: Option<String> = connection
+        .query_row(
+            "SELECT started_at FROM deployments WHERE id = ?1",
+            [deployment_id.as_str()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(initial_started_at, None);
+
     assert_eq!(
         advance_deployment(&connection, &deployment_id, DeploymentEvent::Start).unwrap(),
         DeploymentStatus::Starting
