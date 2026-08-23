@@ -88,7 +88,7 @@ runtime path without the Caddy traffic path.
 
 | Layer | Owns | Does not own |
 |---|---|---|
-| `src/main.rs` and `src/cli/` | CLI definition and parsing (`src/cli/`), host configuration, temporary import checkout preparation, and use-case dispatch | Domain decisions or persistence rules |
+| `src/main.rs` and `src/cli/` | CLI definition (`src/cli/args.rs`), command dispatch and handlers by capability (`src/cli/`), host configuration, temporary import checkout preparation | Domain decisions or persistence rules |
 | `src/domain/` | Domain entities, closed state sets, and value invariants | External effects, SQL, or external file formats |
 | `src/use_cases/` | Business decisions, effect ordering, short transaction boundaries, and compensation | SQL mapping or process invocation details |
 | `src/adapters/stores/` | SQL, row-to-domain mapping, migrations, and compare-and-set writes | Deployment policy or external effects |
