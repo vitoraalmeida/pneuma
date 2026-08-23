@@ -1,10 +1,12 @@
 use std::error::Error;
 use std::fmt;
-use std::io;
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::adapters::stores::PersistenceOutcome;
+use crate::adapters::stores::persistence::{
+    invalid_text_value, outcome, visibility_from_value, visibility_value,
+};
 use crate::domain::exposure::{
     ConfirmedRoute, DomainName, Exposure, ExposureConfigurationVersion, ExposureDiagnostic,
     ExposureIntent, ExposureMaterialization, ExposureMaterializationState, Visibility,
@@ -316,40 +318,6 @@ pub(crate) fn record_public_exposure_failure(
 ) -> Result<PersistenceOutcome, ExposureStoreError> {
     let updated = connection.execute("UPDATE exposures SET materialization_state = ?1, last_error_code = ?2, last_error_message = ?3, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?4 AND desired_visibility = 'public'", params![exposure_materialization_state_value(state), diagnostic.code(), diagnostic.message(), application_id.as_str()]).map_err(|source| ExposureStoreError::Persistence { source })?;
     Ok(outcome(updated))
-}
-
-fn invalid_text_value(column: usize, field: &str, value: &str) -> rusqlite::Error {
-    rusqlite::Error::FromSqlConversionFailure(
-        column,
-        rusqlite::types::Type::Text,
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("invalid {field}: {value}"),
-        )),
-    )
-}
-
-fn outcome(updated: usize) -> PersistenceOutcome {
-    if updated == 1 {
-        PersistenceOutcome::Updated
-    } else {
-        PersistenceOutcome::Stale
-    }
-}
-
-fn visibility_value(value: Visibility) -> &'static str {
-    match value {
-        Visibility::Internal => "internal",
-        Visibility::Public => "public",
-    }
-}
-
-fn visibility_from_value(value: &str) -> Option<Visibility> {
-    match value {
-        "internal" => Some(Visibility::Internal),
-        "public" => Some(Visibility::Public),
-        _ => None,
-    }
 }
 
 fn exposure_materialization_state_value(value: ExposureMaterializationState) -> &'static str {

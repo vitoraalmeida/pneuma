@@ -4,19 +4,20 @@ use std::fmt;
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 
 use crate::adapters::stores::PersistenceOutcome;
+use crate::adapters::stores::persistence::{
+    observed_runtime_state_from_value, outcome, runtime_state_from_value, visibility_from_value,
+};
 use crate::adapters::stores::release_store::artifact_from_values;
 use crate::domain::deployment::{
     Deployment, DeploymentFailure, DeploymentFailureEvidence, DeploymentHistory,
     DeploymentLifecycle, DeploymentStatus, DeploymentType, PromotionTarget, RollbackTarget,
     SourceRevision,
 };
-use crate::domain::exposure::{DomainName, Visibility};
+use crate::domain::exposure::DomainName;
 use crate::domain::git::CommitSha;
 use crate::domain::identity::{ApplicationId, DeploymentId, ReleaseId, RuntimeInstanceId};
 use crate::domain::release::Release;
-use crate::domain::runtime::{
-    ExpectedRuntimeEndpoint, ObservedRuntimeState, RuntimeRetirement, RuntimeState,
-};
+use crate::domain::runtime::{ExpectedRuntimeEndpoint, RuntimeRetirement};
 use std::net::{Ipv4Addr, SocketAddr};
 
 #[derive(Debug)]
@@ -528,13 +529,6 @@ fn invalid_evidence(deployment_id: &str, reason: &str) -> DeploymentStoreError {
 fn persistence(source: rusqlite::Error) -> DeploymentStoreError {
     DeploymentStoreError::Persistence { source }
 }
-fn outcome(updated: usize) -> PersistenceOutcome {
-    if updated == 1 {
-        PersistenceOutcome::Updated
-    } else {
-        PersistenceOutcome::Stale
-    }
-}
 fn deployment_type_value(value: DeploymentType) -> &'static str {
     match value {
         DeploymentType::Deploy => "deploy",
@@ -548,7 +542,7 @@ fn deployment_type_from_value(value: &str) -> Option<DeploymentType> {
         _ => None,
     }
 }
-pub(crate) fn deployment_status_value(value: DeploymentStatus) -> &'static str {
+fn deployment_status_value(value: DeploymentStatus) -> &'static str {
     match value {
         DeploymentStatus::Pending => "pending",
         DeploymentStatus::Starting => "starting",
@@ -582,36 +576,6 @@ fn source_revision_from_value(
             Ok(SourceRevision::Legacy(value.to_owned()))
         }
         Err(error) => Err(error),
-    }
-}
-fn runtime_state_from_value(value: &str) -> Option<RuntimeState> {
-    match value {
-        "starting" => Some(RuntimeState::Starting),
-        "running" => Some(RuntimeState::Running),
-        "stopped" => Some(RuntimeState::Stopped),
-        "failed" => Some(RuntimeState::Failed),
-        _ => None,
-    }
-}
-fn observed_runtime_state_from_value(value: &str) -> ObservedRuntimeState {
-    match value {
-        "missing" => ObservedRuntimeState::Missing,
-        "created" => ObservedRuntimeState::Created,
-        "starting" => ObservedRuntimeState::Starting,
-        "running" => ObservedRuntimeState::Running,
-        "stopping" => ObservedRuntimeState::Stopping,
-        "stopped" => ObservedRuntimeState::Stopped,
-        "failed" => ObservedRuntimeState::Failed,
-        status => ObservedRuntimeState::Unknown {
-            status: status.to_owned(),
-        },
-    }
-}
-fn visibility_from_value(value: &str) -> Option<Visibility> {
-    match value {
-        "internal" => Some(Visibility::Internal),
-        "public" => Some(Visibility::Public),
-        _ => None,
     }
 }
 fn conversion_error(index: usize, error: impl Error + Send + Sync + 'static) -> rusqlite::Error {

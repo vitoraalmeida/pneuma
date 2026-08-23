@@ -1,16 +1,18 @@
 use std::error::Error;
 use std::fmt;
-use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::adapters::stores::PersistenceOutcome;
+use crate::adapters::stores::persistence::{
+    invalid_text_value, observed_runtime_state_from_value, observed_runtime_state_value, outcome,
+    runtime_state_from_value, runtime_state_value,
+};
 use crate::domain::identity::{ApplicationId, DeploymentId, RuntimeInstanceId};
 use crate::domain::runtime::{
-    ContainerId, ContainerObservation, ContainerPort, ExpectedRuntimeEndpoint,
-    ObservedRuntimeState, PreviousRuntime, RuntimeInstance, RuntimeRegistration, RuntimeRetirement,
-    RuntimeState,
+    ContainerId, ContainerObservation, ContainerPort, ExpectedRuntimeEndpoint, PreviousRuntime,
+    RuntimeInstance, RuntimeRegistration, RuntimeRetirement, RuntimeState,
 };
 
 #[derive(Debug)]
@@ -384,74 +386,12 @@ fn map_runtime_instance(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeInst
     })
 }
 
-// Converts an invalid persisted text value into a row-mapping error with column context.
-fn invalid_text_value(column: usize, field: &str, value: &str) -> rusqlite::Error {
-    rusqlite::Error::FromSqlConversionFailure(
-        column,
-        rusqlite::types::Type::Text,
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("invalid {field}: {value}"),
-        )),
-    )
-}
-
 // Hydrates a persisted container identity only when it satisfies the domain invariant.
 fn hydrate_container_id(column: usize, value: &str) -> rusqlite::Result<ContainerId> {
     if !ContainerId::is_valid(value) {
         return Err(invalid_text_value(column, "external runtime id", value));
     }
     Ok(ContainerId::from(value.to_owned()))
-}
-fn outcome(updated: usize) -> PersistenceOutcome {
-    if updated == 1 {
-        PersistenceOutcome::Updated
-    } else {
-        PersistenceOutcome::Stale
-    }
-}
-fn runtime_state_value(value: RuntimeState) -> &'static str {
-    match value {
-        RuntimeState::Starting => "starting",
-        RuntimeState::Running => "running",
-        RuntimeState::Stopped => "stopped",
-        RuntimeState::Failed => "failed",
-    }
-}
-fn runtime_state_from_value(value: &str) -> Option<RuntimeState> {
-    match value {
-        "starting" => Some(RuntimeState::Starting),
-        "running" => Some(RuntimeState::Running),
-        "stopped" => Some(RuntimeState::Stopped),
-        "failed" => Some(RuntimeState::Failed),
-        _ => None,
-    }
-}
-fn observed_runtime_state_value(value: &ObservedRuntimeState) -> &'static str {
-    match value {
-        ObservedRuntimeState::Missing => "missing",
-        ObservedRuntimeState::Created => "created",
-        ObservedRuntimeState::Starting => "starting",
-        ObservedRuntimeState::Running => "running",
-        ObservedRuntimeState::Stopping => "stopping",
-        ObservedRuntimeState::Stopped => "stopped",
-        ObservedRuntimeState::Failed => "failed",
-        ObservedRuntimeState::Unknown { .. } => "unknown",
-    }
-}
-fn observed_runtime_state_from_value(value: &str) -> ObservedRuntimeState {
-    match value {
-        "missing" => ObservedRuntimeState::Missing,
-        "created" => ObservedRuntimeState::Created,
-        "starting" => ObservedRuntimeState::Starting,
-        "running" => ObservedRuntimeState::Running,
-        "stopping" => ObservedRuntimeState::Stopping,
-        "stopped" => ObservedRuntimeState::Stopped,
-        "failed" => ObservedRuntimeState::Failed,
-        status => ObservedRuntimeState::Unknown {
-            status: status.to_owned(),
-        },
-    }
 }
 
 #[cfg(test)]

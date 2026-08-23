@@ -1,15 +1,14 @@
 use std::error::Error;
 use std::fmt;
-use std::io;
 
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 
 use crate::adapters::stores::PersistenceOutcome;
+use crate::adapters::stores::persistence::{invalid_text_value, outcome, visibility_from_value};
 use crate::domain::application::{
     Application, ApplicationDeploymentSpecification, ApplicationName, ApplicationSummary,
     DesiredRuntimeState,
 };
-use crate::domain::exposure::Visibility;
 use crate::domain::git::{ApplicationSource, RelativeManifestPath, RepositoryKind};
 use crate::domain::identity::{ApplicationId, DeploymentId, SystemId};
 use crate::domain::release::DeliverySpecification;
@@ -535,24 +534,6 @@ pub fn load_deployment_specification(
     }))
 }
 
-// Converts an invalid persisted text value into a row-mapping error with column context.
-fn invalid_text_value(column: usize, field: &str, value: &str) -> rusqlite::Error {
-    rusqlite::Error::FromSqlConversionFailure(
-        column,
-        rusqlite::types::Type::Text,
-        Box::new(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("invalid {field}: {value}"),
-        )),
-    )
-}
-fn outcome(updated: usize) -> PersistenceOutcome {
-    if updated == 1 {
-        PersistenceOutcome::Updated
-    } else {
-        PersistenceOutcome::Stale
-    }
-}
 fn delivery_type_value(value: DeliveryType) -> &'static str {
     match value {
         DeliveryType::Oci => "oci",
@@ -574,13 +555,6 @@ fn repository_kind_from_value(value: &str) -> Option<RepositoryKind> {
     match value {
         "local" => Some(RepositoryKind::Local),
         "remote" => Some(RepositoryKind::Remote),
-        _ => None,
-    }
-}
-fn visibility_from_value(value: &str) -> Option<Visibility> {
-    match value {
-        "internal" => Some(Visibility::Internal),
-        "public" => Some(Visibility::Public),
         _ => None,
     }
 }
