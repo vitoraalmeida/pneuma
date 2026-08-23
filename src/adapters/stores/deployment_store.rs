@@ -698,6 +698,36 @@ mod tests {
         );
     }
 
+    #[test]
+    fn partial_unique_index_rejects_a_second_nonterminal_deployment() {
+        let connection = database::open(Path::new(":memory:")).unwrap();
+        seed(&connection, "pending", None, None, None, None, None);
+
+        // Defense in depth: even a writer that skips the use-case blocker check cannot
+        // persist a second non-terminal Deployment for the same Application.
+        let error = connection
+            .execute(
+                "INSERT INTO deployments (id, application_id, release_id, type, status, requested_at)
+                 VALUES ('second', 'app', 'release', 'deploy', 'starting', 'requested')",
+                [],
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            rusqlite::Error::SqliteFailure(ref failure, _)
+                if failure.code == rusqlite::ErrorCode::ConstraintViolation
+        ));
+
+        // Terminal rows never compete for the partial index.
+        connection
+            .execute(
+                "INSERT INTO deployments (id, application_id, release_id, type, status, requested_at)
+                 VALUES ('terminal', 'app', 'release', 'deploy', 'failed', 'requested')",
+                [],
+            )
+            .unwrap();
+    }
+
     fn seed(
         connection: &rusqlite::Connection,
         status: &str,

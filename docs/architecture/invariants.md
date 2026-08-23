@@ -66,9 +66,9 @@ ownership gap; identical entries mean the rule already lives where it belongs.
 | INV-WF-005 | Materialization failure compensates by restoring the previous Caddy fragment; incomplete compensation records `diverged` for manual intervention, never silent success. | Workflow invariant | Exposure change/promotion compensation - `src/use_cases/exposure/mod.rs`, `deployment/promotion.rs` | Same (use cases) | `ExposureOutcome::{Failed,Diverged}` typed outcomes; CAS confirmation | `tests/cli.rs::lost_public_completion_cas_restores_the_fragment_and_is_not_success` | Keep |
 | INV-WF-006 | Start/stop are idempotent; repeating visibility requests matching current desired visibility succeed without touching materialization. | Workflow invariant | `src/use_cases/application/runtime.rs`, `src/use_cases/exposure/mod.rs` | Same (use cases) | Typed intent comparisons before effects | `tests/cli.rs::stop_and_start_are_idempotent...`; visibility repeat tests | Keep |
 | INV-WF-007 | One live per-application kernel lock serializes deploy/reconcile work; reconcile defers while the lock is held. | Workflow invariant | `src/adapters/application_lock.rs:52-93` + use-case acquisition | Same split (adapter owns flock mechanics, use case acquires) | Lock file never unlinked (stable inode); process death releases lock | `src/adapters/application_lock.rs` serialization/independence test; `tests/cli.rs::reconcile_defers_before_external_observation` | Keep |
-| INV-DB-001 | Only one non-terminal Deployment may exist per Application. | Persistence invariant | Partial unique index `one_active_deployment_per_application` - `migrations/0007_deployment_release.sql:73` (originally `0002:43`) | Same | Use case checks before insert; kernel lock serializes attempts | `tests/deployment_create.rs::rejects_a_second_active_deployment`; `tests/cli.rs::a_second_deploy_is_rejected_while_the_first_is_starting` | Keep |
+| INV-DB-001 | Only one non-terminal Deployment may exist per Application. | Persistence invariant | Partial unique index `one_active_deployment_per_application` - `migrations/0007_deployment_release.sql:73` (originally `0002:43`) | Same | Use case checks before insert; kernel lock serializes attempts | `tests/deployment_create.rs::rejects_a_second_active_deployment`; `src/adapters/stores/deployment_store.rs::partial_unique_index_rejects_a_second_nonterminal_deployment`; `tests/cli.rs::a_second_deploy_is_rejected_while_the_first_is_starting` | Keep |
 | INV-DB-002 | Releases, Deployments referencing them, and Runtimes referencing those Deployments all belong to the same Application; mismatches are rejected by triggers on insert and update. | Persistence invariant | Triggers - `migrations/0009_deployment_release_application.sql`, `migrations/0010_runtime_deployment_application.sql`; FKs elsewhere | Same | Domain constructors carry application IDs through all stores | `tests/deployment_create.rs::database_rejects_a_release_from_another_application`; `tests/deployment_register_runtime.rs::database_rejects_a_runtime_identity_from_another_application` | Keep |
-| INV-DB-003 | A live loopback endpoint is unique while a runtime is not removed; each candidate reserves its port before registration and reservations are consumed/released exactly once. | Persistence invariant | Unique index `active_runtime_endpoint` - `migrations/0007_deployment_release.sql:132`; reservation PK on `port` - `migrations/0012_runtime_port_reservations.sql:2`; allocator immediate transaction - `src/adapters/port_allocator.rs:49-114` | Same | Allocator checks live runtimes UNION pending reservations atomically | `tests/deployment_register_runtime.rs::database_rejects_a_duplicate_active_endpoint`, `identical_retry_is_idempotent_but_conflicting_reuse_is_rejected` | Unit/integration tests for the port allocator itself: range parsing, exhaustion, exclusivity (known gap) |
+| INV-DB-003 | A live loopback endpoint is unique while a runtime is not removed; each candidate reserves its port before registration and reservations are consumed/released exactly once. | Persistence invariant | Unique index `active_runtime_endpoint` - `migrations/0007_deployment_release.sql:132`; reservation PK on `port` - `migrations/0012_runtime_port_reservations.sql:2`; allocator immediate transaction - `src/adapters/port_allocator.rs:49-114` | Same | Allocator checks live runtimes UNION pending reservations atomically | `tests/deployment_register_runtime.rs::database_rejects_a_duplicate_active_endpoint`, `identical_retry_is_idempotent_but_conflicting_reuse_is_rejected`; in-file allocator exclusivity/exhaustion/duplicate-PK tests (see Persistence Concurrency Formalization record 4) | Keep |
 | INV-DB-004 | Every persistence write racing on state uses compare-and-set; a zero-row update is stale/concurrent state, never success. | Persistence invariant | `advance_status` (`deployment_store.rs:238`), `compare_and_set_desired_runtime_state` (`application_store.rs:233`), runtime CAS (`runtime_store.rs:129-153`), all exposure transitions (`exposure_store.rs:222-319`), `mark_failed` zero-row → explicit error | Same (stores own CAS mechanics) | Operation fencing generation distinguishes ownership epochs | `src/adapters/stores/deployment_store.rs::compare_and_set_reports_updated_then_stale`; `tests/cli.rs::lost_public_completion_cas_restores_the_fragment_and_is_not_success`, `status_does_not_attempt_external_id_cas` | Keep |
 | INV-DB-005 | Ownership coordination uses a monotonic per-application generation; taking ownership advances it and replaces the token. | Persistence invariant | `operation_store::take_ownership` upsert `generation = generation + 1 RETURNING` - `src/adapters/stores/operation_store.rs:43-66`; `CHECK (generation > 0)` - `migrations/0015_application_operations.sql:4` | Same | PK on `application_id`; SQLite statement serialization | `src/adapters/stores/operation_store.rs::ownership_replaces_the_token_and_advances_the_generation` | Keep |
 | INV-DB-006 | Corrupt or invalid persisted values are conversion errors, never silently mapped to invented defaults; only three documented legacy tolerances exist (`SourceRevision::Legacy`, `DeploymentFailureEvidence::Incomplete`, and the NULL `applications.system_id` of INV-APP-003). | Persistence invariant | All store row mappers (`application_store.rs:132-146,374-540`; `deployment_store.rs:421-520`; `runtime_store.rs:368-483`; `exposure_store.rs:96-219`; `system_store.rs:73-85`) | Same (adapters own encoding; domain validates) | Domain constructors reject at hydration time | `tests/domain_values.rs`; `tests/application_specification.rs::rejects_invalid_persisted_specification/exposure_values`; `preserves_incomplete_historical_failed_evidence` | Keep |
@@ -80,7 +80,7 @@ ownership gap; identical entries mean the rule already lives where it belongs.
 | INV-EXT-001 | Internal health checks connect only to loopback endpoints, use bounded retries (5 attempts × 2 s timeout × 500 ms interval), read a capped status line, and classify timeout vs unreachable. | External-boundary invariant | `src/adapters/health_check_internal.rs:10-12,76-194` | Same (adapter; bounds fixed in production) | Domain endpoint loopback validation upstream (`INV-RUN-001`) | 8 in-file unit tests incl. `rejects_non_loopback_endpoint_before_connecting` | Keep |
 | INV-EXT-002 | External health pins the configured domain to loopback via `curl --resolve <domain>:443:127.0.0.1` with proxy bypass, bounded attempt window, and long bounded ACME retry; status must equal expected. | External-boundary invariant | `src/adapters/health_check_external.rs:61-117` | Same (adapter) | Health spec validated at import (`INV-RUN-002`) | `tests/cli.rs` asserts `--resolve` usage (~line 536) and public-health failure paths | Isolated unit tests for the external checker's timeout/retry semantics (known gap) |
 | INV-EXT-003 | Managed Caddy fragments live at `<application-id>.caddy`, are imported by the main Caddyfile, and untrusted fragment coordinates (path traversal/unexpected names) are rejected before external work. | External-boundary invariant | `src/adapters/caddy_exposure.rs` | Same (adapter) | Exposure store guards route identity to application | `tests/caddy_exposure.rs::rejects_untrusted_fragment_coordinates_before_external_work` (+12 file tests) | Keep |
-| INV-EXT-004 | Port allocation respects the configured `PNEUMA_RUNTIME_PORT_RANGE`; malformed ranges (zero, inverted, non-numeric bounds) are rejected. | External-boundary invariant | `src/adapters/port_allocator.rs:10-11,116-130` | Same (adapter) | Reservation exclusivity in SQLite (`INV-DB-003`) | None directly | Allocator tests covering boundary values of the configured range (known gap) |
+| INV-EXT-004 | Port allocation respects the configured `PNEUMA_RUNTIME_PORT_RANGE`; malformed ranges (zero, inverted, non-numeric bounds) are rejected. | External-boundary invariant | `src/adapters/port_allocator.rs:10-11,116-130` | Same (adapter) | Reservation exclusivity in SQLite (`INV-DB-003`) | In-file allocator tests: `rejects_malformed_zero_and_inverted_ranges` (range grammar incl. zero/inverted bounds), exhaustion and exclusivity tests against the default range | Keep |
 | INV-CI-001 | The restricted SSH dispatcher permits only `version` and `deploy <application> <branch-or-tag>`; both arguments are validated with domain rules; injection attempts are rejected. | Entity invariant | `parse_ci_command` - `src/use_cases/ci/mod.rs` (rules in library, correct owner); `src/cli/ci.rs` only plumbs `SSH_ORIGINAL_COMMAND` | Same | Dispatcher key reaches only this restricted path (security model) | 13 in-file unit tests incl. `parse_injection_attempts_rejected`, `valid/invalid_application_names` | Keep |
 
 ## Primitive And Value Object Audit
@@ -268,6 +268,103 @@ Per action (rule owner first, then test):
    Idempotência: bounded by the reservation; a stale record defers to whatever
    changed the state.
 
+## Persistence Concurrency Formalization
+
+Recorded by consolidation iteration 27: every concurrency-sensitive persistence
+rule with its logical check, its database protection, its conflict behavior,
+and the race/conflict test that proves it. The exit criterion is that no
+concurrent invariant relies on "the CLI is normally serial" — every rule below
+holds under arbitrary interleaved writers because serialization comes from the
+per-application kernel lock (INV-WF-007), SQLite immediate transactions, unique
+indexes/constraints, and compare-and-set writes, never from process discipline.
+
+1. **One non-terminal Deployment per Application** (INV-DB-001).
+   Regra: at most one Deployment per Application is Pending/Starting/
+   Verifying/Activating at any time.
+   Checagem lógica: `create_deployment_in_transaction` loads the blocker
+   before inserting (`src/use_cases/deployment/create.rs`), inside an immediate
+   transaction that also takes operation ownership.
+   Proteção do banco: partial unique index
+   `one_active_deployment_per_application` over non-terminal statuses
+   (`migrations/0007_deployment_release.sql:73`) rejects a concurrent insert
+   even if it skips the workflow check.
+   Comportamento em conflito: workflow conflict ⇒ typed
+   `CreateDeploymentError::ActiveDeployment`; index violation at the boundary
+   ⇒ persistence error carrying the constraint failure — both are explicit,
+   neither continues as if the write happened.
+   Teste de corrida/conflito:
+   `tests/deployment_create.rs::rejects_a_second_active_deployment_for_the_application`
+   (workflow),
+   `src/adapters/stores/deployment_store.rs::partial_unique_index_rejects_a_second_nonterminal_deployment`
+   (index defense, plus terminal rows exempt).
+
+2. **Compare-and-set persistence writes** (INV-DB-004).
+   Regra: every state-racing UPDATE carries an expected prior value; zero rows
+   updated is stale/concurrent state, never success.
+   Checagem lógica: CAS primitives return `PersistenceOutcome::{Updated,Stale}`
+   (`src/adapters/stores/persistence.rs`; deployment/application/runtime/
+   exposure stores) and use cases translate Stale into typed conflicts.
+   Proteção do banco: single-statement conditional UPDATEs; SQLite statement
+   atomicity makes check-and-write indivisible.
+   Comportamento em conflito: `Stale` mapped to explicit errors
+   (`RuntimeChanged`, `ExposureChanged`, transition `Conflict`,
+   reconciliation `NotConverged`, `mark_failed` `Stale`) — the caller never
+   assumes persistence occurred.
+   Teste de corrida/conflito: `compare_and_set_reports_updated_then_stale`
+   (`deployment_store.rs`),
+   `runtime_store.rs::identity_cas_is_stale_unless_the_recorded_container_id_matches`,
+   exposure store reservation/completion precondition tests, and CLI-level
+   lost-CAS scenarios (`tests/cli.rs::lost_public_completion_cas_restores_the_
+   fragment_and_is_not_success`,
+   `lost_removal_completion_cas_restores_the_fragment_and_records_failure_...
+   during_reconcile`).
+
+3. **Operation ownership epochs** (INV-DB-005).
+   Regra: one owner token per Application; taking ownership atomically replaces
+   the token and advances a monotonic generation, so an interrupted epoch can
+   be distinguished from the current one.
+   Checagem lógica: deploy/reconcile generate a random token and take ownership
+   in the same transaction that records intent
+   (`execute.rs`, `reconciliation/mod.rs`, `create.rs`).
+   Proteção do banco: `INSERT .. ON CONFLICT(application_id) DO UPDATE ..
+   RETURNING generation` upsert (`operation_store.rs`); PK on `application_id`
+   and `CHECK (generation > 0)` (`migrations/0015_application_operations.sql`);
+   SQLite serializes concurrent upserts.
+   Comportamento em conflito: a displaced owner holds a superseded epoch; its
+   subsequent guarded writes lose their CAS expectations (record 2) instead of
+   overwriting newer state; live contention is excluded up front by the kernel
+   lock (INV-WF-007).
+   Teste de corrida/conflito:
+   `src/adapters/stores/operation_store.rs::ownership_replaces_the_token_and_
+   advances_the_generation`; stale-writer rejection proven by the CAS matrix
+   of record 2; deferral under contention by
+   `tests/cli.rs::reconcile_defers_before_external_observation_for_a_
+   nonterminal_deployment`.
+
+4. **Runtime endpoint and port-reservation uniqueness** (INV-DB-003,
+   INV-EXT-004).
+   Regra: a loopback endpoint belongs to at most one live runtime; a candidate
+   holds exactly one reserved port before registration; reservations are
+   consumed or released exactly once.
+   Checagem lógica: the allocator checks live runtimes UNION pending
+   reservations inside one immediate transaction before inserting
+   (`src/adapters/port_allocator.rs::reserve_port`).
+   Proteção do banco: PK on `runtime_port_reservations.port`
+   (`migrations/0012_runtime_port_reservations.sql:2`), unique index
+   `active_runtime_endpoint` for registered runtimes
+   (`migrations/0007_deployment_release.sql:132`); the immediate transaction
+   serializes concurrent allocators on the writer lock.
+   Comportamento em conflito: duplicate reservation or endpoint ⇒ constraint
+   violation surfaced as a persistence error; exhausted range ⇒ typed
+   `PortAllocationError::Exhausted`.
+   Teste de corrida/conflito: in-file allocator tests
+   (`reserves_distinct_ports_and_reuses_a_released_port`,
+   `skips_live_runtime_endpoints_and_reuses_removed_ones`,
+   `reports_exhaustion_when_every_configured_port_is_reserved`,
+   `duplicate_reservations_are_rejected_by_the_primary_key`,
+   `rejects_malformed_zero_and_inverted_ranges`);
+   `tests/deployment_register_runtime.rs::database_rejects_a_duplicate_active_endpoint`.
+
 ## Known Coverage Gaps
 
 Recorded here so later iterations can schedule them; none blocks this
@@ -278,9 +375,9 @@ inventory:
 2. Rollback happy path (new Deployment executed from historical provenance,
    INV-DEP-005) has no E2E test; only guards and provenance selection are
    covered.
-3. `port_allocator.rs` and `systemd_quadlet.rs` have no dedicated in-file
-   tests; they are exercised indirectly through CLI fakes (INV-DB-003,
-   INV-EXT-004, INV-SRC-004).
+3. `systemd_quadlet.rs` has no dedicated in-file tests; it is exercised
+   indirectly through CLI fakes (INV-SRC-004). The port allocator's dedicated
+   in-file tests landed with iteration 27 (INV-DB-003, INV-EXT-004).
 4. The external health checker has no isolated timeout/retry tests
    (INV-EXT-002).
 5. Three `tests/oci_image.rs` tests are ignored environment tests requiring a
