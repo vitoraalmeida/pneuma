@@ -165,6 +165,22 @@ fn restores_the_fragment_when_removal_reload_fails() {
 }
 
 #[test]
+fn removes_an_absent_fragment_without_failing_so_removal_is_safe_to_retry() {
+    let environment = CaddyTestEnvironment::new();
+
+    environment.run_removal_child("removal-success");
+
+    assert!(!environment.fragment_path().exists());
+    assert!(!environment.temporary_path().exists());
+    // The removal still validates and reloads so Caddy converges even when
+    // a previous attempt already removed the fragment.
+    let commands = environment.caddy_commands();
+    assert_eq!(commands.len(), 2);
+    assert!(commands[0].starts_with("validate "));
+    assert!(commands[1].starts_with("reload "));
+}
+
+#[test]
 fn preserves_candidate_and_recovery_reload_diagnostics() {
     let environment = CaddyTestEnvironment::new();
     environment.write_previous("known good route\n");
@@ -322,18 +338,25 @@ fn caddy_removal_child_process() {
         return;
     };
     let case = case.to_str().unwrap();
-    if case != "removal-reload-failure" {
-        return;
-    }
     let managed_directory = PathBuf::from(env::var_os(MANAGED_DIRECTORY).unwrap());
     let caddyfile_path = PathBuf::from(env::var_os(CADDYFILE_PATH).unwrap());
 
-    let error =
-        remove_caddy_fragment(&managed_directory, &application_id(), &caddyfile_path).unwrap_err();
-    assert!(matches!(
-        error,
-        pneuma::adapters::caddy_exposure::CaddyRecoveryError::Reload { .. }
-    ));
+    match case {
+        // The fake caddy fails the first reload for the shared `reload-failure` case.
+        "reload-failure" | "removal-reload-failure" => {
+            let error =
+                remove_caddy_fragment(&managed_directory, &application_id(), &caddyfile_path)
+                    .unwrap_err();
+            assert!(matches!(
+                error,
+                pneuma::adapters::caddy_exposure::CaddyRecoveryError::Reload { .. }
+            ));
+        }
+        "removal-success" => {
+            remove_caddy_fragment(&managed_directory, &application_id(), &caddyfile_path).unwrap();
+        }
+        unknown => panic!("unknown removal child case: {unknown}"),
+    }
 }
 
 struct CaddyTestEnvironment {
@@ -419,7 +442,7 @@ impl CaddyTestEnvironment {
     fn run_removal_child(&self, case: &str) {
         let output = Command::new(env::current_exe().unwrap())
             .args(["--exact", "caddy_removal_child_process", "--nocapture"])
-            .env(CHILD_CASE, "removal-reload-failure")
+            .env(CHILD_CASE, case)
             .env(MANAGED_DIRECTORY, &self.managed_directory)
             .env(CADDYFILE_PATH, &self.caddyfile_path)
             .env(CADDY_LOG, &self.caddy_log)

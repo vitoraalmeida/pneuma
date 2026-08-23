@@ -266,3 +266,146 @@ fn control(operation: &'static str, unit: &str, arguments: &[&str]) -> Result<()
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::{Mutex, MutexGuard};
+
+    use super::*;
+
+    // Env overrides are process-global, so quadlet tests serialize directory access.
+    static QUADLET_DIRECTORY_LOCK: Mutex<()> = Mutex::new(());
+
+    struct ScopedQuadletDirectory {
+        _guard: MutexGuard<'static, ()>,
+        previous: Option<std::ffi::OsString>,
+        directory: PathBuf,
+    }
+
+    impl ScopedQuadletDirectory {
+        fn new(name: &str) -> Self {
+            let guard = QUADLET_DIRECTORY_LOCK
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            let directory = std::env::temp_dir().join(format!(
+                "pneuma-quadlet-{name}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            let previous = env::var_os(QUADLET_DIRECTORY_ENVIRONMENT_VARIABLE);
+            // Safety: every access to PNEUMA_QUADLET_DIR in this process happens
+            // while holding QUADLET_DIRECTORY_LOCK, which `guard` keeps alive.
+            unsafe { env::set_var(QUADLET_DIRECTORY_ENVIRONMENT_VARIABLE, &directory) };
+            Self {
+                _guard: guard,
+                previous,
+                directory,
+            }
+        }
+    }
+
+    impl Drop for ScopedQuadletDirectory {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                Some(previous) => {
+                    // Safety: see ScopedQuadletDirectory::new.
+                    unsafe { env::set_var(QUADLET_DIRECTORY_ENVIRONMENT_VARIABLE, previous) };
+                }
+                None => {
+                    // Safety: see ScopedQuadletDirectory::new.
+                    unsafe { env::remove_var(QUADLET_DIRECTORY_ENVIRONMENT_VARIABLE) };
+                }
+            }
+            let _ = fs::remove_dir_all(&self.directory);
+        }
+    }
+
+    fn artifact() -> OciArtifact {
+        OciArtifact::parse("registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap()
+    }
+
+    fn unit_inputs() -> (ApplicationName, DeploymentId) {
+        (
+            ApplicationName::new("app").unwrap(),
+            DeploymentId::from("deployment"),
+        )
+    }
+
+    #[test]
+    fn write_unit_rewrites_canonical_bytes_so_updates_are_retry_safe() {
+        let scoped = ScopedQuadletDirectory::new("write-retry");
+        let (application_name, deployment_id) = unit_inputs();
+
+        let unit = write_unit(
+            &application_name,
+            &deployment_id,
+            &artifact(),
+            ContainerPort::new(8080).unwrap(),
+            HostPort::new(31000).unwrap(),
+        )
+        .unwrap();
+        let path = scoped.directory.join(format!("{unit}.container"));
+        let canonical = canonical_unit_contents(
+            &application_name,
+            &deployment_id,
+            &artifact(),
+            ContainerPort::new(8080).unwrap(),
+            HostPort::new(31000).unwrap(),
+        );
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), canonical);
+
+        // A divergent on-disk unit is replaced by canonical bytes on the next write.
+        fs::write(&path, "stale divergent contents").unwrap();
+        write_unit(
+            &application_name,
+            &deployment_id,
+            &artifact(),
+            ContainerPort::new(8080).unwrap(),
+            HostPort::new(31000).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), canonical);
+
+        assert!(unit_exists(&unit).unwrap());
+    }
+
+    #[test]
+    fn remove_unit_tolerates_missing_units_and_stays_safe_to_retry() {
+        let scoped = ScopedQuadletDirectory::new("remove-retry");
+        let (application_name, deployment_id) = unit_inputs();
+        let unit = unit_name(&application_name, &deployment_id);
+        let path = scoped.directory.join(format!("{unit}.container"));
+
+        // Neither the directory nor the unit file needs to exist for cleanup to succeed.
+        remove_unit(&unit).unwrap();
+        assert!(!scoped.directory.exists());
+
+        fs::create_dir_all(&scoped.directory).unwrap();
+        fs::write(&path, "candidate unit").unwrap();
+        remove_unit(&unit).unwrap();
+        remove_unit(&unit).unwrap();
+
+        assert!(!path.exists());
+        assert!(!unit_exists(&unit).unwrap());
+    }
+
+    #[test]
+    fn observe_unit_source_reports_missing_without_creating_the_directory() {
+        let scoped = ScopedQuadletDirectory::new("observe-missing");
+        let (application_name, deployment_id) = unit_inputs();
+        let unit = unit_name(&application_name, &deployment_id);
+
+        assert!(!unit_exists(&unit).unwrap());
+        assert_eq!(
+            observe_unit_source(&unit).unwrap(),
+            QuadletSourceObservation::Missing
+        );
+        assert!(!scoped.directory.exists());
+    }
+}

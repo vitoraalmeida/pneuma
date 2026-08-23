@@ -81,6 +81,7 @@ ownership gap; identical entries mean the rule already lives where it belongs.
 | INV-EXT-002 | External health pins the configured domain to loopback via `curl --resolve <domain>:443:127.0.0.1` with proxy bypass, bounded attempt window, and long bounded ACME retry; status must equal expected. | External-boundary invariant | `src/adapters/health_check_external.rs:61-117` | Same (adapter) | Health spec validated at import (`INV-RUN-002`) | `tests/cli.rs` asserts `--resolve` usage (~line 536) and public-health failure paths | Isolated unit tests for the external checker's timeout/retry semantics (known gap) |
 | INV-EXT-003 | Managed Caddy fragments live at `<application-id>.caddy`, are imported by the main Caddyfile, and untrusted fragment coordinates (path traversal/unexpected names) are rejected before external work. | External-boundary invariant | `src/adapters/caddy_exposure.rs` | Same (adapter) | Exposure store guards route identity to application | `tests/caddy_exposure.rs::rejects_untrusted_fragment_coordinates_before_external_work` (+12 file tests) | Keep |
 | INV-EXT-004 | Port allocation respects the configured `PNEUMA_RUNTIME_PORT_RANGE`; malformed ranges (zero, inverted, non-numeric bounds) are rejected. | External-boundary invariant | `src/adapters/port_allocator.rs:10-11,116-130` | Same (adapter) | Reservation exclusivity in SQLite (`INV-DB-003`) | In-file allocator tests: `rejects_malformed_zero_and_inverted_ranges` (range grammar incl. zero/inverted bounds), exhaustion and exclusivity tests against the default range | Keep |
+| INV-EXT-005 | Every external operation carries an explicit idempotency/retry classification (see "External Operation Idempotency And Retry Classification" below): effects are idempotent, convergent, observation-gated, cleanup-coupled, or ownership-fenced; no path relies on an interrupted operation having completed atomically. | External-boundary invariant | Adapters own per-command semantics (`systemd_quadlet.rs`, `local_runtime.rs`, `caddy_exposure.rs`, `oci_image.rs`, `git_source.rs`, `port_allocator.rs`); use cases gate controls behind fresh observation and own compensation ordering | Same split (adapters classify commands, use cases order retries/cleanup) | Kernel lock plus operation generation fence all mutations (INV-WF-007, INV-DB-005); CAS makes repeated guarded writes stale instead of double-applying (INV-DB-004) | Quadlet retry tests in `src/adapters/systemd_quadlet.rs`; `tests/caddy_exposure.rs::removes_an_absent_fragment_without_failing_so_removal_is_safe_to_retry`; `tests/git_source.rs::clones_a_repository_by_url_and_cleans_up_the_checkout` (repeat cleanup tolerated) | Keep |
 | INV-CI-001 | The restricted SSH dispatcher permits only `version` and `deploy <application> <branch-or-tag>`; both arguments are validated with domain rules; injection attempts are rejected. | Entity invariant | `parse_ci_command` - `src/use_cases/ci/mod.rs` (rules in library, correct owner); `src/cli/ci.rs` only plumbs `SSH_ORIGINAL_COMMAND` | Same | Dispatcher key reaches only this restricted path (security model) | 13 in-file unit tests incl. `parse_injection_attempts_rejected`, `valid/invalid_application_names` | Keep |
 
 ## Primitive And Value Object Audit
@@ -413,6 +414,94 @@ transaction has been dropped or committed.
    observation/confirmation = observation persist CAS. No explicit
    transactions at all.
 
+## External Operation Idempotency And Retry Classification
+
+Recorded by consolidation iteration 29: every external operation audited and
+classified as `idempotent`, `safe to retry`, `requires observation before
+retry`, `requires cleanup`, or `unsafe without ownership`. Facts shared by all
+rows: every mutation is fenced by the per-application kernel lock plus the
+operation generation (INV-WF-007, INV-DB-005), so no production path mutates
+external state without ownership; CAS persistence (INV-DB-004) makes repeated
+guarded writes stale instead of double-applying.
+
+1. **Quadlet create/update** (`systemd_quadlet.rs::write_unit`) — *idempotent*.
+   Canonical deterministic bytes at the stable `<unit>.container` path; a
+   divergent on-disk unit is replaced by canonical bytes on the next write.
+   Test: in-file `write_unit_rewrites_canonical_bytes_so_updates_are_retry_safe`.
+   No cleanup needed.
+2. **Quadlet remove** (`remove_unit`) — *idempotent*. A missing unit file is
+   success, so candidate cleanup can be retried after partial removal.
+   Test: in-file `remove_unit_tolerates_missing_units_and_stays_safe_to_retry`.
+3. **systemctl control** (`daemon_reload`, `start`, `stop`) — *safe to retry*.
+   daemon-reload is a global idempotent refresh; start/stop of an
+   already-converged unit succeed without changing it. Retry after a failure is
+   always preceded by fresh observation in the owning use case.
+4. **Podman observation** (`observe_container`, `observe_named_container`,
+   `resolve_container_id`) — *idempotent* read-only commands; absence is typed
+   (`Missing`), never an error, so retries cannot invent or erase resources.
+5. **Podman container start/stop** (`local_runtime.rs::start_container`,
+   `stop_container`; used by `application/runtime.rs`) — *requires observation
+   before retry*. A blind repeat can fail benignly (already running/stopped),
+   so `transition_application` controls only when fresh observation differs
+   from the target (INV-WF-006) and re-observes through a persisted CAS
+   afterwards. Quadlet-supervised paths prefer systemctl for convergence.
+6. **Podman force-remove during compensation** (`remove_container`) —
+   *requires cleanup + proven ownership*. Called only on resources tracked in
+   `CandidateResources` or proven by reconciliation identity checks; an already
+   removed container is observed as `Missing` on retry instead of being
+   blindly targeted again (INV-REC-003).
+7. **Caddy fragment materialize** (`materialize_caddy_fragment`) —
+   *idempotent effect + requires cleanup on failure*. Canonical bytes depend
+   only on domain and endpoint, written atomically (temporary file + rename);
+   the previous fragment is captured before overwrite so validate/reload
+   failures restore it, and incomplete restoration records Diverged rather
+   than silent success (INV-WF-005).
+8. **Caddy fragment remove** (`remove_caddy_fragment`) — *idempotent*. An
+   absent fragment does not fail removal; validate/reload still run so Caddy
+   converges even when a previous attempt already removed the fragment.
+   Test: `tests/caddy_exposure.rs::removes_an_absent_fragment_without_
+   failing_so_removal_is_safe_to_retry`. The prior fragment stays restorable
+   during the call for reload-failure compensation.
+9. **Digest-pinned image pull** (`oci_image.rs::pull_image`) — *safe to
+   retry*. Pulling the same digest converges; inspect verifies the exact
+   digest after every pull, so a retried deploy cannot adopt different bytes
+   (INV-SRC-003).
+10. **Tag-based digest resolution** (`resolve_image_digest`) — *requires
+    observation before persistence*. Tags are mutable; the artifact identity
+    comes only from post-pull inspection, so a tag moving between retries
+    changes the recorded Release explicitly instead of corrupting one.
+11. **Release creation** — *idempotent*: `(application_id, image_digest)`
+    uniqueness reuses an existing Release (INV-REL-003).
+12. **Temporary checkout clone/create** (`clone_repository`,
+    `create_checkout`) — deliberately *not idempotent*: an existing
+    destination is rejected instead of replaced, protecting workspace state;
+    a failed detached checkout removes its own partial directory, and
+    abandoned imports are cleaned afterwards (INV-SRC-002).
+13. **Checkout reuse** (`ensure_checkout`) — *idempotent with observation*: a
+    clean checkout at the requested commit is reused; dirty or stale leftovers
+    from failed deployments are discarded and recreated, making a retried
+    branch deployment converge (INV-SRC-002).
+14. **Checkout cleanup** (`cleanup_checkout`) — *idempotent*: an already
+    removed checkout is tolerated (repeat asserted in
+    `tests/git_source.rs::clones_a_repository_by_url_and_cleans_up_the_
+    checkout`).
+15. **Port reservation/release** (`port_allocator.rs`) — reservation is
+    *unsafe without ownership* by construction: SQLite PK plus immediate
+    transaction reject duplicates (INV-DB-003); release/consume are
+    *idempotent* DELETEs keyed by deployment, where zero rows are fine.
+
+Exit criterion: reconciliation never depends on an interrupted operation
+having "not failed midway". Every reconcile decision derives from fresh
+observation of desired, persisted, and external facts; decided effects are
+either naturally idempotent (records 1–2, 7–8, 11, 13–14), convergent under
+observation gating (3–5, 9–10), reservation-gated before any effect
+(INV-REC-004), or refused entirely when ownership cannot be proven (6,
+ManualIntervention). Partial failures leave typed observable drift — Failed/
+Diverged diagnostics, plain external absence, or NotConverged errors — that
+the next reconcile repairs or escalates, never guesses about.
+
+
+
 ## Known Coverage Gaps
 
 Recorded here so later iterations can schedule them; none blocks this
@@ -421,9 +510,11 @@ inventory:
 1. Rollback happy path (new Deployment executed from historical provenance,
    INV-DEP-005) has no E2E test; only guards and provenance selection are
    covered.
-2. `systemd_quadlet.rs` has no dedicated in-file tests; it is exercised
-   indirectly through CLI fakes (INV-SRC-004). The port allocator's dedicated
-   in-file tests landed with iteration 27 (INV-DB-003, INV-EXT-004).
+2. `systemd_quadlet.rs` unit materialization/removal retry semantics have
+   dedicated in-file tests since iteration 29 (INV-EXT-005); broader systemd
+   control behavior remains exercised through CLI fakes (INV-SRC-004). The
+   port allocator's dedicated in-file tests landed with iteration 27
+   (INV-DB-003, INV-EXT-004).
 3. The external health checker has no isolated timeout/retry tests
    (INV-EXT-002).
 4. Three `tests/oci_image.rs` tests are ignored environment tests requiring a

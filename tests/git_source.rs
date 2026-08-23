@@ -182,6 +182,10 @@ fn clones_a_repository_by_url_and_cleans_up_the_checkout() {
 
     cleanup_checkout(&destination).unwrap();
     assert!(!destination.exists());
+
+    // A repeated cleanup after an earlier removal must still succeed so
+    // abandoned-import recovery can be retried safely.
+    cleanup_checkout(&destination).unwrap();
 }
 
 #[test]
