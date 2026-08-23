@@ -23,7 +23,7 @@ mod observe;
 mod recover;
 
 pub use load::load_reconciliation_input;
-pub use observe::observe_reconciliation_input;
+pub(crate) use observe::observe_reconciliation_input;
 
 use execute::{execute_reconciliation_decision, reconciliation_decision_reason};
 use load::persistence_error;

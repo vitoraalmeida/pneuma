@@ -74,7 +74,7 @@ impl fmt::Display for HealthCheckError {
 impl Error for HealthCheckError {}
 
 // Checks a candidate's loopback endpoint with the fixed bounded retry policy used before promotion.
-pub fn check_internal_health(
+pub(crate) fn check_internal_health(
     endpoint: SocketAddr,
     specification: &HealthCheckSpecification,
 ) -> Result<HealthCheckResult, HealthCheckError> {

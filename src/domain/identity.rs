@@ -17,7 +17,7 @@ pub struct RuntimeInstanceId(String);
 
 impl SystemId {
     // Preserves legacy SQLite text without imposing a new identifier format.
-    pub fn as_str(&self) -> &str {
+    pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
 }

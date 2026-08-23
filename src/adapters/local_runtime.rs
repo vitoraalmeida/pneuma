@@ -12,9 +12,9 @@ use crate::domain::runtime::{
 
 #[derive(Debug, PartialEq, Eq)]
 // Preserves Podman diagnostics from successful lifecycle commands for callers that report effects.
-pub struct ContainerCommandOutput {
-    pub stdout: String,
-    pub stderr: String,
+pub(crate) struct ContainerCommandOutput {
+    pub(crate) stdout: String,
+    pub(crate) stderr: String,
 }
 
 #[derive(Debug)]
@@ -54,7 +54,7 @@ pub enum ObserveContainerError {
 }
 
 #[derive(Debug)]
-pub enum ResolveContainerError {
+pub(crate) enum ResolveContainerError {
     EmptyName,
     Execute {
         source: io::Error,
@@ -239,14 +239,14 @@ impl Error for ObserveNamedContainerError {
 }
 
 // Starts a validated container through the shared Podman lifecycle command path.
-pub fn start_container(
+pub(crate) fn start_container(
     container_id: &str,
 ) -> Result<ContainerCommandOutput, ControlContainerError> {
     control_container("starting", &["start"], container_id)
 }
 
 // Resolves Podman's current container ID by stable name because recreation changes external IDs.
-pub fn resolve_container_id(name: &str) -> Result<ContainerId, ResolveContainerError> {
+pub(crate) fn resolve_container_id(name: &str) -> Result<ContainerId, ResolveContainerError> {
     if name.is_empty() {
         return Err(ResolveContainerError::EmptyName);
     }
@@ -273,7 +273,7 @@ pub fn resolve_container_id(name: &str) -> Result<ContainerId, ResolveContainerE
 }
 
 // Observes a deterministic container name without treating ordinary absence as an adapter failure.
-pub fn observe_named_container(
+pub(crate) fn observe_named_container(
     name: &str,
     container_port: ContainerPort,
 ) -> Result<NamedContainerObservation, ObserveNamedContainerError> {
@@ -351,19 +351,21 @@ pub fn observe_named_container(
 }
 
 // Stops a validated container through the shared Podman lifecycle command path.
-pub fn stop_container(container_id: &str) -> Result<ContainerCommandOutput, ControlContainerError> {
+pub(crate) fn stop_container(
+    container_id: &str,
+) -> Result<ContainerCommandOutput, ControlContainerError> {
     control_container("stopping", &["stop"], container_id)
 }
 
 // Force-removes a validated candidate container during cleanup after a failed deployment.
-pub fn remove_container(
+pub(crate) fn remove_container(
     container_id: &str,
 ) -> Result<ContainerCommandOutput, ControlContainerError> {
     control_container("removing", &["container", "rm", "--force"], container_id)
 }
 
 // Observes container state and exposes an endpoint only while Podman confirms it is running.
-pub fn observe_container(
+pub(crate) fn observe_container(
     container_id: &ContainerId,
     container_port: ContainerPort,
 ) -> Result<ContainerObservation, ObserveContainerError> {

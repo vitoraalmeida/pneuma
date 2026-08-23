@@ -95,7 +95,7 @@ pub struct DeliverySpecification {
 }
 
 impl DeliverySpecification {
-    pub fn new(delivery_type: DeliveryType, image_repository: OciRepository) -> Self {
+    pub(crate) fn new(delivery_type: DeliveryType, image_repository: OciRepository) -> Self {
         Self {
             delivery_type,
             image_repository,
@@ -110,7 +110,7 @@ impl DeliverySpecification {
 
     // Cross-object rule: an artifact is deployable only when its repository
     // matches the single repository permitted by this delivery specification.
-    pub fn permits(&self, artifact: &OciArtifact) -> bool {
+    pub(crate) fn permits(&self, artifact: &OciArtifact) -> bool {
         self.image_repository.as_str() == artifact.repository()
     }
 }

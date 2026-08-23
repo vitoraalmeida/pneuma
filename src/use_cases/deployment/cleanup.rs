@@ -14,10 +14,10 @@ use crate::domain::runtime::{ContainerId, PreviousRuntime, RuntimeState};
 #[derive(Debug, Clone)]
 // Tracks only resources proven to belong to a candidate for safe compensation.
 pub(crate) struct CandidateResources {
-    pub unit_name: Option<String>,
-    pub container_id: Option<ContainerId>,
-    pub runtime_id: Option<RuntimeInstanceId>,
-    pub port_reserved: bool,
+    pub(crate) unit_name: Option<String>,
+    pub(crate) container_id: Option<ContainerId>,
+    pub(crate) runtime_id: Option<RuntimeInstanceId>,
+    pub(crate) port_reserved: bool,
 }
 
 impl CandidateResources {

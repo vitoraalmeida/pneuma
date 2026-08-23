@@ -47,7 +47,7 @@ pub struct ActiveRuntime {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 // Distinguishes a missing stable container name from a present materialization with inspectable identity.
-pub enum NamedContainerObservation {
+pub(crate) enum NamedContainerObservation {
     Missing,
     Present {
         id: ContainerId,
@@ -68,7 +68,7 @@ pub enum QuadletSourceObservation {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 // Retains systemd's generated-unit facts without treating an absent unit as an operational failure.
-pub enum SystemdUnitObservation {
+pub(crate) enum SystemdUnitObservation {
     Missing,
     Present { active_state: String },
 }
@@ -84,29 +84,29 @@ pub enum CaddyFragmentObservation {
 // Captures the read-only external facts observed from each authority:
 // Podman (recorded and named containers), systemd/Quadlet (unit source and
 // generated unit), and Caddy (materialized fragment).
-pub struct ReconciliationObservation {
-    pub recorded_container: ContainerObservation,
-    pub named_container: NamedContainerObservation,
-    pub quadlet_source: QuadletSourceObservation,
-    pub systemd_unit: SystemdUnitObservation,
-    pub caddy_fragment: CaddyFragmentObservation,
+pub(crate) struct ReconciliationObservation {
+    pub(crate) recorded_container: ContainerObservation,
+    pub(crate) named_container: NamedContainerObservation,
+    pub(crate) quadlet_source: QuadletSourceObservation,
+    pub(crate) systemd_unit: SystemdUnitObservation,
+    pub(crate) caddy_fragment: CaddyFragmentObservation,
 }
 
 // Boundary-rendered external representations that observed files must match to
 // count as canonical. The adapters own the exact bytes; the pure decision only
 // compares them against observations.
 #[derive(Debug)]
-pub struct ReconciliationExpectations {
-    pub container_name: String,
-    pub canonical_quadlet_contents: String,
+pub(crate) struct ReconciliationExpectations {
+    pub(crate) container_name: String,
+    pub(crate) canonical_quadlet_contents: String,
     // Some only when a public exposure names a domain and an active runtime endpoint exists.
-    pub canonical_route_fragment: Option<String>,
+    pub(crate) canonical_route_fragment: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 // What reconciliation should do next for one application, decided purely from
 // persisted facts, observations, and boundary expectations before any effect.
-pub enum ReconciliationDecision {
+pub(crate) enum ReconciliationDecision {
     InSync,
     RepairRuntime(RuntimeIdentityRepair),
     RematerializeRuntime(RuntimeRematerialization),
@@ -123,43 +123,43 @@ pub enum ReconciliationDecision {
 #[derive(Debug, PartialEq, Eq)]
 // A fully proven recreated container carrying the persisted logical identity;
 // execution confirms it with a CAS swap of the recorded container id.
-pub struct RuntimeIdentityRepair {
-    pub runtime_id: RuntimeInstanceId,
-    pub container_id: ContainerId,
+pub(crate) struct RuntimeIdentityRepair {
+    pub(crate) runtime_id: RuntimeInstanceId,
+    pub(crate) container_id: ContainerId,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 // A missing runtime materialization re-creatable purely from persisted identity;
 // `unit_needs_write` records whether the Quadlet source must be rewritten first.
-pub struct RuntimeRematerialization {
-    pub unit_needs_write: bool,
+pub(crate) struct RuntimeRematerialization {
+    pub(crate) unit_needs_write: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 // Public exposure drift that must never be repaired automatically; execution
 // records the failure evidence and reports the outcome.
-pub struct PublicExposureFailure {
+pub(crate) struct PublicExposureFailure {
     // Materialization state the failure record is compare-and-set against.
-    pub expected_state: ExposureMaterializationState,
-    pub kind: PublicExposureFailureKind,
+    pub(crate) expected_state: ExposureMaterializationState,
+    pub(crate) kind: PublicExposureFailureKind,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum PublicExposureFailureKind {
+pub(crate) enum PublicExposureFailureKind {
     RuntimeMissing,
     RuntimeNotHealthy,
 }
 
 impl PublicExposureFailureKind {
     // Stable diagnostic code persisted alongside the exposure failure record.
-    pub fn code(&self) -> &'static str {
+    pub(crate) fn code(&self) -> &'static str {
         match self {
             Self::RuntimeMissing => "runtime_missing",
             Self::RuntimeNotHealthy => "runtime_not_healthy",
         }
     }
 
-    pub fn message(&self) -> &'static str {
+    pub(crate) fn message(&self) -> &'static str {
         match self {
             Self::RuntimeMissing => "public exposure has no active runtime",
             Self::RuntimeNotHealthy => {
@@ -172,7 +172,7 @@ impl PublicExposureFailureKind {
 #[derive(Debug)]
 // Drift detected after every safe rule was evaluated; reconciliation stops
 // instead of guessing.
-pub enum ReconciliationDecisionError {
+pub(crate) enum ReconciliationDecisionError {
     UnhandledDrift,
     InvalidRouteFragment(InvalidExposureConfigurationVersion),
 }
@@ -183,7 +183,7 @@ pub enum ReconciliationDecisionError {
 // Precedence mirrors the externally relied-on behavior: converged stopped
 // state first, then runtime identity repair, then rematerialization, then
 // exposure drift, then the manual-intervention fallbacks.
-pub fn decide(
+pub(crate) fn decide(
     input: &ReconciliationInput,
     observation: &ReconciliationObservation,
     expectations: &ReconciliationExpectations,

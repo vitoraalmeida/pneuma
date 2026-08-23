@@ -39,7 +39,7 @@ pub enum DeploymentLifecycle {
 }
 
 impl DeploymentLifecycle {
-    pub fn status(&self) -> DeploymentStatus {
+    pub(crate) fn status(&self) -> DeploymentStatus {
         match self {
             Self::Pending => DeploymentStatus::Pending,
             Self::Starting => DeploymentStatus::Starting,
@@ -68,7 +68,7 @@ pub struct DeploymentFailure {
 }
 
 impl DeploymentFailure {
-    pub fn validate_details(
+    pub(crate) fn validate_details(
         code: &str,
         stage: DeploymentStatus,
         message: &str,
@@ -84,7 +84,7 @@ impl DeploymentFailure {
         Ok(())
     }
 
-    pub fn new(
+    pub(crate) fn new(
         code: &str,
         stage: DeploymentStatus,
         message: &str,
@@ -199,7 +199,7 @@ impl fmt::Display for DeploymentEvent {
 
 impl DeploymentStatus {
     // Applies one event to the current status, returning the next status or rejecting the pair.
-    pub fn transition(
+    pub(crate) fn transition(
         self,
         event: DeploymentEvent,
     ) -> Result<DeploymentStatus, InvalidDeploymentTransition> {
@@ -219,16 +219,16 @@ impl DeploymentStatus {
         Ok(next)
     }
 
-    pub fn is_terminal(self) -> bool {
+    pub(crate) fn is_terminal(self) -> bool {
         matches!(self, Self::Succeeded | Self::Failed)
     }
 
-    pub fn is_nonterminal(self) -> bool {
+    pub(crate) fn is_nonterminal(self) -> bool {
         !self.is_terminal()
     }
 
     // Only a Deployment still performing activation work may record a terminal failure.
-    pub fn can_fail(self) -> bool {
+    pub(crate) fn can_fail(self) -> bool {
         self.is_nonterminal()
     }
 }
@@ -261,7 +261,7 @@ pub struct PromotedCandidate {
 
 #[derive(Debug, PartialEq, Eq)]
 // Explains why a runtime cannot be promoted without changing state.
-pub enum PromotionCandidateRejection {
+pub(crate) enum PromotionCandidateRejection {
     NotStarting { actual: RuntimeState },
     NotRunning { actual: ObservedRuntimeState },
     Removed,
@@ -269,23 +269,23 @@ pub enum PromotionCandidateRejection {
 
 #[derive(Debug, PartialEq, Eq)]
 // Combines the persisted facts a promotion must validate before changing state.
-pub struct PromotionTarget {
-    pub runtime_id: RuntimeInstanceId,
-    pub application_id: ApplicationId,
-    pub deployment_id: DeploymentId,
-    pub endpoint: ExpectedRuntimeEndpoint,
-    pub state: RuntimeState,
-    pub observed_state: ObservedRuntimeState,
-    pub retirement: Option<RuntimeRetirement>,
-    pub deployment_status: DeploymentStatus,
-    pub deployment_finished_at: Option<String>,
-    pub visibility: Visibility,
-    pub domain: Option<DomainName>,
+pub(crate) struct PromotionTarget {
+    pub(crate) runtime_id: RuntimeInstanceId,
+    pub(crate) application_id: ApplicationId,
+    pub(crate) deployment_id: DeploymentId,
+    pub(crate) endpoint: ExpectedRuntimeEndpoint,
+    pub(crate) state: RuntimeState,
+    pub(crate) observed_state: ObservedRuntimeState,
+    pub(crate) retirement: Option<RuntimeRetirement>,
+    pub(crate) deployment_status: DeploymentStatus,
+    pub(crate) deployment_finished_at: Option<String>,
+    pub(crate) visibility: Visibility,
+    pub(crate) domain: Option<DomainName>,
 }
 
 impl PromotionTarget {
     // Returns the already-confirmed promotion when the deployment has reached a terminal success.
-    pub fn completed_promotion(&self) -> Option<PromotedCandidate> {
+    pub(crate) fn completed_promotion(&self) -> Option<PromotedCandidate> {
         if self.state != RuntimeState::Running
             || self.deployment_status != DeploymentStatus::Succeeded
         {
@@ -301,7 +301,7 @@ impl PromotionTarget {
     }
 
     // Rejects candidates that are not observed running or have been removed.
-    pub fn validate_promotion_candidate(&self) -> Result<(), PromotionCandidateRejection> {
+    pub(crate) fn validate_promotion_candidate(&self) -> Result<(), PromotionCandidateRejection> {
         if self.state != RuntimeState::Starting {
             return Err(PromotionCandidateRejection::NotStarting { actual: self.state });
         }
@@ -319,9 +319,9 @@ impl PromotionTarget {
 
 #[derive(Debug, PartialEq, Eq)]
 // Selects the most recent succeeded deployment that is no longer active for rollback.
-pub struct RollbackTarget {
-    pub release: Release,
-    pub source_revision: Option<SourceRevision>,
+pub(crate) struct RollbackTarget {
+    pub(crate) release: Release,
+    pub(crate) source_revision: Option<SourceRevision>,
 }
 
 #[cfg(test)]

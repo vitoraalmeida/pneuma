@@ -71,7 +71,7 @@ impl Error for ExposureStoreError {
 }
 
 // Persists initial visibility intent; route materialization remains unconfirmed.
-pub fn insert_exposure(
+pub(crate) fn insert_exposure(
     transaction: &Transaction<'_>,
     application_id: &ApplicationId,
     intent: &ExposureIntent,
@@ -219,7 +219,7 @@ pub fn load_exposure(
 }
 
 // Begins a visibility transition with a compare-and-set on the prior intent.
-pub fn begin_exposure_change(
+pub(crate) fn begin_exposure_change(
     transaction: &Transaction<'_>,
     application_id: &ApplicationId,
     expected_visibility: Visibility,
@@ -234,7 +234,7 @@ pub fn begin_exposure_change(
 }
 
 // Confirms public route materialization only while the matching transition remains in progress.
-pub fn complete_public_exposure_change(
+pub(crate) fn complete_public_exposure_change(
     transaction: &Transaction<'_>,
     application_id: &ApplicationId,
     runtime_id: &RuntimeInstanceId,
@@ -245,7 +245,7 @@ pub fn complete_public_exposure_change(
 }
 
 // Confirms route removal only while the matching internal transition remains in progress.
-pub fn complete_internal_exposure_change(
+pub(crate) fn complete_internal_exposure_change(
     transaction: &Transaction<'_>,
     application_id: &ApplicationId,
 ) -> Result<PersistenceOutcome, ExposureStoreError> {
@@ -254,7 +254,7 @@ pub fn complete_internal_exposure_change(
 }
 
 // Records route diagnostics only when the persisted visibility still matches the attempted change.
-pub fn record_exposure_change_failure(
+pub(crate) fn record_exposure_change_failure(
     transaction: &Transaction<'_>,
     application_id: &ApplicationId,
     visibility: Visibility,
@@ -266,7 +266,7 @@ pub fn record_exposure_change_failure(
 }
 
 // Marks a public route as applying before its external materialization begins.
-pub fn begin_public_exposure(
+pub(crate) fn begin_public_exposure(
     connection: &Connection,
     application_id: &ApplicationId,
 ) -> Result<PersistenceOutcome, ExposureStoreError> {
@@ -275,7 +275,7 @@ pub fn begin_public_exposure(
 }
 
 // Reserves a known public exposure snapshot for reconciliation before Caddy effects begin.
-pub fn begin_public_exposure_reconciliation(
+pub(crate) fn begin_public_exposure_reconciliation(
     connection: &Connection,
     application_id: &ApplicationId,
     expected_state: ExposureMaterializationState,
@@ -285,7 +285,7 @@ pub fn begin_public_exposure_reconciliation(
 }
 
 // Reserves a known internal exposure snapshot for reconciliation before Caddy effects begin.
-pub fn begin_internal_exposure_reconciliation(
+pub(crate) fn begin_internal_exposure_reconciliation(
     connection: &Connection,
     application_id: &ApplicationId,
     expected_state: ExposureMaterializationState,
@@ -295,7 +295,7 @@ pub fn begin_internal_exposure_reconciliation(
 }
 
 // Records reconciliation diagnostics only while its external-effect reservation remains current.
-pub fn record_reconciliation_exposure_failure(
+pub(crate) fn record_reconciliation_exposure_failure(
     connection: &Connection,
     application_id: &ApplicationId,
     visibility: Visibility,
@@ -308,7 +308,7 @@ pub fn record_reconciliation_exposure_failure(
 }
 
 // Persists the result of public-route compensation without treating a missing row as success.
-pub fn record_public_exposure_failure(
+pub(crate) fn record_public_exposure_failure(
     connection: &Connection,
     application_id: &ApplicationId,
     diagnostic: &ExposureDiagnostic,

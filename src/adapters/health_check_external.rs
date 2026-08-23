@@ -8,8 +8,8 @@ use crate::domain::runtime::{HealthCheckPath, HealthCheckStatus};
 
 #[derive(Debug, PartialEq, Eq)]
 // Captures the confirmed public HTTP status for exposure materialization evidence.
-pub struct ExternalHealthCheck {
-    pub response_status: u16,
+pub(crate) struct ExternalHealthCheck {
+    pub(crate) response_status: u16,
 }
 
 #[derive(Debug)]
@@ -59,7 +59,7 @@ impl Error for ExternalHealthCheckError {
 }
 
 // Checks the public HTTPS listener through local Caddy, verifying TLS and routing without external DNS.
-pub fn check_external_health(
+pub(crate) fn check_external_health(
     domain: &DomainName,
     path: &HealthCheckPath,
     expected_status: HealthCheckStatus,

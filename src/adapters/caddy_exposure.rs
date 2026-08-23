@@ -251,7 +251,7 @@ impl Error for MaterializeCaddyFragmentError {
 
 impl MaterializeCaddyFragmentError {
     // Signals whether recovery failed, requiring callers to record route divergence.
-    pub fn recovery_failed(&self) -> bool {
+    pub(crate) fn recovery_failed(&self) -> bool {
         matches!(
             self,
             Self::ValidateConfiguration {
@@ -458,7 +458,7 @@ pub fn remove_caddy_fragment(
 }
 
 // Reinstates a route removed by a caller whose subsequent operation did not complete.
-pub fn restore_removed_caddy_fragment(
+pub(crate) fn restore_removed_caddy_fragment(
     removed: &RemovedCaddyFragment,
     caddyfile_path: &Path,
 ) -> Result<(), CaddyRecoveryError> {
@@ -472,7 +472,7 @@ pub fn restore_removed_caddy_fragment(
 
 impl CaddyRecoveryError {
     // Signals whether a failed removal left the route in an unconfirmed state.
-    pub fn recovery_failed(&self) -> bool {
+    pub(crate) fn recovery_failed(&self) -> bool {
         matches!(
             self,
             Self::ReloadRecovery { .. }

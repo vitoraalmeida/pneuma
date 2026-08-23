@@ -38,7 +38,7 @@ pub(crate) fn reconciliation_expectations(
 }
 
 // Observes persisted runtime and route identities without changing SQLite or controlling external resources.
-pub fn observe_reconciliation_input(
+pub(crate) fn observe_reconciliation_input(
     input: &ReconciliationInput,
     managed_caddy_directory: &Path,
 ) -> Result<Option<ReconciliationObservation>, ReconciliationReadError> {

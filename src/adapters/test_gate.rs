@@ -7,7 +7,7 @@ use std::thread;
 use std::time::Duration;
 
 #[derive(Debug)]
-pub enum TestGateError {
+pub(crate) enum TestGateError {
     CreateDirectory {
         source: std::io::Error,
     },
@@ -48,7 +48,7 @@ impl fmt::Display for TestGateError {
 impl std::error::Error for TestGateError {}
 
 // Blocks only when the VM harness explicitly supplies a gate directory.
-pub fn wait_for_test_gate(name: &str) -> Result<(), TestGateError> {
+pub(crate) fn wait_for_test_gate(name: &str) -> Result<(), TestGateError> {
     let Some(directory) = env::var_os("PNEUMA_TEST_GATE_DIRECTORY") else {
         return Ok(());
     };

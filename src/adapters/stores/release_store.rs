@@ -51,7 +51,7 @@ impl Error for ReleaseStoreError {
 }
 
 // Allocates a Release ID beside its digest-uniqueness check in the same transaction.
-pub fn generate_id(connection: &Connection) -> Result<ReleaseId, ReleaseStoreError> {
+pub(crate) fn generate_id(connection: &Connection) -> Result<ReleaseId, ReleaseStoreError> {
     connection
         .query_row("SELECT lower(hex(randomblob(16)))", [], |row| {
             row.get::<_, String>(0)
@@ -61,7 +61,7 @@ pub fn generate_id(connection: &Connection) -> Result<ReleaseId, ReleaseStoreErr
 }
 
 // Lists image references for the Releases selected by each Application's active Deployment.
-pub fn active_application_image_references(
+pub(crate) fn active_application_image_references(
     connection: &Connection,
 ) -> Result<Vec<String>, rusqlite::Error> {
     let mut statement = connection.prepare(
@@ -76,7 +76,7 @@ pub fn active_application_image_references(
 }
 
 // Inserts an immutable artifact Release and preserves the existing row for the same digest.
-pub fn insert_release(
+pub(crate) fn insert_release(
     transaction: &Transaction<'_>,
     id: &ReleaseId,
     application_id: &ApplicationId,
@@ -106,7 +106,7 @@ pub fn insert_release(
 }
 
 // Loads a Release by immutable digest and validates its redundant persisted artifact fields.
-pub fn load_release_by_digest(
+pub(crate) fn load_release_by_digest(
     connection: &Connection,
     application_id: &ApplicationId,
     image_digest: &str,
@@ -148,7 +148,7 @@ pub fn load_release_by_digest(
 }
 
 // Loads a Release by durable identity and validates its redundant persisted artifact fields.
-pub fn load_release_by_id(
+pub(crate) fn load_release_by_id(
     connection: &Connection,
     release_id: &ReleaseId,
 ) -> Result<Release, ReleaseStoreError> {

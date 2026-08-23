@@ -8,8 +8,8 @@ use crate::domain::release::{OciArtifact, OciRepository, is_sha256_digest};
 
 #[derive(Debug, PartialEq, Eq)]
 // Represents an OCI artifact that Podman pulled and verified against its immutable digest.
-pub struct PulledImage {
-    pub artifact: OciArtifact,
+pub(crate) struct PulledImage {
+    pub(crate) artifact: OciArtifact,
 }
 
 #[derive(Debug)]
@@ -95,7 +95,7 @@ impl Error for PullImageError {
 }
 
 // Pulls a digest-pinned artifact and confirms Podman resolved exactly that digest.
-pub fn pull_image(artifact: &OciArtifact) -> Result<PulledImage, PullImageError> {
+pub(crate) fn pull_image(artifact: &OciArtifact) -> Result<PulledImage, PullImageError> {
     let pull = Command::new("podman")
         .args(["pull", artifact.reference()])
         .output()

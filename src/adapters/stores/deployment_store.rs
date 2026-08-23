@@ -92,7 +92,7 @@ impl Error for DeploymentStoreError {
 }
 
 // Allocates a deployment ID inside the transaction that reserves the Application for activation.
-pub fn generate_id(connection: &Connection) -> Result<DeploymentId, DeploymentStoreError> {
+pub(crate) fn generate_id(connection: &Connection) -> Result<DeploymentId, DeploymentStoreError> {
     connection
         .query_row("SELECT lower(hex(randomblob(16)))", [], |row| {
             row.get::<_, String>(0)
@@ -102,7 +102,7 @@ pub fn generate_id(connection: &Connection) -> Result<DeploymentId, DeploymentSt
 }
 
 // Loads the in-progress Deployment that currently reserves an Application, if any.
-pub fn load_nonterminal_deployment(
+pub(crate) fn load_nonterminal_deployment(
     transaction: &Transaction<'_>,
     application_id: &ApplicationId,
 ) -> Result<Option<Deployment>, DeploymentStoreError> {
@@ -117,7 +117,7 @@ pub fn load_nonterminal_deployment(
 }
 
 // Finds the Release of the active Deployment only when its runtime is still live.
-pub fn load_active_runtime_release_id(
+pub(crate) fn load_active_runtime_release_id(
     transaction: &Transaction<'_>,
     application_id: &ApplicationId,
 ) -> Result<Option<ReleaseId>, DeploymentStoreError> {
@@ -131,7 +131,7 @@ pub fn load_active_runtime_release_id(
 }
 
 // Confirms that the Release belongs to the Application before creating a Deployment.
-pub fn release_exists(
+pub(crate) fn release_exists(
     transaction: &Transaction<'_>,
     release_id: &ReleaseId,
     application_id: &ApplicationId,
@@ -146,7 +146,7 @@ pub fn release_exists(
 }
 
 // Persists a new activation attempt in its initial pending state.
-pub fn insert_pending_deployment(
+pub(crate) fn insert_pending_deployment(
     transaction: &Transaction<'_>,
     deployment_id: &DeploymentId,
     application_id: &ApplicationId,
@@ -163,7 +163,7 @@ pub fn insert_pending_deployment(
 }
 
 // Hydrates one deployment and validates its lifecycle evidence matrix.
-pub fn load_deployment(
+pub(crate) fn load_deployment(
     transaction: &Transaction<'_>,
     deployment_id: &DeploymentId,
 ) -> Result<Deployment, DeploymentStoreError> {
@@ -176,7 +176,7 @@ pub fn load_deployment(
 }
 
 // Returns history with typed deployment, immutable release, and persisted active marker.
-pub fn list_deployment_history(
+pub(crate) fn list_deployment_history(
     connection: &Connection,
     application_id: &ApplicationId,
 ) -> Result<Vec<DeploymentHistory>, DeploymentStoreError> {
@@ -213,7 +213,7 @@ pub fn list_deployment_history(
 }
 
 // Loads the current Deployment status for transition and recovery decisions.
-pub fn load_status(
+pub(crate) fn load_status(
     connection: &Connection,
     deployment_id: &DeploymentId,
 ) -> Result<DeploymentStatus, DeploymentStoreError> {
@@ -235,7 +235,7 @@ pub fn load_status(
 }
 
 // Advances Deployment status with compare-and-set semantics and timestamps its first start.
-pub fn advance_status(
+pub(crate) fn advance_status(
     connection: &Connection,
     deployment_id: &DeploymentId,
     expected: DeploymentStatus,
@@ -250,7 +250,7 @@ pub fn advance_status(
 }
 
 // Records complete terminal failure evidence only from the supplied in-progress stage.
-pub fn mark_failed(
+pub(crate) fn mark_failed(
     transaction: &Transaction<'_>,
     deployment_id: &DeploymentId,
     stage: DeploymentStatus,
@@ -283,7 +283,7 @@ pub fn mark_failed(
 }
 
 // Marks a Deployment successful only when its expected prior stage still holds.
-pub fn mark_succeeded(
+pub(crate) fn mark_succeeded(
     transaction: &Transaction<'_>,
     deployment_id: &DeploymentId,
     expected_status: DeploymentStatus,
@@ -296,7 +296,7 @@ pub fn mark_succeeded(
 }
 
 // Reads the terminal timestamp persisted by a completed Deployment transition.
-pub fn load_finished_at(
+pub(crate) fn load_finished_at(
     transaction: &Transaction<'_>,
     deployment_id: &DeploymentId,
 ) -> Result<String, DeploymentStoreError> {
@@ -310,7 +310,7 @@ pub fn load_finished_at(
 }
 
 // Loads all runtime, deployment, and exposure facts required by either promotion path.
-pub fn load_promotion_target(
+pub(crate) fn load_promotion_target(
     connection: &Connection,
     runtime_id: &RuntimeInstanceId,
 ) -> Result<Option<PromotionTarget>, DeploymentStoreError> {
@@ -360,7 +360,7 @@ pub fn load_promotion_target(
 }
 
 // Selects the most recent succeeded deployment that is no longer active for rollback.
-pub fn load_rollback_target(
+pub(crate) fn load_rollback_target(
     connection: &Connection,
     application_id: &ApplicationId,
 ) -> Result<Option<RollbackTarget>, DeploymentStoreError> {

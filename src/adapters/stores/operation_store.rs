@@ -6,9 +6,9 @@ use rusqlite::{Connection, Transaction, params};
 use crate::domain::identity::ApplicationId;
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct OperationOwnership {
-    pub token: String,
-    pub generation: i64,
+pub(crate) struct OperationOwnership {
+    pub(crate) token: String,
+    pub(crate) generation: i64,
 }
 
 #[derive(Debug)]
@@ -33,14 +33,14 @@ impl Error for OperationStoreError {
 }
 
 // Generates an opaque owner token without inventing identity from process metadata.
-pub fn generate_token(connection: &Connection) -> Result<String, OperationStoreError> {
+pub(crate) fn generate_token(connection: &Connection) -> Result<String, OperationStoreError> {
     connection
         .query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))
         .map_err(persistence)
 }
 
 // Replaces the persisted owner and advances its fencing generation in the caller's short transaction.
-pub fn take_ownership(
+pub(crate) fn take_ownership(
     transaction: &Transaction<'_>,
     application_id: &ApplicationId,
     token: &str,

@@ -68,20 +68,20 @@ impl ExposureIntent {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 // Supplies the route identity after public exposure enters the applying state.
-pub struct PublicExposureTarget {
-    pub application_id: ApplicationId,
-    pub domain: DomainName,
+pub(crate) struct PublicExposureTarget {
+    pub(crate) application_id: ApplicationId,
+    pub(crate) domain: DomainName,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 // Records whether failed public-route compensation left a safe or diverged state.
-pub enum ExposureOutcome {
+pub(crate) enum ExposureOutcome {
     Failed,
     Diverged,
 }
 
 impl ExposureOutcome {
-    pub fn state(self) -> ExposureMaterializationState {
+    pub(crate) fn state(self) -> ExposureMaterializationState {
         match self {
             Self::Failed => ExposureMaterializationState::Failed,
             Self::Diverged => ExposureMaterializationState::Diverged,
@@ -167,7 +167,7 @@ impl ExposureDiagnostic {
         &self.code
     }
 
-    pub fn message(&self) -> &str {
+    pub(crate) fn message(&self) -> &str {
         &self.message
     }
 }
@@ -196,7 +196,7 @@ pub enum ExposureMaterialization {
 }
 
 impl ExposureMaterialization {
-    pub fn state(&self) -> ExposureMaterializationState {
+    pub(crate) fn state(&self) -> ExposureMaterializationState {
         match self {
             Self::NotMaterialized => ExposureMaterializationState::NotMaterialized,
             Self::Applying { .. } => ExposureMaterializationState::Applying,
@@ -207,7 +207,7 @@ impl ExposureMaterialization {
         }
     }
 
-    pub fn confirmed_route(&self) -> Option<&ConfirmedRoute> {
+    pub(crate) fn confirmed_route(&self) -> Option<&ConfirmedRoute> {
         match self {
             Self::NotMaterialized => None,
             Self::Applying { confirmed_route }
@@ -219,16 +219,6 @@ impl ExposureMaterialization {
                 confirmed_route, ..
             } => confirmed_route.as_ref(),
             Self::Active { confirmed_route } => Some(confirmed_route),
-        }
-    }
-
-    pub fn diagnostic(&self) -> Option<&ExposureDiagnostic> {
-        match self {
-            Self::Failed { diagnostic, .. } | Self::Diverged { diagnostic, .. } => Some(diagnostic),
-            Self::NotMaterialized
-            | Self::Applying { .. }
-            | Self::Active { .. }
-            | Self::Removing { .. } => None,
         }
     }
 
@@ -278,7 +268,7 @@ pub struct Exposure {
 }
 
 impl Exposure {
-    pub fn new(
+    pub(crate) fn new(
         application_id: ApplicationId,
         intent: ExposureIntent,
         materialization: ExposureMaterialization,

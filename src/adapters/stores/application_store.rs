@@ -66,7 +66,7 @@ impl Error for ApplicationStoreError {
 }
 
 // Allocates an ID inside the import transaction so related Application records share one boundary.
-pub fn generate_id(connection: &Connection) -> Result<ApplicationId, ApplicationStoreError> {
+pub(crate) fn generate_id(connection: &Connection) -> Result<ApplicationId, ApplicationStoreError> {
     connection
         .query_row("SELECT lower(hex(randomblob(16)))", [], |row| {
             row.get::<_, String>(0)
@@ -76,7 +76,7 @@ pub fn generate_id(connection: &Connection) -> Result<ApplicationId, Application
 }
 
 // Persists an imported Application once, preserving the original specification on name conflicts.
-pub fn insert_application(
+pub(crate) fn insert_application(
     transaction: &Transaction<'_>,
     application_id: &ApplicationId,
     system_id: &SystemId,
@@ -102,7 +102,7 @@ pub fn insert_application(
 }
 
 // Loads the import-facing Application summary with optional source metadata.
-pub fn load_application_for_import(
+pub(crate) fn load_application_for_import(
     transaction: &Transaction<'_>,
     name: &ApplicationName,
 ) -> Result<Option<ApplicationSummary>, ApplicationStoreError> {
@@ -178,7 +178,7 @@ pub fn load_application_by_name(
 }
 
 // Lists catalog summaries in stable display order.
-pub fn list_application_summaries(
+pub(crate) fn list_application_summaries(
     connection: &Connection,
 ) -> Result<Vec<ApplicationSummary>, ApplicationStoreError> {
     let mut statement = connection.prepare("SELECT a.id, a.system_id, a.name, a.desired_runtime_state, a.active_deployment_id, a.spec_version, s.repository_url, s.default_branch FROM applications a LEFT JOIN application_sources s ON s.application_id = a.id ORDER BY a.name").map_err(|source| ApplicationStoreError::Persistence { source })?;
@@ -190,7 +190,7 @@ pub fn list_application_summaries(
 }
 
 // Lists catalog summaries belonging to one System.
-pub fn list_application_summaries_for_system(
+pub(crate) fn list_application_summaries_for_system(
     connection: &Connection,
     system_id: &SystemId,
 ) -> Result<Vec<ApplicationSummary>, ApplicationStoreError> {
@@ -202,7 +202,7 @@ pub fn list_application_summaries_for_system(
         .map_err(|source| ApplicationStoreError::Persistence { source })
 }
 
-pub fn application_has_successful_deployment(
+pub(crate) fn application_has_successful_deployment(
     connection: &Connection,
     application_id: &ApplicationId,
 ) -> Result<bool, ApplicationStoreError> {
@@ -210,7 +210,7 @@ pub fn application_has_successful_deployment(
 }
 
 // Loads persisted runtime intent from its owning Application aggregate.
-pub fn load_desired_runtime_state(
+pub(crate) fn load_desired_runtime_state(
     connection: &Connection,
     application_id: &ApplicationId,
 ) -> Result<DesiredRuntimeState, ApplicationStoreError> {
@@ -230,7 +230,7 @@ pub fn load_desired_runtime_state(
 }
 
 // Changes Application runtime intent only when the persisted state matches the observation.
-pub fn compare_and_set_desired_runtime_state(
+pub(crate) fn compare_and_set_desired_runtime_state(
     connection: &Connection,
     application_id: &ApplicationId,
     expected: DesiredRuntimeState,
@@ -252,7 +252,7 @@ pub fn compare_and_set_desired_runtime_state(
 }
 
 // Persists the immutable delivery configuration associated with an imported Application.
-pub fn insert_delivery_spec(
+pub(crate) fn insert_delivery_spec(
     transaction: &Transaction<'_>,
     application_id: &ApplicationId,
     delivery_type: DeliveryType,
@@ -275,7 +275,7 @@ pub fn insert_delivery_spec(
 }
 
 // Persists source provenance and checkout defaults for an imported Application.
-pub fn insert_source_spec(
+pub(crate) fn insert_source_spec(
     transaction: &Transaction<'_>,
     application_id: &ApplicationId,
     source: &ApplicationSource,
@@ -299,7 +299,7 @@ pub fn insert_source_spec(
 }
 
 // Persists the container port that defines the Application's runtime endpoint.
-pub fn insert_runtime_spec(
+pub(crate) fn insert_runtime_spec(
     transaction: &Transaction<'_>,
     application_id: &ApplicationId,
     container_port: ContainerPort,
@@ -316,7 +316,7 @@ pub fn insert_runtime_spec(
 }
 
 // Persists the internal health-check contract used for candidate verification.
-pub fn insert_health_check_spec(
+pub(crate) fn insert_health_check_spec(
     transaction: &Transaction<'_>,
     application_id: &ApplicationId,
     path: &HealthCheckPath,
@@ -338,7 +338,7 @@ pub fn insert_health_check_spec(
 }
 
 // Checks durable Application existence before dependent persistence work.
-pub fn application_exists(
+pub(crate) fn application_exists(
     connection: &Connection,
     application_id: &ApplicationId,
 ) -> Result<bool, ApplicationStoreError> {

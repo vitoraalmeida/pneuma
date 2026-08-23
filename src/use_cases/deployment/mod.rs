@@ -38,10 +38,7 @@ pub use self::deploy::{
     DeployBranchError, DeployOciError, deploy_branch, deploy_branch_with_progress, deploy_oci,
     deploy_oci_with_progress,
 };
-pub use self::execute::{
-    DeployReleaseError, DeploymentResult, PublicDeploymentConfiguration, deploy_release,
-    deploy_release_with_progress,
-};
+pub use self::execute::{DeployReleaseError, DeploymentResult, PublicDeploymentConfiguration};
 pub use self::progress::{DeploymentProgress, DeploymentStep};
 pub use self::promotion::{PromoteInternalCandidateError, promote_internal_candidate};
 pub use self::query::{ListDeploymentsError, list_deployments};

@@ -61,7 +61,7 @@ impl ApplicationSource {
         })
     }
 
-    pub fn from_location(
+    pub(crate) fn from_location(
         location: &str,
         default_branch: Option<String>,
         manifest_path: RelativeManifestPath,

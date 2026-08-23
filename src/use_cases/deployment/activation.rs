@@ -25,17 +25,17 @@ use crate::domain::runtime::{HealthCheckSpecification, RuntimeInstance};
 
 // Carries the persisted candidate and host paths needed to expose it after internal validation.
 pub(crate) struct PublicActivationInput<'a> {
-    pub connection: &'a mut Connection,
-    pub runtime: &'a RuntimeInstance,
-    pub application_id: &'a ApplicationId,
-    pub health_check: &'a HealthCheckSpecification,
-    pub managed_caddy_directory: &'a Path,
-    pub caddyfile_path: &'a Path,
+    pub(crate) connection: &'a mut Connection,
+    pub(crate) runtime: &'a RuntimeInstance,
+    pub(crate) application_id: &'a ApplicationId,
+    pub(crate) health_check: &'a HealthCheckSpecification,
+    pub(crate) managed_caddy_directory: &'a Path,
+    pub(crate) caddyfile_path: &'a Path,
 }
 
 // Returns activation data needed by the enclosing deployment finalization.
 pub(crate) struct PublicActivationOutput {
-    pub finished_at: String,
+    pub(crate) finished_at: String,
 }
 
 pub(crate) enum PublicActivationError {

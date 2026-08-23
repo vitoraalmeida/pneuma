@@ -7,8 +7,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, DatabaseName, OpenFlags};
 
-pub const DATABASE_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_DATABASE_PATH";
-pub const DEFAULT_DATABASE_PATH: &str = "/var/lib/pneuma/database/pneuma.sqlite3";
+pub(crate) const DATABASE_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_DATABASE_PATH";
+pub(crate) const DEFAULT_DATABASE_PATH: &str = "/var/lib/pneuma/database/pneuma.sqlite3";
 
 const INITIAL_MIGRATION: &str = include_str!("../../migrations/0001_application_catalog.sql");
 const DEPLOYMENT_MIGRATION: &str =
@@ -182,7 +182,7 @@ pub fn backup(path: &Path, destination: &Path) -> Result<(), DatabaseError> {
 }
 
 // Validates a backup, serializes restoration, and returns the automatically created pre-restore backup.
-pub fn restore(path: &Path, source_path: &Path) -> Result<PathBuf, DatabaseError> {
+pub(crate) fn restore(path: &Path, source_path: &Path) -> Result<PathBuf, DatabaseError> {
     let source = Connection::open_with_flags(source_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|source| DatabaseError::RestoreSource {
             path: source_path.to_path_buf(),
@@ -231,7 +231,7 @@ pub fn configured_path() -> PathBuf {
 }
 
 // Returns the number of migrations recorded by an already-open database.
-pub fn migration_count(connection: &Connection) -> Result<i64, rusqlite::Error> {
+pub(crate) fn migration_count(connection: &Connection) -> Result<i64, rusqlite::Error> {
     connection.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
         row.get(0)
     })

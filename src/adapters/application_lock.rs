@@ -93,7 +93,7 @@ impl Drop for ApplicationLock {
 }
 
 // Names the sidecar from both configured database identity and logical application identity.
-pub fn lock_path(database_path: &Path, application_id: &ApplicationId) -> PathBuf {
+pub(crate) fn lock_path(database_path: &Path, application_id: &ApplicationId) -> PathBuf {
     let application_id = application_id.as_str();
     if database_path.as_os_str().is_empty() || database_path == Path::new(":memory:") {
         return std::env::temp_dir().join(format!("pneuma-memory-{application_id}.lock"));

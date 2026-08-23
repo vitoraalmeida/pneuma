@@ -7,7 +7,7 @@ use rusqlite::{Connection, TransactionBehavior, params};
 use crate::domain::identity::{ApplicationId, DeploymentId};
 use crate::domain::runtime::HostPort;
 
-pub const RUNTIME_PORT_RANGE_ENVIRONMENT_VARIABLE: &str = "PNEUMA_RUNTIME_PORT_RANGE";
+pub(crate) const RUNTIME_PORT_RANGE_ENVIRONMENT_VARIABLE: &str = "PNEUMA_RUNTIME_PORT_RANGE";
 const DEFAULT_RUNTIME_PORT_RANGE: &str = "30000-39999";
 
 #[derive(Debug)]
@@ -47,7 +47,7 @@ impl Error for PortAllocationError {
 }
 
 // Atomically reserves the first free configured loopback port across live runtimes and candidates.
-pub fn reserve_port(
+pub(crate) fn reserve_port(
     connection: &mut Connection,
     application_id: &ApplicationId,
     deployment_id: &DeploymentId,
@@ -92,7 +92,7 @@ pub fn reserve_port(
 }
 
 // Releases all reservations owned by a deployment after cleanup or runtime registration.
-pub fn release_port(
+pub(crate) fn release_port(
     connection: &Connection,
     deployment_id: &DeploymentId,
 ) -> Result<(), PortAllocationError> {
@@ -106,7 +106,7 @@ pub fn release_port(
 }
 
 // Consumes a reservation once its port is recorded on a RuntimeInstance.
-pub fn consume_port_reservation(
+pub(crate) fn consume_port_reservation(
     connection: &Connection,
     deployment_id: &DeploymentId,
 ) -> Result<(), PortAllocationError> {

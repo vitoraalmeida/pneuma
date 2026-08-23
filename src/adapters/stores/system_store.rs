@@ -8,7 +8,7 @@ use crate::domain::system::System;
 use crate::domain::system::SystemName;
 
 #[derive(Debug)]
-pub enum SystemStoreError {
+pub(crate) enum SystemStoreError {
     Persistence { source: rusqlite::Error },
 }
 
@@ -27,7 +27,7 @@ impl Error for SystemStoreError {
     }
 }
 
-pub fn create_or_load(
+pub(crate) fn create_or_load(
     transaction: &Transaction<'_>,
     name: &SystemName,
     description: Option<&str>,
@@ -45,7 +45,7 @@ pub fn create_or_load(
         .map_err(persistence)
 }
 
-pub fn list(connection: &Connection) -> Result<Vec<System>, SystemStoreError> {
+pub(crate) fn list(connection: &Connection) -> Result<Vec<System>, SystemStoreError> {
     let mut statement = connection
         .prepare("SELECT id, name, description FROM systems ORDER BY name")
         .map_err(persistence)?;
@@ -56,7 +56,7 @@ pub fn list(connection: &Connection) -> Result<Vec<System>, SystemStoreError> {
         .map_err(persistence)
 }
 
-pub fn load_by_name(
+pub(crate) fn load_by_name(
     connection: &Connection,
     name: &SystemName,
 ) -> Result<Option<System>, SystemStoreError> {

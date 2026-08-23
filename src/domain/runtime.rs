@@ -14,7 +14,7 @@ impl ContainerId {
     }
 
     // Rejects empty or non-hexadecimal external container text before it reaches Podman or SQLite.
-    pub fn is_valid(value: &str) -> bool {
+    pub(crate) fn is_valid(value: &str) -> bool {
         !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_hexdigit())
     }
 }
@@ -97,7 +97,7 @@ impl ExpectedRuntimeEndpoint {
     }
 
     // Returns the published loopback port; loopback validation already rejected zero.
-    pub fn host_port(&self) -> Result<HostPort, InvalidHostPort> {
+    pub(crate) fn host_port(&self) -> Result<HostPort, InvalidHostPort> {
         HostPort::new(self.0.port())
     }
 }
@@ -128,7 +128,7 @@ impl ContainerObservation {
         }
     }
 
-    pub fn state(&self) -> &ObservedRuntimeState {
+    pub(crate) fn state(&self) -> &ObservedRuntimeState {
         match self {
             Self::Running { .. } => &ObservedRuntimeState::Running,
             Self::NotRunning { state } => state,
@@ -187,21 +187,21 @@ pub struct RuntimeInstance {
 
 #[derive(Debug, PartialEq, Eq)]
 // Supplies the identity and reserved endpoint required to register a runtime.
-pub struct RuntimeRegistration {
-    pub id: RuntimeInstanceId,
-    pub application_id: ApplicationId,
-    pub deployment_id: DeploymentId,
-    pub external_runtime_id: ContainerId,
-    pub expected_endpoint: ExpectedRuntimeEndpoint,
-    pub container_port: ContainerPort,
+pub(crate) struct RuntimeRegistration {
+    pub(crate) id: RuntimeInstanceId,
+    pub(crate) application_id: ApplicationId,
+    pub(crate) deployment_id: DeploymentId,
+    pub(crate) external_runtime_id: ContainerId,
+    pub(crate) expected_endpoint: ExpectedRuntimeEndpoint,
+    pub(crate) container_port: ContainerPort,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 // Identifies the prior materialization retained during candidate replacement.
-pub struct PreviousRuntime {
-    pub runtime_id: RuntimeInstanceId,
-    pub deployment_id: DeploymentId,
-    pub external_runtime_id: ContainerId,
+pub(crate) struct PreviousRuntime {
+    pub(crate) runtime_id: RuntimeInstanceId,
+    pub(crate) deployment_id: DeploymentId,
+    pub(crate) external_runtime_id: ContainerId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -243,7 +243,7 @@ impl HostPort {
         Ok(Self(value))
     }
 
-    pub fn get(self) -> u16 {
+    pub(crate) fn get(self) -> u16 {
         self.0
     }
 }
@@ -380,7 +380,7 @@ pub(crate) fn validate_loopback_endpoint(endpoint: SocketAddr) -> Result<(), Run
 
 // Derives the one stable external name shared by the Quadlet unit and the Podman container so
 // supervision, observation, and reconciliation always address the same runtime identity.
-pub fn stable_runtime_name(application_name: &str, deployment_id: &str) -> String {
+pub(crate) fn stable_runtime_name(application_name: &str, deployment_id: &str) -> String {
     format!("pneuma-{application_name}-{deployment_id}")
 }
 

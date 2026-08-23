@@ -12,7 +12,7 @@ use crate::domain::reconciliation::{QuadletSourceObservation, SystemdUnitObserva
 use crate::domain::release::OciArtifact;
 use crate::domain::runtime::{ContainerPort, HostPort, stable_runtime_name};
 
-pub const QUADLET_DIRECTORY_ENVIRONMENT_VARIABLE: &str = "PNEUMA_QUADLET_DIR";
+pub(crate) const QUADLET_DIRECTORY_ENVIRONMENT_VARIABLE: &str = "PNEUMA_QUADLET_DIR";
 
 #[derive(Debug)]
 pub enum QuadletError {
@@ -107,12 +107,18 @@ impl Error for QuadletError {
 }
 
 // Derives the stable Quadlet unit base name from the logical application and deployment identity.
-pub fn unit_name(application_name: &ApplicationName, deployment_id: &DeploymentId) -> String {
+pub(crate) fn unit_name(
+    application_name: &ApplicationName,
+    deployment_id: &DeploymentId,
+) -> String {
     stable_runtime_name(application_name.as_str(), deployment_id.as_str())
 }
 
 // Keeps the generated Podman container name aligned with the Quadlet unit identity.
-pub fn container_name(application_name: &ApplicationName, deployment_id: &DeploymentId) -> String {
+pub(crate) fn container_name(
+    application_name: &ApplicationName,
+    deployment_id: &DeploymentId,
+) -> String {
     stable_runtime_name(application_name.as_str(), deployment_id.as_str())
 }
 
@@ -137,7 +143,7 @@ pub fn canonical_unit_contents(
 }
 
 // Writes a rootless, loopback-bound Quadlet unit that systemd can recreate after Pneuma exits.
-pub fn write_unit(
+pub(crate) fn write_unit(
     application_name: &ApplicationName,
     deployment_id: &DeploymentId,
     artifact: &OciArtifact,
@@ -160,7 +166,7 @@ pub fn write_unit(
 }
 
 // Removes a generated Quadlet file idempotently so candidate cleanup can be retried safely.
-pub fn remove_unit(unit: &str) -> Result<(), QuadletError> {
+pub(crate) fn remove_unit(unit: &str) -> Result<(), QuadletError> {
     let path = quadlet_directory()?.join(format!("{unit}.container"));
     match fs::remove_file(&path) {
         Ok(()) => Ok(()),
@@ -170,14 +176,14 @@ pub fn remove_unit(unit: &str) -> Result<(), QuadletError> {
 }
 
 // Reports whether the expected Quadlet source file remains available for runtime recovery.
-pub fn unit_exists(unit: &str) -> Result<bool, QuadletError> {
+pub(crate) fn unit_exists(unit: &str) -> Result<bool, QuadletError> {
     Ok(quadlet_directory()?
         .join(format!("{unit}.container"))
         .exists())
 }
 
 // Reads the source Quadlet without creating its directory or changing user-systemd state.
-pub fn observe_unit_source(unit: &str) -> Result<QuadletSourceObservation, QuadletError> {
+pub(crate) fn observe_unit_source(unit: &str) -> Result<QuadletSourceObservation, QuadletError> {
     let path = quadlet_directory()?.join(format!("{unit}.container"));
     match fs::read_to_string(&path) {
         Ok(contents) => Ok(QuadletSourceObservation::Present { contents }),
@@ -189,7 +195,7 @@ pub fn observe_unit_source(unit: &str) -> Result<QuadletSourceObservation, Quadl
 }
 
 // Reads systemd's generated-unit state without starting, stopping, or reloading it.
-pub fn observe_generated_unit(unit: &str) -> Result<SystemdUnitObservation, QuadletError> {
+pub(crate) fn observe_generated_unit(unit: &str) -> Result<SystemdUnitObservation, QuadletError> {
     let service = format!("{unit}.service");
     let output = Command::new("systemctl")
         .args(["--user", "is-active", &service])
@@ -212,15 +218,15 @@ pub fn observe_generated_unit(unit: &str) -> Result<SystemdUnitObservation, Quad
 }
 
 // Regenerates user-systemd units after a Quadlet file changes.
-pub fn daemon_reload() -> Result<(), QuadletError> {
+pub(crate) fn daemon_reload() -> Result<(), QuadletError> {
     control("reloading units", "", &["daemon-reload"])
 }
 // Starts the generated user service for a logical Quadlet unit.
-pub fn start(unit: &str) -> Result<(), QuadletError> {
+pub(crate) fn start(unit: &str) -> Result<(), QuadletError> {
     control("starting", unit, &["start"])
 }
 // Stops the generated user service without removing its Quadlet definition.
-pub fn stop(unit: &str) -> Result<(), QuadletError> {
+pub(crate) fn stop(unit: &str) -> Result<(), QuadletError> {
     control("stopping", unit, &["stop"])
 }
 

@@ -15,6 +15,5 @@ pub use self::list::{ListError, application_is_deployed, list_applications};
 pub use self::lookup::{LookupError, find_application_by_name};
 pub use self::remote_import::{RemoteImportError, import_remote_application};
 pub use self::runtime::{
-    RuntimeLifecycleError, RuntimeObservation, report_application_status, start_application,
-    stop_application,
+    RuntimeLifecycleError, report_application_status, start_application, stop_application,
 };

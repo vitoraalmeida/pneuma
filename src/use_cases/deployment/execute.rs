@@ -155,7 +155,7 @@ impl Error for DeployReleaseError {
 }
 
 // Deploys a release without progress callbacks while preserving the full execution workflow.
-pub fn deploy_release(
+pub(crate) fn deploy_release(
     connection: &mut Connection,
     application_id: &ApplicationId,
     release: &Release,
@@ -176,7 +176,7 @@ pub fn deploy_release(
 }
 
 // Deploys a release while reporting durable lifecycle milestones to the supplied callback.
-pub fn deploy_release_with_progress(
+pub(crate) fn deploy_release_with_progress(
     connection: &mut Connection,
     application_id: &ApplicationId,
     release: &Release,

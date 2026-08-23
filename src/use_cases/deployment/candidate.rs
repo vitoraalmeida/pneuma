@@ -24,20 +24,20 @@ use crate::domain::runtime::{
 
 // Returns the observed candidate identity needed by verification and cleanup orchestration.
 pub(crate) struct StartedCandidate {
-    pub runtime: RuntimeInstance,
-    pub container_name: String,
-    pub unit_name: String,
-    pub port: HostPort,
+    pub(crate) runtime: RuntimeInstance,
+    pub(crate) container_name: String,
+    pub(crate) unit_name: String,
+    pub(crate) port: HostPort,
 }
 
 // Groups the persisted deployment context and immutable artifact inputs for candidate startup.
 pub(crate) struct CandidateStartInput<'a> {
-    pub connection: &'a mut Connection,
-    pub deployment_id: &'a DeploymentId,
-    pub application_id: &'a ApplicationId,
-    pub application_name: &'a ApplicationName,
-    pub artifact: &'a OciArtifact,
-    pub runtime: &'a RuntimeSpecification,
+    pub(crate) connection: &'a mut Connection,
+    pub(crate) deployment_id: &'a DeploymentId,
+    pub(crate) application_id: &'a ApplicationId,
+    pub(crate) application_name: &'a ApplicationName,
+    pub(crate) artifact: &'a OciArtifact,
+    pub(crate) runtime: &'a RuntimeSpecification,
 }
 
 pub(crate) enum CandidateStartError {
