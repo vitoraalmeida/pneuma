@@ -60,7 +60,7 @@ ownership gap; identical entries mean the rule already lives where it belongs.
 | INV-REC-003 | `Missing` is an observation, not a tombstone; `removed_at` is reserved for candidate cleanup, retirement, and intentional removal. Reconcile never creates a new Deployment/RuntimeInstance because a container is missing. | Cross-object rule | Decision owner - pure domain policy (`classify_runtime_rematerialization` refuses to invent resources) - `src/domain/reconciliation.rs`; design contract - `docs/design/reconciliation.md` (Invariants 1–2) | Same (domain decides, use case executes) | Store retirement semantics (`INV-RUN-004`) | In-file decision matrix in `src/domain/reconciliation.rs` (rematerialization only for Missing containers of the confirmed identity); reconcile repair tests in `tests/cli.rs` | Keep |
 | INV-REC-004 | Every reconciliation recovery/repair action follows the documented contract ("Reconciliation Recovery And Compensation Contract" below): persistence reservation before external effect, explicit confirmation after observation, CAS-guarded persistence, defined partial-failure compensation that is never silent success, and re-runnable idempotent effects. | Workflow invariant | `src/use_cases/reconciliation/recover.rs`, `execute.rs`; store CAS primitives in `runtime_store.rs`/`exposure_store.rs` | Same split (use cases order, adapters persist/execute) | Operation generation fencing (INV-DB-005); kernel lock (INV-WF-007) | Tests listed per action in the contract section below | Keep |
 | INV-WF-001 | Persist intent before external effect; persist confirmed completion after observing the effect (deploy intent, start/stop intent, exposure applying/removing). | Workflow invariant | Use-case sequencing - `src/use_cases/application/runtime.rs`, `src/use_cases/exposure/mod.rs`, `deployment/candidate.rs` | Same (use cases) | Guarded store transitions make out-of-order writes stale | `tests/cli.rs::public_visibility_without_a_domain_is_rejected_before_external_effects`; lifecycle idempotency tests | Keep; ordering assertions remain scenario-level |
-| INV-WF-002 | No SQLite transaction remains open during Git, OCI, Podman, systemd, Caddy, or HTTP work. | Workflow invariant | Use-case structure (transactions scoped to store calls only) across `src/use_cases/` | Same (use cases) | Writer-lock acquisition inside immediate transactions only (`tests/deployment_create.rs::immediate_transaction_acquires_the_writer_lock_before_reading`) | Proxy coverage only | Dedicated structural/scenario test proving transactions close before external calls (known gap) |
+| INV-WF-002 | No SQLite transaction remains open during Git, OCI, Podman, systemd, Caddy, or HTTP work. | Workflow invariant | Use-case structure (transactions scoped to store calls only) across `src/use_cases/` (see "Transaction And External Effect Boundaries" below) | Same (use cases) | Writer-lock acquisition inside immediate transactions only (`tests/deployment_create.rs::immediate_transaction_acquires_the_writer_lock_before_reading`) | The CLI E2E fakes (`podman`, `systemctl`, `caddy`, `curl` in `tests/cli.rs`) fail with exit 90 whenever the database rollback journal exists at effect time (`PNEUMA_ASSERT_CLOSED_DATABASE`); the journal guard itself is contract-tested by `fake_external_commands_fail_when_the_database_has_an_open_write_transaction`, and every deploy/lifecycle/visibility/reconcile scenario runs with the guard enabled | Keep |
 | INV-WF-003 | Public promotion atomically records succeeded Deployment, active Deployment ID, current RuntimeInstance, and active Exposure in one transaction. | Workflow invariant | Promotion transactions - `src/use_cases/deployment/promotion.rs` | Same (use cases own transaction boundaries) | Unique indexes catch partial states (`one_current_runtime_per_application`) | `tests/deployment_promote_internal.rs::replaces_the_previous_current_runtime_atomically`, `promotes_healthy_candidate_idempotently` | Keep |
 | INV-WF-004 | A failed candidate never replaces the prior active runtime or public route; cleanup removes only resources proven to belong to that candidate; prior-runtime retirement after promotion is best effort. | Workflow invariant | Cleanup - `src/use_cases/deployment/cleanup.rs`; execute-release compensation paths | Same (use cases) | Promotion atomicity means old route persists until success | `tests/deployment_promote_internal.rs::unhealthy_candidate_fails_without_replacing_current_runtime`; `tests/cli.rs::failed_public_health_restores_previous_fragment_and_keeps_public_intent`, `restores_previous_public_route_when_external_health_fails`; `cleanup_does_not_remove_already_promoted_runtime` | Keep |
 | INV-WF-005 | Materialization failure compensates by restoring the previous Caddy fragment; incomplete compensation records `diverged` for manual intervention, never silent success. | Workflow invariant | Exposure change/promotion compensation - `src/use_cases/exposure/mod.rs`, `deployment/promotion.rs` | Same (use cases) | `ExposureOutcome::{Failed,Diverged}` typed outcomes; CAS confirmation | `tests/cli.rs::lost_public_completion_cas_restores_the_fragment_and_is_not_success` | Keep |
@@ -365,24 +365,73 @@ indexes/constraints, and compare-and-set writes, never from process discipline.
    `rejects_malformed_zero_and_inverted_ranges`);
    `tests/deployment_register_runtime.rs::database_rejects_a_duplicate_active_endpoint`.
 
+## Transaction And External Effect Boundaries
+
+Per-flow local sagas confirming INV-WF-002 and INV-WF-001: every transaction is
+short, contains only store calls, and commits before or after — never across —
+external effects. Compensation restores external state only after its
+transaction has been dropped or committed.
+
+1. **Remote import** (`src/use_cases/application/remote_import.rs`):
+   effect = Git clone into an isolated checkout (no persistence open);
+   observation = manifest parse; confirmation = one deferred transaction
+   inserting system, application, and every manifest-derived specification;
+   recovery = checkout cleanup always attempted after the transaction ends.
+2. **Branch → OCI delivery** (`src/use_cases/deployment/deploy.rs`):
+   effects = Git branch resolve, registry digest resolve, Podman pull (no
+   transaction); confirmation = short `create_release` transaction; recovery =
+   failures surface before any deployment record exists.
+3. **Release deploy / candidate start** (`deployment/create.rs`,
+   `candidate.rs`, `execute.rs`): intent = one immediate transaction creating
+   the Pending Deployment with operation ownership; effects = port reservation
+   (own immediate transaction), unit write, daemon-reload, unit start,
+   container resolve and observe (no transaction); confirmation = register
+   runtime transaction, reservation consumption, CAS transitions to Starting /
+   Verifying; recovery = `fail_deployment` CAS then candidate cleanup
+   (systemd/Podman removals outside transactions, persisted marks after).
+4. **Internal promotion** (`deployment/promotion.rs`): observation = internal
+   health check before any transaction; confirmation = one immediate
+   transaction atomically stopping other runtimes, starting the target,
+   marking the Deployment Succeeded, and activating it on the Application.
+5. **Public activation** (`deployment/activation.rs`, `promotion.rs`):
+   intent = `begin_public_exposure` CAS reserve; effects = Caddy fragment
+   materialization + external health check (no transaction); confirmation =
+   single immediate promotion transaction; recovery = restore prior fragment
+   and record Failed/Diverged via CAS after dropping the transaction.
+6. **Exposure change** (`src/use_cases/exposure/mod.rs`): intent =
+   `begin_change` transaction persisting Applying/Removing; effects = container
+   observation, Caddy materialization/removal, external health (no
+   transaction); confirmation = completion transaction; recovery = drop the
+   transaction first, then restore the fragment and record failure via CAS.
+7. **Reconciliation** (`reconciliation/mod.rs` pipeline): intent = ownership
+   transaction, then load transaction closed before observation; observation =
+   Podman/Quadlet/Caddy; decision = pure domain function; execution per
+   decision = reserve CAS → external effect → confirm transaction, restoring
+   fragments only after the dropped transaction (INV-REC-004).
+8. **Runtime lifecycle** (`src/use_cases/application/runtime.rs`): intent =
+   desired-state CAS before control; effect = Podman/systemctl start or stop;
+   observation/confirmation = observation persist CAS. No explicit
+   transactions at all.
+
 ## Known Coverage Gaps
 
 Recorded here so later iterations can schedule them; none blocks this
 inventory:
 
-1. No direct test proves transactions close before external effects
-   (INV-WF-002); coverage is structural/proxy only.
-2. Rollback happy path (new Deployment executed from historical provenance,
+1. Rollback happy path (new Deployment executed from historical provenance,
    INV-DEP-005) has no E2E test; only guards and provenance selection are
    covered.
-3. `systemd_quadlet.rs` has no dedicated in-file tests; it is exercised
+2. `systemd_quadlet.rs` has no dedicated in-file tests; it is exercised
    indirectly through CLI fakes (INV-SRC-004). The port allocator's dedicated
    in-file tests landed with iteration 27 (INV-DB-003, INV-EXT-004).
-4. The external health checker has no isolated timeout/retry tests
+3. The external health checker has no isolated timeout/retry tests
    (INV-EXT-002).
-5. Three `tests/oci_image.rs` tests are ignored environment tests requiring a
+4. Three `tests/oci_image.rs` tests are ignored environment tests requiring a
    configured rootless Podman host; they must be recorded PASS/SKIP with
    reason on such a host, never assumed green (INV-REL-001, INV-SRC-003).
+
+(The former transaction-closure gap was closed by the INV-WF-002 journal-guard
+scenario coverage described above.)
 
 ## Sources Reviewed
 

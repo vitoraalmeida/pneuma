@@ -1985,6 +1985,40 @@ fn external_failures_exit_with_code_five_and_report_the_integration() {
     );
 }
 
+#[test]
+fn fake_external_commands_fail_when_the_database_has_an_open_write_transaction() {
+    let environment = DeploymentEnvironment::new();
+    let journal = environment.database_path.with_file_name(format!(
+        "{}-journal",
+        environment
+            .database_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+    ));
+    fs::write(&journal, "").unwrap();
+
+    for name in ["podman", "systemctl", "caddy", "curl"] {
+        let output = Command::new(environment.fake_bin.join(name))
+            .env("PNEUMA_ASSERT_CLOSED_DATABASE", &environment.database_path)
+            .arg("any")
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(90),
+            "{name} did not enforce the closed-database guard\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("sqlite write transaction was open"),
+            "{name} missing guard diagnostic: {stderr}"
+        );
+    }
+}
+
 fn run_visibility_command(environment: &DeploymentEnvironment, visibility: &str) -> Output {
     run_visibility_command_with_curl_status(environment, visibility, 200)
 }
@@ -2006,6 +2040,7 @@ fn run_visibility_command_with_curl_status(
         .env("PNEUMA_FAKE_PORT", "30000")
         .env("PNEUMA_FAKE_CURL_LOG", environment.root.join("curl.log"))
         .env("PNEUMA_FAKE_CURL_STATUS", curl_status.to_string())
+        .env("PNEUMA_ASSERT_CLOSED_DATABASE", &environment.database_path)
         .args([
             "app",
             "visibility",
@@ -2269,7 +2304,10 @@ impl DeploymentEnvironment {
             .env(
                 "PNEUMA_FAKE_SYSTEMCTL_START_FAILURE",
                 self.root.join("systemctl-start-failure"),
-            );
+            )
+            // The rollback journal exists exactly while a write transaction is
+            // open, so fake external commands prove INV-WF-002 while they run.
+            .env("PNEUMA_ASSERT_CLOSED_DATABASE", &self.database_path);
         if let Some(stale) = &self.stale_container_id {
             command.env("PNEUMA_FAKE_PODMAN_STALE_ID", stale);
         }
@@ -2319,6 +2357,7 @@ impl DeploymentEnvironment {
                 "PNEUMA_FAKE_PODMAN_REMOVED",
                 self.root.join("podman-removed"),
             )
+            .env("PNEUMA_ASSERT_CLOSED_DATABASE", &self.database_path)
             .args(["reconcile", &self.application_name]);
         if let Some(stale) = &self.stale_container_id {
             command.env("PNEUMA_FAKE_PODMAN_STALE_ID", stale);
@@ -2361,6 +2400,7 @@ impl DeploymentEnvironment {
             .env("PNEUMA_FAKE_CURL_LOG", self.root.join("curl.log"))
             .env("PNEUMA_FAKE_CURL_STATUS", "200")
             .env("PNEUMA_FAKE_PODMAN_DIGEST", digest)
+            .env("PNEUMA_ASSERT_CLOSED_DATABASE", &self.database_path)
             .args([
                 "app",
                 "deploy",
@@ -2399,7 +2439,8 @@ impl DeploymentEnvironment {
             .env("PNEUMA_FAKE_PODMAN_COUNT", self.root.join("podman-count"))
             .env("PNEUMA_FAKE_PODMAN_LOG", self.root.join("podman.log"))
             .env("PNEUMA_FAKE_CURL_LOG", self.root.join("curl.log"))
-            .env("PNEUMA_FAKE_CURL_STATUS", "200");
+            .env("PNEUMA_FAKE_CURL_STATUS", "200")
+            .env("PNEUMA_ASSERT_CLOSED_DATABASE", &self.database_path);
         match failure {
             Some(OciFailure::Pull) => {
                 command.env(
@@ -2481,6 +2522,11 @@ fn install_fake_podman(fake_bin: &Path) {
         &podman,
         r#"#!/bin/sh
 set -eu
+
+if [ -n "${PNEUMA_ASSERT_CLOSED_DATABASE:-}" ] && [ -f "${PNEUMA_ASSERT_CLOSED_DATABASE}-journal" ]; then
+    printf 'sqlite write transaction was open during a podman effect\n' >&2
+    exit 90
+fi
 
 if [ -n "${PNEUMA_FAKE_PODMAN_LOG:-}" ]; then
     printf '%s\n' "$*" >> "$PNEUMA_FAKE_PODMAN_LOG"
@@ -2593,6 +2639,10 @@ fn install_fake_systemctl(fake_bin: &Path) {
         &systemctl,
         r#"#!/bin/sh
 set -eu
+if [ -n "${PNEUMA_ASSERT_CLOSED_DATABASE:-}" ] && [ -f "${PNEUMA_ASSERT_CLOSED_DATABASE}-journal" ]; then
+    printf 'sqlite write transaction was open during a systemctl effect\n' >&2
+    exit 90
+fi
 if [ "$1" = "--user" ]; then
     shift
 fi
@@ -2637,11 +2687,11 @@ fn install_fake_caddy_and_curl(fake_bin: &Path) {
     for (name, script) in [
         (
             "caddy",
-            "#!/bin/sh\nset -eu\ncase \"$1\" in validate) printf 'valid configuration\\n' ;; reload) printf 'reload complete\\n' ;; *) exit 1 ;; esac\n",
+            "#!/bin/sh\nset -eu\nif [ -n \"${PNEUMA_ASSERT_CLOSED_DATABASE:-}\" ] && [ -f \"${PNEUMA_ASSERT_CLOSED_DATABASE}-journal\" ]; then\n    printf 'sqlite write transaction was open during a caddy effect\\n' >&2\n    exit 90\nfi\ncase \"$1\" in validate) printf 'valid configuration\\n' ;; reload) printf 'reload complete\\n' ;; *) exit 1 ;; esac\n",
         ),
         (
             "curl",
-            "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"$PNEUMA_FAKE_CURL_LOG\"\nprintf '%s' \"${PNEUMA_FAKE_CURL_STATUS:-200}\"\n",
+            "#!/bin/sh\nset -eu\nif [ -n \"${PNEUMA_ASSERT_CLOSED_DATABASE:-}\" ] && [ -f \"${PNEUMA_ASSERT_CLOSED_DATABASE}-journal\" ]; then\n    printf 'sqlite write transaction was open during an http effect\\n' >&2\n    exit 90\nfi\nprintf '%s\\n' \"$*\" >> \"$PNEUMA_FAKE_CURL_LOG\"\nprintf '%s' \"${PNEUMA_FAKE_CURL_STATUS:-200}\"\n",
         ),
     ] {
         let executable = fake_bin.join(name);
