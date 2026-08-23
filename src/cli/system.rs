@@ -4,6 +4,7 @@ use pneuma::domain::system::SystemName;
 use pneuma::use_cases::system::{create_system, list_systems, show_system};
 
 use super::error::CliError;
+use super::output;
 use super::shared::log_verbose;
 
 // Adapts system creation results and errors to the CLI's output contract.
@@ -17,7 +18,7 @@ pub(crate) fn run_system_create(
     let name = SystemName::new(name).map_err(|source| CliError::InvalidSystemName { source })?;
     let system = create_system(connection, &name, description)
         .map_err(|source| CliError::SystemCreate { source })?;
-    println!("Created {}", system.name);
+    println!("{}", output::created_system(&system));
     Ok(())
 }
 
@@ -25,8 +26,9 @@ pub(crate) fn run_system_create(
 pub(crate) fn run_system_list(connection: &Connection, verbose: bool) -> Result<(), CliError> {
     log_verbose(verbose, "list registered systems");
     let systems = list_systems(connection).map_err(|source| CliError::SystemList { source })?;
-    for system in systems {
-        println!("{}", system.name);
+    let rendered = output::system_list(&systems);
+    if !rendered.is_empty() {
+        println!("{rendered}");
     }
     Ok(())
 }
@@ -41,17 +43,6 @@ pub(crate) fn run_system_show(
     let name = SystemName::new(name).map_err(|source| CliError::InvalidSystemName { source })?;
     let details =
         show_system(connection, &name).map_err(|source| CliError::SystemShow { source })?;
-    println!("System: {}", details.system.name);
-    if let Some(description) = &details.system.description {
-        println!("Description: {description}");
-    }
-    if details.applications.is_empty() {
-        println!("Applications: (none)");
-    } else {
-        println!("Applications:");
-        for application in &details.applications {
-            println!("  {}", application.name);
-        }
-    }
+    println!("{}", output::system_details(&details));
     Ok(())
 }

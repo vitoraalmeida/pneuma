@@ -1932,6 +1932,59 @@ fn deployments_source_is_dash_for_oci_releases() {
     assert!(lines[2].contains("\t-\tSucceeded"));
 }
 
+#[test]
+fn usage_errors_exit_with_code_two_and_keep_the_error_message() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+
+    let output = environment.deploy_oci("not-a-digest", 30000);
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("error: image reference `not-a-digest`"),
+        "unexpected stderr: {stderr}"
+    );
+}
+
+#[test]
+fn unknown_applications_exit_with_code_three_and_name_the_application() {
+    let database_path = temporary_database_path();
+
+    let output = run_pneuma(
+        &database_path,
+        &[
+            OsStr::new("app"),
+            OsStr::new("status"),
+            OsStr::new("missing"),
+        ],
+    );
+    let _ = fs::remove_file(&database_path);
+
+    assert_eq!(output.status.code(), Some(3));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("error: application `missing` was not found"),
+        "unexpected stderr: {stderr}"
+    );
+}
+
+#[test]
+fn external_failures_exit_with_code_five_and_report_the_integration() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    let reference = format!("registry.example/team/service@sha256:{}", "a".repeat(64));
+
+    let output = environment.deploy_oci_with_failure(&reference, OciFailure::Pull);
+
+    assert_eq!(output.status.code(), Some(5));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("error: failed to pull OCI image"),
+        "unexpected stderr: {stderr}"
+    );
+}
+
 fn run_visibility_command(environment: &DeploymentEnvironment, visibility: &str) -> Output {
     run_visibility_command_with_curl_status(environment, visibility, 200)
 }

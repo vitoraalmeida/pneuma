@@ -149,6 +149,7 @@ an explicit role instead of an accidental one. Categories:
 | `ManifestDocument` and section structs (`src/adapters/manifest.rs`), `PulledImage`, `ExternalHealthCheck`, `MaterializedCaddyFragment`, `RemovedCaddyFragment`, `CaddyFilesystemAction`, `CaddyCommandOutput`, `ContainerCommandOutput`, `HealthCheckResult/Failure` | Adapter DTO | Private or adapter-scoped external representations; converted once at the boundary into domain types. |
 | `RawDeployment` (`src/adapters/stores/deployment_store.rs`), `OperationOwnership` (`operation_store.rs`), `PersistenceOutcome` | Persistence row / store primitive | Store-private encoding; never escapes the stores layer. |
 | CLI types (`Cli`, command enums, `Invocation` in `src/cli/args.rs`) | Use-case input (CLI edge) | Converted to use-case inputs; hold no domain rules. |
+| `CliError`, `CliErrorClass`, render functions (`src/cli/error.rs`, `src/cli/output.rs`) | Presentation (CLI edge) | Classify failures into usage/not-found/conflict/external/failure exit codes and render command results as strings; preserve the source error chain and hold no domain decisions. |
 
 Exit criterion met: no code path consumes a read model where an entity is
 required — mutation and transition flows load entities or persisted status via

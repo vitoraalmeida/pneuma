@@ -1,14 +1,14 @@
 use rusqlite::Connection;
 
-use pneuma::domain::deployment::{DeploymentFailureEvidence, DeploymentLifecycle};
 use pneuma::domain::release::OciArtifact;
 use pneuma::use_cases::deployment::{
-    DeployBranchError, DeployOciError, DeploymentResult, PublicDeploymentConfiguration,
-    deploy_branch, deploy_branch_with_progress, deploy_oci, deploy_oci_with_progress,
-    list_deployments, rollback_deployment,
+    DeployBranchError, DeployOciError, PublicDeploymentConfiguration, deploy_branch,
+    deploy_branch_with_progress, deploy_oci, deploy_oci_with_progress, list_deployments,
+    rollback_deployment,
 };
 
 use super::error::CliError;
+use super::output;
 use super::shared::{
     CADDY_MANAGED_PATH_ENVIRONMENT_VARIABLE, CADDYFILE_PATH_ENVIRONMENT_VARIABLE,
     DEFAULT_CADDY_MANAGED_PATH, DEFAULT_CADDYFILE_PATH, configured_path, log_verbose,
@@ -32,49 +32,10 @@ pub(crate) fn run_deployments(
     );
     let deployments = list_deployments(connection, &application.id)
         .map_err(|source| CliError::ListDeployments { source })?;
-    if deployments.is_empty() {
-        println!("No deployments for {}", application.name);
-    } else {
-        println!("Deployments for {}:", application.name);
-        println!("DEPLOYMENT\tTYPE\tRELEASE\tSOURCE\tSTATUS\tSTARTED\tFINISHED\tACTIVE\tFAILURE");
-        for deployment in deployments {
-            let source = deployment
-                .deployment
-                .source_revision
-                .as_ref()
-                .map_or("-", pneuma::domain::deployment::SourceRevision::as_str);
-            let (finished_at, failure) = match &deployment.deployment.lifecycle {
-                DeploymentLifecycle::Succeeded { finished_at } => {
-                    (finished_at.as_str(), "-".to_owned())
-                }
-                DeploymentLifecycle::Failed {
-                    evidence: DeploymentFailureEvidence::Complete(failure),
-                } => (
-                    failure.finished_at.as_str(),
-                    format!("{}:{}:{}", failure.code, failure.stage, failure.message),
-                ),
-                DeploymentLifecycle::Failed {
-                    evidence: DeploymentFailureEvidence::Incomplete,
-                } => ("-", "incomplete".to_owned()),
-                DeploymentLifecycle::Pending
-                | DeploymentLifecycle::Starting
-                | DeploymentLifecycle::Verifying
-                | DeploymentLifecycle::Activating => ("-", "-".to_owned()),
-            };
-            println!(
-                "{}\t{:?}\t{}\t{}\t{:?}\t{}\t{}\t{}\t{}",
-                deployment.deployment.id,
-                deployment.deployment.deployment_type,
-                deployment.release.artifact.digest(),
-                source,
-                deployment.deployment.status(),
-                deployment.deployment.started_at.as_deref().unwrap_or("-"),
-                finished_at,
-                if deployment.is_active { "yes" } else { "no" },
-                failure,
-            );
-        }
-    }
+    println!(
+        "{}",
+        output::deployment_history(&application.name, &deployments)
+    );
     Ok(())
 }
 
@@ -142,7 +103,7 @@ pub(crate) fn run_deploy_oci(
     .map_err(|source: DeployOciError| CliError::DeployOci {
         source: Box::new(source),
     })?;
-    print_deployed(&application.name, &deployed);
+    println!("{}", output::deployed(&application.name, &deployed));
     Ok(())
 }
 
@@ -190,7 +151,7 @@ pub(crate) fn run_deploy_branch(
     .map_err(|source: DeployBranchError| CliError::DeployBranch {
         source: Box::new(source),
     })?;
-    print_deployed(&application.name, &deployed);
+    println!("{}", output::deployed(&application.name, &deployed));
     Ok(())
 }
 
@@ -212,14 +173,10 @@ pub(crate) fn run_rollback(
     let public_configuration = public_deployment_configuration();
     let rolled_back = rollback_deployment(connection, &application.id, Some(&public_configuration))
         .map_err(|source| CliError::Rollback { source })?;
-    println!("Rolled back {}", application.name);
-    println!("Image: {}", rolled_back.artifact.reference());
-    if let Some(source_revision) = rolled_back.source_revision {
-        println!("Source revision: {source_revision}");
-    }
-    println!("Deployment: {}", rolled_back.deployment_id);
-    println!("Runtime: {}", rolled_back.runtime_id);
-    println!("Status: Succeeded");
+    println!(
+        "{}",
+        output::rollback_result(&application.name, &rolled_back)
+    );
     Ok(())
 }
 
@@ -234,19 +191,4 @@ fn public_deployment_configuration() -> PublicDeploymentConfiguration {
             DEFAULT_CADDYFILE_PATH,
         ),
     }
-}
-
-fn print_deployed(
-    application_name: &pneuma::domain::application::ApplicationName,
-    deployed: &DeploymentResult,
-) {
-    println!("Deployed {application_name}");
-    println!("Image: {}", deployed.artifact.reference());
-    if let Some(source_revision) = &deployed.source_revision {
-        println!("Source revision: {source_revision}");
-    }
-    println!("Deployment: {}", deployed.deployment_id);
-    println!("Runtime: {}", deployed.runtime_id);
-    println!("Container: {}", deployed.container_name);
-    println!("Status: Succeeded");
 }

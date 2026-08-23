@@ -6,6 +6,7 @@ use pneuma::use_cases::application::{
 };
 
 use super::error::CliError;
+use super::output;
 use super::shared::{
     DEFAULT_WORKSPACE_PATH, WORKSPACE_PATH_ENVIRONMENT_VARIABLE, configured_path, log_verbose,
     resolve_application,
@@ -28,15 +29,8 @@ pub(crate) fn run_import(
         system_name,
         manifest_path,
     )
-    .map_err(|source| CliError::Import { source });
-    let application = application?;
-    println!("Imported {}", application.name);
-    println!("Status: Registered");
-    if let Some(deployment_id) = &application.active_deployment_id {
-        println!("Deployment: {deployment_id}");
-    } else {
-        println!("Deployment: Not deployed");
-    }
+    .map_err(|source| CliError::Import { source })?;
+    println!("{}", output::imported_application(&application));
     Ok(())
 }
 
@@ -44,16 +38,15 @@ pub(crate) fn run_import(
 pub(crate) fn run_list(connection: &Connection, verbose: bool) -> Result<(), CliError> {
     log_verbose(verbose, "list registered applications");
     let applications = list_applications(connection).map_err(|source| CliError::List { source })?;
+    let mut entries = Vec::with_capacity(applications.len());
     for application in applications {
-        let deployment_status = if application_is_deployed(connection, &application.id)
-            .map_err(|source| CliError::List { source })?
-        {
-            "Deployed"
-        } else {
-            "Not deployed"
-        };
-
-        println!("{}\tRegistered\t{deployment_status}", application.name);
+        let deployed = application_is_deployed(connection, &application.id)
+            .map_err(|source| CliError::List { source })?;
+        entries.push((application, deployed));
+    }
+    let rendered = output::application_list(&entries).trim_end().to_owned();
+    if !rendered.is_empty() {
+        println!("{rendered}");
     }
     Ok(())
 }
@@ -78,10 +71,7 @@ pub(crate) fn run_status(
             source: Box::new(source),
         })?;
     println!("Application: {}", application.name);
-    println!("Desired state: {:?}", observation.desired_runtime_state);
-    println!("Observed state: {:?}", observation.observed_runtime_state);
-    println!("Runtime: {}", observation.runtime_id);
-    println!("Container: {}", observation.container_id);
+    println!("{}", output::runtime_status(&observation));
     Ok(())
 }
 
@@ -104,8 +94,7 @@ pub(crate) fn run_stop(
             }
         })?;
     println!("Stopped {}", application.name);
-    println!("Desired state: {:?}", observation.desired_runtime_state);
-    println!("Observed state: {:?}", observation.observed_runtime_state);
+    println!("{}", output::lifecycle_outcome(&observation));
     Ok(())
 }
 
@@ -128,7 +117,6 @@ pub(crate) fn run_start(
             }
         })?;
     println!("Started {}", application.name);
-    println!("Desired state: {:?}", observation.desired_runtime_state);
-    println!("Observed state: {:?}", observation.observed_runtime_state);
+    println!("{}", output::lifecycle_outcome(&observation));
     Ok(())
 }

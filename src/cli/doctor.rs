@@ -6,6 +6,7 @@ use pneuma::adapters::database::{self, DatabaseError};
 use pneuma::adapters::diagnostics;
 
 use super::error::CliError;
+use super::output;
 
 // Runs diagnostic checks without failing on a missing database connection.
 pub(crate) fn run_doctor(connection: &Connection, verbose: bool) -> Result<(), CliError> {
@@ -19,11 +20,7 @@ pub(crate) fn run_doctor(connection: &Connection, verbose: bool) -> Result<(), C
 // Opens the database for the doctor command, reporting the failure as diagnostic output.
 pub(crate) fn open_doctor_connection(database_path: &Path) -> Result<Connection, CliError> {
     database::open(database_path).map_err(|source| {
-        println!(
-            "✗ Database connection: FAILED (unable to open database at {})",
-            database_path.display()
-        );
-        println!("\nSome checks failed. Please review the output above.");
+        println!("{}", output::doctor_connection_failure(database_path));
         CliError::Database { source }
     })
 }

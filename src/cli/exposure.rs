@@ -4,6 +4,7 @@ use pneuma::domain::exposure::Visibility;
 use pneuma::use_cases::exposure::{ExposureChangeError, change_exposure};
 
 use super::error::CliError;
+use super::output;
 use super::shared::{
     CADDY_MANAGED_PATH_ENVIRONMENT_VARIABLE, CADDYFILE_PATH_ENVIRONMENT_VARIABLE,
     DEFAULT_CADDY_MANAGED_PATH, DEFAULT_CADDYFILE_PATH, configured_path, log_verbose,
@@ -43,16 +44,9 @@ pub(crate) fn run_visibility_set(
         &caddyfile_path,
     )
     .map_err(|source: ExposureChangeError| CliError::VisibilitySet { source })?;
-    match exposure_change.visibility {
-        Visibility::Public => {
-            println!("Visibility for {}: Public", application.name);
-            if let Some(domain) = exposure_change.domain {
-                println!("Domain: {}", domain);
-            }
-        }
-        Visibility::Internal => {
-            println!("Visibility for {}: Internal", application.name);
-        }
-    }
+    println!(
+        "{}",
+        output::visibility_change(&application.name, &exposure_change)
+    );
     Ok(())
 }

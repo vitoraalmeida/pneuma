@@ -5,6 +5,7 @@ mod deployment;
 mod doctor;
 mod error;
 mod exposure;
+mod output;
 mod reconciliation;
 mod shared;
 mod system;
