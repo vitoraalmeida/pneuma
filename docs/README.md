@@ -64,6 +64,7 @@ behavior (`CHANGELOG.md`), or product direction (`roadmap.md`).
 | [`architecture/security-model.md`](architecture/security-model.md) | Living | Current assets, trust boundaries, controls, and security limits |
 | [`architecture/threat-model.md`](architecture/threat-model.md) | Living | Architecture threats, attack paths, assumptions, and residual risks |
 | [`decisions/`](decisions/) | Historical records | Retrospective architectural decision records |
+| [`engineering/consolidation-review.md`](engineering/consolidation-review.md) | Historical record | Closing audit of the consolidation program: problem, changes, final state, deferred debt, evidence |
 | [`design/documentation-architecture-refactor.md`](design/documentation-architecture-refactor.md) | Approved design | Current documentation-refactor design |
 | [`design/reconciliation.md`](design/reconciliation.md) | Historical record | Completed v0.4 reconciliation design; implemented behavior lives in `architecture/` |
 | [`design/reconciliation-e2e.md`](design/reconciliation-e2e.md) | Historical record | Completed v0.4 E2E catalog, executed by `scripts/dev-vm/reconciliation-e2e.sh` |
