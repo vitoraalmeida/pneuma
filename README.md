@@ -80,8 +80,7 @@ follow [`docs/getting-started.md`](docs/getting-started.md).
 | Understand the problem and scope | [`docs/architecture/system-context.md`](docs/architecture/system-context.md) |
 | Understand implemented behavior | [`docs/architecture/architecture.md`](docs/architecture/architecture.md) |
 | Understand persistence | [`docs/architecture/data-model.md`](docs/architecture/data-model.md) |
-| Understand trust boundaries | [`docs/architecture/security-model.md`](docs/architecture/security-model.md) |
-| Understand architecture threats | [`docs/architecture/threat-model.md`](docs/architecture/threat-model.md) |
+| Understand trust boundaries and threats | [`docs/architecture/security-model.md`](docs/architecture/security-model.md) |
 | Understand architectural rationale | [`docs/decisions/`](docs/decisions/) |
 | Set up and operate a host | [`docs/getting-started.md`](docs/getting-started.md) |
 | Validate on a disposable VM | [`docs/operations/dev-vm-tutorial.md`](docs/operations/dev-vm-tutorial.md) |

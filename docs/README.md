@@ -26,7 +26,7 @@ overrides current architecture.
 
 | Intent | Read in order |
 |---|---|
-| Understand Pneuma | [`../README.md`](../README.md) → `architecture/system-context.md` → `architecture/architecture.md` → `architecture/data-model.md` → `architecture/security-model.md` → `architecture/threat-model.md` → relevant ADR |
+| Understand Pneuma | [`../README.md`](../README.md) → `architecture/system-context.md` → `architecture/architecture.md` → `architecture/data-model.md` → `architecture/security-model.md` → relevant ADR |
 | Deploy Pneuma | [`getting-started.md`](getting-started.md) → [`operations/`](operations/) for disposable VM validation |
 | Contribute | system context → architecture → [`code-guide.md`](code-guide.md) → [`rust-guidelines.md`](rust-guidelines.md) → active iteration |
 | Understand future work | [`roadmap.md`](roadmap.md) → [`iterations/next-iteration.md`](iterations/next-iteration.md) |
@@ -44,8 +44,8 @@ Do not run reset, restore, bootstrap acceptance, or E2E scripts on production.
 ## Documentation Requirements
 
 For every change, determine whether it changes implemented behavior
-(`architecture.md`), persistence (`data-model.md`), trust boundaries
-(`security-model.md`), architecture threats (`threat-model.md`), a major decision
+(`architecture.md`), persistence (`data-model.md`), trust boundaries or threats
+(`security-model.md`), a major decision
 (ADR), user setup (`getting-started.md`), released behavior (`CHANGELOG.md`), or
 product direction (`roadmap.md`).
 
@@ -60,8 +60,7 @@ product direction (`roadmap.md`).
 | [`code-guide.md`](code-guide.md) | Living | Code navigation guide: each user-facing flow traced through CLI, use cases, domain, stores, adapters, and tests |
 | [`architecture/architecture.md`](architecture/architecture.md) | Living | Implemented architecture, authority boundaries, rules, and flows |
 | [`architecture/data-model.md`](architecture/data-model.md) | Living | Implemented SQLite model and persistence invariants |
-| [`architecture/security-model.md`](architecture/security-model.md) | Living | Current assets, trust boundaries, controls, and security limits |
-| [`architecture/threat-model.md`](architecture/threat-model.md) | Living | Architecture threats, attack paths, assumptions, and residual risks |
+| [`architecture/security-model.md`](architecture/security-model.md) | Living | Assets, actors, trust boundaries, controls, threats with residual risks, attack chains, and security posture |
 | [`decisions/`](decisions/) | Historical records | Retrospective architectural decision records |
 | [`iterations/current-iteration.md`](iterations/current-iteration.md) | Active planning | Completed v0.4.2 domain type closure tracker |
 | [`iterations/next-iteration.md`](iterations/next-iteration.md) | Queued planning | v0.5 observed state planning reminder |
