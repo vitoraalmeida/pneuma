@@ -418,6 +418,116 @@ fn public_deploy_rolls_back_caddy_when_external_health_fails() {
 }
 
 #[test]
+fn rollback_executes_a_new_deployment_from_historical_provenance() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+
+    // First release becomes historical provenance once the second is active.
+    let first_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let first_port = first_listener.local_addr().unwrap().port();
+    let first_server = thread::spawn(move || respond_until_timeout(&first_listener, 200));
+    let first_output = environment.deploy(first_port, false);
+    first_server.join().unwrap();
+    assert_command_succeeded(&first_output);
+    let first_deployment_id = extract_deployment_id(&first_output);
+
+    let second_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let second_port = second_listener.local_addr().unwrap().port();
+    let second_server = thread::spawn(move || respond_until_timeout(&second_listener, 200));
+    let second_output = environment.deploy_with_different_digest(second_port, 'b');
+    second_server.join().unwrap();
+    assert_command_succeeded(&second_output);
+    let second_deployment_id = extract_deployment_id(&second_output);
+    let second_runtime_id = extract_runtime_id(&second_output);
+
+    let rollback_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let rollback_port = rollback_listener.local_addr().unwrap().port();
+    let rollback_server = thread::spawn(move || respond_until_timeout(&rollback_listener, 200));
+    let output = environment.rollback(rollback_port);
+    rollback_server.join().unwrap();
+
+    assert_command_succeeded(&output);
+    let rollback_deployment_id = extract_deployment_id(&output);
+    let rollback_runtime_id = extract_runtime_id(&output);
+
+    let connection = database::open(&environment.database_path).unwrap();
+    let app_id: String = connection
+        .query_row(
+            "SELECT id FROM applications WHERE name = ?1",
+            [&environment.application_name],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    // The rollback is a NEW deployment of the first Release's provenance.
+    let rollback_row: (String, String, String) = connection
+        .query_row(
+            "SELECT d.type, d.status, d.release_id
+             FROM deployments d JOIN deployments prior ON prior.id = ?1
+             WHERE d.id = ?2",
+            [&first_deployment_id, &rollback_deployment_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(rollback_row.0, "rollback");
+    assert_eq!(rollback_row.1, "succeeded");
+    let original_release: String = connection
+        .query_row(
+            "SELECT release_id FROM deployments WHERE id = ?1",
+            [&first_deployment_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(rollback_row.2, original_release);
+
+    // History is insert-only: prior rows keep their identity and status.
+    for survived in [&first_deployment_id, &second_deployment_id] {
+        let status: String = connection
+            .query_row(
+                "SELECT status FROM deployments WHERE id = ?1",
+                [survived],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "succeeded", "{survived} must be untouched");
+    }
+
+    // The application confirms the rollback deployment as active.
+    let active_deployment: String = connection
+        .query_row(
+            "SELECT active_deployment_id FROM applications WHERE id = ?1",
+            [&app_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(active_deployment, rollback_deployment_id);
+
+    // The replaced runtime is retired; the rollback runtime is live.
+    let second_runtime_removed: Option<String> = connection
+        .query_row(
+            "SELECT removed_at FROM runtime_instances WHERE id = ?1",
+            [&second_runtime_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(second_runtime_removed.is_some());
+    let rollback_runtime_state: String = connection
+        .query_row(
+            "SELECT last_observed_state FROM runtime_instances WHERE id = ?1",
+            [&rollback_runtime_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(rollback_runtime_state, "running");
+
+    // The candidate unit of the rollback exists under the stable name.
+    let unit_path = environment.root.join("quadlets").join(format!(
+        "pneuma-another-site-{rollback_deployment_id}.container"
+    ));
+    assert!(unit_path.exists(), "rollback unit file must exist");
+}
+
+#[test]
 fn cleanup_does_not_remove_already_promoted_runtime() {
     let environment = DeploymentEnvironment::new();
     assert_command_succeeded(&environment.import());
@@ -649,6 +759,24 @@ impl DeploymentEnvironment {
                 "--image",
                 &reference,
             ])
+            .output()
+            .unwrap()
+    }
+
+    fn rollback(&self, port: u16) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_pneuma"))
+            .env("PNEUMA_DATABASE_PATH", &self.database_path)
+            .env("PNEUMA_WORKSPACE_PATH", &self.workspace_path)
+            .env("PNEUMA_CADDY_MANAGED_PATH", &self.managed_caddy_directory)
+            .env("PNEUMA_CADDYFILE_PATH", &self.caddyfile_path)
+            .env("PNEUMA_QUADLET_DIR", self.root.join("quadlets"))
+            .env("PATH", executable_path(&self.fake_bin))
+            // The fake Podman answers every endpoint observation with this port.
+            .env("PNEUMA_FAKE_PORT", port.to_string())
+            // A distinct container identity for the rollback candidate, since
+            // the fake would otherwise reuse the previous deployment's ID.
+            .env("PNEUMA_FAKE_PODMAN_ID", "c".repeat(64))
+            .args(["deployment", "rollback", &self.application_name])
             .output()
             .unwrap()
     }

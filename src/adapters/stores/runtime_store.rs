@@ -295,6 +295,8 @@ pub(crate) fn load_runtime_by_deployment(
 }
 
 // Tombstones only a stopped runtime, preserving lifecycle transition ordering.
+// The persisted tombstone is `state = 'removed'` plus `removed_at`, exactly the
+// combination hydration accepts as retirement (INV-RUN-004).
 pub(crate) fn mark_runtime_removed(
     connection: &Connection,
     runtime_id: &RuntimeInstanceId,
@@ -302,7 +304,7 @@ pub(crate) fn mark_runtime_removed(
     let updated = connection
         .execute(
             "UPDATE runtime_instances
-              SET state = 'stopped', removed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+              SET state = 'removed', removed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
              WHERE id = ?1 AND state = 'stopped' AND removed_at IS NULL",
             [runtime_id.as_str()],
         )
@@ -318,12 +320,12 @@ pub(crate) fn mark_starting_runtime_missing(
     let updated = connection
         .execute(
             "UPDATE runtime_instances
-              SET state = 'stopped',
+              SET state = 'removed',
                   last_observed_state = 'missing',
                  last_observed_at = CURRENT_TIMESTAMP,
                  removed_at = CURRENT_TIMESTAMP,
                  updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?1 AND state = 'starting' AND removed_at IS NULL",
+              WHERE id = ?1 AND state = 'starting' AND removed_at IS NULL",
             [runtime_id.as_str()],
         )
         .map_err(|source| RuntimeStoreError::Persistence { source })?;
