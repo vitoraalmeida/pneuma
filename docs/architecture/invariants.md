@@ -71,7 +71,7 @@ domain state, use-case input/output, adapter DTO, persistence row) — are kept
 as comments on the types themselves in `src/`, so the classification sits next
 to the code it describes instead of drifting here.
 
-| ID | Rule | Categoria | Owner atual | Owner desejado | Defesa secundária | Teste atual | Teste desejado |
+| ID | Rule | Category | Current owner | Desired owner | Secondary defense | Current test | Desired test |
 |---|---|---|---|---|---|---|---|
 | INV-SYS-001 | System names satisfy the shared catalog name rule: 1–63 chars, lowercase ASCII letters/digits/hyphens, alphanumeric first and last. | Value invariant | `SystemName::new` - `src/domain/system.rs:18`; shared predicate `is_valid_catalog_name` - `src/domain/identity.rs:144` | Same (domain) | Manifest import validation (`src/adapters/manifest.rs`); CLI uses `SystemName::new` (`src/cli/system.rs:17,41`) | `tests/manifest.rs::accepts_name_domain_and_status_boundaries`, `rejects_overlong_names_and_domains`; `src/use_cases/ci/mod.rs` name tables; in-file boundary tests `accepts_catalog_names_within_the_shared_rule`, `rejects_names_outside_the_shared_rule` (`src/domain/system.rs`) | Keep |
 | INV-APP-001 | Application names satisfy the same catalog name rule as Systems. | Value invariant | `ApplicationName::new` - `src/domain/application.rs:45`, predicate `src/domain/identity.rs:144` | Same (domain) | Manifest validation (`src/adapters/manifest.rs`); CI command parsing reuses it (`src/use_cases/ci/mod.rs`) | `src/use_cases/ci/mod.rs::parse_deploy_reuses_the_domain_application_rule`, `valid/invalid_application_names`; `tests/manifest.rs`; in-file boundary tests `accepts_catalog_names_within_the_shared_rule`, `rejects_names_outside_the_shared_rule` (`src/domain/application.rs`) | Keep |
@@ -145,98 +145,98 @@ Per action (rule owner first, then test):
 
 1. **Interrupted Pending deployment** (`recover.rs`, Pending arm;
    `tests/reconciliation.rs::reconcile_marks_an_interrupted_pending_deployment_failed_without_external_effects`).
-   Pré-condição: lock released with a non-terminal Pending Deployment. Efeito:
-   none external. Confirmação: not applicable. Persistência: CAS
-   `fail_deployment` records Failed with code `operation_interrupted`. Falha
-   parcial: stale CAS surfaces as an error, next reconcile retries. Retry/
-   idempotência: terminal after one success; later runs skip via the
-   non-terminal gate. Compensação: none needed — nothing was materialized.
+   Precondition: lock released with a non-terminal Pending Deployment. Effect:
+   none external. Confirmation: not applicable. Persistence: CAS
+   `fail_deployment` records Failed with code `operation_interrupted`. Partial
+   failure: stale CAS surfaces as an error, next reconcile retries. Retry/
+   idempotency: terminal after one success; later runs skip via the
+   non-terminal gate. Compensation: none needed — nothing was materialized.
 
 2. **Interrupted candidate (Starting/Verifying)** (`recover.rs`;
    `tests/reconciliation.rs::reconcile_cleans_a_verified_candidate_only_after_unit_identity_is_proven`,
    `reconcile_reports_manual_intervention_when_a_candidate_identity_cannot_be_proven`,
    `reconcile_reports_manual_intervention_when_an_interrupted_candidate_has_no_persisted_runtime`).
-   Pré-condição: non-terminal candidate plus its persisted runtime row; without
-   that row cleanup ownership cannot be proven ⇒ ManualIntervention. Efeito:
+   Precondition: non-terminal candidate plus its persisted runtime row; without
+   that row cleanup ownership cannot be proven ⇒ ManualIntervention. Effect:
    stop/remove proven unit, remove proven container, mark runtime missing,
-   release port. Confirmação: unit bytes equal the canonical unit AND full
+   release port. Confirmation: unit bytes equal the canonical unit AND full
    container identity match (id, name, image reference, application/digest
    labels, endpoint) before any removal; unprovable identity ⇒ ManualIntervention
-   with zero cleanup. Persistência: failure recorded first, retirement after the
-   external effects (`mark_starting_runtime_missing` CAS). Falha parcial:
+   with zero cleanup. Persistence: failure recorded first, retirement after the
+   external effects (`mark_starting_runtime_missing` CAS). Partial failure:
    cleanup errors abort as NotConverged leaving partial resources for the next
    run (each step individually idempotent). Ownership: use case orchestrates;
-   `cleanup_failed_candidate` owns adapter effects. Compensação: deliberately
+   `cleanup_failed_candidate` owns adapter effects. Compensation: deliberately
    none — nothing unproven is ever removed.
 
 3. **Interrupted activation (Activating)** (`recover.rs`;
    `tests/reconciliation.rs::reconcile_marks_an_interrupted_activation_route_diverged_when_prior_route_is_unproven`,
    `reconcile_preserves_a_proven_prior_route_when_an_activation_was_interrupted`).
-   Pré-condição: non-terminal Activating Deployment. Efeito: none external —
-   the prior route is never touched. Confirmação: prior canonical route proven
+   Precondition: non-terminal Activating Deployment. Effect: none external —
+   the prior route is never touched. Confirmation: prior canonical route proven
    only when the confirmed route matches the active runtime AND the on-disk
-   fragment equals the recorded configuration version. Persistência: deployment
+   fragment equals the recorded configuration version. Persistence: deployment
    marked failed; exposure failure recorded from the Applying reservation —
    Failed when the prior route is proven preserved, Diverged otherwise; stale
    exposure ⇒ ManualIntervention. Retry: re-records only while the reservation
-   still matches. Compensação: none required because no new effect happened.
+   still matches. Compensation: none required because no new effect happened.
 
 4. **Runtime identity repair** (`execute.rs::confirm_runtime_identity`;
    `src/adapters/stores/runtime_store.rs::identity_cas_is_stale_unless_the_recorded_container_id_matches`;
    `tests/cli.rs::reconcile_repairs_a_confirmed_quadlet_container_recreation`).
-   Pré-condição: pure decision proved a recreated container's full identity.
-   Efeito: none external. Persistência: single CAS swap of
-   `external_runtime_id`. Falha parcial: stale ⇒ NotConverged, retried by the
-   next reconcile. Idempotência: repeating with the same observation converges.
+   Precondition: pure decision proved a recreated container's full identity.
+   Effect: none external. Persistence: single CAS swap of
+   `external_runtime_id`. Partial failure: stale ⇒ NotConverged, retried by the
+   next reconcile. Idempotency: repeating with the same observation converges.
 
 5. **Runtime rematerialization** (`execute.rs::rematerialize_runtime`;
    `tests/cli.rs::reconcile_rematerializes_a_missing_quadlet_and_container`,
    `reconcile_restarts_a_canonical_quadlet_after_its_container_is_removed`,
    `reconcile_reports_manual_intervention_for_a_divergent_recreated_container`).
-   Pré-condição: decision proved container Missing (and optionally divergent
-   Quadlet bytes) with a startable generated unit. Efeito: canonical unit write
-   + daemon-reload only when needed, then systemd start. Confirmação: full
+   Precondition: decision proved container Missing (and optionally divergent
+   Quadlet bytes) with a startable generated unit. Effect: canonical unit write
+   + daemon-reload only when needed, then systemd start. Confirmation: full
    container identity re-observed and matched, then internal health check.
-   Persistência: identity CAS confirm strictly after healthy observation.
-   Falha parcial: absent/divergent rematerialization ⇒ Failed/ManualIntervention
+   Persistence: identity CAS confirm strictly after healthy observation.
+   Partial failure: absent/divergent rematerialization ⇒ Failed/ManualIntervention
    without persistence; health failure ⇒ Failed; stale CAS ⇒ NotConverged.
-   Idempotência: canonical-byte writes and systemd start are idempotent.
-   Compensação: none automatic — remaining drift is re-decided next run.
+   Idempotency: canonical-byte writes and systemd start are idempotent.
+   Compensation: none automatic — remaining drift is re-decided next run.
 
 6. **Internal route removal** (`execute.rs::remove_internal_route`;
    `tests/cli.rs::reconcile_removes_an_internal_caddy_fragment`,
    `lost_removal_completion_cas_restores_the_fragment_and_records_failure_during_reconcile`).
-   Pré-condição: decision RemoveInternalRoute carrying the persisted snapshot
-   state. Persistência-first: CAS reservation to Removing before any effect.
-   Efeito: managed fragment removal + Caddy validate/reload. Confirmação/
-   persistência: atomic completion CAS Removing→NotMaterialized clearing the
-   route triple. Falha parcial: removal error ⇒ failure record flagged by
+   Precondition: decision RemoveInternalRoute carrying the persisted snapshot
+   state. Persistence-first: CAS reservation to Removing before any effect.
+   Effect: managed fragment removal + Caddy validate/reload. Confirmation/
+   Persistence: atomic completion CAS Removing→NotMaterialized clearing the
+   route triple. Partial failure: removal error ⇒ failure record flagged by
    `recovery_failed()`; lost completion CAS ⇒ restore removed fragment, then
-   record `exposure_changed` (Diverged if restoration also failed). Idempotência:
+   record `exposure_changed` (Diverged if restoration also failed). Idempotency:
    removing an already-absent fragment is decided away before any effect.
    Ownership: use case orders reserve→effect→confirm; adapter owns files/Caddy.
-   Compensação: `restore_removed_caddy_fragment`.
+   Compensation: `restore_removed_caddy_fragment`.
 
 7. **Public route materialization** (`execute.rs::materialize_public_route`;
    `tests/cli.rs::reconcile_repairs_a_missing_public_caddy_fragment_with_configured_caddyfile`,
    `reconcile_records_failed_public_exposure_when_external_health_cannot_confirm_it`).
-   Pré-condição: decision MaterializePublicRoute for public intent with an
-   active runtime. Persistência-first: CAS reservation to Applying. Efeito:
+   Precondition: decision MaterializePublicRoute for public intent with an
+   active runtime. Persistence-first: CAS reservation to Applying. Effect:
    canonical fragment materialize + Caddy validate/reload, then external health
-   check pinned to loopback. Confirmação/persistência: completion CAS
-   Applying→Active writing the route triple. Falha parcial: materialization
+   check pinned to loopback. Confirmation/persistence: completion CAS
+   Applying→Active writing the route triple. Partial failure: materialization
    error ⇒ failure record; health failure ⇒ restore previous fragment + record;
-   lost completion CAS ⇒ restore + record. Idempotência: canonical bytes are
-   deterministic. Compensação: `restore_materialized_caddy_fragment`; incomplete
+   lost completion CAS ⇒ restore + record. Idempotency: canonical bytes are
+   deterministic. Compensation: `restore_materialized_caddy_fragment`; incomplete
    compensation records Diverged, never silent success (INV-WF-005).
 
 8. **Public exposure failure record**
    (`execute.rs::record_public_exposure_failure`; unhealthy/missing-runtime
-   scenarios in `tests/cli.rs`). Pré-condição: pure decision classified
-   RuntimeMissing/RuntimeNotHealthy carrying exact persisted codes. Efeito:
-   none external. Persistência: single CAS diagnostic record valid only while
+   scenarios in `tests/cli.rs`). Precondition: pure decision classified
+   RuntimeMissing/RuntimeNotHealthy carrying exact persisted codes. Effect:
+   none external. Persistence: single CAS diagnostic record valid only while
    the expected reservation is current; stale ⇒ NotConverged surfaced as error.
-   Idempotência: bounded by the reservation; a stale record defers to whatever
+   Idempotency: bounded by the reservation; a stale record defers to whatever
    changed the state.
 
 ## Persistence Concurrency Formalization
@@ -250,38 +250,38 @@ immediate transactions, unique indexes/constraints, and compare-and-set writes,
 never from process discipline.
 
 1. **One non-terminal Deployment per Application** (INV-DB-001).
-   Regra: at most one Deployment per Application is Pending/Starting/
+   Rule: at most one Deployment per Application is Pending/Starting/
    Verifying/Activating at any time.
-   Checagem lógica: `create_deployment_in_transaction` loads the blocker
+   Logical check: `create_deployment_in_transaction` loads the blocker
    before inserting (`src/use_cases/deployment/create.rs`), inside an immediate
    transaction that also takes operation ownership.
-   Proteção do banco: partial unique index
+   Database protection: partial unique index
    `one_active_deployment_per_application` over non-terminal statuses
    (`migrations/0007_deployment_release.sql:73`) rejects a concurrent insert
    even if it skips the workflow check.
-   Comportamento em conflito: workflow conflict ⇒ typed
+   Conflict behavior: workflow conflict ⇒ typed
    `CreateDeploymentError::ActiveDeployment`; index violation at the boundary
    ⇒ persistence error carrying the constraint failure — both are explicit,
    neither continues as if the write happened.
-   Teste de corrida/conflito:
+   Race/conflict test:
    `tests/deployment_create.rs::rejects_a_second_active_deployment_for_the_application`
    (workflow),
    `src/adapters/stores/deployment_store.rs::partial_unique_index_rejects_a_second_nonterminal_deployment`
    (index defense, plus terminal rows exempt).
 
 2. **Compare-and-set persistence writes** (INV-DB-004).
-   Regra: every state-racing UPDATE carries an expected prior value; zero rows
+   Rule: every state-racing UPDATE carries an expected prior value; zero rows
    updated is stale/concurrent state, never success.
-   Checagem lógica: CAS primitives return `PersistenceOutcome::{Updated,Stale}`
+   Logical check: CAS primitives return `PersistenceOutcome::{Updated,Stale}`
    (`src/adapters/stores/persistence.rs`; deployment/application/runtime/
    exposure stores) and use cases translate Stale into typed conflicts.
-   Proteção do banco: single-statement conditional UPDATEs; SQLite statement
+   Database protection: single-statement conditional UPDATEs; SQLite statement
    atomicity makes check-and-write indivisible.
-   Comportamento em conflito: `Stale` mapped to explicit errors
+   Conflict behavior: `Stale` mapped to explicit errors
    (`RuntimeChanged`, `ExposureChanged`, transition `Conflict`,
    reconciliation `NotConverged`, `mark_failed` `Stale`) — the caller never
    assumes persistence occurred.
-   Teste de corrida/conflito: `compare_and_set_reports_updated_then_stale`
+   Race/conflict test: `compare_and_set_reports_updated_then_stale`
    (`deployment_store.rs`),
    `runtime_store.rs::identity_cas_is_stale_unless_the_recorded_container_id_matches`,
    exposure store reservation/completion precondition tests, and CLI-level
@@ -291,21 +291,21 @@ never from process discipline.
    during_reconcile`).
 
 3. **Operation ownership epochs** (INV-DB-005).
-   Regra: one owner token per Application; taking ownership atomically replaces
+   Rule: one owner token per Application; taking ownership atomically replaces
    the token and advances a monotonic generation, so an interrupted epoch can
    be distinguished from the current one.
-   Checagem lógica: deploy/reconcile generate a random token and take ownership
+   Logical check: deploy/reconcile generate a random token and take ownership
    in the same transaction that records intent
    (`execute.rs`, `reconciliation/mod.rs`, `create.rs`).
-   Proteção do banco: `INSERT .. ON CONFLICT(application_id) DO UPDATE ..
+   Database protection: `INSERT .. ON CONFLICT(application_id) DO UPDATE ..
    RETURNING generation` upsert (`operation_store.rs`); PK on `application_id`
    and `CHECK (generation > 0)` (`migrations/0015_application_operations.sql`);
    SQLite serializes concurrent upserts.
-   Comportamento em conflito: a displaced owner holds a superseded epoch; its
+   Conflict behavior: a displaced owner holds a superseded epoch; its
    subsequent guarded writes lose their CAS expectations (record 2) instead of
    overwriting newer state; live contention is excluded up front by the kernel
    lock (INV-WF-007).
-   Teste de corrida/conflito:
+   Race/conflict test:
    `src/adapters/stores/operation_store.rs::ownership_replaces_the_token_and_
    advances_the_generation`; stale-writer rejection proven by the CAS matrix
    of record 2; deferral under contention by
@@ -314,21 +314,21 @@ never from process discipline.
 
 4. **Runtime endpoint and port-reservation uniqueness** (INV-DB-003,
    INV-EXT-004).
-   Regra: a loopback endpoint belongs to at most one live runtime; a candidate
+   Rule: a loopback endpoint belongs to at most one live runtime; a candidate
    holds exactly one reserved port before registration; reservations are
    consumed or released exactly once.
-   Checagem lógica: the allocator checks live runtimes UNION pending
+   Logical check: the allocator checks live runtimes UNION pending
    reservations inside one immediate transaction before inserting
    (`src/adapters/port_allocator.rs::reserve_port`).
-   Proteção do banco: PK on `runtime_port_reservations.port`
+   Database protection: PK on `runtime_port_reservations.port`
    (`migrations/0012_runtime_port_reservations.sql:2`), unique index
    `active_runtime_endpoint` for registered runtimes
    (`migrations/0007_deployment_release.sql:132`); the immediate transaction
    serializes concurrent allocators on the writer lock.
-   Comportamento em conflito: duplicate reservation or endpoint ⇒ constraint
+   Conflict behavior: duplicate reservation or endpoint ⇒ constraint
    violation surfaced as a persistence error; exhausted range ⇒ typed
    `PortAllocationError::Exhausted`.
-   Teste de corrida/conflito: in-file allocator tests
+   Race/conflict test: in-file allocator tests
    (`reserves_distinct_ports_and_reuses_a_released_port`,
    `skips_live_runtime_endpoints_and_reuses_removed_ones`,
    `reports_exhaustion_when_every_configured_port_is_reserved`,
