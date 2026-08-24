@@ -57,39 +57,28 @@ trusted local boundaries. Root compromise defeats Pneuma's local controls. The
 [authority map](architecture.md#authority-and-persistence) distinguishes
 persisted intent from external observation.
 
-## Controls
+## Threats and Controls
 
-| Mechanism | Threat addressed | Limit |
-|---|---|---|
-| Digest-pinned Release | Mutable tag changing after selection | Does not verify image signature or publisher provenance. |
-| Commit-SHA tag resolution | Selecting the artifact CI associated with a resolved revision | Assumes CI published `repository:<commit-sha>` correctly. |
-| Manifest repository allow-list | Deploy command selecting an unrelated repository | Does not authorize a particular branch per application. |
-| No fallback to `latest` | Silent substitution of an unavailable requested artifact | Registry availability remains external. |
-| Rootless Podman | Broadens the privilege boundary less than rootful runtime | Not hostile-workload or kernel-exploit isolation. |
-| Loopback runtime binding | Direct public access to application runtime ports | Host-local users and Caddy remain able to reach loopback. |
-| Caddy managed routes | Explicit ingress materialization and external health boundary | DNS, certificates, and Caddy host configuration remain operator-managed. |
-| Candidate health verification | Promoting an unhealthy replacement | Does not guarantee later application correctness. |
-| Forced SSH dispatcher | CI key becoming an arbitrary shell | Key can deploy any imported Application and syntactically valid branch/tag. |
+Each architecture-level threat, the control that addresses it, and what remains
+after the control is applied:
 
-## Threats and Residual Risks
-
-| Threat | Potential damage | Existing mitigation | Residual risk |
+| Threat | Damage if exploited | Control | Residual risk |
 |---|---|---|---|
-| Repository or CI compromise | Publish and deploy malicious application code. | Git revision resolves to a full commit SHA; the selected artifact becomes a digest-pinned Release. | Pneuma does not verify image signatures, attestations, or builder provenance. |
-| Registry tag replacement before selection | Substitute content at `repository:<commit-sha>` before Pneuma resolves its digest. | Pneuma records and subsequently uses the resolved digest. | Digest pinning proves identity after selection, not who published the selected content. |
-| Registry digest bytes unavailable | Deployment or runtime recovery fails; availability loss. | Absence is reported explicitly instead of falling back to another artifact. | Availability is external to Pneuma. |
-| Stolen CI deployment key | Repeatedly deploy an Application, select an unintended valid revision, or cause availability loss. | SSH forced command permits only `version` and `deploy`; deployment still enforces the imported repository. | One key can request deployment for any imported Application and syntactically valid branch or tag; there is no per-key Application or revision policy. |
-| Public Application compromise | Steal Application data or credentials, attack reachable services, and consume host resources. | Rootless Podman and loopback binding reduce host privilege and direct public exposure. | Rootless containers are not a hostile-workload boundary; kernel/runtime escape and unrestricted reachable dependencies remain possible. |
+| Repository or CI compromise | Publish and deploy malicious application code. | Git revision resolves to a full commit SHA; the selected artifact becomes a digest-pinned Release. | Pneuma does not verify image signatures, attestations, or builder provenance; commit-SHA resolution assumes CI published `repository:<commit-sha>` correctly. |
+| Registry tag replacement before selection | Substitute content at `repository:<commit-sha>` before Pneuma resolves its digest. | Pneuma records the resolved digest and subsequently uses only that digest-pinned Release. | Digest pinning proves identity after selection, not who published the selected content. |
+| Registry digest bytes unavailable | Deployment or runtime recovery fails; availability loss. | Absence is reported explicitly; there is no fallback to `latest` or other artifacts. | Availability is external to Pneuma. |
+| Stolen CI deployment key | Repeatedly deploy an Application, select an unintended valid revision, or cause availability loss. | SSH forced command permits only `version` and `deploy`; deployment still enforces each application's configured repository allow-list. | One key can request deployment for any imported Application and syntactically valid branch or tag; there is no per-key Application or revision policy. |
+| Public Application compromise | Steal Application data or credentials, attack reachable services, and consume host resources. | Rootless Podman reduces host privilege; loopback binding prevents direct public access to runtime ports. | Rootless containers are not a hostile-workload boundary; kernel/runtime escape and unrestricted reachable dependencies remain possible, and host-local users and Caddy can still reach loopback. |
 | Resource exhaustion | One workload consumes CPU, memory, processes, disk, or ports and disrupts other Applications. | systemd supervises runtime failures. | Generated Quadlet units do not currently define per-Application resource quotas; all workloads share one host. |
 | `pneuma` Unix-account compromise | Modify SQLite state, Quadlet units, managed Caddy fragments, checkouts, and deployment operations. | The account has no sudo and uses rootless Podman. | Deployment control is intentionally concentrated in one local identity. |
 | Persisted-state tampering | Desired intent, history, and logical identity are compromised. | SQLite write access requires the `pneuma` identity; authorities are separated and status observes Podman rather than trusting SQLite alone. | Any writer to the database file owns logical state. |
 | Backup substitution | Restore structurally valid but attacker-modified intent and history. | Restore runs SQLite integrity checks and creates a pre-restore backup. | Integrity checking does not authenticate the backup producer or contents. |
-| DNS or Caddy compromise | Redirect traffic, break TLS, or expose an unintended route. | Pneuma validates managed fragments and Caddy configuration before reload. | DNS, certificates, the base Caddy configuration, and host administration remain trusted. |
+| DNS or Caddy compromise | Redirect traffic, break TLS, or expose an unintended route. | Public routes exist only as managed Caddy fragments validated before reload, with an external health boundary. | DNS, certificates, the base Caddy configuration, and host administration remain operator-managed and trusted. |
 | Host root compromise | Control every workload, route, credential, database, and binary. | Standard Linux host controls are the outer boundary. | Pneuma cannot defend the host after root compromise. |
 | Single-host failure | Make all Applications and deployment control unavailable. | systemd and Quadlet restore promoted runtimes after an ordinary reboot; backup/restore protects logical state. | There is no failover, replication, or multi-host recovery. |
-| Persisted/observed drift | SQLite can describe running or public intent while a runtime or route is missing or divergent. | Authorities are separated and status observes Podman rather than trusting SQLite alone. | Complete convergence and ambiguity handling are v0.4 reconciliation work. |
+| Persisted/observed drift | SQLite can describe running or public intent while a runtime or route is missing or divergent. | Authorities are separated and status observes Podman rather than trusting SQLite alone; reconcile repairs unambiguous drift explicitly. | Complete convergence and ambiguity handling are v0.4 reconciliation work. |
 | Weak deployment attribution | Make a deployment difficult to attribute to a person or repository workflow. | Deployment history records activation attempts and source revisions. | Shared deployment keys and the absence of a complete audit identity limit attribution. |
-| Health-check evasion | Promote malicious or semantically broken code that returns the expected status. | Internal and public health checks prevent promotion of an unavailable candidate. | HTTP health proves bounded reachability/status, not application correctness or safety. |
+| Health-check evasion | Promote malicious or semantically broken code that returns the expected status. | Internal and public health checks gate promotion and prevent promoting an unavailable candidate. | HTTP health proves bounded reachability/status, not application correctness or safety. |
 
 ## Restricted CI-Key Boundary
 

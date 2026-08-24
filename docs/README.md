@@ -60,7 +60,7 @@ product direction (`roadmap.md`).
 | [`code-guide.md`](code-guide.md) | Living | Code navigation guide: each user-facing flow traced through CLI, use cases, domain, stores, adapters, and tests |
 | [`architecture/architecture.md`](architecture/architecture.md) | Living | Implemented architecture, authority boundaries, rules, and flows |
 | [`architecture/data-model.md`](architecture/data-model.md) | Living | Implemented SQLite model and persistence invariants |
-| [`architecture/security-model.md`](architecture/security-model.md) | Living | Assets, actors, trust boundaries, controls, threats with residual risks, attack chains, and security posture |
+| [`architecture/security-model.md`](architecture/security-model.md) | Living | Assets, actors, trust boundaries, threats with their controls and residual risks, attack chains, and security posture |
 | [`decisions/`](decisions/) | Historical records | Retrospective architectural decision records |
 | [`iterations/current-iteration.md`](iterations/current-iteration.md) | Active planning | Completed v0.4.2 domain type closure tracker |
 | [`iterations/next-iteration.md`](iterations/next-iteration.md) | Queued planning | v0.5 observed state planning reminder |
