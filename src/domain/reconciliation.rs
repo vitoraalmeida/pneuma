@@ -261,6 +261,14 @@ fn classify_runtime_identity_repair(
     ))
 }
 
+// Conservative classification of systemd's open-ended active-state vocabulary:
+// only the documented not-running states authorize an automatic start. Transient
+// or unrecognized states fall through to manual intervention instead of being
+// silently adopted as startable.
+fn known_not_running_unit_state(active_state: &str) -> bool {
+    matches!(active_state, "inactive" | "failed")
+}
+
 // Rematerializes an absent runtime only when nothing contradicts a clean start
 // from the persisted identity: no recorded or named container, a missing or
 // canonical Quadlet source, and a generated unit that is not running.
@@ -280,7 +288,9 @@ fn classify_runtime_rematerialization(
         });
     let generated_unit_can_start = match &observation.systemd_unit {
         SystemdUnitObservation::Missing => true,
-        SystemdUnitObservation::Present { active_state } => active_state != "active",
+        SystemdUnitObservation::Present { active_state } => {
+            known_not_running_unit_state(active_state)
+        }
     };
     if input.desired.application.desired_runtime_state != DesiredRuntimeState::Running
         || *observation.recorded_container.state() != ObservedRuntimeState::Missing
@@ -715,6 +725,55 @@ mod tests {
             decision,
             ReconciliationDecision::RequireManualIntervention(_)
         ));
+    }
+
+    // A systemd state outside the known not-running vocabulary (transient or
+    // introduced by a future systemd version) must never be silently adopted as
+    // startable; reconciliation refuses to guess.
+    #[test]
+    fn unknown_or_transient_generated_unit_states_block_rematerialization() {
+        for active_state in ["activating", "reloading", "maintenance"] {
+            let input = input(DesiredRuntimeState::Running, None);
+            let observed = observation(
+                ContainerObservation::missing(),
+                NamedContainerObservation::Missing,
+                QuadletSourceObservation::Missing,
+                SystemdUnitObservation::Present {
+                    active_state: active_state.to_owned(),
+                },
+                CaddyFragmentObservation::Missing,
+            );
+            let decision = decide(&input, &observed, &expectations(None)).unwrap();
+            assert!(
+                matches!(
+                    decision,
+                    ReconciliationDecision::RequireManualIntervention(_)
+                ),
+                "expected manual intervention for active state `{active_state}`"
+            );
+        }
+    }
+
+    #[test]
+    fn failed_generated_unit_permits_rematerialization() {
+        let input = input(DesiredRuntimeState::Running, None);
+        let observed = observation(
+            ContainerObservation::missing(),
+            NamedContainerObservation::Missing,
+            QuadletSourceObservation::Missing,
+            SystemdUnitObservation::Present {
+                active_state: "failed".to_owned(),
+            },
+            CaddyFragmentObservation::Missing,
+        );
+        let decision = decide(&input, &observed, &expectations(None)).unwrap();
+        assert_eq!(
+            decision,
+            ReconciliationDecision::RematerializeRuntime(RuntimeRematerialization {
+                // The Quadlet source is missing in this scenario, so execution must rewrite it.
+                unit_needs_write: true,
+            })
+        );
     }
 
     #[test]
