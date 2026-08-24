@@ -111,6 +111,33 @@ fn rejects_persisted_retirement_without_a_removed_timestamp() {
 }
 
 #[test]
+fn rejects_an_active_runtime_row_that_carries_a_removed_timestamp() {
+    let (mut connection, _, deployment_id) = starting_deployment("valid");
+    let runtime = register_candidate_runtime(
+        &mut connection,
+        &deployment_id,
+        &container_id('a'),
+        endpoint("127.0.0.1:30001"),
+        port(8080),
+    )
+    .unwrap();
+    connection
+        .execute(
+            "UPDATE runtime_instances SET removed_at = '2026-08-20 12:00:00' WHERE id = ?1",
+            [runtime.id.as_str()],
+        )
+        .unwrap();
+
+    let error = pneuma::adapters::stores::runtime_store::load_runtime_by_external_id(
+        &connection,
+        &runtime.external_runtime_id,
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("active runtime with removed_at"));
+}
+
+#[test]
 fn requires_a_starting_deployment() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
     let application =

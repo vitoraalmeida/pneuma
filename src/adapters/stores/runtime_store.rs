@@ -396,7 +396,33 @@ fn hydrate_container_id(column: usize, value: &str) -> rusqlite::Result<Containe
 
 #[cfg(test)]
 mod tests {
+    use std::net::Ipv4Addr;
+    use std::path::Path;
+
+    use rusqlite::params;
+
+    use crate::adapters::database;
+    use crate::domain::identity::RuntimeInstanceId;
+
     use super::*;
+
+    fn seed_deployment_chain(connection: &rusqlite::Connection) {
+        connection
+            .execute_batch(
+                "INSERT INTO applications (id, name, desired_runtime_state, spec_version, created_at, updated_at)
+                 VALUES ('app', 'app', 'stopped', 3, 'now', 'now');
+                 INSERT INTO releases (
+                    id, application_id, image_repository, image_digest, image_reference, created_at
+                 ) VALUES ('release', 'app', 'registry.example/app',
+                           'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                           'registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                           'now');
+                 INSERT INTO deployments (
+                    id, application_id, release_id, type, status, requested_at
+                 ) VALUES ('deployment', 'app', 'release', 'deploy', 'starting', 'now');",
+            )
+            .unwrap();
+    }
 
     #[test]
     fn loads_a_typed_runtime_state_and_rejects_invalid_persisted_text() {
@@ -528,5 +554,72 @@ mod tests {
         )
         .unwrap();
         assert_eq!(outcome, PersistenceOutcome::Stale);
+    }
+
+    #[test]
+    fn loopback_check_rejects_foreign_addresses_and_hydration_refuses_them() {
+        let connection = database::open(Path::new(":memory:")).unwrap();
+        seed_deployment_chain(&connection);
+
+        // The SQLite CHECK constraint is the database-level defense for INV-RUN-001.
+        let error = connection
+            .execute(
+                "INSERT INTO runtime_instances (
+                    id, application_id, deployment_id, external_runtime_id,
+                    state, host_address, host_port, container_port,
+                    last_observed_state, last_observed_at, created_at, updated_at
+                 ) VALUES ('runtime', 'app', 'deployment',
+                           'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                           'running', '10.0.0.2', 30001, 8080, 'running', 'now', 'now', 'now')",
+                params![],
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            rusqlite::Error::SqliteFailure(ref failure, _)
+                if failure.code == rusqlite::ErrorCode::ConstraintViolation
+        ));
+
+        // Hydration must also refuse such a row if it ever existed (defense at mapping).
+        connection
+            .execute_batch("PRAGMA ignore_check_constraints = ON;")
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO runtime_instances (
+                    id, application_id, deployment_id, external_runtime_id,
+                    state, host_address, host_port, container_port,
+                    last_observed_state, last_observed_at, created_at, updated_at
+                 ) VALUES ('runtime', 'app', 'deployment',
+                           'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                           'running', '10.0.0.2', 30001, 8080, 'running', 'now', 'now', 'now')",
+                params![],
+            )
+            .unwrap();
+
+        let error = load_runtime_by_external_id(
+            &connection,
+            &ContainerId::from("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("runtime host address"));
+
+        // Sanity: the same identity on the loopback address hydrates cleanly.
+        connection
+            .execute(
+                "UPDATE runtime_instances SET host_address = ?1 WHERE id = 'runtime'",
+                [Ipv4Addr::LOCALHOST.to_string()],
+            )
+            .unwrap();
+        let runtime = load_runtime_by_external_id(
+            &connection,
+            &ContainerId::from("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            runtime.expected_endpoint.socket_addr().ip().to_string(),
+            "127.0.0.1"
+        );
     }
 }

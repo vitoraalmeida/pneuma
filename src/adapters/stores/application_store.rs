@@ -571,3 +571,224 @@ fn desired_runtime_state_value(value: DesiredRuntimeState) -> &'static str {
         DesiredRuntimeState::Stopped => "stopped",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use rusqlite::{Connection, TransactionBehavior, params};
+
+    use crate::adapters::database;
+    use crate::adapters::stores::PersistenceOutcome;
+    use crate::domain::application::ApplicationName;
+    use crate::domain::identity::{ApplicationId, SystemId};
+
+    use super::{
+        ApplicationStoreError, DesiredRuntimeState, compare_and_set_desired_runtime_state,
+        insert_application, insert_delivery_spec, insert_runtime_spec, load_delivery_specification,
+        load_deployment_specification, load_desired_runtime_state, load_source,
+    };
+
+    fn application_id() -> ApplicationId {
+        ApplicationId::from("app")
+    }
+
+    fn seed_application(connection: &Connection, id: &str) {
+        connection
+            .execute(
+                "INSERT INTO applications (id, name, desired_runtime_state, spec_version, created_at, updated_at)
+                 VALUES (?1, ?1, 'stopped', 3, 'now', 'now')",
+                params![id],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn desired_runtime_state_cas_reports_updated_then_stale() {
+        let connection = database::open(Path::new(":memory:")).unwrap();
+        seed_application(&connection, "app");
+
+        assert_eq!(
+            compare_and_set_desired_runtime_state(
+                &connection,
+                &application_id(),
+                DesiredRuntimeState::Stopped,
+                DesiredRuntimeState::Running,
+            )
+            .unwrap(),
+            PersistenceOutcome::Updated
+        );
+        assert_eq!(
+            compare_and_set_desired_runtime_state(
+                &connection,
+                &application_id(),
+                DesiredRuntimeState::Stopped,
+                DesiredRuntimeState::Running,
+            )
+            .unwrap(),
+            PersistenceOutcome::Stale
+        );
+        assert_eq!(
+            load_desired_runtime_state(&connection, &application_id()).unwrap(),
+            DesiredRuntimeState::Running
+        );
+    }
+
+    #[test]
+    fn corrupt_desired_runtime_state_is_a_typed_error_not_an_invented_state() {
+        let connection = database::open(Path::new(":memory:")).unwrap();
+        seed_application(&connection, "app");
+        // The CHECK constraint is bypassed so a corrupt historical row can exist.
+        connection
+            .execute_batch("PRAGMA ignore_check_constraints = ON;")
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE applications SET desired_runtime_state = 'paused' WHERE id = 'app'",
+                [],
+            )
+            .unwrap();
+
+        let error = load_desired_runtime_state(&connection, &application_id()).unwrap_err();
+
+        assert!(matches!(
+            error,
+            ApplicationStoreError::InvalidDesiredRuntimeState { state, .. } if state == "paused"
+        ));
+    }
+
+    #[test]
+    fn rolling_back_the_import_transaction_persists_nothing() {
+        let mut connection = database::open(Path::new(":memory:")).unwrap();
+        let repository =
+            crate::domain::release::OciRepository::new("registry.example/app").unwrap();
+
+        {
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .unwrap();
+            transaction
+                .execute(
+                    "INSERT INTO systems (id, name, created_at) VALUES ('system-id', 'team', 'now')",
+                    [],
+                )
+                .unwrap();
+            insert_application(
+                &transaction,
+                &application_id(),
+                &SystemId::from("system-id"),
+                &ApplicationName::new("app").unwrap(),
+                3,
+            )
+            .unwrap();
+            insert_delivery_spec(
+                &transaction,
+                &application_id(),
+                crate::domain::release::DeliveryType::Oci,
+                &repository,
+            )
+            .unwrap();
+            insert_runtime_spec(
+                &transaction,
+                &application_id(),
+                crate::domain::runtime::ContainerPort::new(8080).unwrap(),
+            )
+            .unwrap();
+            drop(transaction);
+        }
+
+        for table in [
+            "applications",
+            "application_delivery_specs",
+            "application_runtime_specs",
+        ] {
+            let count: i64 = connection
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(count, 0, "{table} must stay empty after a rollback");
+        }
+    }
+
+    #[test]
+    fn unknown_enum_text_in_specification_rows_is_rejected_with_context() {
+        let connection = database::open(Path::new(":memory:")).unwrap();
+        seed_application(&connection, "app");
+
+        // The delivery type CHECK is bypassed so a corrupt historical row can exist.
+        connection
+            .execute_batch("PRAGMA ignore_check_constraints = ON;")
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO application_delivery_specs (
+                    application_id, delivery_type, image_repository, created_at, updated_at
+                 ) VALUES ('app', 'docker', 'registry.example/app', 'now', 'now')",
+                [],
+            )
+            .unwrap();
+
+        let error = load_delivery_specification(&connection, &application_id());
+
+        assert!(matches!(
+            error,
+            Err(ApplicationStoreError::Persistence { .. })
+        ));
+    }
+
+    #[test]
+    fn unknown_repository_kind_is_rejected_when_loading_the_source() {
+        let connection = database::open(Path::new(":memory:")).unwrap();
+        seed_application(&connection, "app");
+
+        // The repository kind CHECK is bypassed so a corrupt historical row can exist.
+        connection
+            .execute_batch("PRAGMA ignore_check_constraints = ON;")
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO application_sources (
+                    application_id, repository_url, repository_kind,
+                    default_branch, manifest_path, created_at, updated_at
+                 ) VALUES ('app', 'https://github.com/example/app', 'svn',
+                           'main', 'pneuma.toml', 'now', 'now')",
+                [],
+            )
+            .unwrap();
+
+        let error = load_source(&connection, &application_id());
+
+        assert!(matches!(
+            error,
+            Err(ApplicationStoreError::Persistence { .. })
+        ));
+    }
+
+    #[test]
+    fn unknown_visibility_text_is_rejected_when_loading_the_deployment_specification() {
+        let connection = database::open(Path::new(":memory:")).unwrap();
+        seed_application(&connection, "app");
+        connection
+            .execute_batch(
+                "PRAGMA ignore_check_constraints = ON;
+                 INSERT INTO application_runtime_specs (
+                    application_id, container_port, created_at, updated_at
+                 ) VALUES ('app', 8080, 'now', 'now');
+                 INSERT INTO health_check_specs (
+                    application_id, path, expected_status, created_at, updated_at
+                 ) VALUES ('app', '/healthz', 200, 'now', 'now');
+                 INSERT INTO exposures (
+                    application_id, desired_visibility, domain, created_at, updated_at
+                 ) VALUES ('app', 'private', NULL, 'now', 'now');",
+            )
+            .unwrap();
+
+        let error = load_deployment_specification(&connection, &application_id());
+
+        assert!(matches!(
+            error,
+            Err(ApplicationStoreError::Persistence { .. })
+        ));
+    }
+}

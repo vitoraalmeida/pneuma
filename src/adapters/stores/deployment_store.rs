@@ -728,6 +728,29 @@ mod tests {
             .unwrap();
     }
 
+    #[test]
+    fn source_revision_tolerates_only_clean_legacy_text() {
+        use crate::domain::deployment::SourceRevision;
+        use crate::domain::git::CommitSha;
+
+        let commit = CommitSha::new(&"a".repeat(40)).unwrap();
+        assert_eq!(
+            super::source_revision_from_value(commit.as_str()).unwrap(),
+            SourceRevision::from_commit(commit)
+        );
+        assert_eq!(
+            super::source_revision_from_value("legacy-tag").unwrap(),
+            SourceRevision::Legacy("legacy-tag".to_owned())
+        );
+
+        for rejected in ["", " padded", "bad\nsha", "\u{7}control"] {
+            assert!(
+                super::source_revision_from_value(rejected).is_err(),
+                "value {rejected:?} must not hydrate as any source revision"
+            );
+        }
+    }
+
     fn seed(
         connection: &rusqlite::Connection,
         status: &str,

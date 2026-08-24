@@ -86,3 +86,76 @@ fn map_system(row: &rusqlite::Row<'_>) -> rusqlite::Result<System> {
 fn persistence(source: rusqlite::Error) -> SystemStoreError {
     SystemStoreError::Persistence { source }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use rusqlite::{TransactionBehavior, params};
+
+    use crate::adapters::database;
+    use crate::domain::system::SystemName;
+
+    use super::{SystemStoreError, create_or_load, list, load_by_name};
+
+    #[test]
+    fn create_or_load_round_trips_a_system_and_reuses_it_by_name() {
+        let mut connection = database::open(Path::new(":memory:")).unwrap();
+        let name = SystemName::new("team-a").unwrap();
+
+        let first = {
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .unwrap();
+            let system = create_or_load(&transaction, &name, Some("first description")).unwrap();
+            transaction.commit().unwrap();
+            system
+        };
+        let second = {
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .unwrap();
+            let system = create_or_load(&transaction, &name, Some("ignored on conflict")).unwrap();
+            transaction.commit().unwrap();
+            system
+        };
+
+        assert_eq!(first.id, second.id);
+        assert_eq!(second.name.as_str(), "team-a");
+
+        let loaded = load_by_name(&connection, &name).unwrap().unwrap();
+        assert_eq!(loaded.id, first.id);
+        assert_eq!(
+            loaded.description.as_deref(),
+            Some("first description"),
+            "the original registration must be preserved on name conflicts"
+        );
+        let missing =
+            load_by_name(&connection, &SystemName::new("missing-system").unwrap()).unwrap();
+        assert_eq!(missing, None);
+
+        let systems = list(&connection).unwrap();
+        assert_eq!(systems.len(), 1);
+        assert_eq!(systems[0].id, first.id);
+    }
+
+    #[test]
+    fn rejects_a_corrupt_persisted_system_name_instead_of_hydrating_it() {
+        let connection = database::open(Path::new(":memory:")).unwrap();
+        connection
+            .execute(
+                "INSERT INTO systems (id, name, description, created_at)
+                 VALUES ('system-id', 'Not A Valid Name', NULL, 'now')",
+                params![],
+            )
+            .unwrap();
+
+        let error = list(&connection).unwrap_err();
+        assert!(matches!(
+            error,
+            SystemStoreError::Persistence {
+                source: rusqlite::Error::FromSqlConversionFailure(_, _, _)
+            }
+        ));
+    }
+}
