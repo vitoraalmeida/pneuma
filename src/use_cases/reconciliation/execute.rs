@@ -33,7 +33,7 @@ use super::{
 pub(crate) fn reconciliation_decision_reason(error: ReconciliationDecisionError) -> String {
     match error {
         ReconciliationDecisionError::UnhandledDrift => {
-            "runtime repair and public-route confirmation are not implemented".to_owned()
+            "drift has no automatic repair; manual intervention is required".to_owned()
         }
         ReconciliationDecisionError::InvalidRouteFragment(source) => source.to_string(),
     }
@@ -441,5 +441,30 @@ fn record_exposure_failure(
         Ok(ReconciliationResult::Failed {
             reason: message.to_owned(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unhandled_drift_reason_names_the_missing_automatic_repair() {
+        let reason = reconciliation_decision_reason(ReconciliationDecisionError::UnhandledDrift);
+        assert_eq!(
+            reason,
+            "drift has no automatic repair; manual intervention is required"
+        );
+    }
+
+    #[test]
+    fn invalid_route_fragment_reason_preserves_the_source_message() {
+        let error = ReconciliationDecisionError::InvalidRouteFragment(
+            crate::domain::exposure::InvalidExposureConfigurationVersion {
+                value: "<invalid>".to_owned(),
+            },
+        );
+        let reason = reconciliation_decision_reason(error);
+        assert_eq!(reason, "invalid exposure configuration version `<invalid>`");
     }
 }
