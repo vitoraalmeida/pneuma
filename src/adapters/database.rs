@@ -224,10 +224,7 @@ pub fn restore_and_verify(path: &Path, source_path: &Path) -> Result<PathBuf, Da
 
 // Resolves the configured database path, treating an empty override as unset.
 pub fn configured_path() -> PathBuf {
-    std::env::var_os(DATABASE_PATH_ENVIRONMENT_VARIABLE)
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_DATABASE_PATH))
+    crate::config::configured_path(DATABASE_PATH_ENVIRONMENT_VARIABLE, DEFAULT_DATABASE_PATH)
 }
 
 // Returns the number of migrations recorded by an already-open database.
