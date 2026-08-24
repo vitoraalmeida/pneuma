@@ -9,9 +9,9 @@ or control plane: each CLI invocation runs locally and exits; systemd supervises
 promoted runtimes afterward.
 
 This document describes implemented behavior. The detailed persisted schema is
-in [`data-model.md`](data-model.md). Reconciliation semantics were approved in
-[`../design/reconciliation.md`](../design/reconciliation.md) and are implemented
-as described here; that document is retained as the historical design record.
+in [`data-model.md`](data-model.md). The v0.4 reconciliation semantics were
+decided before implementation and are implemented as described here; the
+original design text remains in Git history.
 
 ## How to Read This Document
 

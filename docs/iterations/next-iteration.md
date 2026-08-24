@@ -2,30 +2,39 @@
 
 **Status:** planning reminder, not an execution tracker.
 
-**Target:** v0.5 - Application Topology and Internal Networking.
+**Target:** v0.5 - Observed State / Host Observation.
 
-Do not implement this work until v0.4 is complete, an approved design exists,
-and this tracker is promoted to `current-iteration.md`.
+Do not implement this work until an approved design exists and this tracker is
+promoted to `current-iteration.md`.
 
 ## Objective
 
-Model how Applications relate to each other so Pneuma can support internal
-services and their connectivity rather than treating every Application as an
-isolated workload.
+Make Pneuma explicitly observe the real state of the host instead of trusting
+predominantly the state it recorded itself, establishing the separation between
+desired state (what should exist), recorded state (what Pneuma believes it did),
+and observed state (what actually exists now).
 
 ## Checkpoints
 
-- Service relationships and Application dependencies.
-- Internal services and network/service addressing.
-- System as a functional grouping mechanism.
-- Basic service discovery.
+- Workload observation from systemd/Podman: unit existence and state, container
+  existence and running state, current PID, image/digest in use, exit status.
+- Proxy observation from Caddy: route presence, domain-to-target correctness,
+  absence of routes that should be absent, exposure divergence from desired
+  state.
+- Explicit observed-state model with a small verdict set comparing desired and
+  observed application state (conceptually
+  InSync/Missing/Unexpected/Different/Unknown).
+- Reconciliation decisions driven by observation of the world, not only by the
+  outcome of Pneuma's previous operation.
+- Unknown-state handling: Unknown/Unobservable/partially observed results stay
+  legitimate outcomes instead of being forced into healthy/failed.
 
 ## Boundaries
 
-- Network policy enforcement belongs to v0.6.
-- Workload identity and authenticated service-to-service communication belong to
-  v0.7.
-- Do not introduce topology before an approved design defines entities,
-  persistence, runtime behavior, and acceptance scenarios.
+- Repair/recovery robustness (idempotent operations, crash recovery, retry
+  policy) belongs to v0.6; v0.5 only observes and reports divergence.
+- Multi-service applications belong to v0.7.
+- No new product features beyond this scope before an approved design defines
+  entities, persistence, runtime behavior, and acceptance scenarios.
 
 See [`../roadmap.md`](../roadmap.md) for the authoritative v0.5 scope.

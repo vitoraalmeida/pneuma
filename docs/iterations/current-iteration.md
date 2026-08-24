@@ -4,7 +4,8 @@
 
 **Base:** `d089700` (`docs(iteration): close v0.4.1 domain hardening sweep`)
 
-**Approved design:** [`domain-type-closure.md`](../design/domain-type-closure.md)
+**Approved design:** domain type closure design (removed from `docs/`; see
+commit `6a37693` in Git history)
 
 ## Iteration - v0.4.2 Domain Type Closure
 

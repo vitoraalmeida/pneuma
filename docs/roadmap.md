@@ -1,4 +1,4 @@
-# Consolidated Pneuma Roadmap - v0.1 to v0.8
+# Consolidated Pneuma Roadmap - v0.1 to v1.0
 
 **Status:** living document - project evolution contract
 **Pilot application:** `vitoralmeida.tech`
@@ -121,34 +121,222 @@ automatic rollback after promotion.
   removed.
 - `HostPort` newtype represents the reserved loopback host port.
 
-## v0.5 - Application Topology and Internal Networking
+## v0.5 - Observed State / Host Observation
 
-- [ ] Service relationships and Application dependencies.
-- [ ] Internal services and network/service addressing.
-- [ ] System as a functional grouping mechanism.
-- [ ] Basic service discovery.
+**Status:** planned; not started. No approved design yet.
 
-## v0.6 - Network Policy Enforcement
+Objective: stop depending predominantly on the state Pneuma itself recorded and
+start explicitly observing the real state of the host. This version establishes
+the separation between:
 
-- [ ] `pneuma-netd` host connectivity enforcement using nftables, default deny,
-  and explicit connectivity.
+- **Desired State** - what should exist;
+- **Recorded State** - what Pneuma believes it did;
+- **Observed State** - what actually exists right now.
 
-## v0.7 - Workload Identity and Secure S2S
+- [ ] Workload observation: query systemd/Podman for unit existence and unit
+  state (`active`, `inactive`, `failed`), container existence, container running
+  state, current PID, the image/digest actually in use, and exit status where
+  applicable.
+- [ ] Proxy observation: verify what Caddy actually publishes - whether the
+  application has a route, whether the expected domain points at the correct
+  target, whether routes that should be absent really are absent, and whether
+  public exposure diverged from desired state.
+- [ ] Explicit observed-state model: a desired application state compared with an
+  observed counterpart produces a small verdict set (conceptually
+  `InSync`/`Missing`/`Unexpected`/`Different`/`Unknown`; naming is indicative,
+  not literal).
+- [ ] Observation-based reconciliation: the reconciler stops asking only "did my
+  previous operation finish?" and starts asking "is the world really in the
+  expected state?".
+- [ ] Unknown-state handling: not every observation must collapse into
+  healthy/failed. `Unknown`, `Unobservable`, and partially observed results are
+  legitimate outcomes so Pneuma never invents certainty.
 
-- [ ] SPIFFE and SPIRE workload identity per RuntimeInstance.
-- [ ] `pneuma-proxy` for mTLS, authentication, authorization, and telemetry.
+Result: after v0.5, manually killing a container or editing a unit must let
+Pneuma report "the desired state is X, but I observed Y" before attempting any
+repair.
 
-## v0.8 - Artifact Security and Secrets
+## v0.6 - Recovery & Resilience
 
-- [ ] SBOM generation and enforcement.
-- [ ] Image signature verification.
-- [ ] Admission policies for unsigned artifacts.
-- [ ] Secret management, injection, and rotation.
-- [ ] Implemented threat model.
+**Status:** planned; depends on v0.5 observed state.
 
-## Out of Scope Beyond v0.8
+Objective: turn reconciliation from "try to reach the expected state" into a
+mechanism that stays robust when something breaks during reconciliation itself.
+v0.5 answers "is the system divergent?"; v0.6 answers "can I recover this system
+safely?".
 
-HTTP API, webhooks, centralized observability, multiple hosts, scheduler, remote
-agents, distributed reconciliation, managed builds, canary or gradual
-rollout, autoscaling, Kubernetes, RBAC, and multi-user support remain out of
-scope until a future version explicitly revisits them.
+- [ ] Idempotent operations: repeating an operation must not corrupt state.
+  Prefer `ensure_*` operations (`ensure_container_running`,
+  `ensure_route_exists`, `ensure_unit_installed`, `ensure_release_active`) over
+  imperative `create_*/add_route/start_*` where semantically meaningful.
+- [ ] Crash recovery: if Pneuma dies mid-deployment (candidate created, process
+  gone), a fresh start must observe the host and decide what to do.
+- [ ] Partial failure coverage: combinations such as "container created, unit
+  installed, proxy not updated" or "new release started, proxy switched, old
+  release not removed".
+- [ ] Retry policy: distinguish transient errors, permanent errors, unknown
+  state, safe-to-retry operations, and operations that require inspection.
+- [ ] Recovery of incomplete operations: operation/deployment progress must be
+  reconstructable from intent + persisted state + observed state, not from a
+  single running flag.
+- [ ] Fail-safe behavior: when Pneuma cannot know what happened, prefer the safe
+  outcome - never destroy the previous release without sufficient evidence that
+  the new one is healthy.
+- [ ] Chaos testing: kill Pneuma mid-deploy, kill containers, block systemd
+  restarts, force invalid Caddy reloads, remove Quadlet units, simulate timeouts,
+  and repeat reconciliations many times.
+
+Result: intermediate events stop being the source of truth; current state
+becomes reconstructable.
+
+## v0.7 - Multi-Service Applications
+
+**Status:** planned.
+
+Objective: move from one workload per Application to Applications composed of
+multiple services (for example `gateway`, `api`, `auth`, `worker`). Pneuma starts
+managing systems of cooperating services rather than isolated containers.
+
+- [ ] Service as an explicit concept: an Application owns a list of services,
+  each with its own image, command, environment, health check, resources,
+  exposure, and dependencies.
+- [ ] Composite Release: a Release represents one consistent configuration of
+  several services (per-service digests under one release identity). Rollback
+  restores the whole prior Release, never one service.
+- [ ] Initial internal networking: services of the same application can find
+  each other through a simple runtime-provided mechanism (for example
+  `auth.internal`/`api.internal` or equivalent).
+- [ ] Dependency ordering: simple startup ordering where there is real need
+  (database ready → auth → api) without building a homegrown scheduler.
+- [ ] Aggregate health: application-level health derived from service states
+  (conceptually Healthy/Degraded/Unhealthy).
+- [ ] Per-service reconciliation: an application can be divergent in one service
+  while others are in sync; act on the smallest appropriate unit.
+
+## v0.8 - Workload Identity / mTLS
+
+**Status:** planned.
+
+Objective: give workloads a verifiable cryptographic identity so services can
+authenticate each other. v0.7 creates real relationships between services; v0.8
+secures them.
+
+- [ ] Workload identity per service (conceptually
+  `spiffe://pneuma.local/application/shop/service/auth`).
+- [ ] SPIFFE/SPIRE or an equivalent mechanism - do not invent a private PKI if
+  SPIFFE solves the problem; the host may run a SPIRE agent or equivalent.
+- [ ] Short-lived credentials: renewable, identity-bound, never distributed as
+  long-lived static secrets.
+- [ ] mTLS between services (frontend → api, api → auth).
+- [ ] Identity-aware policy foundation: enough to express "auth accepts
+  application/shop/service/api" without becoming a full authorization system.
+
+Result: a process is no longer trusted merely because it runs on the same host;
+it must prove which workload it is.
+
+## v0.9 - Resource Isolation
+
+**Status:** planned.
+
+Objective: prevent one application from harming the host or other applications
+through excessive resource consumption, using Linux/systemd primitives rather
+than an internal scheduler.
+
+- [ ] Memory limits per service with predictable overrun behavior.
+- [ ] CPU limits or weights depending on the adopted model.
+- [ ] PID/task limits to contain fork bombs and process leaks.
+- [ ] Filesystem constraints where meaningful: read-only root filesystem,
+  explicit volumes, write limits, `tmpfs`, path separation.
+- [ ] Enforcement stays in systemd/cgroups.
+- [ ] Resource observation: memory usage, CPU usage, PID counts, and OOM events -
+  not only configuration.
+- [ ] Resource-policy reconciliation: manual drift such as changing
+  `MemoryMax=512M` to `MemoryMax=infinity` must be detectable.
+
+## v0.10 - Network Isolation
+
+**Status:** planned.
+
+Objective: move networking from "everything on the host can potentially talk"
+to "communication must be explicitly allowed".
+
+- [ ] Per-application networks by default: two applications cannot see each other.
+- [ ] Explicit connectivity policy between services (allow/deny specific edges).
+- [ ] Default deny between applications unless explicitly allowed.
+- [ ] Explicit ingress: Internet → Caddy → allowed service only; internal
+  services stay unexposed.
+- [ ] Simple egress classes initially (allow internet / deny internet / allow
+  destinations) without an elaborate firewall DSL.
+- [ ] Integration with v0.8 identity: networking decides whether traffic may
+  reach a target, identity decides who is trying, mTLS proves it.
+
+Result: a compromised application loses automatic lateral movement on the host.
+
+## v1.0 - Hardening
+
+**Status:** planned.
+
+v1.0 introduces no major new abstraction. It takes everything that exists and
+answers: would I trust this to keep my applications running for months without
+manual intervention?
+
+- [ ] Documented failure model with defined behavior for each case: host reboot,
+  disk full, process crash, container crash, corrupted state, invalid manifest,
+  Caddy failure, systemd failure, network unavailable, interrupted operation.
+- [ ] Security review covering the SSH boundary and dispatcher forced command,
+  filesystem permissions, Podman privileges, systemd units, secrets,
+  SPIFFE/SPIRE integration, network policy, and manifest validation.
+- [ ] Manifest/versioning stability: define manifest compatibility (for example
+  `apiVersion: pneuma.dev/v1`).
+- [ ] Robust database migrations: tested upgrades, backup, detectable
+  corruption, rollback where possible.
+- [ ] Supported upgrade path for Pneuma itself - updating must never mean
+  "hope it keeps working".
+- [ ] Operational observability: enough information to answer what happened,
+  when, which reconciliation ran, what was observed, and why an action executed -
+  without becoming Grafana inside Pneuma.
+- [ ] Extensive failure testing: happy path, drift, crash, reboot, partial
+  deployment, bad configuration, network failure, resource exhaustion.
+- [ ] Documentation explaining invariants, consistency model, failure model,
+  reconciliation model, deployment model, identity model, and trust boundaries.
+
+## Progression
+
+Each version creates the conceptual prerequisite of the next:
+
+```text
+v0.4.2  basic reconciliation
+   │
+   ▼
+v0.5    Observed State            "what is really happening?"
+   │
+   ▼
+v0.6    Recovery & Resilience     "can I return to a valid state?"
+   │
+   ▼
+v0.7    Multi-Service             "can I administer a system?"
+   │
+   ▼
+v0.8    Identity / mTLS           "who is each workload?"
+   │
+   ▼
+v0.9    Resource Isolation        "how much may each workload consume?"
+   │
+   ▼
+v0.10   Network Isolation         "who may talk to whom?"
+   │
+   ▼
+v1.0    Hardening                 "can I trust this operationally?"
+```
+
+## Not Scheduled
+
+Deferred until demonstrated need: artifact security (SBOM generation and
+enforcement, image signature verification, admission policies for unsigned
+artifacts), secret management/injection/rotation, non-interactive CLI with
+structured output and exit codes.
+
+Beyond v1.0, still out of scope: HTTP API, webhooks, centralized observability,
+multiple hosts, scheduler, remote agents, distributed reconciliation, managed
+builds, canary or gradual rollout, autoscaling, Kubernetes, RBAC, and multi-user
+support remain out of scope until a future version explicitly revisits them.

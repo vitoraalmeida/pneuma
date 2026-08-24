@@ -8,18 +8,17 @@ Each category answers a different question.
 |---|---|---|
 | Current system truth | How does Pneuma work today? | [`architecture/`](architecture/), [`getting-started.md`](getting-started.md), [`operations/`](operations/) |
 | Architectural rationale | Why was this choice made? | [`decisions/`](decisions/) |
-| Approved future design | How will a decided, unimplemented feature work? | [`design/`](design/) |
 | Active planning | What is being implemented now? | [`iterations/current-iteration.md`](iterations/current-iteration.md) |
 | Product evolution | Where is Pneuma going? | [`roadmap.md`](roadmap.md) |
 | Released history | What changed in releases? | [`../CHANGELOG.md`](../CHANGELOG.md) |
 
-**Living** documents describe current behavior and change with it. An **approved
-design** describes decided future behavior. **Active planning** tracks execution,
-not system truth. A **historical record** preserves what was completed or
-released and is not rewritten to make history appear different.
+**Living** documents describe current behavior and change with it. **Active
+planning** tracks execution, not system truth. A **historical record** preserves
+what was completed or released and is not rewritten to make history appear
+different.
 
-When documents disagree, trust current architecture first, then an approved
-design for future behavior, then the active iteration tracker for progress. The
+When documents disagree, trust current architecture first, then the roadmap for
+future direction, then the active iteration tracker for progress. The
 roadmap describes direction and history; the changelog records releases. Neither
 overrides current architecture.
 
@@ -29,8 +28,8 @@ overrides current architecture.
 |---|---|
 | Understand Pneuma | [`../README.md`](../README.md) → `architecture/system-context.md` → `architecture/architecture.md` → `architecture/data-model.md` → `architecture/security-model.md` → `architecture/threat-model.md` → relevant ADR |
 | Deploy Pneuma | [`getting-started.md`](getting-started.md) → [`operations/`](operations/) for disposable VM validation |
-| Contribute | system context → architecture → [`code-guide.md`](code-guide.md) → [`rust-guidelines.md`](rust-guidelines.md) → active iteration → relevant approved design |
-| Understand future work | [`roadmap.md`](roadmap.md) → relevant `design/` document → active iteration |
+| Contribute | system context → architecture → [`code-guide.md`](code-guide.md) → [`rust-guidelines.md`](rust-guidelines.md) → active iteration |
+| Understand future work | [`roadmap.md`](roadmap.md) → [`iterations/next-iteration.md`](iterations/next-iteration.md) |
 
 ## Operating Environments
 
@@ -47,8 +46,8 @@ Do not run reset, restore, bootstrap acceptance, or E2E scripts on production.
 For every change, determine whether it changes implemented behavior
 (`architecture.md`), persistence (`data-model.md`), trust boundaries
 (`security-model.md`), architecture threats (`threat-model.md`), a major decision
-(ADR), future behavior (design), user setup (`getting-started.md`), released
-behavior (`CHANGELOG.md`), or product direction (`roadmap.md`).
+(ADR), user setup (`getting-started.md`), released behavior (`CHANGELOG.md`), or
+product direction (`roadmap.md`).
 
 ## Index
 
@@ -64,14 +63,6 @@ behavior (`CHANGELOG.md`), or product direction (`roadmap.md`).
 | [`architecture/security-model.md`](architecture/security-model.md) | Living | Current assets, trust boundaries, controls, and security limits |
 | [`architecture/threat-model.md`](architecture/threat-model.md) | Living | Architecture threats, attack paths, assumptions, and residual risks |
 | [`decisions/`](decisions/) | Historical records | Retrospective architectural decision records |
-| [`design/documentation-architecture-refactor.md`](design/documentation-architecture-refactor.md) | Historical record | Completed documentation-model design; the resulting model is described by this document |
-| [`design/reconciliation.md`](design/reconciliation.md) | Historical record | Completed v0.4 reconciliation design; implemented behavior lives in `architecture/` |
-| [`design/reconciliation-e2e.md`](design/reconciliation-e2e.md) | Historical record | Completed v0.4 E2E catalog, executed by `scripts/dev-vm/reconciliation-e2e.sh` |
-| [`design/domain-model-hardening.md`](design/domain-model-hardening.md) | Historical record | Completed v0.4 domain-model hardening design; implemented behavior lives in `architecture/` |
-| [`design/domain-boundary-refactor.md`](design/domain-boundary-refactor.md) | Historical record | Completed v0.4 domain, store, and use-case boundary design; implemented behavior lives in `architecture/` |
-| [`design/domain-hardening-sweep.md`](design/domain-hardening-sweep.md) | Historical record | Completed v0.4.1 domain hardening sweep design; implemented behavior lives in `architecture/` |
-| [`design/domain-type-closure.md`](design/domain-type-closure.md) | Historical record | Completed v0.4.2 domain type closure design; implemented behavior lives in `architecture/` |
-| [`design/caddy-unmatched-host-fallback.md`](design/caddy-unmatched-host-fallback.md) | Historical record | Completed v0.3.1 design |
 | [`iterations/current-iteration.md`](iterations/current-iteration.md) | Active planning | Completed v0.4.2 domain type closure tracker |
-| [`iterations/next-iteration.md`](iterations/next-iteration.md) | Queued planning | v0.5 topology planning reminder |
-| [`roadmap.md`](roadmap.md) | Living | v0.1 → v0.8 evolution and direction |
+| [`iterations/next-iteration.md`](iterations/next-iteration.md) | Queued planning | v0.5 observed state planning reminder |
+| [`roadmap.md`](roadmap.md) | Living | v0.1 → v1.0 evolution and direction |

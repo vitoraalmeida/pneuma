@@ -32,4 +32,3 @@ assuming they are identical.
 
 - [`../architecture/architecture.md`](../architecture/architecture.md)
 - [`../architecture/data-model.md`](../architecture/data-model.md)
-- [`../design/reconciliation.md`](../design/reconciliation.md)
