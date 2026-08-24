@@ -1,8 +1,21 @@
 # Design — Reconciliation
 
-**Status:** approved design for v0.4; it does not describe behavior already
-implemented. Execution and progress live only in
-`docs/iterations/current-iteration.md`.
+**Status:** historical approved design for v0.4. Reconciliation is implemented
+(`pneuma reconcile`); the authoritative description of the implemented behavior
+is [`../architecture/architecture.md`](../architecture/architecture.md) and
+[`../architecture/invariants.md`](../architecture/invariants.md)
+(INV-REC-001 through INV-REC-005). The tables below preserve the original
+approved semantics and are superseded where the implementation deliberately
+chose a more conservative policy:
+
+- A recorded `Stopped`, `Failed`, or unknown runtime state is never restarted
+  automatically while Running is desired; it requires manual intervention
+  instead of the "start/restart the unit" actions sketched below.
+- Generated-unit states outside systemd's documented not-running family
+  (`inactive`, `failed`) block automatic rematerialization (INV-REC-005).
+- A converged running application reaches `no-op` only with a confirmed public
+  route; a converged running internal application falls through to manual
+  intervention today (recorded deferred follow-up).
 
 ## Objective
 

@@ -220,7 +220,8 @@ active runtime and public route remain intact.
 - [`security-model.md`](security-model.md) describes trust boundaries.
 - [`../decisions/0004-sqlite-intent-vs-runtime-authority.md`](../decisions/0004-sqlite-intent-vs-runtime-authority.md)
   explains the authority split.
-- [`../design/reconciliation.md`](../design/reconciliation.md) defines future
-  v0.4 reconciliation semantics.
+- [`../design/reconciliation.md`](../design/reconciliation.md) records the
+  approved v0.4 reconciliation design; the implemented behavior is described in
+  [`architecture.md`](architecture.md) and [`invariants.md`](invariants.md).
 - [`../getting-started.md`](../getting-started.md) describes manifest authoring,
   import, deployment, and host operation.

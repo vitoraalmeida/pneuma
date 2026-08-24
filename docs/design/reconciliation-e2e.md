@@ -1,7 +1,10 @@
 # E2E Catalog — Reconciliation v0.4
 
-**Status:** catalog approved for future implementation; it does not describe
-tests already executed or introduce `pneuma reconcile`.
+**Status:** historical approved catalog; `pneuma reconcile` and the disposable-VM
+harness `scripts/dev-vm/reconciliation-e2e.sh` exist. Runtime behavior is
+described by [`../architecture/architecture.md`](../architecture/architecture.md);
+the conservative decision deviations recorded in
+[`reconciliation.md`](reconciliation.md) apply to the expected results below.
 
 **Semantics:** [`reconciliation.md`](reconciliation.md) defines authorities,
 invariants, results, and non-goals. This catalog defines the operational proof

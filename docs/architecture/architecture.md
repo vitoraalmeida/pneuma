@@ -9,8 +9,9 @@ or control plane: each CLI invocation runs locally and exits; systemd supervises
 promoted runtimes afterward.
 
 This document describes implemented behavior. The detailed persisted schema is
-in [`data-model.md`](data-model.md). Future v0.4 reconciliation behavior is
-specified separately in [`../design/reconciliation.md`](../design/reconciliation.md).
+in [`data-model.md`](data-model.md). Reconciliation semantics were approved in
+[`../design/reconciliation.md`](../design/reconciliation.md) and are implemented
+as described here; that document is retained as the historical design record.
 
 ## How to Read This Document
 
@@ -97,9 +98,49 @@ runtime path without the Caddy traffic path.
 The project uses concrete synchronous Rust code. The constraints in
 [`docs/rust-guidelines.md`](../rust-guidelines.md) apply to every change.
 
-### Reconciliation Preparation
+## Ownership
 
-The library now has a read-only reconciliation input path. It loads the
+Each layer owns exactly one kind of decision; rules are never split across
+layers without a documented secondary defense (see
+[`invariants.md`](invariants.md) for the rule-by-rule inventory).
+
+**Domain** (`src/domain/`) owns:
+
+- value validity, enforced once by validated value objects at boundaries;
+- entity transitions and closed state sets (Deployment status, runtime states,
+  exposure materialization states);
+- pure cross-object rules such as delivery-repository permission;
+- pure reconciliation policy — `decide` answers "what should happen?" from
+  in-memory facts only, with no SQLite, Podman, systemd, Caddy, filesystem,
+  clock, or randomness access.
+
+**Use cases** (`src/use_cases/`) own:
+
+- operation ordering: persist intent before effects, observe, then persist
+  confirmed completion;
+- external effects, compensation, and interrupted-work recovery;
+- authority coordination: kernel locks, ownership epochs, transaction
+  boundaries, and translating domain decisions into store and adapter calls.
+
+**Adapters** (`src/adapters/`) own:
+
+- external representation: SQL encoding, manifest TOML parsing, Quadlet and
+  Caddy fragment bytes, Git/OCI command construction;
+- observation of Podman, systemd, Caddy, Git, registries, and health endpoints;
+  raw external values convert into typed domain observations here;
+- persistence: migrations, row mapping, constraints, and compare-and-set
+  primitives that make zero-row writes explicit conflicts.
+
+**CLI** (`src/main.rs` and `src/cli/`) owns argument parsing, host-environment
+bootstrap, dependency composition, output rendering, and exit-code
+classification. It holds no domain rules and never bypasses use cases to reach
+persistence.
+
+### Reconciliation
+
+Reconciliation is an on-demand pipeline invoked by
+`pneuma reconcile <application>` and orchestrated by
+`src/use_cases/reconciliation/`. It loads the
 persisted Application, any non-terminal Deployment, active Deployment and
 Release, RuntimeInstance, Exposure, and specification in a short SQLite
 transaction, then closes that transaction before observing Podman, Quadlet, and
@@ -108,8 +149,7 @@ distinguishable from persisted bookkeeping: `DesiredState` carries the
 Application intent and Exposure route decision, `PersistedState` carries the
 blocking Deployment, confirmed active materialization, and specification
 snapshot, and observed Podman/systemd/Caddy facts stay separate in
-`ReconciliationObservation`. The library input path does not change SQLite or
-control external resources. After observation, a pure domain function
+`ReconciliationObservation`. After observation, a pure domain function
 (`decide` in `src/domain/reconciliation.rs`) classifies the next action into a
 `ReconciliationDecision` from persisted facts, observations, and
 boundary-rendered canonical expectations, without touching SQLite, Podman,
