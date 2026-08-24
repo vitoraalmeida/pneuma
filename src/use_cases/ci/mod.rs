@@ -3,6 +3,8 @@ use std::fmt;
 
 use crate::domain::application::ApplicationName;
 
+// Use-case input: the validated command carried by the restricted SSH
+// dispatcher, with names already checked against the domain catalog rule.
 #[derive(Debug, PartialEq)]
 pub enum CiCommand {
     Deploy { application: String, branch: String },

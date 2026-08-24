@@ -63,6 +63,9 @@ impl OciArtifact {
     }
 
     // Returns the sha256 digest portion constrained by artifact validation.
+    // Deliberately no standalone digest type: the digest is validated exactly
+    // once inside `parse` and has no behavior or lifecycle of its own, so it
+    // stays an intentional primitive carried by the artifact.
     pub fn digest(&self) -> &str {
         &self.digest
     }
@@ -149,8 +152,9 @@ impl fmt::Display for InvalidOciArtifact {
 impl Error for InvalidOciArtifact {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-// Records a reusable immutable artifact associated with one Application.
-// A Release never changes after creation; a new artifact means a new Release.
+// Entity: one immutable artifact reusable by an Application; the invariant
+// authority for release identity. A Release never changes after creation; a new
+// artifact means a new Release.
 pub struct Release {
     pub id: ReleaseId,
     pub application_id: ApplicationId,

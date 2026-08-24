@@ -12,6 +12,8 @@ const RETRY_INTERVAL: Duration = Duration::from_millis(500);
 const MAX_ATTEMPTS: u8 = 5;
 const MAX_STATUS_LINE_BYTES: u64 = 1024;
 
+// Adapter observation result: what one internal probe saw, converted into
+// typed evidence for callers; no domain decision is taken here.
 #[derive(Debug, PartialEq, Eq)]
 pub enum HealthCheckResult {
     Healthy {
@@ -24,6 +26,8 @@ pub enum HealthCheckResult {
     },
 }
 
+// Adapter classification of why a probe failed; timeout and unreachability are
+// distinguished because retry policy treats them differently.
 #[derive(Debug, PartialEq, Eq)]
 pub enum HealthCheckFailure {
     TimedOut,

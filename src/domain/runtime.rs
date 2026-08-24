@@ -181,7 +181,8 @@ pub struct RuntimeRetirement {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-// Identifies the logical runtime materialized for a Deployment, not just its
+// Entity: the logical runtime materialized for a Deployment — the invariant
+// authority for runtime identity, endpoint, and retirement facts, not just its
 // container. The `observed_*` fields are the last external observation snapshot;
 // `retirement` records intentional removal so reconciliation can tell
 // tombstones from drift.

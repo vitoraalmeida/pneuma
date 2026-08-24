@@ -4,10 +4,11 @@ use std::fmt;
 use crate::domain::exposure::Visibility;
 use crate::domain::identity::{ApplicationId, DeploymentId, SystemId};
 
-// The durable identity of one deployable application: it survives deployments,
+// Entity — the invariant authority for the application aggregate — and a fact
+// bundle: it survives deployments,
 // rollbacks, and Pneuma restarts. Mutations of intent are ID-keyed store
-// primitives rather than entity field writes (INV-APP-002), so this type is a
-// fact bundle, not a mutable command target.
+// primitives rather than entity field writes (INV-APP-002), so this type is not
+// a mutable command target.
 #[derive(Debug, Clone, PartialEq, Eq)]
 // Captures durable application identity and persisted runtime intent.
 pub struct Application {

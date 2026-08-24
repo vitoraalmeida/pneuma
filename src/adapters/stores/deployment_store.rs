@@ -387,6 +387,8 @@ fn deployment_from_row(row: &Row<'_>) -> rusqlite::Result<Deployment> {
         .map_err(|error| conversion_error(4, error))
 }
 
+// Persistence row: private store-level encoding of a deployment row before it
+// is converted into the domain `Deployment`; never escapes the stores layer.
 struct RawDeployment {
     id: String,
     application_id: String,

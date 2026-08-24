@@ -9,7 +9,10 @@ use std::error::Error;
 use std::fmt;
 
 #[derive(Debug, PartialEq, Eq)]
-// Records one immutable attempt to activate a Release for an Application.
+// Entity: one immutable attempt to activate a Release for an Application and
+// the invariant authority for its lifecycle. Records never mutate in place;
+// state changes are status-level CAS writes gated by the domain transition
+// table (INV-DEP-006).
 pub struct Deployment {
     pub id: DeploymentId,
     pub application_id: ApplicationId,

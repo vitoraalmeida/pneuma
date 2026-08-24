@@ -274,7 +274,10 @@ impl ExposureMaterialization {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-// Tracks visibility intent separately from confirmed Caddy materialization evidence.
+// Entity: the invariant authority pairing one application's route intent with
+// its confirmed materialization evidence. Tracks visibility intent separately
+// from confirmed Caddy materialization evidence — changing intent alone
+// activates nothing (INV-EXP-001).
 pub struct Exposure {
     pub application_id: ApplicationId,
     intent: ExposureIntent,

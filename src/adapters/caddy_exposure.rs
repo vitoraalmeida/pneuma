@@ -59,6 +59,8 @@ pub enum CaddyRecoveryError {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+// Adapter DTO: the next filesystem/Caddy step to perform while materializing
+// or removing a route; execution owns the actual external effects.
 pub enum CaddyFilesystemAction {
     InspectCaddyfile,
     CreateManagedDirectory,

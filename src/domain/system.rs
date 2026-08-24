@@ -4,7 +4,9 @@ use std::fmt;
 use crate::domain::identity::SystemId;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-// Represents the durable organizational grouping assigned to Applications.
+// Entity: durable organizational grouping assigned to Applications and the
+// invariant authority for its catalog row (id/name/description written once at
+// creation; `create_or_load` is idempotent by name).
 pub struct System {
     pub id: SystemId,
     pub name: SystemName,

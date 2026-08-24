@@ -8,25 +8,68 @@ owner in code, its desired owner, its secondary defense line, and the tests that
 prove it. No rule of the architecture may remain only implicit; if a rule is
 missing from this table, either add it or record why it does not apply.
 
+## What Is An Invariant
+
+An invariant is a property that must hold true at every point in time — across
+every request, crash, restart, concurrent operation, and external failure — for
+the system to remain correct. Invariants are not step-by-step behavior; they are
+the guarantees behavior must never break. For Pneuma, typical invariants are:
+
+- structural rules that make invalid values unrepresentable (a port is nonzero,
+  a digest is lowercase sha256);
+- lifecycle rules that only certain state changes may ever happen (a failed
+  candidate never replaces the active runtime);
+- coordination rules that concurrent or repeated operations cannot corrupt
+  persisted facts (compare-and-set writes, ownership generations);
+- boundary rules about trusting outside input (unknown Podman states are
+  preserved as `Unknown`, never adopted as known-safe values).
+
+Every invariant names exactly one owner — the layer responsible for enforcing
+it — plus a secondary defense line and tests. When changing code, find the
+invariants you touch here first; when adding code, classify every rule before
+moving it.
+
 ## How to Read This Table
 
 Categories follow the consolidation classification:
 
-- **Value invariant** - determined from a single value; owned by a validated
-  domain type constructed once at the boundary.
-- **Entity invariant** - determined by an entity plus the requested operation;
-  owned by entity behavior or a pure domain function.
-- **Cross-object rule** - depends on more than one domain object; owned by a
-  pure domain function or enforced with persistence support.
-- **Persistence invariant** - protects against races or corruption; owned by
-  SQLite constraints plus adapter CAS mechanics, with use-case cooperation.
-- **Workflow invariant** - ordering of persistence and external effects; owned
-  by use cases.
-- **External-boundary invariant** - data or effects coming from outside; owned
-  by adapters converting into safe domain types.
+- **Value invariant** - determined from a single value in isolation. The rule
+  belongs to a validated domain type constructed once at the boundary, so an
+  invalid value cannot exist afterward. Example: INV-RUN-002 (nonzero ports,
+  bounded health status) owned by `ContainerPort::new`/`HealthCheckStatus::new`.
+- **Entity invariant** - determined by an entity together with the requested
+  operation; whether the change is legal depends on the entity's current state,
+  not just the new value. Owned by entity behavior or a pure domain function.
+  Example: INV-DEP-001 (only legal status transitions) owned by
+  `DeploymentStatus::transition`.
+- **Cross-object rule** - depends on more than one domain object being
+  consistent with each other. Owned by a pure domain function comparing both,
+  or enforced with persistence support when races are possible. Example:
+  INV-REL-002 (an artifact may only come from the application's configured
+  repository) owned by `DeliverySpecification::permits`.
+- **Persistence invariant** - protects stored facts against races, duplication,
+  or corruption; several writers could otherwise violate it. Owned by SQLite
+  constraints/triggers plus adapter compare-and-set mechanics, with use-case
+  cooperation. Example: INV-DB-004 (zero-row CAS update is conflict, never
+  success).
+- **Workflow invariant** - ordering of persistence and external effects across
+  steps of one operation (what must happen before what). Owned by use cases.
+  Example: INV-WF-001 (persist intent before the external effect, confirm after
+  observing it).
+- **External-boundary invariant** - data or effects arriving from systems
+  Pneuma does not control (Git, OCI registries, Podman, systemd, Caddy, HTTP);
+  the rule is that untrusted or open-ended input is converted or classified
+  once at the edge into safe domain types. Example: INV-REC-005 (unknown
+  external states stay explicitly unknown).
 
 "Desired owner" differs from "current owner" only where the inventory found an
 ownership gap; identical entries mean the rule already lives where it belongs.
+
+Per-type classifications — which recurring primitives are Value Objects versus
+intentional primitives, and which role each struct plays (entity, read model,
+domain state, use-case input/output, adapter DTO, persistence row) — are kept
+as comments on the types themselves in `src/`, so the classification sits next
+to the code it describes instead of drifting here.
 
 | ID | Rule | Categoria | Owner atual | Owner desejado | Defesa secundária | Teste atual | Teste desejado |
 |---|---|---|---|---|---|---|---|
@@ -84,80 +127,6 @@ ownership gap; identical entries mean the rule already lives where it belongs.
 | INV-EXT-004 | Port allocation respects the configured `PNEUMA_RUNTIME_PORT_RANGE`; malformed ranges (zero, inverted, non-numeric bounds) are rejected. | External-boundary invariant | `src/adapters/port_allocator.rs:10-11,116-130` | Same (adapter) | Reservation exclusivity in SQLite (`INV-DB-003`) | In-file allocator tests: `rejects_malformed_zero_and_inverted_ranges` (range grammar incl. zero/inverted bounds), exhaustion and exclusivity tests against the default range | Keep |
 | INV-EXT-005 | Every external operation carries an explicit idempotency/retry classification (see "External Operation Idempotency And Retry Classification" below): effects are idempotent, convergent, observation-gated, cleanup-coupled, or ownership-fenced; no path relies on an interrupted operation having completed atomically. | External-boundary invariant | Adapters own per-command semantics (`systemd_quadlet.rs`, `local_runtime.rs`, `caddy_exposure.rs`, `oci_image.rs`, `git_source.rs`, `port_allocator.rs`); use cases gate controls behind fresh observation and own compensation ordering | Same split (adapters classify commands, use cases order retries/cleanup) | Kernel lock plus operation generation fence all mutations (INV-WF-007, INV-DB-005); CAS makes repeated guarded writes stale instead of double-applying (INV-DB-004) | Quadlet retry tests in `src/adapters/systemd_quadlet.rs`; `tests/caddy_exposure.rs::removes_an_absent_fragment_without_failing_so_removal_is_safe_to_retry`; `tests/git_source.rs::clones_a_repository_by_url_and_cleans_up_the_checkout` (repeat cleanup tolerated) | Keep |
 | INV-CI-001 | The restricted SSH dispatcher permits only `version` and `deploy <application> <branch-or-tag>`; both arguments are validated with domain rules; injection attempts are rejected. | Entity invariant | `parse_ci_command` - `src/use_cases/ci/mod.rs` (rules in library, correct owner); `src/cli/ci.rs` only plumbs `SSH_ORIGINAL_COMMAND` | Same | Dispatcher key reaches only this restricted path (security model) | 13 in-file unit tests incl. `parse_injection_attempts_rejected`, `valid/invalid_application_names` | Keep |
-
-## Primitive And Value Object Audit
-
-Recorded by consolidation iteration 02 so every recurring primitive carries an
-explicit classification instead of an accidental one. Categories:
-
-- **Value Object** - validated or otherwise restricted construction; the type,
-  not call sites, guarantees the rule.
-- **Intentional Primitive** - stays a primitive on purpose; its one rule is
-  enforced once where the value is produced.
-- **Boundary-only Type** - exists only at an external edge to convert input
-  into domain-safe types.
-- **Read-model Primitive** - presentation/projection text that never re-enters
-  domain rules.
-
-| Candidate | Classification | Decision and owner |
-|---|---|---|
-| `ApplicationName` | Value Object | Catalog-name rule owned by `ApplicationName::new` (`src/domain/application.rs`) over the shared predicate `is_valid_catalog_name` (`src/domain/identity.rs:144`). |
-| `SystemName` | Value Object | Same shared rule owned by `SystemName::new` (`src/domain/system.rs`). |
-| `SystemId`, `ApplicationId`, `ReleaseId`, `DeploymentId`, `RuntimeInstanceId` | Value Object | Newtypes for semantic distinction and argument-mixup prevention (`src/domain/identity.rs`; see the non-interchangeability test in `src/domain/runtime.rs`). By explicit decision they impose no format rule so legacy SQLite text round-trips unchanged; construction stays via `From` impls and APIs must not widen back to raw `String`. |
-| OCI repository | Value Object | `OciRepository` owns the repository grammar (`src/domain/release.rs`); consumed through `OciArtifact` and `DeliverySpecification`, never re-parsed downstream. |
-| Image digest | Intentional Primitive | No standalone type: the sha256 digest is validated exactly once inside `OciArtifact::parse` (`is_sha256_digest`, `src/domain/release.rs`) and has no behavior or independent lifecycle; adapters only compare it against the artifact (`src/adapters/oci_image.rs`). Revisit only if a digest ever flows separately from its artifact. |
-| Healthcheck path | Value Object | `HealthCheckPath` requires an absolute whitespace-free path starting `/` (`src/domain/runtime.rs`). |
-| Expected HTTP status | Value Object | `HealthCheckStatus` accepts only 100–599 (`src/domain/runtime.rs`). |
-| Container port | Value Object | `ContainerPort` rejects zero (`src/domain/runtime.rs`). |
-| Host port | Value Object | `HostPort` rejects zero (`src/domain/runtime.rs`). |
-| Domain/hostname | Value Object | `DomainName` owns the domain grammar (`src/domain/exposure.rs`). |
-| Source revision | Value Object + Read-model Primitive | New revisions must be a validated `CommitSha` (40-char lowercase hex, `src/domain/git.rs`). Historical rows hydrate through `SourceRevision::Legacy` (`src/domain/deployment.rs`), the documented legacy tolerance of INV-DB-006 that is never accepted as a new commit value. |
-| Manifest path | Value Object | `RelativeManifestPath` rejects empty, absolute, root, prefix, and parent components (`src/domain/git.rs`); used both by the manifest loader and persisted sources. |
-| Specification version | Intentional Primitive | `schema_version: u32` is compared once against `SUPPORTED_SCHEMA_VERSION` at the manifest boundary (`src/adapters/manifest.rs`); equality-only semantics give a dedicated type nothing to own. The validated copy travels as `ImportSpecification.schema_version` (`src/domain/manifest.rs`), which is TOML-free. |
-
-No audited candidate qualifies as a Boundary-only Type today: every
-external-input rule already lands in a domain-owned validated type at the
-manifest, Git, or OCI boundary. Exit criterion met: every candidate listed by
-iteration 02 has an explicit decision.
-
-## Struct Role Classification
-
-Recorded by consolidation iteration 12 so every public struct and enum carries
-an explicit role instead of an accidental one. Categories:
-
-- **Entity** - durable identity plus lifecycle; the invariant authority for its
-  aggregate.
-- **Value Object** - validated or restricted construction (see the audit above).
-- **Domain state** - closed set, decision output, or evidence bundle owned by
-  the domain.
-- **Read model** - query/projection shape for display; never carries invariant
-  authority.
-- **Use-case input/output** - workflow input, output, progress, or error type.
-- **Adapter DTO** - external representation exchanged with one adapter.
-- **Persistence row** - private store-level row mapping.
-
-| Type | Role | Notes |
-|---|---|---|
-| `Application`, `System`, `Release`, `Deployment`, `RuntimeInstance`, `Exposure` (`src/domain/`) | Entity | The only invariant authorities for their aggregates. Every mutation path loads one of these (e.g. `load_application_by_name`) before deciding; no use case decides from a projection. |
-| `ApplicationSummary` (`src/domain/application.rs`) | Read model | Catalog projection hydrated by `application_store` and returned only by list/import/remote-import/show flows. Marked in code as carrying no invariant authority. |
-| `DeploymentHistory` (`src/domain/deployment.rs`) | Read model | Deployment + Release + active marker for `app deployments`. Transitions/promotions load persisted status through CAS primitives, never this view. |
-| `SystemDetails` (`src/use_cases/system/show.rs`) | Read model | System entity plus its catalog summaries for one show flow. |
-| Value Objects and intentional primitives | Value Object | All rows of the "Primitive And Value Object Audit" above. |
-| `DesiredRuntimeState`, `DeploymentStatus`, `DeploymentLifecycle`, `DeploymentEvent`, `DeploymentType`, `RuntimeState`, `ObservedRuntimeState`, `Visibility`, `ExposureIntent`, `ExposureOutcome`, `ExposureMaterializationState`, `RepositoryKind`, `DeliveryType` | Domain state | Closed sets owned by the domain; adapters classify into them, stores persist exactly their values. |
-| `DeploymentFailure`, `DeploymentFailureEvidence`, `SourceRevision`, `ConfirmedRoute`, `ExposureDiagnostic`, `ExposureMaterialization`, `PromotionTarget`, `PromotedCandidate`, `PromotionCandidateRejection`, `RollbackTarget`, `RuntimeRetirement`, `RuntimeRegistration`, `PreviousRuntime`, `ExpectedRuntimeEndpoint`, `ActiveRuntime`, `ReconciliationInput` with its `DesiredState`/`PersistedState` authority groups, observation enums (`src/domain/reconciliation.rs`, `ContainerObservation`) | Domain state / evidence bundle | Pure facts and decision outputs; produced by hydration or observation, consumed by domain gates and use cases without infrastructure. |
-| `ImportSpecification`, `CiCommand` | Use-case input | Boundary-validated inputs; TOML-free and effect-free. |
-| `ApplicationDeploymentSpecification` (`src/domain/application.rs`) | Use-case input | Persisted fact bundle loaded whole for deploy/promote/reconciliation; not an entity — intent writes stay ID-keyed in store primitives. |
-| Use-case outputs and errors (`DeploymentResult`, `PublicActivationOutput/Input`, `CandidateStartInput/StartedCandidate`, `CandidateResources`, `ProgressReporter`, `DeploymentStep/Progress`, `RuntimeObservation`, all `*Error` enums) | Use-case input/output | Owned by the orchestrating flow; private unless a genuine library API. |
-| `ManifestDocument` and section structs (`src/adapters/manifest.rs`), `PulledImage`, `ExternalHealthCheck`, `MaterializedCaddyFragment`, `RemovedCaddyFragment`, `CaddyFilesystemAction`, `CaddyCommandOutput`, `ContainerCommandOutput`, `HealthCheckResult/Failure` | Adapter DTO | Private or adapter-scoped external representations; converted once at the boundary into domain types. |
-| `RawDeployment` (`src/adapters/stores/deployment_store.rs`), `OperationOwnership` (`operation_store.rs`), `PersistenceOutcome` | Persistence row / store primitive | Store-private encoding; never escapes the stores layer. |
-| CLI types (`Cli`, command enums, `Invocation` in `src/cli/args.rs`) | Use-case input (CLI edge) | Converted to use-case inputs; hold no domain rules. |
-| `CliError`, `CliErrorClass`, render functions (`src/cli/error.rs`, `src/cli/output.rs`) | Presentation (CLI edge) | Classify failures into usage/not-found/conflict/external/failure exit codes and render command results as strings; preserve the source error chain and hold no domain decisions. |
-
-Exit criterion met: no code path consumes a read model where an entity is
-required — mutation and transition flows load entities or persisted status via
-store primitives (`application_lookup`, reconciliation reads, promote/rollback
-gates), while `ApplicationSummary`, `DeploymentHistory`, and `SystemDetails`
-are returned only by query/display flows.
 
 ## Reconciliation Recovery And Compensation Contract
 

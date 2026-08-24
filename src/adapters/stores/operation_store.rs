@@ -6,6 +6,8 @@ use rusqlite::{Connection, Transaction, params};
 use crate::domain::identity::ApplicationId;
 
 #[derive(Debug, PartialEq, Eq)]
+// Persistence row: the ownership token and fencing generation for one
+// application's current operation (INV-DB-005); store-private coordination fact.
 pub(crate) struct OperationOwnership {
     pub(crate) token: String,
     pub(crate) generation: i64,
