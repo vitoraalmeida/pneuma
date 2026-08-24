@@ -90,3 +90,35 @@ pub struct ApplicationDeploymentSpecification {
     pub runtime: crate::domain::runtime::RuntimeSpecification,
     pub visibility: Visibility,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::ApplicationName;
+
+    #[test]
+    fn accepts_catalog_names_within_the_shared_rule() {
+        assert!(ApplicationName::new("a").is_ok());
+        assert!(ApplicationName::new("personal-site").is_ok());
+        let longest_allowed = format!("a{}b", "c".repeat(61));
+        assert_eq!(longest_allowed.len(), 63);
+        assert!(ApplicationName::new(&longest_allowed).is_ok());
+    }
+
+    #[test]
+    fn rejects_names_outside_the_shared_rule() {
+        let too_long = format!("{}c", "a".repeat(63));
+        assert_eq!(too_long.len(), 64);
+        for invalid in [
+            "",
+            "Personal-Site",
+            "personal site",
+            "personal_site",
+            "-site",
+            "site-",
+            "personal.site",
+            too_long.as_str(),
+        ] {
+            assert!(ApplicationName::new(invalid).is_err(), "{invalid:?}");
+        }
+    }
+}

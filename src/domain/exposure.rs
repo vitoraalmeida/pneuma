@@ -383,3 +383,76 @@ fn is_valid_domain_label(label: &str) -> bool {
             .iter()
             .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ConfirmedRoute, DomainName, ExposureConfigurationVersion, ExposureDiagnostic,
+        ExposureIntent, Visibility,
+    };
+    use crate::domain::identity::RuntimeInstanceId;
+
+    #[test]
+    fn public_intent_requires_a_domain_while_internal_accepts_any() {
+        assert!(ExposureIntent::new(Visibility::Public, None).is_err());
+        assert!(matches!(
+            ExposureIntent::new(
+                Visibility::Public,
+                Some(DomainName::new("example.test").unwrap())
+            ),
+            Ok(ExposureIntent::Public { .. })
+        ));
+        assert!(matches!(
+            ExposureIntent::new(Visibility::Internal, None),
+            Ok(ExposureIntent::Internal { domain: None })
+        ));
+        assert!(matches!(
+            ExposureIntent::new(
+                Visibility::Internal,
+                Some(DomainName::new("example.test").unwrap())
+            ),
+            Ok(ExposureIntent::Internal { domain: Some(_) })
+        ));
+    }
+
+    #[test]
+    fn configuration_versions_and_diagnostics_are_trimmed_nonempty_text() {
+        assert!(ExposureConfigurationVersion::new("example.test {\n}\n").is_ok());
+        assert!(ExposureConfigurationVersion::new(" \n ").is_err());
+        assert!(ExposureConfigurationVersion::new("").is_err());
+
+        assert!(ExposureDiagnostic::new("runtime_missing", "container disappeared").is_ok());
+        assert!(ExposureDiagnostic::new("", "message").is_err());
+        assert!(ExposureDiagnostic::new("code", " ").is_err());
+        assert!(ExposureDiagnostic::new(" padded ", "message").is_err());
+    }
+
+    #[test]
+    fn confirmed_routes_require_a_trimmed_materialization_timestamp() {
+        let version = ExposureConfigurationVersion::new("v1").unwrap();
+        assert!(
+            ConfirmedRoute::new(
+                RuntimeInstanceId::from("runtime-1"),
+                version.clone(),
+                String::new()
+            )
+            .is_err()
+        );
+        assert!(
+            ConfirmedRoute::new(
+                RuntimeInstanceId::from("runtime-1"),
+                version.clone(),
+                " 2026-08-20 00:00:00".to_owned()
+            )
+            .is_err()
+        );
+        let route = ConfirmedRoute::new(
+            RuntimeInstanceId::from("runtime-1"),
+            version,
+            "2026-08-20 00:00:00".to_owned(),
+        )
+        .expect("route with a trimmed timestamp is valid");
+        assert_eq!(route.runtime_id(), &RuntimeInstanceId::from("runtime-1"));
+        assert_eq!(route.materialized_at(), "2026-08-20 00:00:00");
+    }
+}

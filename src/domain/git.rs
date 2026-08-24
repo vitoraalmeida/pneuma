@@ -197,3 +197,108 @@ impl fmt::Display for InvalidCommitSha {
 }
 
 impl Error for InvalidCommitSha {}
+
+#[cfg(test)]
+mod tests {
+    use super::{ApplicationSource, CommitSha, RelativeManifestPath, RepositoryKind};
+
+    fn manifest_path() -> RelativeManifestPath {
+        RelativeManifestPath::new("deploy/pneuma.toml").expect("test path is valid")
+    }
+
+    #[test]
+    fn classifies_locations_by_transport_prefix() {
+        assert_eq!(
+            RepositoryKind::from_location("https://example.test/application.git"),
+            RepositoryKind::Remote
+        );
+        assert_eq!(
+            RepositoryKind::from_location("git@example.test:team/application.git"),
+            RepositoryKind::Remote
+        );
+        assert_eq!(
+            RepositoryKind::from_location("/srv/checkouts/application"),
+            RepositoryKind::Local
+        );
+        assert_eq!(RepositoryKind::from_location("."), RepositoryKind::Local);
+    }
+
+    #[test]
+    fn builds_local_and_remote_sources_preserving_the_supplied_fields() {
+        let remote = ApplicationSource::new(
+            RepositoryKind::Remote,
+            "https://example.test/application.git",
+            Some("main".to_owned()),
+            manifest_path(),
+        )
+        .expect("remote source is valid");
+        assert_eq!(remote.repository_kind(), RepositoryKind::Remote);
+        assert_eq!(
+            remote.repository_location(),
+            "https://example.test/application.git"
+        );
+        assert_eq!(remote.default_branch(), Some("main"));
+        assert_eq!(remote.manifest_path().as_str(), "deploy/pneuma.toml");
+
+        let local = ApplicationSource::new(
+            RepositoryKind::Local,
+            "/srv/checkouts/application",
+            None,
+            manifest_path(),
+        )
+        .expect("local source is valid");
+        assert_eq!(local.repository_kind(), RepositoryKind::Local);
+        assert_eq!(local.repository_location(), "/srv/checkouts/application");
+        assert_eq!(local.default_branch(), None);
+    }
+
+    #[test]
+    fn rejects_empty_untrimmed_or_kind_mismatched_locations() {
+        for (kind, location) in [
+            (RepositoryKind::Local, ""),
+            (RepositoryKind::Local, "/srv/checkouts/application "),
+            (
+                RepositoryKind::Local,
+                "https://example.test/application.git",
+            ),
+            (RepositoryKind::Remote, "/srv/checkouts/application"),
+            (
+                RepositoryKind::Remote,
+                " https://example.test/application.git",
+            ),
+        ] {
+            assert!(
+                ApplicationSource::new(kind, location, None, manifest_path()).is_err(),
+                "{kind:?} with {location:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn relative_manifest_paths_stay_relative_and_inside_the_checkout() {
+        assert!(RelativeManifestPath::new("pneuma.toml").is_ok());
+        assert!(RelativeManifestPath::new("deploy/pneuma.toml").is_ok());
+        for invalid in [
+            "",
+            "/etc/pneuma.toml",
+            "../pneuma.toml",
+            "deploy/../pneuma.toml",
+        ] {
+            assert!(RelativeManifestPath::new(invalid).is_err(), "{invalid:?}");
+        }
+    }
+
+    #[test]
+    fn commit_identities_are_full_lowercase_hex_sha1s() {
+        assert!(CommitSha::new(&"0123abcdef".repeat(4)).is_ok());
+        for invalid in [
+            "",
+            "short",
+            &"A".repeat(40),
+            &format!("{}g", "a".repeat(39)),
+            &"a".repeat(41),
+        ] {
+            assert!(CommitSha::new(invalid).is_err(), "{invalid:?}");
+        }
+    }
+}

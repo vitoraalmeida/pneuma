@@ -154,7 +154,9 @@ pub(crate) fn is_valid_catalog_name(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::ApplicationId;
+    use super::{
+        ApplicationId, DeploymentId, ReleaseId, RuntimeInstanceId, SystemId, is_valid_catalog_name,
+    };
 
     #[test]
     fn preserves_legacy_text_without_a_format_requirement() {
@@ -162,5 +164,44 @@ mod tests {
 
         assert_eq!(application_id.as_str(), "legacy value/with punctuation");
         assert_eq!(application_id.to_string(), "legacy value/with punctuation");
+    }
+
+    #[test]
+    fn every_identifier_kind_preserves_arbitrary_legacy_text() {
+        assert_eq!(SystemId::from("sys 001").to_string(), "sys 001");
+        assert_eq!(
+            ApplicationId::from("app/legacy id").to_string(),
+            "app/legacy id"
+        );
+        assert_eq!(ReleaseId::from("rel#7").to_string(), "rel#7");
+        assert_eq!(DeploymentId::from("dep 42").to_string(), "dep 42");
+        assert_eq!(
+            RuntimeInstanceId::from("runtime_1").to_string(),
+            "runtime_1"
+        );
+    }
+
+    #[test]
+    fn catalog_names_are_lowercase_alphanumeric_with_inner_hyphens() {
+        let longest_allowed = format!("a{}b", "c".repeat(61));
+        assert_eq!(longest_allowed.len(), 63);
+        for valid in ["a", "team-system", longest_allowed.as_str()] {
+            assert!(is_valid_catalog_name(valid), "{valid:?}");
+        }
+
+        let too_long = format!("{longest_allowed}c");
+        assert_eq!(too_long.len(), 64);
+        for invalid in [
+            "",
+            "Team",
+            "team system",
+            "team_system",
+            "-team",
+            "team-",
+            "team.system",
+            too_long.as_str(),
+        ] {
+            assert!(!is_valid_catalog_name(invalid), "{invalid:?}");
+        }
     }
 }

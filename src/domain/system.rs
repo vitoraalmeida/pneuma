@@ -47,3 +47,35 @@ impl fmt::Display for InvalidSystemName {
 }
 
 impl Error for InvalidSystemName {}
+
+#[cfg(test)]
+mod tests {
+    use super::SystemName;
+
+    #[test]
+    fn accepts_catalog_names_within_the_shared_rule() {
+        assert!(SystemName::new("a").is_ok());
+        assert!(SystemName::new("team-system").is_ok());
+        let longest_allowed = format!("a{}b", "c".repeat(61));
+        assert_eq!(longest_allowed.len(), 63);
+        assert!(SystemName::new(&longest_allowed).is_ok());
+    }
+
+    #[test]
+    fn rejects_names_outside_the_shared_rule() {
+        let too_long = format!("{}c", "a".repeat(63));
+        assert_eq!(too_long.len(), 64);
+        for invalid in [
+            "",
+            "Team",
+            "team system",
+            "team_system",
+            "-team",
+            "team-",
+            "team.system",
+            too_long.as_str(),
+        ] {
+            assert!(SystemName::new(invalid).is_err(), "{invalid:?}");
+        }
+    }
+}

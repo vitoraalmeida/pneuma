@@ -455,4 +455,54 @@ mod tests {
             "cannot apply deployment event `start` while in state `failed`"
         );
     }
+
+    #[test]
+    fn failures_require_trimmed_details_and_a_nonterminal_stage() {
+        assert!(
+            super::DeploymentFailure::validate_details(
+                "health_failed",
+                DeploymentStatus::Verifying,
+                "candidate unhealthy"
+            )
+            .is_ok()
+        );
+        for (code, stage, message) in [
+            ("", DeploymentStatus::Starting, "message"),
+            (" health_failed ", DeploymentStatus::Starting, "message"),
+            ("health_failed", DeploymentStatus::Activating, ""),
+            ("health_failed", DeploymentStatus::Activating, " padded "),
+            ("health_failed", DeploymentStatus::Succeeded, "message"),
+            ("health_failed", DeploymentStatus::Failed, "message"),
+        ] {
+            assert!(
+                super::DeploymentFailure::validate_details(code, stage, message).is_err(),
+                "{code:?} at {stage} with {message:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn failure_construction_rejects_a_missing_timestamp_and_keeps_valid_evidence() {
+        assert!(
+            super::DeploymentFailure::new(
+                "health_failed",
+                DeploymentStatus::Verifying,
+                "candidate unhealthy",
+                String::new(),
+            )
+            .is_err()
+        );
+
+        let failure = super::DeploymentFailure::new(
+            "health_failed",
+            DeploymentStatus::Verifying,
+            "candidate unhealthy",
+            "2026-08-23 12:00:00".to_owned(),
+        )
+        .expect("complete evidence is valid");
+        assert_eq!(failure.code, "health_failed");
+        assert_eq!(failure.stage, DeploymentStatus::Verifying);
+        assert_eq!(failure.message, "candidate unhealthy");
+        assert_eq!(failure.finished_at, "2026-08-23 12:00:00");
+    }
 }

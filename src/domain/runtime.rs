@@ -386,7 +386,7 @@ pub(crate) fn stable_runtime_name(application_name: &str, deployment_id: &str) -
 
 #[cfg(test)]
 mod tests {
-    use super::ContainerId;
+    use super::{ContainerId, ExpectedRuntimeEndpoint, stable_runtime_name};
     use crate::domain::identity::{ApplicationId, DeploymentId};
 
     #[test]
@@ -399,5 +399,40 @@ mod tests {
             DeploymentId::from("deployment"),
         );
         observe_container(ContainerId::from("container"));
+    }
+
+    #[test]
+    fn container_identity_text_must_be_nonempty_hexadecimal() {
+        assert!(ContainerId::is_valid("0123abcdefABCDEF"));
+        assert!(!ContainerId::is_valid(""));
+        assert!(!ContainerId::is_valid("container id"));
+        assert!(!ContainerId::is_valid("0123 abcdef"));
+    }
+
+    #[test]
+    fn expected_endpoints_are_ipv4_loopback_with_a_port() {
+        assert!(ExpectedRuntimeEndpoint::new("127.0.0.1:30000".parse().unwrap()).is_ok());
+        for invalid in [
+            "10.0.0.5:30000",
+            "0.0.0.0:30000",
+            "[::1]:30000",
+            "127.0.0.1:0",
+        ] {
+            assert!(
+                ExpectedRuntimeEndpoint::new(invalid.parse().unwrap()).is_err(),
+                "{invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn stable_names_couple_the_application_and_deployment_identities() {
+        assert_eq!(
+            stable_runtime_name(
+                ApplicationId::from("personal-site").as_str(),
+                DeploymentId::from("dep-7").as_str()
+            ),
+            "pneuma-personal-site-dep-7"
+        );
     }
 }
