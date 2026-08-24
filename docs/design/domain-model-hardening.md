@@ -1,8 +1,8 @@
 # Design - Domain Model Hardening
 
-**Status:** approved design for v0.4 before reconciliation implementation. It
-does not describe implemented behavior. Execution and progress live only in
-[`../iterations/current-iteration.md`](../iterations/current-iteration.md).
+**Status:** historical record. Approved for v0.4 before reconciliation and now
+fully implemented; implemented behavior lives in
+[`../architecture/`](../architecture/). Execution history is in Git.
 
 ## Objective
 

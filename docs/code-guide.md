@@ -18,6 +18,7 @@ Deeper reference material lives in [`architecture/architecture.md`](architecture
 
 ```text
 src/main.rs                  process bootstrap and composition root only
+src/config.rs                documented PNEUMA_* path variables, path resolution, verbose logging
 src/cli/                     argument tree, dispatch, handlers, output, error classes
 src/use_cases/<capability>/  workflow ordering and external-effect orchestration
 src/domain/                  value objects, entities, transitions, pure policy

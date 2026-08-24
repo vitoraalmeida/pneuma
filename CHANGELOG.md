@@ -18,6 +18,20 @@
 - Introduced `HostPort`, a newtype for the reserved loopback host port, carried
   by `StartedCandidate`, `ExpectedRuntimeEndpoint`, and Quadlet unit creation.
   Persisted representation remains `u16`.
+- Domain boundary hardening (v0.4.1 sweep, shipped in this release): the
+  Deployment transition table, promotion eligibility, exposure target/outcome
+  types, stable runtime naming, and container-id format rules each have one
+  domain owner; Caddy, lock, port, OCI, and operation-store boundaries accept
+  typed identities; `ApplicationName`/`SystemName` share one catalog-name
+  validator.
+
+### Fixed
+
+- Internal health checks reject IPv6 `::1` loopback endpoints: runtime
+  endpoints are validated as IPv4 `127.0.0.1` by the domain
+  (`ExpectedRuntimeEndpoint`) instead of per-adapter checks.
+- Visibility changes probe the persisted health check path and expected status
+  of the active runtime instead of a hardcoded `/` expecting HTTP `200`.
 
 ## v0.4.0 — Reconciliation and Domain Boundaries (2026-08-21)
 

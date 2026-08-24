@@ -1,8 +1,8 @@
 # Design - Domain Hardening Sweep
 
-**Status:** approved design for v0.4.1. It does not describe implemented
-behavior. Execution and progress live only in
-[`../iterations/current-iteration.md`](../iterations/current-iteration.md).
+**Status:** historical record. Approved as v0.4.1 and fully implemented
+(shipped within the v0.4.2 release); implemented behavior lives in
+[`../architecture/`](../architecture/). Execution history is in Git.
 
 ## Objective
 

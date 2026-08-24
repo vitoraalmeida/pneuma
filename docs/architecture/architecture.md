@@ -262,6 +262,9 @@ All configurable paths and ports use `PNEUMA_DATABASE_PATH`,
 `PNEUMA_WORKSPACE_PATH`, `PNEUMA_CADDY_MANAGED_PATH`,
 `PNEUMA_CADDYFILE_PATH`, `PNEUMA_RUNTIME_PORT_RANGE`, and
 `PNEUMA_QUADLET_DIR`, with host defaults described in the getting-started guide.
+The workspace, Caddy-managed, and Caddyfile variables plus the shared path
+resolution and verbose-log helpers have one owner in `src/config.rs`; the
+database-path constants remain beside their store in `src/adapters/database.rs`.
 
 ## Cross-Cutting Invariants
 

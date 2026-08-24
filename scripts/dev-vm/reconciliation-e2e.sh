@@ -9,9 +9,9 @@
 # Usage:
 #   scripts/dev-vm/reconciliation-e2e.sh [ssh-host] [R1|...|C4]
 #
-# Without a case ID the complete approved catalog is run. Case C2 is skipped
-# until reconcile exposes a deterministic post-lock test gate; polling a short
-# reconciliation process would not prove serialization.
+# Without a case ID the complete approved catalog is run. Case C2 uses the
+# deterministic post-lock test gate (PNEUMA_TEST_GATE_DIRECTORY) to serialize
+# two reconciliations without polling a short-lived process.
 
 set -euo pipefail
 

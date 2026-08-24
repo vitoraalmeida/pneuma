@@ -1,8 +1,8 @@
 # Design - Domain Type Closure
 
-**Status:** approved design for v0.4.2. It does not describe implemented
-behavior. Execution and progress live only in
-[`../iterations/current-iteration.md`](../iterations/current-iteration.md).
+**Status:** historical record. Approved as v0.4.2 and fully implemented;
+implemented behavior lives in [`../architecture/`](../architecture/).
+Execution history is in Git.
 
 ## Objective
 

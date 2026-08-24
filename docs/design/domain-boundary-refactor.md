@@ -1,8 +1,8 @@
 # Design - Domain Boundary Refactor
 
-**Status:** approved design for v0.4 after reconciliation. It does not describe
-implemented behavior. Execution and progress live only in
-[`../iterations/current-iteration.md`](../iterations/current-iteration.md).
+**Status:** historical record. Approved for v0.4 after reconciliation and now
+fully implemented; implemented behavior lives in
+[`../architecture/`](../architecture/). Execution history is in Git.
 
 ## Objective
 

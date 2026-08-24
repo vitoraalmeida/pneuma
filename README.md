@@ -90,9 +90,9 @@ follow [`docs/getting-started.md`](docs/getting-started.md).
 
 ## Status
 
-v0.3.1 is released. The current iteration is v0.4 reconciliation. See
-[`docs/roadmap.md`](docs/roadmap.md) for direction and
-[`CHANGELOG.md`](CHANGELOG.md) for released changes.
+v0.4.2 is the latest release. The next stage, v0.5 application topology, is
+planned but not started. See [`docs/roadmap.md`](docs/roadmap.md) for direction
+and [`CHANGELOG.md`](CHANGELOG.md) for released changes.
 
 ## Development
 

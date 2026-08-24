@@ -1,8 +1,7 @@
 # Design - Documentation Architecture Refactor
 
-**Status:** approved design. It defines the documentation refactor that precedes
-v0.4 reconciliation; execution and progress live in
-[`../iterations/current-iteration.md`](../iterations/current-iteration.md).
+**Status:** historical record. This design is fully implemented; the resulting
+documentation model is described by [`../README.md`](../README.md).
 
 ## Objective
 

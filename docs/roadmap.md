@@ -92,6 +92,23 @@ Out of scope until demonstrated need: registry watchers, automatic deployment
 policies, complete audit logging, generic idempotency keys, image retention, and
 automatic rollback after promotion.
 
+### v0.4.1 - Domain Hardening Sweep
+
+**Status:** completed on August 21, 2026 (iteration stage; not tagged separately
+- its changes shipped within the v0.4.2 release).
+
+- Loopback runtime endpoints became a domain-owned invariant
+  (`ExpectedRuntimeEndpoint`), fixing IPv6 `::1` acceptance in internal health
+  checks, with `ContainerPort` typed through runtime registration.
+- Visibility changes probe the persisted health check path and status instead of
+  a hardcoded `/` expecting `200`.
+- The Deployment transition table, promotion eligibility, exposure target and
+  outcome types, stable runtime naming, and container-id format rules each have
+  one domain owner.
+- Caddy, lock, port, OCI, operation-store, and reconciliation boundaries accept
+  typed identities; `ApplicationName`/`SystemName` share one catalog-name
+  validator.
+
 ### v0.4.2 - Domain Type Closure
 
 **Status:** completed on 2026-08-21.

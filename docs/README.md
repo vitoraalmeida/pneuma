@@ -38,7 +38,7 @@ overrides current architecture.
 |---|---|---|
 | Production host | Bootstrap, application operation, and non-destructive smoke tests only | [`getting-started.md`](getting-started.md) |
 | Development VM | Disposable Debian 13 provisioning and manual regression | [`operations/dev-vm-tutorial.md`](operations/dev-vm-tutorial.md) |
-| Automated VM regression | Fixture-cycle E2E and full disposable regression | [`../scripts/dev-vm/e2e.sh`](../scripts/dev-vm/e2e.sh), [`../scripts/dev-vm/test-all.sh`](../scripts/dev-vm/test-all.sh) |
+| Automated VM regression | Fixture-cycle E2E, full disposable regression, and reconciliation catalog | [`../scripts/dev-vm/e2e.sh`](../scripts/dev-vm/e2e.sh), [`../scripts/dev-vm/test-all.sh`](../scripts/dev-vm/test-all.sh), [`../scripts/dev-vm/reconciliation-e2e.sh`](../scripts/dev-vm/reconciliation-e2e.sh) |
 
 Do not run reset, restore, bootstrap acceptance, or E2E scripts on production.
 
@@ -64,12 +64,13 @@ behavior (`CHANGELOG.md`), or product direction (`roadmap.md`).
 | [`architecture/security-model.md`](architecture/security-model.md) | Living | Current assets, trust boundaries, controls, and security limits |
 | [`architecture/threat-model.md`](architecture/threat-model.md) | Living | Architecture threats, attack paths, assumptions, and residual risks |
 | [`decisions/`](decisions/) | Historical records | Retrospective architectural decision records |
-| [`engineering/consolidation-review.md`](engineering/consolidation-review.md) | Historical record | Closing audit of the consolidation program: problem, changes, final state, deferred debt, evidence |
-| [`design/documentation-architecture-refactor.md`](design/documentation-architecture-refactor.md) | Approved design | Current documentation-refactor design |
+| [`design/documentation-architecture-refactor.md`](design/documentation-architecture-refactor.md) | Historical record | Completed documentation-model design; the resulting model is described by this document |
 | [`design/reconciliation.md`](design/reconciliation.md) | Historical record | Completed v0.4 reconciliation design; implemented behavior lives in `architecture/` |
 | [`design/reconciliation-e2e.md`](design/reconciliation-e2e.md) | Historical record | Completed v0.4 E2E catalog, executed by `scripts/dev-vm/reconciliation-e2e.sh` |
-| [`design/domain-model-hardening.md`](design/domain-model-hardening.md) | Approved design | v0.4 domain-model hardening before reconciliation |
-| [`design/domain-boundary-refactor.md`](design/domain-boundary-refactor.md) | Approved design | v0.4 domain, store, and use-case boundary alignment |
+| [`design/domain-model-hardening.md`](design/domain-model-hardening.md) | Historical record | Completed v0.4 domain-model hardening design; implemented behavior lives in `architecture/` |
+| [`design/domain-boundary-refactor.md`](design/domain-boundary-refactor.md) | Historical record | Completed v0.4 domain, store, and use-case boundary design; implemented behavior lives in `architecture/` |
+| [`design/domain-hardening-sweep.md`](design/domain-hardening-sweep.md) | Historical record | Completed v0.4.1 domain hardening sweep design; implemented behavior lives in `architecture/` |
+| [`design/domain-type-closure.md`](design/domain-type-closure.md) | Historical record | Completed v0.4.2 domain type closure design; implemented behavior lives in `architecture/` |
 | [`design/caddy-unmatched-host-fallback.md`](design/caddy-unmatched-host-fallback.md) | Historical record | Completed v0.3.1 design |
 | [`iterations/current-iteration.md`](iterations/current-iteration.md) | Active planning | Completed v0.4.2 domain type closure tracker |
 | [`iterations/next-iteration.md`](iterations/next-iteration.md) | Queued planning | v0.5 topology planning reminder |
