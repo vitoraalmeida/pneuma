@@ -507,6 +507,24 @@ the next reconcile repairs or escalates, never guesses about.
 
 
 
+## Domain Nomenclature Audit
+
+Recorded by consolidation iteration 36: every glossary word audited against
+the code after the modeling work. Verdicts:
+
+| Word | Verdict | Evidence and decision |
+|---|---|---|
+| Release | Consistent | Immutable artifact everywhere (`Release` + digest uniqueness; mutable tags rejected at `OciArtifact`). Unrelated verb uses (`release_port`, flock release) do not compete. |
+| Deployment | Consistent | "One attempt to activate a Release" in the entity doc and every lifecycle path. |
+| Runtime / container | Consistent | Deliberate two-level vocabulary: logical `RuntimeInstance` vs adapter-fact `Container*` types; Podman's id is always `external_runtime_id`. |
+| Candidate | Consistent | Only transitory pre-activation materializations; nothing persists a candidate as durable status. |
+| Active | Consistent | Every referent means confirmed/selected (`active_deployment_id`, `ConfirmedRoute`'s `active_runtime_id`, `one_active_runtime_per_application`). The residual `current_*` function names were renamed to `active_*` this iteration (`load_current_successful_runtime` → `load_active_successful_runtime`, `CurrentRuntimeObservation` → `ActiveRuntimeObservation`, exposure `current_visibility` → CAS-style `expected_visibility`). |
+| Operation | Consistent by decision | Three coexisting terms denote three genuinely different mechanisms: the durable coordination record (`application_operations`/`operation_store`), its fencing token (`OperationOwnership.generation`), and the process-level flock (`ApplicationLock` wrapped as `OperationLock` errors). Renaming would blur a real distinction. |
+| Specification | One semantic family | All `*Specification` types and `*_specs` tables mean declared or persisted desired configuration (import input, delivery policy, runtime/health contract, deploy aggregate, reconciliation snapshot). The dead `application_build_specs` table (migration 0001, unreferenced) is recorded for removal by the compatibility/dead-code cleanup iteration. |
+
+Exit criterion met: glossary and code use the same words; no actively
+misleading name remains.
+
 ## Known Coverage Gaps
 
 Recorded here so later iterations can schedule them; none blocks this

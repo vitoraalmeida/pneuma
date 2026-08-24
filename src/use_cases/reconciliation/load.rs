@@ -42,7 +42,7 @@ pub fn load_reconciliation_input(
             let release = release_store::load_release_by_id(&transaction, &deployment.release_id)
                 .map_err(|source| ReconciliationReadError::Release { source })?;
             let runtime =
-                runtime_store::load_current_successful_runtime(&transaction, &application.id)
+                runtime_store::load_active_successful_runtime(&transaction, &application.id)
                     .map_err(|source| ReconciliationReadError::Runtime { source })?;
             Some(ActiveRuntime {
                 deployment,

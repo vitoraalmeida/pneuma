@@ -92,7 +92,7 @@ pub(crate) fn insert_runtime(
 }
 
 // Loads the non-removed runtime belonging to the active successful Deployment.
-pub(crate) fn load_current_successful_runtime(
+pub(crate) fn load_active_successful_runtime(
     connection: &Connection,
     application_id: &ApplicationId,
 ) -> Result<Option<RuntimeInstance>, RuntimeStoreError> {

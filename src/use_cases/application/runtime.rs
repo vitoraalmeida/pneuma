@@ -143,7 +143,7 @@ pub fn report_application_status(
     application_id: &ApplicationId,
     application_name: &ApplicationName,
 ) -> Result<RuntimeObservation, RuntimeLifecycleError> {
-    let runtime = load_current_runtime(connection, application_id, application_name)?;
+    let runtime = load_active_runtime(connection, application_id, application_name)?;
     let desired_runtime_state = load_desired_state(connection, application_id)?;
     let observation = observe_container(&runtime.external_runtime_id, runtime.container_port)
         .map_err(|source| RuntimeLifecycleError::Observe {
@@ -222,11 +222,11 @@ fn transition_application(
     operation: &'static str,
     control: fn(&str) -> Result<ContainerCommandOutput, ControlContainerError>,
 ) -> Result<RuntimeObservation, RuntimeLifecycleError> {
-    let runtime = load_current_runtime(connection, application_id, application_name)?;
+    let runtime = load_active_runtime(connection, application_id, application_name)?;
     // The desired state is the operator's intent and is persisted before any external
     // effect, so an interrupted control operation still leaves the intent recorded.
     set_desired_state(connection, application_id, desired_runtime_state)?;
-    let current = observe_current_runtime(connection, &runtime, application_name)?;
+    let current = observe_active_runtime(connection, &runtime, application_name)?;
     let observation = current.observation;
     let external_runtime_id = current.container_id;
     if *observation.state() == ObservedRuntimeState::Missing {
@@ -257,7 +257,7 @@ fn transition_application(
                     runtime_id: runtime.id.to_string(),
                     source,
                 })?;
-                let current = observe_current_runtime(connection, &runtime, application_name)?;
+                let current = observe_active_runtime(connection, &runtime, application_name)?;
                 let new_observation = current.observation;
                 let new_external_runtime_id = current.container_id;
                 if *new_observation.state() != ObservedRuntimeState::Missing {
@@ -345,23 +345,23 @@ fn transition_application(
 // name with a fresh id whenever its unit restarts (for example, after a reboot). The
 // persisted runtime identity can therefore go stale; reconcile it against the name
 // before concluding the runtime is gone.
-struct CurrentRuntimeObservation {
+struct ActiveRuntimeObservation {
     observation: ContainerObservation,
     container_id: ContainerId,
 }
 
-fn observe_current_runtime(
+fn observe_active_runtime(
     connection: &Connection,
     runtime: &RuntimeInstance,
     application_name: &ApplicationName,
-) -> Result<CurrentRuntimeObservation, RuntimeLifecycleError> {
+) -> Result<ActiveRuntimeObservation, RuntimeLifecycleError> {
     let observation = observe_container(&runtime.external_runtime_id, runtime.container_port)
         .map_err(|source| RuntimeLifecycleError::Observe {
             runtime_id: runtime.id.to_string(),
             source,
         })?;
     if *observation.state() != ObservedRuntimeState::Missing {
-        return Ok(CurrentRuntimeObservation {
+        return Ok(ActiveRuntimeObservation {
             observation,
             container_id: runtime.external_runtime_id.clone(),
         });
@@ -370,7 +370,7 @@ fn observe_current_runtime(
         match resolve_container_id(&container_name(application_name, &runtime.deployment_id)) {
             Ok(id) => id,
             Err(_) => {
-                return Ok(CurrentRuntimeObservation {
+                return Ok(ActiveRuntimeObservation {
                     observation,
                     container_id: runtime.external_runtime_id.clone(),
                 });
@@ -394,19 +394,19 @@ fn observe_current_runtime(
             source,
         }
     })?;
-    Ok(CurrentRuntimeObservation {
+    Ok(ActiveRuntimeObservation {
         observation,
         container_id: resolved,
     })
 }
 
 // Loads the active successful runtime, rejecting lifecycle commands for undeployed applications.
-fn load_current_runtime(
+fn load_active_runtime(
     connection: &Connection,
     application_id: &ApplicationId,
     application_name: &ApplicationName,
 ) -> Result<RuntimeInstance, RuntimeLifecycleError> {
-    runtime_store::load_current_successful_runtime(connection, application_id)
+    runtime_store::load_active_successful_runtime(connection, application_id)
         .map_err(|source| RuntimeLifecycleError::Store { source })?
         .ok_or_else(|| RuntimeLifecycleError::NotDeployed {
             application_name: application_name.as_str().to_owned(),

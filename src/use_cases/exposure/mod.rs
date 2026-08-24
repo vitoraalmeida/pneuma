@@ -259,7 +259,7 @@ pub fn change_exposure(
 fn begin_change(
     connection: &mut Connection,
     application_id: &ApplicationId,
-    current_visibility: Visibility,
+    expected_visibility: Visibility,
     desired_visibility: Visibility,
 ) -> Result<(), ExposureChangeError> {
     let transaction = connection
@@ -268,7 +268,7 @@ fn begin_change(
     let updated = exposure_store::begin_exposure_change(
         &transaction,
         application_id,
-        current_visibility,
+        expected_visibility,
         desired_visibility,
     )
     .map_err(|source| ExposureChangeError::Store { source })?;
@@ -318,7 +318,7 @@ fn make_public(
             );
         }
     };
-    let Some(runtime) = runtime_store::load_current_successful_runtime(connection, application_id)
+    let Some(runtime) = runtime_store::load_active_successful_runtime(connection, application_id)
         .map_err(|source| ExposureChangeError::RuntimeStore { source })?
     else {
         return fail_public(
