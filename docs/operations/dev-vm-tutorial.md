@@ -2,9 +2,8 @@
 
 Tutorial for creating and preparing a Debian 13 VM that reproduces the relevant
 properties of the production VPS and serves as the standard target for Pneuma
-integration and E2E tests, without using the VPS as a laboratory. The complete
-plan is at `~/Downloads/pneuma-development-vm-plan.md`; this document is the
-operational walkthrough.
+integration and E2E tests, without using the VPS as a laboratory. Every script
+mentioned here lives in this repository under `scripts/`.
 
 This tutorial is intended for a KVM virtual machine managed by libvirt through
 the `qemu:///system` connection. Its `virsh` commands, NAT networking, and
@@ -267,6 +266,7 @@ VM expect the SSH alias to connect as `root`; they neither require nor install
 | `e2e.sh` | Reset → rebuild → public/internal HTTPS → failed candidate → upgrade → rollback → reboot/recovery | Runtime and exposure battery |
 | `test-branch-deploy.sh` | Creates a Git repo with `main`/`staging`, tags images with each commit SHA, imports by Git URL, and deploys through `--branch` | Validate the Git → OCI flow (phase G) |
 | `test-all.sh` | Orchestrates E2E, Git/OCI, CI dispatcher, HTTPS, reboot, and semantic restore; requires 0 FAIL/0 SKIP | Final disposable regression |
+| `reconciliation-e2e.sh` | Runs the approved drift catalog (runtime, exposure, interrupted deployments, concurrency) against a disposable clone | Reconciliation regression |
 
 Typical development flow:
 
@@ -310,7 +310,8 @@ local CA, reboots the VM, tests CI key boundaries, and proves semantic restore.
 Require `0 FAIL` and `0 SKIP`, then destroy and undefine the clone, including
 its storage. Run `scripts/test-bootstrap-vps.sh` on another fresh clone for
 bootstrap acceptance; it receives a full SHA or tag and shares no state with the
-E2E VM.
+E2E VM. Run `scripts/dev-vm/reconciliation-e2e.sh` against another fresh clone
+for the drift catalog; it shares no state with either battery.
 
 ## 7. Local DNS and Caddy
 
@@ -369,18 +370,22 @@ The `scripts/dev-vm/e2e.sh` battery already covers the main cycle (import,
 digest deployment, upgrade, rollback, and reboot). Upgrade/rollback and reboot
 were validated on the VM: Quadlet (through `[Install] WantedBy=default.target`)
 restores applications at boot with linger enabled, without explicit `systemctl
-enable`. With v0.3.1 as the current release, the Git → OCI flow is covered by
+enable`. With v0.4.2 as the current release, the Git → OCI flow is covered by
 `test-branch-deploy.sh` (Git repo with `main`/`staging`, import by `file://` URL,
 and deployment through `--branch`) and `e2e.sh` imports fixtures through local
-Git repositories. The VPS is used only for final public-integration smoke tests
-(real DNS and TLS).
+Git repositories; `reconciliation-e2e.sh` covers the drift catalog. The VPS is
+used only for final public-integration smoke tests (real DNS and TLS).
 
 ## References
 
-- `scripts/dev-vm/provision-host.sh` — host provisioning.
+- `scripts/dev-vm/provision-host.sh` — host provisioning (with `scripts/lib/provision-host.sh`).
 - `scripts/dev-vm/smoke.sh` — basic verification (version, doctor, app list).
 - `scripts/dev-vm/sync-binary.sh` — build + deployment of the binary to the VM.
-- `scripts/dev-vm/{rebuild,deploy-all,reset,overview,e2e}.sh` — fixture-cycle
-  automation (section 6.4).
+- `scripts/dev-vm/{rebuild,deploy-all,reset,overview,e2e,test-branch-deploy}.sh` —
+  fixture-cycle automation (section 6.4).
+- `scripts/dev-vm/test-all.sh` — full disposable regression battery (section 6.5).
+- `scripts/dev-vm/reconciliation-e2e.sh` — drift-catalog regression (section 6.5).
+- `scripts/bootstrap-vps.sh`, `scripts/test-bootstrap-vps.sh` — production
+  bootstrap and its acceptance test.
 - `scripts/dev-vm/fixtures/` — five deterministic fixtures for E2E scenarios
   (section 6).
