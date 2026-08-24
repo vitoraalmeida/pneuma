@@ -601,7 +601,7 @@ exit \"${PNEUMA_FAKE_PODMAN_EXIT:-0}\"
     }
 
     struct ScopedPodman {
-        _path: crate::test_support::ScopedExternalPath,
+        path: crate::test_support::ScopedExternalPath,
         log: PathBuf,
     }
 
@@ -626,7 +626,7 @@ exit \"${PNEUMA_FAKE_PODMAN_EXIT:-0}\"
             path.remove_var("PNEUMA_FAKE_PODMAN_EXIT");
             let log = path.directory().join("invocations.log");
             path.set_var("PNEUMA_FAKE_PODMAN_LOG", &log.to_string_lossy());
-            Self { _path: path, log }
+            Self { path, log }
         }
 
         fn invocations(&self) -> Vec<String> {
@@ -662,7 +662,7 @@ exit \"${PNEUMA_FAKE_PODMAN_EXIT:-0}\"
             ]
         );
 
-        scoped._path.set_var("PNEUMA_FAKE_PODMAN_EXIT", "9");
+        scoped.path.set_var("PNEUMA_FAKE_PODMAN_EXIT", "9");
         let error = stop_container(&id).unwrap_err();
         assert!(matches!(
             error,
@@ -691,7 +691,7 @@ exit \"${PNEUMA_FAKE_PODMAN_EXIT:-0}\"
     fn observe_container_maps_running_unknown_and_foreign_endpoint_states() {
         let scoped = ScopedPodman::new("observe-states");
         let id = ContainerId::from(container_id('c'));
-        scoped._path.set_var("PNEUMA_FAKE_PODMAN_EXISTS", "0");
+        scoped.path.set_var("PNEUMA_FAKE_PODMAN_EXISTS", "0");
 
         let observation = observe_container(&id, ContainerPort::new(8080).unwrap()).unwrap();
         assert_eq!(
@@ -701,7 +701,7 @@ exit \"${PNEUMA_FAKE_PODMAN_EXIT:-0}\"
             }
         );
 
-        scoped._path.set_var("PNEUMA_FAKE_PODMAN_STATUS", "paused");
+        scoped.path.set_var("PNEUMA_FAKE_PODMAN_STATUS", "paused");
         let observation = observe_container(&id, ContainerPort::new(8080).unwrap()).unwrap();
         assert_eq!(
             observation,
@@ -712,9 +712,9 @@ exit \"${PNEUMA_FAKE_PODMAN_EXIT:-0}\"
             }
         );
 
-        scoped._path.set_var("PNEUMA_FAKE_PODMAN_STATUS", "running");
+        scoped.path.set_var("PNEUMA_FAKE_PODMAN_STATUS", "running");
         scoped
-            ._path
+            .path
             .set_var("PNEUMA_FAKE_PODMAN_PORT", "10.0.0.2:31000");
         assert!(matches!(
             observe_container(&id, ContainerPort::new(8080).unwrap()),
@@ -727,18 +727,18 @@ exit \"${PNEUMA_FAKE_PODMAN_EXIT:-0}\"
         let scoped = ScopedPodman::new("resolve");
 
         scoped
-            ._path
+            .path
             .set_var("PNEUMA_FAKE_PODMAN_ID", "not a container id");
         let error = resolve_container_id("pneuma-app-1").unwrap_err();
         assert!(matches!(error, ResolveContainerError::InvalidOutput { .. }));
 
         scoped
-            ._path
+            .path
             .set_var("PNEUMA_FAKE_PODMAN_ID", &container_id('d'));
         let resolved = resolve_container_id("pneuma-app-1").unwrap();
         assert_eq!(resolved.as_str(), container_id('d'));
 
-        scoped._path.set_var("PNEUMA_FAKE_PODMAN_INSPECT_EXIT", "1");
+        scoped.path.set_var("PNEUMA_FAKE_PODMAN_INSPECT_EXIT", "1");
         assert!(matches!(
             resolve_container_id("pneuma-app-1"),
             Err(ResolveContainerError::Podman { .. })
@@ -754,8 +754,8 @@ exit \"${PNEUMA_FAKE_PODMAN_EXIT:-0}\"
             container_id('f'),
             container_id('g'),
         );
-        scoped._path.set_var("PNEUMA_FAKE_PODMAN_EXISTS", "0");
-        scoped._path.set_var("PNEUMA_FAKE_PODMAN_NAMED", &named);
+        scoped.path.set_var("PNEUMA_FAKE_PODMAN_EXISTS", "0");
+        scoped.path.set_var("PNEUMA_FAKE_PODMAN_NAMED", &named);
 
         let observation =
             observe_named_container("pneuma-app-1", ContainerPort::new(8080).unwrap()).unwrap();
@@ -792,13 +792,13 @@ exit \"${PNEUMA_FAKE_PODMAN_EXIT:-0}\"
             id,
             container_id('f'),
         );
-        scoped._path.set_var("PNEUMA_FAKE_PODMAN_NAMED", &unnamed);
+        scoped.path.set_var("PNEUMA_FAKE_PODMAN_NAMED", &unnamed);
         assert!(matches!(
             observe_named_container("pneuma-app-1", ContainerPort::new(8080).unwrap()),
             Err(ObserveNamedContainerError::InvalidOutput { .. })
         ));
 
-        scoped._path.remove_var("PNEUMA_FAKE_PODMAN_EXISTS");
+        scoped.path.remove_var("PNEUMA_FAKE_PODMAN_EXISTS");
         assert!(matches!(
             observe_named_container("pneuma-app-9", ContainerPort::new(8080).unwrap()),
             Ok(NamedContainerObservation::Missing)

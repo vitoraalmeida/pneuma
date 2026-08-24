@@ -8,9 +8,8 @@ const HOST_ENVIRONMENT_FILE: &str = "/etc/pneuma/environment";
 
 // Loads host defaults without overriding explicit environment supplied by the caller.
 fn load_host_environment() {
-    let content = match fs::read_to_string(HOST_ENVIRONMENT_FILE) {
-        Ok(c) => c,
-        Err(_) => return,
+    let Ok(content) = fs::read_to_string(HOST_ENVIRONMENT_FILE) else {
+        return;
     };
 
     for line in content.lines() {
@@ -32,8 +31,8 @@ fn load_host_environment() {
 // Derives uid-scoped runtime paths so rootless systemd and Podman never use another user's bus.
 fn configure_runtime_environment() {
     let uid = unsafe { libc::getuid() };
-    let runtime_dir = format!("/run/user/{}", uid);
-    let dbus_address = format!("unix:path={}/bus", runtime_dir);
+    let runtime_dir = format!("/run/user/{uid}");
+    let dbus_address = format!("unix:path={runtime_dir}/bus");
 
     // XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS are uid-scoped: a value inherited
     // from another user (for example /run/user/0 when launched through `runuser` as
@@ -45,7 +44,7 @@ fn configure_runtime_environment() {
     }
 
     if let Ok(home) = env::var("HOME") {
-        let quadlet_dir = format!("{}/.config/containers/systemd", home);
+        let quadlet_dir = format!("{home}/.config/containers/systemd");
         if env::var_os("PNEUMA_QUADLET_DIR").is_none() {
             unsafe {
                 env::set_var("PNEUMA_QUADLET_DIR", &quadlet_dir);

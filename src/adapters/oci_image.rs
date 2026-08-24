@@ -237,7 +237,7 @@ pub fn resolve_image_digest(
     let pull_stderr = String::from_utf8_lossy(&pull.stderr).into_owned();
     if !pull.status.success() {
         return Err(ResolveImageDigestError::Pull {
-            reference: tagged.clone(),
+            reference: tagged,
             stdout: pull_stdout,
             stderr: pull_stderr,
         });

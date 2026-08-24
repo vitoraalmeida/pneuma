@@ -31,7 +31,8 @@ pub(crate) fn run(invocation: Invocation) -> Result<(), CliError> {
         let database_path = database::configured_path();
 
         if matches!(command, Command::Version) {
-            return run_version();
+            run_version();
+            return Ok(());
         }
         if let Command::DatabaseBackup { path } = command {
             return doctor::run_database_backup(&database_path, &path);
@@ -113,7 +114,6 @@ pub(crate) fn run(invocation: Invocation) -> Result<(), CliError> {
 }
 
 // Prints version information without requiring host configuration or database access.
-pub(crate) fn run_version() -> Result<(), CliError> {
+pub(crate) fn run_version() {
     println!("pneuma {}", env!("CARGO_PKG_VERSION"));
-    Ok(())
 }

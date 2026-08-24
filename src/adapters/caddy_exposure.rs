@@ -227,11 +227,11 @@ impl fmt::Display for MaterializeCaddyFragmentError {
                     formatter,
                     "failed to validate the complete configuration: {failure}"
                 )?;
-                write_recovery(formatter, recovery)
+                write_recovery(formatter, recovery.as_deref())
             }
             Self::Reload { failure, recovery } => {
                 write!(formatter, "failed to reload Caddy: {failure}")?;
-                write_recovery(formatter, recovery)
+                write_recovery(formatter, recovery.as_deref())
             }
         }
     }
@@ -330,9 +330,13 @@ pub fn materialize_caddy_fragment(
     let configuration_validation = match caddy_command("validate", caddyfile_path) {
         Ok(validation) => validation,
         Err(failure) => {
-            let recovery = restore_fragment(&fragment_path, &temporary_path, &previous_fragment)
-                .err()
-                .map(Box::new);
+            let recovery = restore_fragment(
+                &fragment_path,
+                &temporary_path,
+                previous_fragment.as_deref(),
+            )
+            .err()
+            .map(Box::new);
             return Err(MaterializeCaddyFragmentError::ValidateConfiguration { failure, recovery });
         }
     };
@@ -345,7 +349,7 @@ pub fn materialize_caddy_fragment(
             let recovery = recover_previous_configuration(
                 &fragment_path,
                 &temporary_path,
-                &previous_fragment,
+                previous_fragment.as_deref(),
                 caddyfile_path,
             )
             .err()
@@ -408,7 +412,7 @@ pub fn restore_materialized_caddy_fragment(
     recover_previous_configuration(
         &materialized.path,
         &materialized.temporary_path,
-        &materialized.previous_fragment,
+        materialized.previous_fragment.as_deref(),
         caddyfile_path,
     )
 }
@@ -428,18 +432,22 @@ pub fn remove_caddy_fragment(
             }
             _ => unreachable!(),
         })?;
-    restore_fragment(&fragment_path, &temporary_path, &None)?;
+    restore_fragment(&fragment_path, &temporary_path, None)?;
     if let Err(failure) = caddy_command("validate", caddyfile_path) {
-        let recovery = restore_fragment(&fragment_path, &temporary_path, &previous_fragment)
-            .err()
-            .map(Box::new);
+        let recovery = restore_fragment(
+            &fragment_path,
+            &temporary_path,
+            previous_fragment.as_deref(),
+        )
+        .err()
+        .map(Box::new);
         return Err(CaddyRecoveryError::ValidateConfiguration { failure, recovery });
     }
     if let Err(failure) = caddy_command("reload", caddyfile_path) {
         let recovery = recover_previous_configuration(
             &fragment_path,
             &temporary_path,
-            &previous_fragment,
+            previous_fragment.as_deref(),
             caddyfile_path,
         );
         return match recovery {
@@ -465,7 +473,7 @@ pub(crate) fn restore_removed_caddy_fragment(
     recover_previous_configuration(
         &removed.path,
         &removed.temporary_path,
-        &removed.previous_fragment,
+        removed.previous_fragment.as_deref(),
         caddyfile_path,
     )
 }
@@ -508,7 +516,7 @@ fn read_previous_fragment(
 fn restore_fragment(
     fragment_path: &Path,
     temporary_path: &Path,
-    previous_fragment: &Option<Vec<u8>>,
+    previous_fragment: Option<&[u8]>,
 ) -> Result<(), CaddyRecoveryError> {
     if let Some(previous_fragment) = previous_fragment {
         fs::write(temporary_path, previous_fragment).map_err(|source| {
@@ -544,7 +552,7 @@ fn restore_fragment(
 fn recover_previous_configuration(
     fragment_path: &Path,
     temporary_path: &Path,
-    previous_fragment: &Option<Vec<u8>>,
+    previous_fragment: Option<&[u8]>,
     caddyfile_path: &Path,
 ) -> Result<(), CaddyRecoveryError> {
     restore_fragment(fragment_path, temporary_path, previous_fragment)?;
@@ -592,7 +600,7 @@ fn diagnostic<'a>(stdout: &'a str, stderr: &'a str) -> &'a str {
 // Appends recovery details without obscuring the primary materialization failure.
 fn write_recovery(
     formatter: &mut fmt::Formatter<'_>,
-    recovery: &Option<Box<CaddyRecoveryError>>,
+    recovery: Option<&CaddyRecoveryError>,
 ) -> fmt::Result {
     if let Some(recovery) = recovery {
         write!(formatter, "; recovery also failed: {recovery}")?;

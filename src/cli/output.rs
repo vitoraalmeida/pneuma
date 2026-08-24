@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::path::Path;
 
 use pneuma::domain::application::{ApplicationName, ApplicationSummary};
@@ -17,7 +18,7 @@ use pneuma::use_cases::system::SystemDetails;
 pub(crate) fn imported_application(application: &ApplicationSummary) -> String {
     let mut output = format!("Imported {}\nStatus: Registered", application.name);
     if let Some(deployment_id) = &application.active_deployment_id {
-        output.push_str(&format!("\nDeployment: {deployment_id}"));
+        let _ = write!(output, "\nDeployment: {deployment_id}");
     } else {
         output.push_str("\nDeployment: Not deployed");
     }
@@ -92,8 +93,9 @@ pub(crate) fn deployment_history(
             | DeploymentLifecycle::Verifying
             | DeploymentLifecycle::Activating => ("-", "-".to_owned()),
         };
-        output.push_str(&format!(
-            "{}\t{:?}\t{}\t{}\t{:?}\t{}\t{}\t{}\t{}\n",
+        let _ = writeln!(
+            output,
+            "{}\t{:?}\t{}\t{}\t{:?}\t{}\t{}\t{}\t{}",
             deployment.deployment.id,
             deployment.deployment.deployment_type,
             deployment.release.artifact.digest(),
@@ -103,7 +105,7 @@ pub(crate) fn deployment_history(
             finished_at,
             if deployment.is_active { "yes" } else { "no" },
             failure,
-        ));
+        );
     }
     output.pop();
     output
@@ -118,12 +120,13 @@ pub(crate) fn deployed(
         deployed.artifact.reference()
     );
     if let Some(source_revision) = &deployed.source_revision {
-        output.push_str(&format!("\nSource revision: {source_revision}"));
+        let _ = write!(output, "\nSource revision: {source_revision}");
     }
-    output.push_str(&format!(
+    let _ = write!(
+        output,
         "\nDeployment: {}\nRuntime: {}\nContainer: {}\nStatus: Succeeded",
         deployed.deployment_id, deployed.runtime_id, deployed.container_name
-    ));
+    );
     output
 }
 
@@ -136,12 +139,13 @@ pub(crate) fn rollback_result(
         rolled_back.artifact.reference()
     );
     if let Some(source_revision) = &rolled_back.source_revision {
-        output.push_str(&format!("\nSource revision: {source_revision}"));
+        let _ = write!(output, "\nSource revision: {source_revision}");
     }
-    output.push_str(&format!(
+    let _ = write!(
+        output,
         "\nDeployment: {}\nRuntime: {}\nStatus: Succeeded",
         rolled_back.deployment_id, rolled_back.runtime_id
-    ));
+    );
     output
 }
 
@@ -151,13 +155,13 @@ pub(crate) fn visibility_change(
 ) -> String {
     match change.visibility {
         Visibility::Public => {
-            let mut output = format!("Visibility for {}: Public", application_name);
+            let mut output = format!("Visibility for {application_name}: Public");
             if let Some(domain) = &change.domain {
-                output.push_str(&format!("\nDomain: {domain}"));
+                let _ = write!(output, "\nDomain: {domain}");
             }
             output
         }
-        Visibility::Internal => format!("Visibility for {}: Internal", application_name),
+        Visibility::Internal => format!("Visibility for {application_name}: Internal"),
     }
 }
 
@@ -173,32 +177,35 @@ pub(crate) fn reconciliation_result(
         } => {
             output.push_str("\nResult: deferred");
             if let Some(blocking_deployment) = blocking_deployment {
-                output.push_str(&format!(
+                let _ = write!(
+                    output,
                     "\nBlocking deployment: {} ({})",
                     blocking_deployment.id,
                     blocking_deployment.status()
-                ));
+                );
             }
         }
         ReconciliationResult::Repaired {
             runtime_id,
             container_id,
         } => {
-            output.push_str(&format!(
+            let _ = write!(
+                output,
                 "\nResult: repaired\nRuntime: {runtime_id}\nContainer: {container_id}"
-            ));
+            );
         }
         ReconciliationResult::ManualIntervention { reason } => {
-            output.push_str(&format!(
+            let _ = write!(
+                output,
                 "\nResult: manual-intervention\nDiagnostic: {reason}"
-            ));
+            );
         }
         ReconciliationResult::ExposureRepaired => output.push_str("\nResult: repaired"),
         ReconciliationResult::Failed { reason } => {
-            output.push_str(&format!("\nResult: failed\nDiagnostic: {reason}"));
+            let _ = write!(output, "\nResult: failed\nDiagnostic: {reason}");
         }
         ReconciliationResult::Diverged { reason } => {
-            output.push_str(&format!("\nResult: diverged\nDiagnostic: {reason}"));
+            let _ = write!(output, "\nResult: diverged\nDiagnostic: {reason}");
         }
     }
     output
@@ -219,14 +226,14 @@ pub(crate) fn system_list(systems: &[System]) -> String {
 pub(crate) fn system_details(details: &SystemDetails) -> String {
     let mut output = format!("System: {}", details.system.name);
     if let Some(description) = &details.system.description {
-        output.push_str(&format!("\nDescription: {description}"));
+        let _ = write!(output, "\nDescription: {description}");
     }
     if details.applications.is_empty() {
         output.push_str("\nApplications: (none)");
     } else {
         output.push_str("\nApplications:");
         for application in &details.applications {
-            output.push_str(&format!("\n  {}", application.name));
+            let _ = write!(output, "\n  {}", application.name);
         }
     }
     output

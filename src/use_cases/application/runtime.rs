@@ -214,7 +214,7 @@ pub fn start_application(
 // Coordinates intent persistence, external control, and observation while preserving a stable
 // runtime record across Quadlet container recreation.
 fn transition_application(
-    connection: &mut Connection,
+    connection: &Connection,
     application_id: &ApplicationId,
     application_name: &ApplicationName,
     desired_runtime_state: DesiredRuntimeState,

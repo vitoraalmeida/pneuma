@@ -440,7 +440,7 @@ fn deploys_a_verified_oci_image_and_persists_its_release() {
         (
             reference.clone(),
             "registry.example/team/service".to_owned(),
-            digest.clone(),
+            digest,
             None,
         )
     );

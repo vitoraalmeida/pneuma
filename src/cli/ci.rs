@@ -18,7 +18,10 @@ pub(crate) fn run_ci_dispatch(verbose: bool) -> Result<(), CliError> {
         parse_ci_command(&original_command).map_err(|source| CliError::CiDispatch { source })?;
 
     match ci_command {
-        CiCommand::Version => super::run_version(),
+        CiCommand::Version => {
+            super::run_version();
+            Ok(())
+        }
         CiCommand::Deploy {
             application,
             branch,

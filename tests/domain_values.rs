@@ -121,7 +121,7 @@ fn exposure_values_require_complete_intent_route_and_diagnostic_evidence() {
     let domain = DomainName::new("example.test").unwrap();
     assert!(ExposureIntent::new(Visibility::Public, None).is_err());
     assert!(matches!(
-        ExposureIntent::new(Visibility::Internal, Some(domain.clone())),
+        ExposureIntent::new(Visibility::Internal, Some(domain)),
         Ok(ExposureIntent::Internal { .. })
     ));
     assert!(ExposureConfigurationVersion::new(" \n ").is_err());
