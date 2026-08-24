@@ -130,7 +130,7 @@ to the code it describes instead of drifting here.
 
 ## Reconciliation Recovery And Compensation Contract
 
-Recorded by consolidation iteration 17 so every repair and recovery action has
+Every repair and recovery action has
 an explicit rule and test (INV-REC-004). Facts shared by all paths:
 
 - **Ownership** - the per-application kernel lock plus monotonic operation
@@ -241,13 +241,13 @@ Per action (rule owner first, then test):
 
 ## Persistence Concurrency Formalization
 
-Recorded by consolidation iteration 27: every concurrency-sensitive persistence
-rule with its logical check, its database protection, its conflict behavior,
-and the race/conflict test that proves it. The exit criterion is that no
-concurrent invariant relies on "the CLI is normally serial" — every rule below
-holds under arbitrary interleaved writers because serialization comes from the
-per-application kernel lock (INV-WF-007), SQLite immediate transactions, unique
-indexes/constraints, and compare-and-set writes, never from process discipline.
+Every concurrency-sensitive persistence rule with its logical check, its database 
+protection, its conflict behavior, and the race/conflict test that proves it. 
+The exit criterion is that no concurrent invariant relies on "the CLI is normally 
+serial" — every rule below holds under arbitrary interleaved writers because 
+serialization comes from the per-application kernel lock (INV-WF-007), SQLite 
+immediate transactions, unique indexes/constraints, and compare-and-set writes, 
+never from process discipline.
 
 1. **One non-terminal Deployment per Application** (INV-DB-001).
    Regra: at most one Deployment per Application is Pending/Starting/
@@ -473,52 +473,3 @@ observation gating (3–5, 9–10), reservation-gated before any effect
 ManualIntervention). Partial failures leave typed observable drift — Failed/
 Diverged diagnostics, plain external absence, or NotConverged errors — that
 the next reconcile repairs or escalates, never guesses about.
-
-
-
-## Domain Nomenclature Audit
-
-Recorded by consolidation iteration 36: every glossary word audited against
-the code after the modeling work. Verdicts:
-
-| Word | Verdict | Evidence and decision |
-|---|---|---|
-| Release | Consistent | Immutable artifact everywhere (`Release` + digest uniqueness; mutable tags rejected at `OciArtifact`). Unrelated verb uses (`release_port`, flock release) do not compete. |
-| Deployment | Consistent | "One attempt to activate a Release" in the entity doc and every lifecycle path. |
-| Runtime / container | Consistent | Deliberate two-level vocabulary: logical `RuntimeInstance` vs adapter-fact `Container*` types; Podman's id is always `external_runtime_id`. |
-| Candidate | Consistent | Only transitory pre-activation materializations; nothing persists a candidate as durable status. |
-| Active | Consistent | Every referent means confirmed/selected (`active_deployment_id`, `ConfirmedRoute`'s `active_runtime_id`, `one_active_runtime_per_application`). The residual `current_*` function names were renamed to `active_*` this iteration (`load_current_successful_runtime` → `load_active_successful_runtime`, `CurrentRuntimeObservation` → `ActiveRuntimeObservation`, exposure `current_visibility` → CAS-style `expected_visibility`). |
-| Operation | Consistent by decision | Three coexisting terms denote three genuinely different mechanisms: the durable coordination record (`application_operations`/`operation_store`), its fencing token (`OperationOwnership.generation`), and the process-level flock (`ApplicationLock` wrapped as `OperationLock` errors). Renaming would blur a real distinction. |
-| Specification | One semantic family | All `*Specification` types and `*_specs` tables mean declared or persisted desired configuration (import input, delivery policy, runtime/health contract, deploy aggregate, reconciliation snapshot). The dead `application_build_specs` table (migration 0001, unreferenced) is recorded for removal by the compatibility/dead-code cleanup iteration. |
-
-Exit criterion met: glossary and code use the same words; no actively
-misleading name remains.
-
-## Known Coverage Gaps
-
-Recorded here so later iterations can schedule them; none blocks this
-inventory:
-
-1. Rollback happy path (INV-DEP-005) is proven by
-   `tests/deployment_execute_release.rs::rollback_executes_a_new_deployment_from_historical_provenance`;
-   closed.
-2. `systemd_quadlet.rs` unit materialization/removal retry semantics have
-   dedicated in-file tests since iteration 29 (INV-EXT-005); broader systemd
-   control behavior remains exercised through CLI fakes (INV-SRC-004). The
-   port allocator's dedicated in-file tests landed with iteration 27
-   (INV-DB-003, INV-EXT-004).
-3. The external health checker has no isolated timeout/retry tests
-   (INV-EXT-002).
-4. Three `tests/oci_image.rs` tests are ignored environment tests requiring a
-   configured rootless Podman host; they must be recorded PASS/SKIP with
-   reason on such a host, never assumed green (INV-REL-001, INV-SRC-003).
-
-(The former transaction-closure gap was closed by the INV-WF-002 journal-guard
-scenario coverage described above.)
-
-## Sources Reviewed
-
-`docs/architecture/architecture.md`, `docs/architecture/data-model.md`,
-ADRs `0001`–`0007`, `src/domain/`,
-`src/use_cases/`, `src/adapters/`, `migrations/0001`–`0015`, and the test
-suite (`tests/*.rs` plus in-file unit tests).
