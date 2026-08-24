@@ -4,6 +4,10 @@ use std::fmt;
 use crate::domain::exposure::Visibility;
 use crate::domain::identity::{ApplicationId, DeploymentId, SystemId};
 
+// The durable identity of one deployable application: it survives deployments,
+// rollbacks, and Pneuma restarts. Mutations of intent are ID-keyed store
+// primitives rather than entity field writes (INV-APP-002), so this type is a
+// fact bundle, not a mutable command target.
 #[derive(Debug, Clone, PartialEq, Eq)]
 // Captures durable application identity and persisted runtime intent.
 pub struct Application {
@@ -12,7 +16,12 @@ pub struct Application {
     // every import writes exactly one System (`insert_application` takes `&SystemId`).
     pub system_id: Option<SystemId>,
     pub name: ApplicationName,
+    // Operator-requested lifecycle intent (`running`/`stopped`). This is what
+    // Pneuma should converge to — deliberately distinct from the observed
+    // external state carried by runtime types.
     pub desired_runtime_state: DesiredRuntimeState,
+    // The deployment currently serving the application; `None` until a first
+    // promotion succeeds. Written only by the guarded atomic activation primitive.
     pub active_deployment_id: Option<DeploymentId>,
     // Immutable copy of the manifest `schema_version` recorded at import time
     // (`insert_application`); never updated, compared, or incremented afterwards.
@@ -38,6 +47,8 @@ pub struct ApplicationSummary {
     pub manifest_schema_version: u32,
 }
 
+// Catalog name for one application. Validated here once; every later boundary
+// re-checks through this constructor instead of re-implementing the grammar.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApplicationName(String);
 
@@ -74,6 +85,10 @@ impl Error for InvalidApplicationName {}
 
 use crate::domain::identity::is_valid_catalog_name;
 
+// The two lifecycle intents an operator can request. Kept separate from
+// `runtime::RuntimeState` (what is actually deployed) and
+// `ObservedRuntimeState` (what the host reports) so desired state can never be
+// confused with observed state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DesiredRuntimeState {
     Running,

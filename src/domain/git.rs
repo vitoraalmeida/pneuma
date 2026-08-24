@@ -2,6 +2,14 @@ use std::error::Error;
 use std::fmt;
 use std::path::{Component, Path};
 
+// Git-domain concepts only: how an application's source repository is
+// classified and addressed, which manifest path inside a checkout is safe to
+// read, and what a full commit identity looks like. No TOML parsing and no
+// application lifecycle rules live here; those belong to the manifest boundary
+// and the owning entities.
+
+// Classifies a Git location by transport prefix so adapters choose between a
+// local filesystem checkout and a remote clone without re-parsing the location.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RepositoryKind {
     Local,
@@ -120,6 +128,8 @@ impl Error for InvalidApplicationSource {}
 pub struct RelativeManifestPath(String);
 
 impl RelativeManifestPath {
+    // The path must stay inside the checkout: absolute paths, parent traversal,
+    // and platform roots would let a manifest location escape the repository.
     pub fn new(value: &str) -> Result<Self, InvalidRelativeManifestPath> {
         let path = Path::new(value);
         if value.is_empty()
@@ -161,6 +171,9 @@ impl Error for InvalidRelativeManifestPath {}
 pub struct CommitSha(String);
 
 impl CommitSha {
+    // Only full lowercase SHA-1s are accepted because the commit is shared as
+    // an immutable identity by Git resolution, OCI image tags, and Deployment
+    // provenance; abbreviated or uppercase forms would make those links ambiguous.
     pub fn new(value: &str) -> Result<Self, InvalidCommitSha> {
         if value.len() != 40
             || !value

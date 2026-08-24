@@ -12,6 +12,8 @@ pub struct System {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+// Catalog name of one organizational grouping. Uses the same grammar as
+// `ApplicationName` (shared validator) so the catalog stays uniform.
 pub struct SystemName(String);
 
 impl SystemName {

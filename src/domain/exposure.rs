@@ -4,6 +4,9 @@ use std::fmt;
 
 use crate::domain::identity::{ApplicationId, RuntimeInstanceId};
 
+// Route visibility requested for an application. `Deserialize` exists only for
+// the manifest/TOML input boundary; persisted values convert through the store
+// text mappings instead.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Visibility {
@@ -20,6 +23,9 @@ impl fmt::Display for Visibility {
     }
 }
 
+// Flat persisted vocabulary for route materialization progress. The typed
+// combinations live in `ExposureMaterialization`; this enum is what SQLite
+// stores and what compare-and-set guards match against.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExposureMaterializationState {
     NotMaterialized,
@@ -89,6 +95,8 @@ impl ExposureOutcome {
     }
 }
 
+// Identifies the exact canonical Caddy fragment a route was materialized from,
+// so confirmation can prove the published configuration matches persisted intent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExposureConfigurationVersion(String);
 
@@ -146,6 +154,8 @@ impl ConfirmedRoute {
     }
 }
 
+// Durable evidence of why route materialization failed or diverged; both parts
+// are required so intervention always has an actionable code plus explanation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExposureDiagnostic {
     code: String,
@@ -222,6 +232,10 @@ impl ExposureMaterialization {
         }
     }
 
+    // Rebuilds the typed evidence bundle from persisted columns, rejecting any
+    // combination that no legal lifecycle could have written (e.g. Active
+    // without a confirmed route). Corrupt rows must fail hydration rather than
+    // silently become valid domain values.
     pub fn hydrate(
         state: ExposureMaterializationState,
         confirmed_route: Option<ConfirmedRoute>,
@@ -289,6 +303,8 @@ impl Exposure {
     }
 }
 
+// Public DNS name of a public route. Validated once here; adapters must not
+// re-implement label grammar when rendering or matching Caddy routes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DomainName(String);
 
@@ -366,6 +382,9 @@ fn is_trimmed_nonempty(value: &str) -> bool {
     !value.is_empty() && value.trim() == value
 }
 
+// RFC-1123-style hostname grammar: one authority for what may become a public
+// route domain. Length and ASCII limits keep Caddy configuration and health
+// checks well-defined.
 pub(crate) fn is_valid_domain(domain: &str) -> bool {
     if domain.is_empty() || domain.len() > 253 || !domain.is_ascii() {
         return false;

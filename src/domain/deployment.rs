@@ -22,6 +22,8 @@ pub struct Deployment {
 }
 
 impl Deployment {
+    // Convenience read of the lifecycle status; all state *changes* go through
+    // `DeploymentStatus::transition` plus store compare-and-set primitives.
     pub fn status(&self) -> DeploymentStatus {
         self.lifecycle.status()
     }
@@ -130,6 +132,8 @@ pub enum SourceRevision {
 }
 
 impl SourceRevision {
+    // New deployments always record a validated full commit; the Legacy variant
+    // exists only for rows persisted before SHA validation (INV-DB-006).
     pub fn from_commit(commit: CommitSha) -> Self {
         Self::Commit(commit)
     }
@@ -146,12 +150,17 @@ impl fmt::Display for SourceRevision {
         f.write_str(self.as_str())
     }
 }
+// Whether this activation was a fresh deploy or a rollback to a prior release.
+// Rollbacks create their own Deployment rows so history stays append-only.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeploymentType {
     Deploy,
     Rollback,
 }
 
+// The persisted status vocabulary. This is the flat form used by SQLite and
+// the transition table; `DeploymentLifecycle` is its typed carrier with
+// terminal evidence attached.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeploymentStatus {
     Pending,

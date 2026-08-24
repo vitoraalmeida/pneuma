@@ -37,6 +37,10 @@ impl fmt::Display for ContainerId {
     }
 }
 
+// External state as last reported by the container authority. `Unknown`
+// preserves unrecognized status text verbatim instead of collapsing it into a
+// known state, so observation never invents facts (the reconciliation policy
+// treats unknown states conservatively).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ObservedRuntimeState {
     Missing,
@@ -110,11 +114,15 @@ pub enum ContainerObservation {
 }
 
 impl ContainerObservation {
+    // A running observation must re-prove the loopback endpoint rule: adapters
+    // may only report endpoints that satisfy the same invariant as expected ones.
     pub fn running(observed_endpoint: SocketAddr) -> Result<Self, RuntimeEndpointError> {
         validate_loopback_endpoint(observed_endpoint)?;
         Ok(Self::Running { observed_endpoint })
     }
 
+    // Rejects `Running` here so callers cannot construct a contradictory
+    // "not running but running" observation.
     pub fn not_running(state: ObservedRuntimeState) -> Result<Self, ObservedRuntimeState> {
         if state == ObservedRuntimeState::Running {
             return Err(state);
@@ -143,6 +151,10 @@ impl ContainerObservation {
     }
 }
 
+// Pneuma's own lifecycle record for a logical runtime (`starting` while the
+// candidate runs pre-promotion checks). Deliberately distinct from
+// `ObservedRuntimeState`: recorded state is what Pneuma believes; observed
+// state is what Podman reports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RuntimeState {
     Starting,
@@ -169,7 +181,10 @@ pub struct RuntimeRetirement {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-// Identifies the logical runtime materialized for a Deployment, not just its container.
+// Identifies the logical runtime materialized for a Deployment, not just its
+// container. The `observed_*` fields are the last external observation snapshot;
+// `retirement` records intentional removal so reconciliation can tell
+// tombstones from drift.
 pub struct RuntimeInstance {
     pub id: RuntimeInstanceId,
     pub application_id: ApplicationId,
@@ -204,6 +219,9 @@ pub(crate) struct PreviousRuntime {
     pub(crate) external_runtime_id: ContainerId,
 }
 
+// Port inside the container the application listens on (from the manifest).
+// Distinct from `HostPort` so a published loopback port can never be confused
+// with the container-facing port at type level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ContainerPort(u16);
 
@@ -263,6 +281,9 @@ impl Error for InvalidHostPort {}
 
 impl Error for InvalidContainerPort {}
 
+// HTTP path probed to verify runtime health. Must start with `/` and stay
+// whitespace-free so it can be embedded safely in curl invocations and
+// rendered configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HealthCheckPath(String);
 
@@ -294,6 +315,8 @@ impl fmt::Display for InvalidHealthCheckPath {
 
 impl Error for InvalidHealthCheckPath {}
 
+// HTTP status considered healthy, bounded to the valid HTTP range so adapters
+// never compare against an impossible expectation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HealthCheckStatus(u16);
 
@@ -331,6 +354,8 @@ pub struct HealthCheckSpecification {
 }
 
 impl HealthCheckSpecification {
+    // Bundles already-validated parts; there is no way to build an unhealthy
+    // combination because each field is a validated value object.
     pub fn new(path: HealthCheckPath, expected_status: HealthCheckStatus) -> Self {
         Self {
             path,
@@ -371,6 +396,9 @@ impl RuntimeSpecification {
     }
 }
 
+// Single owner of the loopback endpoint invariant: IPv4 127.0.0.1 with a
+// nonzero port. Both expected endpoints and observed running endpoints must
+// pass through here, which is what closed the historical `::1` drift.
 pub(crate) fn validate_loopback_endpoint(endpoint: SocketAddr) -> Result<(), RuntimeEndpointError> {
     if endpoint.ip() != IpAddr::V4(Ipv4Addr::LOCALHOST) || endpoint.port() == 0 {
         return Err(RuntimeEndpointError::NotIpv4Loopback { endpoint });

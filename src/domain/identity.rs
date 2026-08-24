@@ -1,5 +1,12 @@
 use std::fmt;
 
+// One distinct nominal type per entity so an `ApplicationId` can never be
+// passed where a `DeploymentId` is required, even though all of them are
+// SQLite text under the hood. They are deliberately non-validating: rows
+// persisted before this type system existed carry arbitrary legacy text
+// (INV-DB-006), so imposing a format here would break hydration of real data.
+// Construction is unrestricted (`From`) because only stores mint identifiers;
+// everywhere else they flow in as already-persisted facts.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SystemId(String);
 
@@ -140,7 +147,9 @@ impl fmt::Display for RuntimeInstanceId {
     }
 }
 
-// Shares the catalog naming rule between Application and System names.
+// Single authority for the Application/System name grammar so both entities
+// (and the SSH dispatcher, which must reject exactly what the catalog rejects)
+// share one rule instead of three drifted copies.
 pub(crate) fn is_valid_catalog_name(value: &str) -> bool {
     let bytes = value.as_bytes();
     !bytes.is_empty()

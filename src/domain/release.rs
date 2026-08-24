@@ -73,6 +73,8 @@ impl OciArtifact {
 pub struct OciRepository(String);
 
 impl OciRepository {
+    // Accepts registry host/port plus path components but no tag or digest:
+    // mutable identifiers must never masquerade as repository identity.
     pub fn new(repository: &str) -> Result<Self, InvalidOciRepository> {
         if !is_repository(repository) {
             return Err(InvalidOciRepository {
@@ -95,6 +97,9 @@ pub struct DeliverySpecification {
 }
 
 impl DeliverySpecification {
+    // Restricted construction: only the manifest/import boundary mints one,
+    // after both fields were validated, so no code path can pair an unchecked
+    // repository with a delivery type.
     pub(crate) fn new(delivery_type: DeliveryType, image_repository: OciRepository) -> Self {
         Self {
             delivery_type,
@@ -145,6 +150,7 @@ impl Error for InvalidOciArtifact {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 // Records a reusable immutable artifact associated with one Application.
+// A Release never changes after creation; a new artifact means a new Release.
 pub struct Release {
     pub id: ReleaseId,
     pub application_id: ApplicationId,
