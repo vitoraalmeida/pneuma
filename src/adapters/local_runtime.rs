@@ -544,6 +544,8 @@ fn diagnostic<'a>(stdout: &'a str, stderr: &'a str) -> &'a str {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
 
     #[test]
@@ -566,5 +568,245 @@ mod tests {
         for (status, expected) in cases {
             assert_eq!(observed_state(status), expected);
         }
+    }
+
+    // Fake `podman` used by the adapter contract tests below. Every invocation
+    // is logged as one argv line; behavior is selected per subcommand through
+    // PNEUMA_FAKE_PODMAN_* variables.
+    const FAKE_PODMAN: &str = "#!/bin/sh
+printf '%s\\n' \"$*\" >> \"$PNEUMA_FAKE_PODMAN_LOG\"
+if [ \"$1\" = \"container\" ] && [ \"$2\" = \"exists\" ]; then
+  exit \"${PNEUMA_FAKE_PODMAN_EXISTS:-1}\"
+fi
+if [ \"$1\" = \"port\" ]; then
+  printf '%s\\n' \"${PNEUMA_FAKE_PODMAN_PORT:-127.0.0.1:31000}\"
+  exit 0
+fi
+if [ \"$1\" = \"inspect\" ]; then
+  case \"$3\" in
+    \"{{.Id}}\")
+      printf '%s\\n' \"${PNEUMA_FAKE_PODMAN_ID:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}\";;
+    \"{{.State.Status}}\")
+      printf '%s\\n' \"${PNEUMA_FAKE_PODMAN_STATUS:-running}\";;
+    *)
+      printf '%s\\n' \"$PNEUMA_FAKE_PODMAN_NAMED\";;
+  esac
+  exit \"${PNEUMA_FAKE_PODMAN_INSPECT_EXIT:-0}\"
+fi
+exit \"${PNEUMA_FAKE_PODMAN_EXIT:-0}\"
+";
+
+    fn container_id(character: char) -> String {
+        character.to_string().repeat(64)
+    }
+
+    struct ScopedPodman {
+        _path: crate::test_support::ScopedExternalPath,
+        log: PathBuf,
+    }
+
+    impl ScopedPodman {
+        // Tests holding the shared external-PATH lock never run concurrently,
+        // so stale behavior variables from an earlier scenario can be cleared.
+        const BEHAVIOR_VARIABLES: [&str; 6] = [
+            "PNEUMA_FAKE_PODMAN_EXISTS",
+            "PNEUMA_FAKE_PODMAN_PORT",
+            "PNEUMA_FAKE_PODMAN_ID",
+            "PNEUMA_FAKE_PODMAN_STATUS",
+            "PNEUMA_FAKE_PODMAN_NAMED",
+            "PNEUMA_FAKE_PODMAN_INSPECT_EXIT",
+        ];
+
+        fn new(name: &str) -> Self {
+            let path =
+                crate::test_support::ScopedExternalPath::new(name, &[("podman", FAKE_PODMAN)]);
+            for variable in Self::BEHAVIOR_VARIABLES {
+                path.remove_var(variable);
+            }
+            path.remove_var("PNEUMA_FAKE_PODMAN_EXIT");
+            let log = path.directory().join("invocations.log");
+            path.set_var("PNEUMA_FAKE_PODMAN_LOG", &log.to_string_lossy());
+            Self { _path: path, log }
+        }
+
+        fn invocations(&self) -> Vec<String> {
+            std::fs::read_to_string(&self.log)
+                .unwrap_or_default()
+                .lines()
+                .map(str::to_owned)
+                .collect()
+        }
+    }
+
+    #[test]
+    fn control_commands_target_the_recorded_container_and_map_failures() {
+        let scoped = ScopedPodman::new("control");
+        let id = container_id('a');
+
+        assert!(matches!(
+            start_container("not-hex"),
+            Err(ControlContainerError::InvalidContainerId)
+        ));
+        assert!(scoped.invocations().is_empty());
+
+        start_container(&id).unwrap();
+        stop_container(&id).unwrap();
+        remove_container(&id).unwrap();
+
+        assert_eq!(
+            scoped.invocations(),
+            [
+                format!("start {id}"),
+                format!("stop {id}"),
+                format!("container rm --force {id}"),
+            ]
+        );
+
+        scoped._path.set_var("PNEUMA_FAKE_PODMAN_EXIT", "9");
+        let error = stop_container(&id).unwrap_err();
+        assert!(matches!(
+            error,
+            ControlContainerError::Podman {
+                operation: "stopping",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn observe_container_reports_missing_without_inspecting() {
+        let scoped = ScopedPodman::new("observe-missing");
+        let id = ContainerId::from(container_id('b'));
+
+        let observation = observe_container(&id, ContainerPort::new(8080).unwrap()).unwrap();
+
+        assert_eq!(observation, ContainerObservation::missing());
+        assert_eq!(
+            scoped.invocations(),
+            [format!("container exists {}", id.as_str())]
+        );
+    }
+
+    #[test]
+    fn observe_container_maps_running_unknown_and_foreign_endpoint_states() {
+        let scoped = ScopedPodman::new("observe-states");
+        let id = ContainerId::from(container_id('c'));
+        scoped._path.set_var("PNEUMA_FAKE_PODMAN_EXISTS", "0");
+
+        let observation = observe_container(&id, ContainerPort::new(8080).unwrap()).unwrap();
+        assert_eq!(
+            observation,
+            ContainerObservation::Running {
+                observed_endpoint: "127.0.0.1:31000".parse().unwrap(),
+            }
+        );
+
+        scoped._path.set_var("PNEUMA_FAKE_PODMAN_STATUS", "paused");
+        let observation = observe_container(&id, ContainerPort::new(8080).unwrap()).unwrap();
+        assert_eq!(
+            observation,
+            ContainerObservation::NotRunning {
+                state: ObservedRuntimeState::Unknown {
+                    status: "paused".to_owned(),
+                },
+            }
+        );
+
+        scoped._path.set_var("PNEUMA_FAKE_PODMAN_STATUS", "running");
+        scoped
+            ._path
+            .set_var("PNEUMA_FAKE_PODMAN_PORT", "10.0.0.2:31000");
+        assert!(matches!(
+            observe_container(&id, ContainerPort::new(8080).unwrap()),
+            Err(ObserveContainerError::InvalidEndpoint { .. })
+        ));
+    }
+
+    #[test]
+    fn resolve_container_id_validates_podmans_answer() {
+        let scoped = ScopedPodman::new("resolve");
+
+        scoped
+            ._path
+            .set_var("PNEUMA_FAKE_PODMAN_ID", "not a container id");
+        let error = resolve_container_id("pneuma-app-1").unwrap_err();
+        assert!(matches!(error, ResolveContainerError::InvalidOutput { .. }));
+
+        scoped
+            ._path
+            .set_var("PNEUMA_FAKE_PODMAN_ID", &container_id('d'));
+        let resolved = resolve_container_id("pneuma-app-1").unwrap();
+        assert_eq!(resolved.as_str(), container_id('d'));
+
+        scoped._path.set_var("PNEUMA_FAKE_PODMAN_INSPECT_EXIT", "1");
+        assert!(matches!(
+            resolve_container_id("pneuma-app-1"),
+            Err(ResolveContainerError::Podman { .. })
+        ));
+    }
+    #[test]
+    fn observe_named_container_parses_identity_labels_and_preserves_absence() {
+        let scoped = ScopedPodman::new("observe-named");
+        let id = container_id('e');
+        let named = format!(
+            "{}\tpneuma-app\tregistry.example/app@sha256:{}\tmyapp\tsha256:{}",
+            id,
+            container_id('f'),
+            container_id('g'),
+        );
+        scoped._path.set_var("PNEUMA_FAKE_PODMAN_EXISTS", "0");
+        scoped._path.set_var("PNEUMA_FAKE_PODMAN_NAMED", &named);
+
+        let observation =
+            observe_named_container("pneuma-app-1", ContainerPort::new(8080).unwrap()).unwrap();
+        match observation {
+            NamedContainerObservation::Present {
+                id: observed_id,
+                name,
+                image_reference,
+                application_label,
+                image_digest_label,
+                observation,
+            } => {
+                assert_eq!(observed_id.as_str(), id);
+                assert_eq!(name, "pneuma-app");
+                assert_eq!(
+                    image_reference,
+                    format!("registry.example/app@sha256:{}", container_id('f'))
+                );
+                assert_eq!(application_label.as_deref(), Some("myapp"));
+                assert_eq!(
+                    image_digest_label.as_deref(),
+                    Some(format!("sha256:{}", container_id('g')).as_str())
+                );
+                assert!(matches!(observation, ContainerObservation::Running { .. }));
+            }
+            other => panic!("expected a present observation, got {other:?}"),
+        }
+
+        // Trailing empty label fields are trimmed away, so a present container
+        // without its identity labels is refused instead of adopted with
+        // invented or partially-absent identity (conservative external boundary).
+        let unnamed = format!(
+            "{}\tpneuma-app\tregistry.example/app@sha256:{}\t\t",
+            id,
+            container_id('f'),
+        );
+        scoped._path.set_var("PNEUMA_FAKE_PODMAN_NAMED", &unnamed);
+        assert!(matches!(
+            observe_named_container("pneuma-app-1", ContainerPort::new(8080).unwrap()),
+            Err(ObserveNamedContainerError::InvalidOutput { .. })
+        ));
+
+        scoped._path.remove_var("PNEUMA_FAKE_PODMAN_EXISTS");
+        assert!(matches!(
+            observe_named_container("pneuma-app-9", ContainerPort::new(8080).unwrap()),
+            Ok(NamedContainerObservation::Missing)
+        ));
+
+        assert!(matches!(
+            observe_named_container("", ContainerPort::new(8080).unwrap()),
+            Err(ObserveNamedContainerError::EmptyName)
+        ));
     }
 }

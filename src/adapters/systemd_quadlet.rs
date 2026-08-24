@@ -408,4 +408,116 @@ mod tests {
         );
         assert!(!scoped.directory.exists());
     }
+
+    // Fake `systemctl` recording every invocation; behavior comes from
+    // PNEUMA_FAKE_SYSTEMCTL_* variables.
+    const FAKE_SYSTEMCTL: &str = "#!/bin/sh
+printf '%s\\n' \"$*\" >> \"$PNEUMA_FAKE_SYSTEMCTL_LOG\"
+exit \"${PNEUMA_FAKE_SYSTEMCTL_EXIT:-0}\"
+";
+
+    struct ScopedSystemctl {
+        _path: crate::test_support::ScopedExternalPath,
+        log: PathBuf,
+    }
+
+    impl ScopedSystemctl {
+        fn new(name: &str) -> Self {
+            let path = crate::test_support::ScopedExternalPath::new(
+                name,
+                &[("systemctl", FAKE_SYSTEMCTL)],
+            );
+            path.remove_var("PNEUMA_FAKE_SYSTEMCTL_EXIT");
+            let log = path.directory().join("invocations.log");
+            path.set_var("PNEUMA_FAKE_SYSTEMCTL_LOG", &log.to_string_lossy());
+            Self { _path: path, log }
+        }
+
+        fn invocations(&self) -> Vec<String> {
+            std::fs::read_to_string(&self.log)
+                .unwrap_or_default()
+                .lines()
+                .map(str::to_owned)
+                .collect()
+        }
+    }
+
+    // observe_generated_unit answers through the same fake with per-case exits,
+    // so it gets its own scope helper returning stdout separately.
+    #[test]
+    fn control_invokes_user_systemctl_with_the_expected_service() {
+        let scoped = ScopedSystemctl::new("control");
+        let (application_name, deployment_id) = unit_inputs();
+        let unit = unit_name(&application_name, &deployment_id);
+        let service = format!("{unit}.service");
+
+        daemon_reload().unwrap();
+        start(&unit).unwrap();
+        stop(&unit).unwrap();
+
+        assert_eq!(
+            scoped.invocations(),
+            [
+                "--user daemon-reload".to_owned(),
+                format!("--user start {service}"),
+                format!("--user stop {service}"),
+            ]
+        );
+
+        scoped._path.set_var("PNEUMA_FAKE_SYSTEMCTL_EXIT", "4");
+        assert!(matches!(
+            start(&unit),
+            Err(QuadletError::Systemd {
+                operation: "starting",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn generated_unit_observation_maps_absence_and_inactive_states() {
+        let _path = crate::test_support::ScopedExternalPath::new(
+            "observe-generated",
+            &[(
+                "systemctl",
+                "#!/bin/sh
+printf '%s\\n' \"$*\" >> \"$PNEUMA_FAKE_SYSTEMCTL_LOG\"
+if [ -n \"$PNEUMA_FAKE_SYSTEMCTL_EXIT\" ]; then
+  if [ \"$PNEUMA_FAKE_SYSTEMCTL_EXIT\" = \"3\" ]; then printf 'inactive\\n'; fi
+  exit \"$PNEUMA_FAKE_SYSTEMCTL_EXIT\"
+fi
+printf '%s\\n' \"${PNEUMA_FAKE_SYSTEMCTL_STATE:-active}\"
+exit 0
+",
+            )],
+        );
+        let log = _path.directory().join("invocations.log");
+        _path.set_var("PNEUMA_FAKE_SYSTEMCTL_LOG", &log.to_string_lossy());
+        _path.remove_var("PNEUMA_FAKE_SYSTEMCTL_EXIT");
+        let (application_name, deployment_id) = unit_inputs();
+        let service = format!("{}.service", unit_name(&application_name, &deployment_id));
+
+        // Unit absence is systemd exit code 4 and maps to Missing, never an error.
+        _path.set_var("PNEUMA_FAKE_SYSTEMCTL_EXIT", "4");
+        assert_eq!(
+            observe_generated_unit(&service).unwrap(),
+            SystemdUnitObservation::Missing
+        );
+
+        // The documented not-running family stays observable (inactive reports exit 3).
+        _path.set_var("PNEUMA_FAKE_SYSTEMCTL_EXIT", "3");
+        assert_eq!(
+            observe_generated_unit(&service).unwrap(),
+            SystemdUnitObservation::Present {
+                active_state: "inactive".to_owned()
+            }
+        );
+
+        // Any other failure is a typed error carrying the diagnostic.
+        _path.set_var("PNEUMA_FAKE_SYSTEMCTL_EXIT", "9");
+        assert!(matches!(
+            observe_generated_unit(&service),
+            Err(QuadletError::ObserveUnit { .. })
+        ));
+    }
 }

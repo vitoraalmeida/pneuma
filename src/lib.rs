@@ -1,3 +1,6 @@
 pub mod adapters;
 pub mod domain;
 pub mod use_cases;
+
+#[cfg(test)]
+pub(crate) mod test_support;

@@ -292,6 +292,8 @@ fn diagnostic<'a>(stdout: &'a str, stderr: &'a str) -> &'a str {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
 
     #[test]
@@ -328,5 +330,141 @@ mod tests {
             Some(digest.as_str())
         );
         assert_eq!(normalize_digest("sha256:not-a-digest"), None);
+    }
+
+    // Fake `podman` for pull/resolution contract tests. Every invocation is
+    // logged; inspect answers with PNEUMA_FAKE_PODMAN_DIGEST.
+    const FAKE_PODMAN: &str = "#!/bin/sh
+printf '%s\\n' \"$*\" >> \"$PNEUMA_FAKE_PODMAN_LOG\"
+if [ \"$1 $2\" = \"image inspect\" ]; then
+  printf '%s\\n' \"$PNEUMA_FAKE_PODMAN_DIGEST\"
+  exit \"${PNEUMA_FAKE_PODMAN_INSPECT_EXIT:-0}\"
+fi
+exit \"${PNEUMA_FAKE_PODMAN_PULL_EXIT:-0}\"
+";
+
+    struct ScopedPodman {
+        _path: crate::test_support::ScopedExternalPath,
+        log: PathBuf,
+    }
+
+    impl ScopedPodman {
+        const BEHAVIOR_VARIABLES: [&str; 3] = [
+            "PNEUMA_FAKE_PODMAN_DIGEST",
+            "PNEUMA_FAKE_PODMAN_INSPECT_EXIT",
+            "PNEUMA_FAKE_PODMAN_PULL_EXIT",
+        ];
+
+        fn new(name: &str, digest: &str) -> Self {
+            let path =
+                crate::test_support::ScopedExternalPath::new(name, &[("podman", FAKE_PODMAN)]);
+            for variable in Self::BEHAVIOR_VARIABLES {
+                path.remove_var(variable);
+            }
+            let log = path.directory().join("invocations.log");
+            path.set_var("PNEUMA_FAKE_PODMAN_LOG", &log.to_string_lossy());
+            path.set_var("PNEUMA_FAKE_PODMAN_DIGEST", digest);
+            Self { _path: path, log }
+        }
+
+        fn invocations(&self) -> Vec<String> {
+            std::fs::read_to_string(&self.log)
+                .unwrap_or_default()
+                .lines()
+                .map(str::to_owned)
+                .collect()
+        }
+    }
+
+    fn artifact(digest_character: char) -> OciArtifact {
+        OciArtifact::parse(&format!(
+            "registry.example/app@sha256:{}",
+            digest_character.to_string().repeat(64)
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn pull_image_pulls_the_pinned_reference_and_confirms_the_digest() {
+        let scoped = ScopedPodman::new("pull-verified", &format!("sha256:{}", "a".repeat(64)));
+
+        let pulled = pull_image(&artifact('a')).unwrap();
+
+        assert_eq!(pulled.artifact, artifact('a'));
+        assert_eq!(
+            scoped.invocations(),
+            [
+                format!("pull {}", artifact('a').reference()),
+                format!(
+                    "image inspect --format {{{{.Digest}}}} {}",
+                    artifact('a').reference()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn pull_image_refuses_a_digest_mismatch_invalid_output_and_failed_pulls() {
+        // A registry serving different bytes than the declared artifact is a hard error.
+        {
+            let _scoped = ScopedPodman::new("pull-mismatch", &format!("sha256:{}", "b".repeat(64)));
+            let error = pull_image(&artifact('a')).unwrap_err();
+            assert!(matches!(
+                error,
+                PullImageError::DigestMismatch { expected, actual, .. }
+                    if expected == format!("sha256:{}", "a".repeat(64))
+                        && actual == format!("sha256:{}", "b".repeat(64))
+            ));
+        }
+
+        {
+            let _scoped = ScopedPodman::new("pull-invalid", "\nsha256:not-a-digest\n");
+            assert!(matches!(
+                pull_image(&artifact('a')),
+                Err(PullImageError::InvalidInspectOutput { .. })
+            ));
+        }
+
+        {
+            let scoped = ScopedPodman::new("pull-failure", "");
+            scoped._path.set_var("PNEUMA_FAKE_PODMAN_PULL_EXIT", "5");
+            assert!(matches!(
+                pull_image(&artifact('a')),
+                Err(PullImageError::Pull { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn resolve_image_digest_builds_the_tagged_reference_and_normalizes_the_answer() {
+        let repository = OciRepository::new("registry.example/app").unwrap();
+        let commit = CommitSha::new(&"c".repeat(40)).unwrap();
+        let digest = format!("sha256:{}", "d".repeat(64));
+        let scoped = ScopedPodman::new("resolve-digest", &format!("\n{digest}\n"));
+
+        let resolved = resolve_image_digest(&repository, &commit).unwrap();
+
+        assert_eq!(resolved.repository(), repository.as_str());
+        assert_eq!(resolved.digest(), digest);
+        assert_eq!(
+            scoped.invocations(),
+            [
+                format!("pull --quiet registry.example/app:{}", commit.as_str()),
+                format!(
+                    "image inspect --format {{{{.Digest}}}} registry.example/app:{}",
+                    commit.as_str()
+                ),
+            ]
+        );
+        drop(scoped);
+
+        {
+            let failing = ScopedPodman::new("resolve-digest-failure", "");
+            failing._path.set_var("PNEUMA_FAKE_PODMAN_PULL_EXIT", "7");
+            assert!(matches!(
+                resolve_image_digest(&repository, &commit),
+                Err(ResolveImageDigestError::Pull { .. })
+            ));
+        }
     }
 }
