@@ -573,6 +573,74 @@ app deployments -> Deployment history with type, Release digest, source, and sta
 `system show` fails for an unknown System. `app deployments` first resolves the
 Application by name; an Application with no history reports that explicitly.
 
+### Reconcile
+
+```text
+reconcile <application>
+  -> resolve Application by name
+  -> try per-application kernel lock; held => Deferred (no observation happens)
+  -> short transaction: generate token and take operation ownership (generation fence)
+  -> load persisted facts: desired state, active bundle, blocking deployment
+  -> blocking non-terminal Deployment? run interrupted-deployment recovery instead:
+     record it failed, clean only provably owned candidate resources
+  -> end transaction; observe Podman recorded/named containers, Quadlet source,
+     generated systemd unit, and Caddy fragment
+  -> adapters render canonical expectations (container name, Quadlet bytes,
+     public route fragment)
+  -> pure domain decision from persisted facts vs observations vs expectations
+  -> execute the decided variant with CAS confirmation
+```
+
+The decision is computed without any store, filesystem, Podman, systemd, Caddy,
+clock, or randomness access (`domain/reconciliation.rs::decide`). Outcomes are
+reported as no-op, deferred, runtime repaired, exposure repaired, failed,
+diverged, or manual intervention with a reason; drift that no safe rule covers
+is never silently adopted. Unknown external states stay unknown rather than
+becoming invented stopped/running facts.
+
+### Database backup and restore
+
+```text
+backup <path>
+  -> refuse an existing destination
+  -> open the live database read-only
+  -> SQLite online backup into the destination file
+
+restore <path>
+  -> open the candidate file read-only and require PRAGMA integrity_check = ok
+  -> create a create-only restore.lock to serialize concurrent restores
+  -> back up the live database to a timestamped pre-restore snapshot first
+  -> copy the validated file to a temporary path, then atomically rename it
+     over the live database and remove stale -wal/-shm/-journal sidecars
+  -> reopen the restored database so success also proves usability
+```
+
+Restore never reports success for an unusable database: the reopened connection
+applies pending migrations exactly like any other open. The pre-restore snapshot
+path is printed so an operator can roll back a bad restoration.
+
+### Doctor
+
+```text
+doctor
+  -> open the configured database (applying pending migrations)
+  -> ordered direct host checks: database connectivity, applied migration count,
+     workspace directory, Caddy managed directory, Caddyfile presence plus
+     `caddy validate`, Git availability, Podman availability, active OCI image
+     pullability, free space for database and checkouts, rootless Podman mode,
+     Quadlet user generator, Caddy binary
+  -> print one pass/fail line per check and fail the command if any failed
+```
+
+Doctor performs only observations; it repairs nothing and is safe to run at any
+time, including when the database itself cannot be opened (the failure becomes
+the diagnostic output).
+
+### Version
+
+`version` prints the binary name and version and touches neither SQLite nor any
+external system.
+
 ## Health and Exposure Effects
 
 Internal health uses HTTP against the candidate loopback endpoint before traffic
