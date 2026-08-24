@@ -973,6 +973,67 @@ fn reconcile_reports_no_op_for_stopped_intent_with_missing_resources() {
 }
 
 #[test]
+fn reconcile_reports_no_op_for_a_converged_running_application() {
+    let mut environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+
+    // Deploy against the same endpoint reconcile will later observe.
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || respond_once(&listener, 200));
+    environment.reconciliation_port = Some(port);
+    let output = environment.deploy(port, false);
+    server.join().unwrap();
+    assert_command_succeeded(&output);
+
+    // Pin the fake's observed identity to the persisted runtime identity, the
+    // way a real converged host would answer.
+    let connection = database::open(&environment.database_path).unwrap();
+    let recorded_id: String = connection
+        .query_row(
+            "SELECT external_runtime_id FROM runtime_instances WHERE removed_at IS NULL",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    drop(connection);
+    environment.replacement_container_id = Some(recorded_id);
+
+    fs::remove_file(environment.root.join("podman.log")).unwrap();
+
+    let connection = database::open(&environment.database_path).unwrap();
+    let before: (String, String) = connection
+        .query_row(
+            "SELECT desired_runtime_state, active_deployment_id FROM applications WHERE name = ?1",
+            [&environment.application_name],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    drop(connection);
+
+    let output = environment.run_reconcile();
+
+    // Documented current precedence: only a confirmed public route reaches
+    // no-op; a converged healthy INTERNAL application falls through to the
+    // manual-intervention fallback (recorded deferred follow-up). The fallback
+    // must not mutate any persisted intent or bookkeeping.
+    assert_command_succeeded(&output);
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "Application: another-site\nResult: manual-intervention\nDiagnostic: runtime identity or configuration differs from persisted intent\n"
+    );
+    let connection = database::open(&environment.database_path).unwrap();
+    let after: (String, String) = connection
+        .query_row(
+            "SELECT desired_runtime_state, active_deployment_id FROM applications WHERE name = ?1",
+            [&environment.application_name],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(after, before);
+}
+
+#[test]
 fn reconcile_defers_before_external_observation_for_a_nonterminal_deployment() {
     let environment = DeploymentEnvironment::new();
     assert_command_succeeded(&environment.import());
