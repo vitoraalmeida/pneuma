@@ -5,7 +5,9 @@
 //! module tree. Reading a deploy top-down:
 //!
 //! - [`deploy`] resolves sources into releases (`deploy_branch`, `deploy_oci`);
-//! - [`execute`] runs the release workflow (`deploy_release`) and owns failure finalization;
+//! - [`execute`] runs the release workflow (`deploy_release`);
+//! - [`failure`] represents and finalizes failed executions: classification, failure
+//!   persistence, candidate cleanup, and recovery-error precedence;
 //! - [`candidate`] materializes the candidate runtime (`start_candidate`, registration);
 //! - [`activation`] drives public-candidate activation (health, Caddy route, promotion);
 //! - [`promotion`] persists candidate confirmation (`promote_internal_candidate`, public
@@ -23,6 +25,7 @@ mod cleanup;
 mod create;
 mod deploy;
 mod execute;
+mod failure;
 mod progress;
 mod promotion;
 mod query;
@@ -38,7 +41,8 @@ pub use self::deploy::{
     DeployBranchError, DeployOciError, deploy_branch, deploy_branch_with_progress, deploy_oci,
     deploy_oci_with_progress,
 };
-pub use self::execute::{DeployReleaseError, DeploymentResult, PublicDeploymentConfiguration};
+pub use self::execute::{DeploymentResult, PublicDeploymentConfiguration};
+pub use self::failure::DeployReleaseError;
 pub use self::progress::{DeploymentProgress, DeploymentStep};
 pub use self::promotion::{PromoteInternalCandidateError, promote_internal_candidate};
 pub use self::query::{ListDeploymentsError, list_deployments};

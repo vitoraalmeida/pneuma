@@ -3,9 +3,8 @@ use std::fmt;
 
 use rusqlite::Connection;
 
-use super::execute::{
-    DeployReleaseError, DeploymentResult, PublicDeploymentConfiguration, deploy_release,
-};
+use super::execute::{DeploymentResult, PublicDeploymentConfiguration, deploy_release};
+use super::failure::DeployReleaseError;
 use crate::adapters::oci_image::{PullImageError, pull_image};
 use crate::adapters::stores::application_store;
 use crate::adapters::stores::deployment_store;

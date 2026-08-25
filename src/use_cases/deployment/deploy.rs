@@ -3,9 +3,8 @@ use std::fmt;
 
 use rusqlite::Connection;
 
-use super::execute::{
-    DeployReleaseError, DeploymentResult, PublicDeploymentConfiguration, deploy_release_reporting,
-};
+use super::execute::{DeploymentResult, PublicDeploymentConfiguration, deploy_release_reporting};
+use super::failure::DeployReleaseError;
 use super::progress::{DeploymentProgress, ProgressReporter};
 use crate::adapters::git_source::{ResolveBranchError, resolve_branch};
 use crate::adapters::oci_image::{
