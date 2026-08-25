@@ -4,9 +4,8 @@ use thiserror::Error;
 use crate::adapters::application_lock::{ApplicationLock, ApplicationLockError};
 use crate::adapters::caddy_exposure::ObserveCaddyFragmentError;
 use crate::adapters::local_runtime::PodmanError;
-use crate::adapters::stores::operation_store::{self, OperationStoreError};
 use crate::adapters::stores::{
-    application_store, deployment_store, exposure_store, release_store, runtime_store,
+    application_store, deployment_store, exposure_store, operation_store, release_store,
 };
 use crate::adapters::systemd_quadlet::QuadletError;
 use crate::adapters::test_gate::wait_for_test_gate;
@@ -72,7 +71,7 @@ pub enum ReconciliationReadError {
     #[error("failed to load reconciliation runtime: {source}")]
     Runtime {
         #[source]
-        source: runtime_store::RuntimeStoreError,
+        source: rusqlite::Error,
     },
     #[error("failed to load reconciliation exposure: {source}")]
     Exposure {
@@ -87,7 +86,7 @@ pub enum ReconciliationReadError {
     #[error("failed to acquire reconciliation ownership: {source}")]
     Operation {
         #[source]
-        source: OperationStoreError,
+        source: rusqlite::Error,
     },
     #[error("failed to observe recorded runtime: {source}")]
     ObserveContainer {

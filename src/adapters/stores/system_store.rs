@@ -1,52 +1,36 @@
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
-use thiserror::Error;
 
 use crate::domain::identity::SystemId;
 use crate::domain::system::System;
 use crate::domain::system::SystemName;
 
-#[derive(Debug, Error)]
-pub(crate) enum SystemStoreError {
-    #[error("system store error: {source}")]
-    Persistence {
-        #[source]
-        source: rusqlite::Error,
-    },
-}
-
 pub(crate) fn create_or_load(
     transaction: &Transaction<'_>,
     name: &SystemName,
     description: Option<&str>,
-) -> Result<System, SystemStoreError> {
-    let id: String = transaction
-        .query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))
-        .map_err(persistence)?;
-    transaction.execute("INSERT INTO systems (id, name, description, created_at) VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP) ON CONFLICT(name) DO NOTHING", params![id, name.as_str(), description]).map_err(persistence)?;
-    transaction
-        .query_row(
-            "SELECT id, name, description FROM systems WHERE name = ?1",
-            [name.as_str()],
-            map_system,
-        )
-        .map_err(persistence)
+) -> Result<System, rusqlite::Error> {
+    let id: String =
+        transaction.query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))?;
+    transaction.execute("INSERT INTO systems (id, name, description, created_at) VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP) ON CONFLICT(name) DO NOTHING", params![id, name.as_str(), description])?;
+    transaction.query_row(
+        "SELECT id, name, description FROM systems WHERE name = ?1",
+        [name.as_str()],
+        map_system,
+    )
 }
 
-pub(crate) fn list(connection: &Connection) -> Result<Vec<System>, SystemStoreError> {
-    let mut statement = connection
-        .prepare("SELECT id, name, description FROM systems ORDER BY name")
-        .map_err(persistence)?;
+pub(crate) fn list(connection: &Connection) -> Result<Vec<System>, rusqlite::Error> {
+    let mut statement =
+        connection.prepare("SELECT id, name, description FROM systems ORDER BY name")?;
     statement
-        .query_map([], map_system)
-        .map_err(persistence)?
+        .query_map([], map_system)?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(persistence)
 }
 
 pub(crate) fn load_by_name(
     connection: &Connection,
     name: &SystemName,
-) -> Result<Option<System>, SystemStoreError> {
+) -> Result<Option<System>, rusqlite::Error> {
     connection
         .query_row(
             "SELECT id, name, description FROM systems WHERE name = ?1",
@@ -54,7 +38,6 @@ pub(crate) fn load_by_name(
             map_system,
         )
         .optional()
-        .map_err(persistence)
 }
 
 fn map_system(row: &rusqlite::Row<'_>) -> rusqlite::Result<System> {
@@ -70,9 +53,6 @@ fn map_system(row: &rusqlite::Row<'_>) -> rusqlite::Result<System> {
         description: row.get(2)?,
     })
 }
-fn persistence(source: rusqlite::Error) -> SystemStoreError {
-    SystemStoreError::Persistence { source }
-}
 
 #[cfg(test)]
 mod tests {
@@ -83,7 +63,7 @@ mod tests {
     use crate::adapters::database;
     use crate::domain::system::SystemName;
 
-    use super::{SystemStoreError, create_or_load, list, load_by_name};
+    use super::{create_or_load, list, load_by_name};
 
     #[test]
     fn create_or_load_round_trips_a_system_and_reuses_it_by_name() {
@@ -140,9 +120,7 @@ mod tests {
         let error = list(&connection).unwrap_err();
         assert!(matches!(
             error,
-            SystemStoreError::Persistence {
-                source: rusqlite::Error::FromSqlConversionFailure(_, _, _)
-            }
+            rusqlite::Error::FromSqlConversionFailure(_, _, _)
         ));
     }
 }

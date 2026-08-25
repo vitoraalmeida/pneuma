@@ -34,11 +34,7 @@ pub fn show_system(
     system_name: &SystemName,
 ) -> Result<SystemDetails, ShowError> {
     let system = system_store::load_by_name(connection, system_name)
-        .map_err(|error| match error {
-            system_store::SystemStoreError::Persistence { source } => {
-                ShowError::Persistence { source }
-            }
-        })?
+        .map_err(|source| ShowError::Persistence { source })?
         .ok_or_else(|| ShowError::NotFound {
             system_name: system_name.to_string(),
         })?;

@@ -12,7 +12,7 @@ use crate::adapters::health_check_external::{ExternalHealthCheckError, check_ext
 use crate::adapters::local_runtime::{PodmanError, observe_container};
 use crate::adapters::stores::application_store;
 use crate::adapters::stores::exposure_store::{self, ExposureStoreError};
-use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
+use crate::adapters::stores::runtime_store;
 use crate::domain::exposure::{
     DomainName, Exposure, ExposureConfigurationVersion, ExposureDiagnostic, ExposureIntent,
     ExposureMaterializationState, Visibility,
@@ -56,7 +56,7 @@ pub enum ExposureChangeError {
     #[error("failed to read runtime: {source}")]
     RuntimeStore {
         #[source]
-        source: RuntimeStoreError,
+        source: rusqlite::Error,
     },
     #[error("failed to read application specification: {source}")]
     ApplicationStore {

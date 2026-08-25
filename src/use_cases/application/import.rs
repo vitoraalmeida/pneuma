@@ -6,7 +6,7 @@ use thiserror::Error;
 use crate::adapters::manifest::{ManifestError, load_manifest_at};
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::adapters::stores::exposure_store::{self, ExposureStoreError};
-use crate::adapters::stores::system_store::{self, SystemStoreError};
+use crate::adapters::stores::system_store;
 use crate::domain::application::ApplicationSummary;
 use crate::domain::git::{ApplicationSource, RelativeManifestPath};
 use crate::domain::identity::ApplicationId;
@@ -63,11 +63,9 @@ impl From<ExposureStoreError> for ImportError {
     }
 }
 
-impl From<SystemStoreError> for ImportError {
-    fn from(error: SystemStoreError) -> Self {
-        match error {
-            SystemStoreError::Persistence { source } => Self::Persistence { source },
-        }
+impl From<rusqlite::Error> for ImportError {
+    fn from(source: rusqlite::Error) -> Self {
+        Self::Persistence { source }
     }
 }
 
@@ -96,16 +94,12 @@ pub fn import_application(
     };
     let application_name = specification.application_name.clone();
 
-    let transaction = connection
-        .transaction()
-        .map_err(|source| ImportError::Persistence { source })?;
+    let transaction = connection.transaction()?;
 
     if let Some(application) =
         application_store::load_application_for_import(&transaction, &application_name)?
     {
-        transaction
-            .commit()
-            .map_err(|source| ImportError::Persistence { source })?;
+        transaction.commit()?;
         return Ok(application);
     }
 
@@ -136,9 +130,7 @@ pub fn import_application(
                 application_id: application_id.to_string(),
             })?;
 
-    transaction
-        .commit()
-        .map_err(|source| ImportError::Persistence { source })?;
+    transaction.commit()?;
 
     Ok(application)
 }

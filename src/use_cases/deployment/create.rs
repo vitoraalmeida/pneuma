@@ -1,9 +1,11 @@
+use std::error::Error;
+
 use rusqlite::{Connection, TransactionBehavior};
 use thiserror::Error;
 
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
-use crate::adapters::stores::operation_store::{self, OperationStoreError};
+use crate::adapters::stores::operation_store;
 use crate::domain::deployment::{Deployment, DeploymentType, SourceRevision};
 use crate::domain::identity::{ApplicationId, ReleaseId};
 
@@ -21,25 +23,34 @@ pub enum CreateDeploymentError {
     #[error("release `{release_id}` is already the active deployment")]
     AlreadyActive { release_id: String },
     #[error("failed to create deployment: {source}")]
-    ApplicationStore {
-        #[source]
-        source: ApplicationStoreError,
-    },
-    #[error("failed to create deployment: {source}")]
-    DeploymentStore {
-        #[source]
-        source: DeploymentStoreError,
-    },
-    #[error("failed to create deployment: {source}")]
-    OperationStore {
-        #[source]
-        source: OperationStoreError,
-    },
-    #[error("failed to create deployment: {source}")]
     Persistence {
         #[source]
-        source: rusqlite::Error,
+        source: Box<dyn Error>,
     },
+}
+
+impl From<rusqlite::Error> for CreateDeploymentError {
+    fn from(source: rusqlite::Error) -> Self {
+        Self::Persistence {
+            source: Box::new(source),
+        }
+    }
+}
+
+impl From<ApplicationStoreError> for CreateDeploymentError {
+    fn from(error: ApplicationStoreError) -> Self {
+        Self::Persistence {
+            source: Box::new(error),
+        }
+    }
+}
+
+impl From<DeploymentStoreError> for CreateDeploymentError {
+    fn from(error: DeploymentStoreError) -> Self {
+        Self::Persistence {
+            source: Box::new(error),
+        }
+    }
 }
 
 // Creates a deployment without source provenance for callers that deploy an existing release.
@@ -67,9 +78,7 @@ pub(crate) fn create_deployment_with_source_revision_and_ownership(
     source_revision: Option<&SourceRevision>,
     owner_token: Option<&str>,
 ) -> Result<Deployment, CreateDeploymentError> {
-    let transaction = connection
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|source| CreateDeploymentError::Persistence { source })?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
     let deployment = create_deployment_in_transaction(
         &transaction,
@@ -79,9 +88,7 @@ pub(crate) fn create_deployment_with_source_revision_and_ownership(
         source_revision,
         owner_token,
     )?;
-    transaction
-        .commit()
-        .map_err(|source| CreateDeploymentError::Persistence { source })?;
+    transaction.commit()?;
     Ok(deployment)
 }
 
@@ -112,38 +119,33 @@ fn create_deployment_in_transaction(
     source_revision: Option<&SourceRevision>,
     owner_token: Option<&str>,
 ) -> Result<Deployment, CreateDeploymentError> {
-    let application_exists = application_store::application_exists(transaction, application_id)
-        .map_err(|source| CreateDeploymentError::ApplicationStore { source })?;
+    let application_exists = application_store::application_exists(transaction, application_id)?;
     if !application_exists {
         return Err(CreateDeploymentError::ApplicationNotFound {
             application_id: application_id.to_string(),
         });
     }
-    let release_exists = deployment_store::release_exists(transaction, release_id, application_id)
-        .map_err(|source| CreateDeploymentError::DeploymentStore { source })?;
+    let release_exists = deployment_store::release_exists(transaction, release_id, application_id)?;
     if !release_exists {
         return Err(CreateDeploymentError::ReleaseNotFound {
             release_id: release_id.to_string(),
         });
     }
-    let blocker = deployment_store::load_nonterminal_deployment(transaction, application_id)
-        .map_err(|source| CreateDeploymentError::DeploymentStore { source })?;
+    let blocker = deployment_store::load_nonterminal_deployment(transaction, application_id)?;
     if let Some(deployment) = blocker {
         return Err(CreateDeploymentError::ActiveDeployment {
             deployment: Box::new(deployment),
         });
     }
     let active_release_id =
-        deployment_store::load_active_runtime_release_id(transaction, application_id)
-            .map_err(|source| CreateDeploymentError::DeploymentStore { source })?;
+        deployment_store::load_active_runtime_release_id(transaction, application_id)?;
     if active_release_id.as_ref() == Some(release_id) && deployment_type == DeploymentType::Deploy {
         return Err(CreateDeploymentError::AlreadyActive {
             release_id: release_id.to_string(),
         });
     }
 
-    let deployment_id = deployment_store::generate_id(transaction)
-        .map_err(|source| CreateDeploymentError::DeploymentStore { source })?;
+    let deployment_id = deployment_store::generate_id(transaction)?;
     deployment_store::insert_pending_deployment(
         transaction,
         &deployment_id,
@@ -151,14 +153,11 @@ fn create_deployment_in_transaction(
         release_id,
         deployment_type,
         source_revision,
-    )
-    .map_err(|source| CreateDeploymentError::DeploymentStore { source })?;
+    )?;
     if let Some(owner_token) = owner_token {
-        operation_store::take_ownership(transaction, application_id, owner_token)
-            .map_err(|source| CreateDeploymentError::OperationStore { source })?;
+        operation_store::take_ownership(transaction, application_id, owner_token)?;
     }
-    let deployment = deployment_store::load_deployment(transaction, &deployment_id)
-        .map_err(|source| CreateDeploymentError::DeploymentStore { source })?;
+    let deployment = deployment_store::load_deployment(transaction, &deployment_id)?;
 
     Ok(deployment)
 }

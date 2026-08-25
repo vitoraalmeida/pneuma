@@ -1,10 +1,11 @@
 use std::fmt;
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
+use std::net::{SocketAddr, TcpStream};
 use std::thread;
-use thiserror::Error;
 
-use crate::domain::runtime::{HealthCheckSpecification, HealthCheckStatus};
+use crate::domain::runtime::{
+    HealthCheckSpecification, HealthCheckStatus, RuntimeEndpointError, validate_loopback_endpoint,
+};
 use std::time::Duration;
 
 const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -57,17 +58,11 @@ impl fmt::Display for HealthCheckFailure {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Error)]
-pub enum HealthCheckError {
-    #[error("internal health endpoint must be loopback: {endpoint}")]
-    NonLoopbackEndpoint { endpoint: SocketAddr },
-}
-
 // Checks a candidate's loopback endpoint with the fixed bounded retry policy used before promotion.
 pub(crate) fn check_internal_health(
     endpoint: SocketAddr,
     specification: &HealthCheckSpecification,
-) -> Result<HealthCheckResult, HealthCheckError> {
+) -> Result<HealthCheckResult, RuntimeEndpointError> {
     check_internal_health_with_policy(
         endpoint,
         specification,
@@ -92,10 +87,8 @@ fn check_internal_health_with_policy(
     endpoint: SocketAddr,
     specification: &HealthCheckSpecification,
     policy: HealthCheckPolicy,
-) -> Result<HealthCheckResult, HealthCheckError> {
-    if endpoint.ip() != IpAddr::V4(Ipv4Addr::LOCALHOST) {
-        return Err(HealthCheckError::NonLoopbackEndpoint { endpoint });
-    }
+) -> Result<HealthCheckResult, RuntimeEndpointError> {
+    validate_loopback_endpoint(endpoint)?;
 
     for attempt in 1..=policy.max_attempts {
         match check_once(
@@ -336,7 +329,7 @@ mod tests {
 
         let error = check_internal_health(endpoint, &health_check()).unwrap_err();
 
-        assert_eq!(error, HealthCheckError::NonLoopbackEndpoint { endpoint });
+        assert_eq!(error, RuntimeEndpointError::NotIpv4Loopback { endpoint });
     }
 
     #[test]
@@ -345,7 +338,7 @@ mod tests {
 
         let error = check_internal_health(endpoint, &health_check()).unwrap_err();
 
-        assert_eq!(error, HealthCheckError::NonLoopbackEndpoint { endpoint });
+        assert_eq!(error, RuntimeEndpointError::NotIpv4Loopback { endpoint });
     }
 
     fn server_with_responses(statuses: &[u16]) -> (SocketAddr, thread::JoinHandle<()>) {

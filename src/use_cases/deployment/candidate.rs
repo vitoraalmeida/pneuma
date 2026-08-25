@@ -9,7 +9,7 @@ use super::transition::{TransitionDeploymentError, advance_deployment};
 use crate::adapters::local_runtime::{observe_container, resolve_container_id};
 use crate::adapters::port_allocator::{consume_port_reservation, reserve_port};
 use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
-use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
+use crate::adapters::stores::runtime_store;
 use crate::adapters::systemd_quadlet::{
     QuadletError, container_name, daemon_reload, start, write_unit,
 };
@@ -228,19 +228,9 @@ pub enum RegisterCandidateRuntimeError {
     #[error("registered runtime `{runtime_id}` could not be reloaded")]
     RegistrationNotFound { runtime_id: RuntimeInstanceId },
     #[error("failed to register candidate runtime: {source}")]
-    Store {
-        #[source]
-        source: RuntimeStoreError,
-    },
-    #[error("failed to register candidate runtime: {source}")]
-    DeploymentStore {
-        #[source]
-        source: DeploymentStoreError,
-    },
-    #[error("failed to register candidate runtime: {source}")]
     Persistence {
         #[source]
-        source: rusqlite::Error,
+        source: Box<dyn Error>,
     },
 }
 
@@ -261,17 +251,17 @@ impl From<DeploymentStoreError> for RegisterCandidateRuntimeError {
                 deployment_id,
                 actual: status,
             },
-            DeploymentStoreError::InvalidType { .. } => Self::DeploymentStore { source: error },
-            DeploymentStoreError::InvalidEvidence { .. } => Self::DeploymentStore { source: error },
-            DeploymentStoreError::Persistence { source } => Self::Persistence { source },
+            error => Self::Persistence {
+                source: Box::new(error),
+            },
         }
     }
 }
 
-impl From<RuntimeStoreError> for RegisterCandidateRuntimeError {
-    fn from(error: RuntimeStoreError) -> Self {
-        match error {
-            RuntimeStoreError::Persistence { source } => Self::Persistence { source },
+impl From<rusqlite::Error> for RegisterCandidateRuntimeError {
+    fn from(source: rusqlite::Error) -> Self {
+        Self::Persistence {
+            source: Box::new(source),
         }
     }
 }
@@ -286,16 +276,12 @@ pub fn register_candidate_runtime(
 ) -> Result<RuntimeInstance, RegisterCandidateRuntimeError> {
     validate_external_runtime_id(external_runtime_id.as_str())?;
 
-    let transaction = connection
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|source| RegisterCandidateRuntimeError::Persistence { source })?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     if let Some(existing) =
         runtime_store::load_runtime_by_external_id(&transaction, external_runtime_id)?
     {
         if matches_existing_registration(&existing, deployment_id, endpoint, container_port) {
-            transaction
-                .commit()
-                .map_err(|source| RegisterCandidateRuntimeError::Persistence { source })?;
+            transaction.commit()?;
             return Ok(existing);
         }
         return Err(RegisterCandidateRuntimeError::ExternalRuntimeConflict {
@@ -333,9 +319,7 @@ pub fn register_candidate_runtime(
         .ok_or_else(|| RegisterCandidateRuntimeError::RegistrationNotFound {
             runtime_id: registration.id.clone(),
         })?;
-    transaction
-        .commit()
-        .map_err(|source| RegisterCandidateRuntimeError::Persistence { source })?;
+    transaction.commit()?;
 
     Ok(runtime)
 }

@@ -1,5 +1,4 @@
 use rusqlite::{Connection, Transaction, params};
-use thiserror::Error;
 
 use crate::domain::identity::ApplicationId;
 
@@ -11,20 +10,9 @@ pub(crate) struct OperationOwnership {
     pub(crate) generation: i64,
 }
 
-#[derive(Debug, Error)]
-pub enum OperationStoreError {
-    #[error("operation store error: {source}")]
-    Persistence {
-        #[source]
-        source: rusqlite::Error,
-    },
-}
-
 // Generates an opaque owner token without inventing identity from process metadata.
-pub(crate) fn generate_token(connection: &Connection) -> Result<String, OperationStoreError> {
-    connection
-        .query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))
-        .map_err(persistence)
+pub(crate) fn generate_token(connection: &Connection) -> Result<String, rusqlite::Error> {
+    connection.query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))
 }
 
 // Replaces the persisted owner and advances its fencing generation in the caller's short transaction.
@@ -32,29 +20,23 @@ pub(crate) fn take_ownership(
     transaction: &Transaction<'_>,
     application_id: &ApplicationId,
     token: &str,
-) -> Result<OperationOwnership, OperationStoreError> {
-    transaction
-        .query_row(
-            "INSERT INTO application_operations (application_id, owner_token, generation)
+) -> Result<OperationOwnership, rusqlite::Error> {
+    transaction.query_row(
+        "INSERT INTO application_operations (application_id, owner_token, generation)
              VALUES (?1, ?2, 1)
              ON CONFLICT(application_id) DO UPDATE SET
                  owner_token = excluded.owner_token,
                  generation = application_operations.generation + 1,
                  updated_at = CURRENT_TIMESTAMP
              RETURNING generation",
-            params![application_id.as_str(), token],
-            |row| {
-                Ok(OperationOwnership {
-                    token: token.to_owned(),
-                    generation: row.get(0)?,
-                })
-            },
-        )
-        .map_err(persistence)
-}
-
-fn persistence(source: rusqlite::Error) -> OperationStoreError {
-    OperationStoreError::Persistence { source }
+        params![application_id.as_str(), token],
+        |row| {
+            Ok(OperationOwnership {
+                token: token.to_owned(),
+                generation: row.get(0)?,
+            })
+        },
+    )
 }
 
 #[cfg(test)]

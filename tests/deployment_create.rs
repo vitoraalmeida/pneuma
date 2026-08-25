@@ -34,12 +34,16 @@ fn immediate_transaction_acquires_the_writer_lock_before_reading() {
     drop(transaction);
     let _ = std::fs::remove_file(&database_path);
 
-    assert!(matches!(
-        error,
-        CreateDeploymentError::Persistence {
-            source: rusqlite::Error::SqliteFailure(error, _)
-        } if error.code == ErrorCode::DatabaseBusy
-    ));
+    let CreateDeploymentError::Persistence { source } = &error else {
+        panic!("expected the writer-lock conflict to surface as a persistence error: {error:?}");
+    };
+    let rusqlite::Error::SqliteFailure(failure, _) = source
+        .downcast_ref::<rusqlite::Error>()
+        .expect("SQLite failures must stay downcastable")
+    else {
+        panic!("expected a SQLite failure, got {source:?}");
+    };
+    assert_eq!(failure.code, ErrorCode::DatabaseBusy);
 }
 
 #[test]

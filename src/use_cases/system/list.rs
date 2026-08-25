@@ -13,7 +13,5 @@ pub struct ListSystemsError {
 
 // Lists catalog systems in stable name order without modifying persisted state.
 pub fn list_systems(connection: &Connection) -> Result<Vec<System>, ListSystemsError> {
-    system_store::list(connection).map_err(|error| match error {
-        system_store::SystemStoreError::Persistence { source } => ListSystemsError { source },
-    })
+    system_store::list(connection).map_err(|source| ListSystemsError { source })
 }

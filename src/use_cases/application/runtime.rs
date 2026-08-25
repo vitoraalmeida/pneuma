@@ -8,7 +8,7 @@ use crate::adapters::local_runtime::{
     stop_container,
 };
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
-use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
+use crate::adapters::stores::runtime_store;
 use crate::adapters::systemd_quadlet::{
     QuadletError, container_name, start as start_unit, stop as stop_unit, unit_exists, unit_name,
 };
@@ -104,11 +104,6 @@ pub enum RuntimeLifecycleError {
     #[error("application has invalid persisted desired state `{state}`")]
     InvalidDesiredState { state: String },
     #[error("failed to control application runtime: {source}")]
-    Store {
-        #[source]
-        source: RuntimeStoreError,
-    },
-    #[error("failed to control application runtime: {source}")]
     ApplicationStore {
         #[source]
         source: ApplicationStoreError,
@@ -138,6 +133,12 @@ pub enum RuntimeLifecycleError {
         #[source]
         source: rusqlite::Error,
     },
+}
+
+impl From<rusqlite::Error> for RuntimeLifecycleError {
+    fn from(source: rusqlite::Error) -> Self {
+        Self::Persistence { source }
+    }
 }
 
 // Observes the current runtime and persists its state without changing the operator's intent.
@@ -399,8 +400,7 @@ fn observe_active_runtime(
         &runtime.id,
         &runtime.external_runtime_id,
         &resolved,
-    )
-    .map_err(|source| RuntimeLifecycleError::Store { source })?;
+    )?;
     if reconciled == crate::adapters::stores::PersistenceOutcome::Stale {
         return Err(RuntimeLifecycleError::RuntimeChanged {
             runtime_id: runtime.id.to_string(),
@@ -424,11 +424,11 @@ fn load_active_runtime(
     application_id: &ApplicationId,
     application_name: &ApplicationName,
 ) -> Result<RuntimeInstance, RuntimeLifecycleError> {
-    runtime_store::load_active_successful_runtime(connection, application_id)
-        .map_err(|source| RuntimeLifecycleError::Store { source })?
-        .ok_or_else(|| RuntimeLifecycleError::NotDeployed {
+    runtime_store::load_active_successful_runtime(connection, application_id)?.ok_or_else(|| {
+        RuntimeLifecycleError::NotDeployed {
             application_name: application_name.as_str().to_owned(),
-        })
+        }
+    })
 }
 
 // Maps persisted desired state into the domain value and surfaces corrupt values explicitly.
@@ -473,8 +473,7 @@ fn persist_observation(
     runtime: &RuntimeInstance,
     observation: &ContainerObservation,
 ) -> Result<(), RuntimeLifecycleError> {
-    let updated = runtime_store::persist_observation(connection, &runtime.id, observation)
-        .map_err(|source| RuntimeLifecycleError::Store { source })?;
+    let updated = runtime_store::persist_observation(connection, &runtime.id, observation)?;
     if updated == crate::adapters::stores::PersistenceOutcome::Stale {
         return Err(RuntimeLifecycleError::RuntimeChanged {
             runtime_id: runtime.id.to_string(),

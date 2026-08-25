@@ -1,15 +1,15 @@
+use std::error::Error;
+
 use rusqlite::{Connection, TransactionBehavior};
 use thiserror::Error;
 
 use super::transition::{TransitionDeploymentError, fail_deployment};
-use crate::adapters::health_check_internal::{
-    HealthCheckError, HealthCheckResult, check_internal_health,
-};
+use crate::adapters::health_check_internal::{HealthCheckResult, check_internal_health};
 use crate::adapters::stores::PersistenceOutcome;
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
 use crate::adapters::stores::exposure_store::{self, ExposureStoreError};
-use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
+use crate::adapters::stores::runtime_store;
 use crate::domain::deployment::{
     DeploymentEvent, DeploymentStatus, PromotedCandidate, PromotionCandidateRejection,
     PromotionTarget,
@@ -19,7 +19,7 @@ use crate::domain::exposure::{
     PublicExposureTarget, Visibility,
 };
 use crate::domain::identity::{ApplicationId, RuntimeInstanceId};
-use crate::domain::runtime::HealthCheckSpecification;
+use crate::domain::runtime::{HealthCheckSpecification, RuntimeEndpointError};
 
 #[derive(Debug, Error)]
 pub enum PromoteInternalCandidateError {
@@ -40,11 +40,8 @@ pub enum PromoteInternalCandidateError {
     },
     #[error("application `{application_id}` requires public route activation before promotion")]
     PublicApplication { application_id: String },
-    #[error("{source}")]
-    HealthCheck {
-        #[source]
-        source: HealthCheckError,
-    },
+    #[error(transparent)]
+    HealthCheck { source: RuntimeEndpointError },
     #[error("candidate failed its internal health check: {result:?}")]
     CandidateUnhealthy { result: HealthCheckResult },
     #[error("failed to record candidate health failure: {source}")]
@@ -53,25 +50,34 @@ pub enum PromoteInternalCandidateError {
         source: TransitionDeploymentError,
     },
     #[error("failed to promote internal candidate: {source}")]
-    Store {
-        #[source]
-        source: DeploymentStoreError,
-    },
-    #[error("failed to promote internal candidate: {source}")]
-    ApplicationStore {
-        #[source]
-        source: ApplicationStoreError,
-    },
-    #[error("failed to promote internal candidate: {source}")]
-    RuntimeStore {
-        #[source]
-        source: RuntimeStoreError,
-    },
-    #[error("failed to promote internal candidate: {source}")]
     Persistence {
         #[source]
-        source: rusqlite::Error,
+        source: Box<dyn Error>,
     },
+}
+
+impl From<rusqlite::Error> for PromoteInternalCandidateError {
+    fn from(source: rusqlite::Error) -> Self {
+        Self::Persistence {
+            source: Box::new(source),
+        }
+    }
+}
+
+impl From<DeploymentStoreError> for PromoteInternalCandidateError {
+    fn from(error: DeploymentStoreError) -> Self {
+        Self::Persistence {
+            source: Box::new(error),
+        }
+    }
+}
+
+impl From<ApplicationStoreError> for PromoteInternalCandidateError {
+    fn from(error: ApplicationStoreError) -> Self {
+        Self::Persistence {
+            source: Box::new(error),
+        }
+    }
 }
 
 // Health-checks an internal candidate outside a transaction, then atomically promotes it.
@@ -127,14 +133,10 @@ pub fn promote_internal_candidate(
         }
     }
 
-    let transaction = connection
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|source| PromoteInternalCandidateError::Persistence { source })?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let target = load_target(&transaction, runtime_id)?;
     if let Some(promoted) = target.completed_promotion() {
-        transaction
-            .commit()
-            .map_err(|source| PromoteInternalCandidateError::Persistence { source })?;
+        transaction.commit()?;
         return Ok(promoted);
     }
     target
@@ -167,11 +169,8 @@ pub fn promote_internal_candidate(
         &transaction,
         &target.application_id,
         &target.runtime_id,
-    )
-    .map_err(|source| PromoteInternalCandidateError::RuntimeStore { source })?;
-    if runtime_store::start_runtime(&transaction, &target.runtime_id)
-        .map_err(|source| PromoteInternalCandidateError::RuntimeStore { source })?
-        == PersistenceOutcome::Stale
+    )?;
+    if runtime_store::start_runtime(&transaction, &target.runtime_id)? == PersistenceOutcome::Stale
     {
         return Err(PromoteInternalCandidateError::InvalidDeploymentState {
             deployment_id: target.deployment_id.to_string(),
@@ -182,9 +181,7 @@ pub fn promote_internal_candidate(
         &transaction,
         &target.deployment_id,
         target.deployment_status,
-    )
-    .map_err(|source| PromoteInternalCandidateError::Store { source })?
-        == PersistenceOutcome::Stale
+    )? == PersistenceOutcome::Stale
     {
         return Err(PromoteInternalCandidateError::InvalidDeploymentState {
             deployment_id: target.deployment_id.to_string(),
@@ -195,20 +192,15 @@ pub fn promote_internal_candidate(
         &transaction,
         &target.application_id,
         &target.deployment_id,
-    )
-    .map_err(|source| PromoteInternalCandidateError::ApplicationStore { source })?
-        == PersistenceOutcome::Stale
+    )? == PersistenceOutcome::Stale
     {
         return Err(PromoteInternalCandidateError::InvalidDeploymentState {
             deployment_id: target.deployment_id.to_string(),
             actual: "changed during promotion".to_owned(),
         });
     }
-    let finished_at = deployment_store::load_finished_at(&transaction, &target.deployment_id)
-        .map_err(|source| PromoteInternalCandidateError::Store { source })?;
-    transaction
-        .commit()
-        .map_err(|source| PromoteInternalCandidateError::Persistence { source })?;
+    let finished_at = deployment_store::load_finished_at(&transaction, &target.deployment_id)?;
+    transaction.commit()?;
 
     Ok(PromotedCandidate {
         runtime_id: target.runtime_id,
@@ -234,11 +226,11 @@ fn load_target(
     connection: &Connection,
     runtime_id: &RuntimeInstanceId,
 ) -> Result<PromotionTarget, PromoteInternalCandidateError> {
-    deployment_store::load_promotion_target(connection, runtime_id)
-        .map_err(|source| PromoteInternalCandidateError::Store { source })?
-        .ok_or_else(|| PromoteInternalCandidateError::RuntimeNotFound {
+    deployment_store::load_promotion_target(connection, runtime_id)?.ok_or_else(|| {
+        PromoteInternalCandidateError::RuntimeNotFound {
             runtime_id: runtime_id.to_string(),
-        })
+        }
+    })
 }
 
 #[derive(Debug, Error)]
@@ -258,30 +250,42 @@ pub(crate) enum PromotePublicCandidateError {
         reason: String,
     },
     #[error("failed to persist public promotion: {source}")]
-    ExposureStore {
-        #[source]
-        source: ExposureStoreError,
-    },
-    #[error("failed to persist public promotion: {source}")]
-    DeploymentStore {
-        #[source]
-        source: DeploymentStoreError,
-    },
-    #[error("failed to persist public promotion: {source}")]
-    ApplicationStore {
-        #[source]
-        source: ApplicationStoreError,
-    },
-    #[error("failed to persist public promotion: {source}")]
-    RuntimeStore {
-        #[source]
-        source: RuntimeStoreError,
-    },
-    #[error("failed to persist public promotion: {source}")]
     Persistence {
         #[source]
-        source: rusqlite::Error,
+        source: Box<dyn Error>,
     },
+}
+
+impl From<rusqlite::Error> for PromotePublicCandidateError {
+    fn from(source: rusqlite::Error) -> Self {
+        Self::Persistence {
+            source: Box::new(source),
+        }
+    }
+}
+
+impl From<ExposureStoreError> for PromotePublicCandidateError {
+    fn from(error: ExposureStoreError) -> Self {
+        Self::Persistence {
+            source: Box::new(error),
+        }
+    }
+}
+
+impl From<DeploymentStoreError> for PromotePublicCandidateError {
+    fn from(error: DeploymentStoreError) -> Self {
+        Self::Persistence {
+            source: Box::new(error),
+        }
+    }
+}
+
+impl From<ApplicationStoreError> for PromotePublicCandidateError {
+    fn from(error: ApplicationStoreError) -> Self {
+        Self::Persistence {
+            source: Box::new(error),
+        }
+    }
 }
 
 // Marks public exposure as applying before Caddy effects occur outside SQLite transactions.
@@ -326,8 +330,7 @@ pub(crate) fn begin_public_exposure(
         }
     };
 
-    let updated = exposure_store::begin_public_exposure(connection, &target.application_id)
-        .map_err(|source| PromotePublicCandidateError::ExposureStore { source })?;
+    let updated = exposure_store::begin_public_exposure(connection, &target.application_id)?;
     if updated == crate::adapters::stores::PersistenceOutcome::Stale {
         return Err(PromotePublicCandidateError::InvalidExposure {
             application_id: target.application_id.to_string(),
@@ -353,8 +356,7 @@ pub(crate) fn record_public_exposure_failure(
         application_id,
         diagnostic,
         outcome.state(),
-    )
-    .map_err(|source| PromotePublicCandidateError::ExposureStore { source })?;
+    )?;
     if updated == crate::adapters::stores::PersistenceOutcome::Stale {
         return Err(PromotePublicCandidateError::InvalidExposure {
             application_id: application_id.to_string(),
@@ -370,9 +372,7 @@ pub(crate) fn promote_public_candidate(
     runtime_id: &RuntimeInstanceId,
     configuration_version: &ExposureConfigurationVersion,
 ) -> Result<PromotedCandidate, PromotePublicCandidateError> {
-    let transaction = connection
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|source| PromotePublicCandidateError::Persistence { source })?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let target = load_public_target(&transaction, runtime_id)?;
     target.validate_promotion_candidate().map_err(|rejection| {
         PromotePublicCandidateError::InvalidRuntime {
@@ -409,11 +409,8 @@ pub(crate) fn promote_public_candidate(
         &transaction,
         &target.application_id,
         &target.runtime_id,
-    )
-    .map_err(|source| PromotePublicCandidateError::RuntimeStore { source })?;
-    if runtime_store::start_runtime(&transaction, &target.runtime_id)
-        .map_err(|source| PromotePublicCandidateError::RuntimeStore { source })?
-        == PersistenceOutcome::Stale
+    )?;
+    if runtime_store::start_runtime(&transaction, &target.runtime_id)? == PersistenceOutcome::Stale
     {
         return Err(PromotePublicCandidateError::InvalidRuntime {
             runtime_id: runtime_id.to_string(),
@@ -425,9 +422,7 @@ pub(crate) fn promote_public_candidate(
         &target.application_id,
         &target.runtime_id,
         configuration_version,
-    )
-    .map_err(|source| PromotePublicCandidateError::ExposureStore { source })?
-        == PersistenceOutcome::Stale
+    )? == PersistenceOutcome::Stale
     {
         return Err(PromotePublicCandidateError::InvalidRuntime {
             runtime_id: runtime_id.to_string(),
@@ -438,9 +433,7 @@ pub(crate) fn promote_public_candidate(
         &transaction,
         &target.deployment_id,
         target.deployment_status,
-    )
-    .map_err(|source| PromotePublicCandidateError::DeploymentStore { source })?
-        == PersistenceOutcome::Stale
+    )? == PersistenceOutcome::Stale
     {
         return Err(PromotePublicCandidateError::InvalidRuntime {
             runtime_id: runtime_id.to_string(),
@@ -451,9 +444,7 @@ pub(crate) fn promote_public_candidate(
         &transaction,
         &target.application_id,
         &target.deployment_id,
-    )
-    .map_err(|source| PromotePublicCandidateError::ApplicationStore { source })?
-        == PersistenceOutcome::Stale
+    )? == PersistenceOutcome::Stale
     {
         return Err(PromotePublicCandidateError::InvalidRuntime {
             runtime_id: runtime_id.to_string(),
@@ -463,11 +454,8 @@ pub(crate) fn promote_public_candidate(
     let finished_at = crate::adapters::stores::deployment_store::load_finished_at(
         &transaction,
         &target.deployment_id,
-    )
-    .map_err(|source| PromotePublicCandidateError::DeploymentStore { source })?;
-    transaction
-        .commit()
-        .map_err(|source| PromotePublicCandidateError::Persistence { source })?;
+    )?;
+    transaction.commit()?;
 
     Ok(PromotedCandidate {
         runtime_id: target.runtime_id,
@@ -481,8 +469,7 @@ fn load_public_target(
     connection: &Connection,
     runtime_id: &RuntimeInstanceId,
 ) -> Result<PromotionTarget, PromotePublicCandidateError> {
-    crate::adapters::stores::deployment_store::load_promotion_target(connection, runtime_id)
-        .map_err(|source| PromotePublicCandidateError::DeploymentStore { source })?
+    crate::adapters::stores::deployment_store::load_promotion_target(connection, runtime_id)?
         .ok_or_else(|| PromotePublicCandidateError::RuntimeNotFound {
             runtime_id: runtime_id.to_string(),
         })

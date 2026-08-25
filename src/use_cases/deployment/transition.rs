@@ -40,11 +40,8 @@ pub enum TransitionDeploymentError {
         deployment_id: String,
         deployment_type: String,
     },
-    #[error("{source}")]
-    InvalidFailure {
-        #[source]
-        source: InvalidDeploymentFailure,
-    },
+    #[error(transparent)]
+    InvalidFailure { source: InvalidDeploymentFailure },
     #[error("failed to transition deployment: {source}")]
     Persistence {
         #[source]

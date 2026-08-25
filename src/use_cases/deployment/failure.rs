@@ -19,7 +19,6 @@ use super::promotion::PromoteInternalCandidateError;
 use super::transition::{TransitionDeploymentError, fail_deployment};
 use crate::adapters::application_lock::ApplicationLockError;
 use crate::adapters::stores::application_store::ApplicationStoreError;
-use crate::adapters::stores::operation_store::OperationStoreError;
 use crate::domain::identity::{DeploymentId, RuntimeInstanceId};
 use crate::domain::runtime::ContainerId;
 
@@ -34,11 +33,8 @@ pub enum DeployReleaseError {
         #[source]
         source: ApplicationStoreError,
     },
-    #[error("{source}")]
-    CreateDeployment {
-        #[source]
-        source: CreateDeploymentError,
-    },
+    #[error(transparent)]
+    CreateDeployment { source: CreateDeploymentError },
     #[error("deployment `{deployment_id}` failed with `{code}`: {source}")]
     DeploymentFailed {
         deployment_id: String,
@@ -72,7 +68,7 @@ pub enum DeployReleaseError {
     #[error("failed to create deployment ownership: {source}")]
     OperationToken {
         #[source]
-        source: OperationStoreError,
+        source: rusqlite::Error,
     },
     #[error("application `{application_id}` already has an operation in progress")]
     OperationInProgress { application_id: String },

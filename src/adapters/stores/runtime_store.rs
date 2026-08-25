@@ -1,7 +1,6 @@
 use std::net::{Ipv4Addr, SocketAddr};
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
-use thiserror::Error;
 
 use crate::adapters::stores::PersistenceOutcome;
 use crate::adapters::stores::persistence::{
@@ -14,46 +13,34 @@ use crate::domain::runtime::{
     RuntimeInstance, RuntimeRegistration, RuntimeRetirement, RuntimeState,
 };
 
-#[derive(Debug, Error)]
-pub enum RuntimeStoreError {
-    #[error("runtime store error: {source}")]
-    Persistence {
-        #[source]
-        source: rusqlite::Error,
-    },
-}
-
 // Allocates a runtime ID beside endpoint registration in the same SQLite transaction.
-pub(crate) fn generate_id(connection: &Connection) -> Result<RuntimeInstanceId, RuntimeStoreError> {
+pub(crate) fn generate_id(connection: &Connection) -> Result<RuntimeInstanceId, rusqlite::Error> {
     connection
         .query_row("SELECT lower(hex(randomblob(16)))", [], |row| {
             row.get::<_, String>(0)
         })
         .map(RuntimeInstanceId::from)
-        .map_err(|source| RuntimeStoreError::Persistence { source })
 }
 
 // Checks whether a non-removed runtime already owns the requested loopback endpoint.
 pub(crate) fn port_is_reserved(
     connection: &Connection,
     endpoint: &ExpectedRuntimeEndpoint,
-) -> Result<bool, RuntimeStoreError> {
+) -> Result<bool, rusqlite::Error> {
     let socket_addr = endpoint.socket_addr();
-    connection
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM runtime_instances
+    connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM runtime_instances
              WHERE host_address = ?1 AND host_port = ?2 AND removed_at IS NULL)",
-            params![socket_addr.ip().to_string(), socket_addr.port()],
-            |row| row.get(0),
-        )
-        .map_err(|source| RuntimeStoreError::Persistence { source })
+        params![socket_addr.ip().to_string(), socket_addr.port()],
+        |row| row.get(0),
+    )
 }
 
 // Persists a candidate runtime and its reserved loopback endpoint after external creation.
 pub(crate) fn insert_runtime(
     transaction: &Transaction<'_>,
     registration: &RuntimeRegistration,
-) -> Result<(), RuntimeStoreError> {
+) -> Result<(), rusqlite::Error> {
     transaction
         .execute(
             "INSERT INTO runtime_instances (
@@ -71,8 +58,7 @@ pub(crate) fn insert_runtime(
                 registration.expected_endpoint.socket_addr().port(),
                 registration.container_port.get()
             ],
-        )
-        .map_err(|source| RuntimeStoreError::Persistence { source })?;
+        )?;
     Ok(())
 }
 
@@ -80,7 +66,7 @@ pub(crate) fn insert_runtime(
 pub(crate) fn load_active_successful_runtime(
     connection: &Connection,
     application_id: &ApplicationId,
-) -> Result<Option<RuntimeInstance>, RuntimeStoreError> {
+) -> Result<Option<RuntimeInstance>, rusqlite::Error> {
     connection
         .query_row(
             "SELECT
@@ -109,7 +95,6 @@ pub(crate) fn load_active_successful_runtime(
             map_runtime_instance,
         )
         .optional()
-        .map_err(|source| RuntimeStoreError::Persistence { source })
 }
 
 // Replaces an external container ID only when the logical runtime still has the expected ID.
@@ -118,10 +103,9 @@ pub(crate) fn reconcile_external_runtime_id(
     runtime_id: &RuntimeInstanceId,
     expected_external_runtime_id: &ContainerId,
     replacement_external_runtime_id: &ContainerId,
-) -> Result<PersistenceOutcome, RuntimeStoreError> {
-    let updated = connection
-        .execute(
-            "UPDATE runtime_instances
+) -> Result<PersistenceOutcome, rusqlite::Error> {
+    let updated = connection.execute(
+        "UPDATE runtime_instances
               SET external_runtime_id = ?1,
                   last_observed_state = 'running',
                   last_observed_at = CURRENT_TIMESTAMP,
@@ -129,13 +113,12 @@ pub(crate) fn reconcile_external_runtime_id(
               WHERE id = ?2
                 AND external_runtime_id = ?3
                 AND removed_at IS NULL",
-            params![
-                replacement_external_runtime_id.as_str(),
-                runtime_id.as_str(),
-                expected_external_runtime_id.as_str()
-            ],
-        )
-        .map_err(|source| RuntimeStoreError::Persistence { source })?;
+        params![
+            replacement_external_runtime_id.as_str(),
+            runtime_id.as_str(),
+            expected_external_runtime_id.as_str()
+        ],
+    )?;
     Ok(outcome(updated))
 }
 
@@ -144,18 +127,16 @@ pub(crate) fn persist_observation(
     connection: &Connection,
     runtime_id: &RuntimeInstanceId,
     observation: &ContainerObservation,
-) -> Result<PersistenceOutcome, RuntimeStoreError> {
+) -> Result<PersistenceOutcome, rusqlite::Error> {
     let state = observed_runtime_state_value(observation.state());
-    let updated = connection
-        .execute(
-            "UPDATE runtime_instances
+    let updated = connection.execute(
+        "UPDATE runtime_instances
          SET last_observed_state = ?2,
               last_observed_at = CURRENT_TIMESTAMP,
               updated_at = CURRENT_TIMESTAMP
          WHERE id = ?1 AND removed_at IS NULL",
-            params![runtime_id.as_str(), state],
-        )
-        .map_err(|source| RuntimeStoreError::Persistence { source })?;
+        params![runtime_id.as_str(), state],
+    )?;
     Ok(outcome(updated))
 }
 
@@ -163,15 +144,13 @@ pub(crate) fn persist_observation(
 pub(crate) fn start_runtime(
     transaction: &Transaction<'_>,
     runtime_id: &RuntimeInstanceId,
-) -> Result<PersistenceOutcome, RuntimeStoreError> {
-    let updated = transaction
-        .execute(
-            "UPDATE runtime_instances
+) -> Result<PersistenceOutcome, rusqlite::Error> {
+    let updated = transaction.execute(
+        "UPDATE runtime_instances
              SET state = 'running', updated_at = CURRENT_TIMESTAMP
              WHERE id = ?1 AND state = 'starting' AND removed_at IS NULL",
-            [runtime_id.as_str()],
-        )
-        .map_err(|source| RuntimeStoreError::Persistence { source })?;
+        [runtime_id.as_str()],
+    )?;
     Ok(outcome(updated))
 }
 
@@ -180,18 +159,16 @@ pub(crate) fn stop_other_running_runtimes(
     transaction: &Transaction<'_>,
     application_id: &ApplicationId,
     candidate_runtime_id: &RuntimeInstanceId,
-) -> Result<(), RuntimeStoreError> {
-    transaction
-        .execute(
-            "UPDATE runtime_instances
+) -> Result<(), rusqlite::Error> {
+    transaction.execute(
+        "UPDATE runtime_instances
              SET state = 'stopped', updated_at = CURRENT_TIMESTAMP
              WHERE application_id = ?1
                AND state = 'running'
                AND removed_at IS NULL
                AND id != ?2",
-            params![application_id.as_str(), candidate_runtime_id.as_str()],
-        )
-        .map_err(|source| RuntimeStoreError::Persistence { source })?;
+        params![application_id.as_str(), candidate_runtime_id.as_str()],
+    )?;
     Ok(())
 }
 
@@ -199,7 +176,7 @@ pub(crate) fn stop_other_running_runtimes(
 pub(crate) fn load_runtime_state(
     connection: &Connection,
     runtime_id: &RuntimeInstanceId,
-) -> Result<Option<RuntimeState>, RuntimeStoreError> {
+) -> Result<Option<RuntimeState>, rusqlite::Error> {
     connection
         .query_row(
             "SELECT state FROM runtime_instances WHERE id = ?1",
@@ -211,7 +188,6 @@ pub(crate) fn load_runtime_state(
             },
         )
         .optional()
-        .map_err(|source| RuntimeStoreError::Persistence { source })
 }
 
 // Finds another live runtime that may need retirement after candidate promotion.
@@ -219,7 +195,7 @@ pub(crate) fn load_previous_runtime(
     connection: &Connection,
     application_id: &ApplicationId,
     candidate_runtime_id: &RuntimeInstanceId,
-) -> Result<Option<PreviousRuntime>, RuntimeStoreError> {
+) -> Result<Option<PreviousRuntime>, rusqlite::Error> {
     connection
         .query_row(
             "SELECT id, deployment_id, external_runtime_id
@@ -238,14 +214,13 @@ pub(crate) fn load_previous_runtime(
             },
         )
         .optional()
-        .map_err(|source| RuntimeStoreError::Persistence { source })
 }
 
 // Resolves a logical runtime from the container identity observed from Podman.
 pub fn load_runtime_by_external_id(
     connection: &Connection,
     external_runtime_id: &ContainerId,
-) -> Result<Option<RuntimeInstance>, RuntimeStoreError> {
+) -> Result<Option<RuntimeInstance>, rusqlite::Error> {
     connection
         .query_row(
             "SELECT id, application_id, deployment_id, external_runtime_id,
@@ -257,14 +232,13 @@ pub fn load_runtime_by_external_id(
             map_runtime_instance,
         )
         .optional()
-        .map_err(|source| RuntimeStoreError::Persistence { source })
 }
 
 // Finds the candidate runtime registered by one deployment without confusing it with an active runtime.
 pub(crate) fn load_runtime_by_deployment(
     connection: &Connection,
     deployment_id: &DeploymentId,
-) -> Result<Option<RuntimeInstance>, RuntimeStoreError> {
+) -> Result<Option<RuntimeInstance>, rusqlite::Error> {
     connection
         .query_row(
             "SELECT id, application_id, deployment_id, external_runtime_id,
@@ -276,7 +250,6 @@ pub(crate) fn load_runtime_by_deployment(
             map_runtime_instance,
         )
         .optional()
-        .map_err(|source| RuntimeStoreError::Persistence { source })
 }
 
 // Tombstones only a stopped runtime, preserving lifecycle transition ordering.
@@ -285,15 +258,13 @@ pub(crate) fn load_runtime_by_deployment(
 pub(crate) fn mark_runtime_removed(
     connection: &Connection,
     runtime_id: &RuntimeInstanceId,
-) -> Result<PersistenceOutcome, RuntimeStoreError> {
-    let updated = connection
-        .execute(
-            "UPDATE runtime_instances
+) -> Result<PersistenceOutcome, rusqlite::Error> {
+    let updated = connection.execute(
+        "UPDATE runtime_instances
               SET state = 'removed', removed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
              WHERE id = ?1 AND state = 'stopped' AND removed_at IS NULL",
-            [runtime_id.as_str()],
-        )
-        .map_err(|source| RuntimeStoreError::Persistence { source })?;
+        [runtime_id.as_str()],
+    )?;
     Ok(outcome(updated))
 }
 
@@ -301,19 +272,17 @@ pub(crate) fn mark_runtime_removed(
 pub(crate) fn mark_starting_runtime_missing(
     connection: &Connection,
     runtime_id: &RuntimeInstanceId,
-) -> Result<PersistenceOutcome, RuntimeStoreError> {
-    let updated = connection
-        .execute(
-            "UPDATE runtime_instances
+) -> Result<PersistenceOutcome, rusqlite::Error> {
+    let updated = connection.execute(
+        "UPDATE runtime_instances
               SET state = 'removed',
                   last_observed_state = 'missing',
                  last_observed_at = CURRENT_TIMESTAMP,
                  removed_at = CURRENT_TIMESTAMP,
                  updated_at = CURRENT_TIMESTAMP
               WHERE id = ?1 AND state = 'starting' AND removed_at IS NULL",
-            [runtime_id.as_str()],
-        )
-        .map_err(|source| RuntimeStoreError::Persistence { source })?;
+        [runtime_id.as_str()],
+    )?;
     Ok(outcome(updated))
 }
 
@@ -438,7 +407,7 @@ mod tests {
         );
         assert!(matches!(
             load_runtime_state(&connection, &RuntimeInstanceId::from("invalid")),
-            Err(RuntimeStoreError::Persistence { .. })
+            Err(rusqlite::Error::FromSqlConversionFailure(_, _, _))
         ));
     }
 

@@ -23,13 +23,8 @@ pub fn create_system(
         .transaction()
         .map_err(|source| CreateError::Persistence { source })?;
 
-    let system = system_store::create_or_load(&transaction, name, description).map_err(
-        |error| match error {
-            system_store::SystemStoreError::Persistence { source } => {
-                CreateError::Persistence { source }
-            }
-        },
-    )?;
+    let system = system_store::create_or_load(&transaction, name, description)
+        .map_err(|source| CreateError::Persistence { source })?;
 
     transaction
         .commit()
