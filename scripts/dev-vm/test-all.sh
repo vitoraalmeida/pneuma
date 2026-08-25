@@ -237,7 +237,9 @@ check_remote "Started healthy-http" "app start" "pneuma app start healthy-http"
 check_remote "Started healthy-http" "app start is idempotent" "pneuma app start healthy-http"
 check_remote "Observed state: Running" "app status reflects Running" "pneuma app status healthy-http"
 check_remote "Deployments for healthy-http:" "app deployments lists history" "pneuma app deployments healthy-http"
-BACKUP_PATH="$LOG_DIR/pneuma-backup-$$.sqlite3"
+# The backup path is interpreted on the VM (pneuma_cmd runs remotely), so it
+# must be valid there: a flat /tmp file exists on every fresh clone.
+BACKUP_PATH="/tmp/pneuma-backup-$$.sqlite3"
 check_remote "Created e2e-before-backup" "create pre-backup system" "pneuma system create e2e-before-backup --description restore-baseline"
 check_remote "e2e-before-backup" "pre-backup system exists" "pneuma system list"
 check_remote "Database backup:" "database backup" "pneuma database backup $BACKUP_PATH"
