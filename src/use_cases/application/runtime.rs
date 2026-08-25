@@ -213,19 +213,9 @@ pub fn report_application_status(
             runtime_id: runtime.id.to_string(),
             source,
         })?;
-    if *observation.state() == ObservedRuntimeState::Missing {
-        // When the operator wants the application stopped and the container is missing
-        // (removed by the Quadlet ExecStop), deduce a stopped observation without marking
-        // the runtime as removed so subsequent stop/start/status commands can still find it.
-        if desired_runtime_state == DesiredRuntimeState::Stopped {
-            persist_observation(connection, &runtime, &observation)?;
-            return Ok(RuntimeObservation::recorded(
-                desired_runtime_state,
-                runtime.id,
-                runtime.external_runtime_id,
-                &observation,
-            ));
-        }
+    if *observation.state() == ObservedRuntimeState::Missing
+        && !missing_container_satisfies_stop_intent(&observation, desired_runtime_state)
+    {
         persist_observation(connection, &runtime, &observation)?;
         return Err(RuntimeLifecycleError::ContainerMissing {
             application_name: application_name.as_str().to_owned(),
@@ -291,6 +281,18 @@ fn transition_application(
     transition_observed_runtime(connection, &runtime, application_name, command, current)
 }
 
+// A container reported missing while the operator wants the application stopped
+// is a stop already carried out (Quadlet removes the container on ExecStop).
+// The observation is recorded without retiring the runtime so subsequent
+// stop/start/status commands still find it.
+fn missing_container_satisfies_stop_intent(
+    observation: &ContainerObservation,
+    desired_runtime_state: DesiredRuntimeState,
+) -> bool {
+    *observation.state() == ObservedRuntimeState::Missing
+        && desired_runtime_state == DesiredRuntimeState::Stopped
+}
+
 // Interprets an absent container against the operator's intent: a stop is already
 // satisfied, a start attempts supervised recovery through the stable Quadlet
 // identity, and anything unresolved remains an explicit missing-container error.
@@ -302,10 +304,9 @@ fn handle_missing_runtime(
     current: ActiveRuntimeObservation,
 ) -> Result<RuntimeObservation, RuntimeLifecycleError> {
     let desired_runtime_state = command.desired_state();
-    // When the operator wants the application stopped and the container is missing
-    // (removed by the Quadlet ExecStop), the intent is already satisfied. Recording
-    // the missing observation without retiring the runtime keeps later commands operable.
-    if desired_runtime_state == DesiredRuntimeState::Stopped {
+    // Recording the missing observation without retiring the runtime keeps later
+    // commands operable instead of reporting the application as undeployed.
+    if missing_container_satisfies_stop_intent(&current.observation, desired_runtime_state) {
         persist_observation(connection, runtime, &current.observation)?;
         return Ok(RuntimeObservation::recorded(
             desired_runtime_state,

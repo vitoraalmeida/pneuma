@@ -361,10 +361,7 @@ pub fn register_candidate_runtime(
     if let Some(existing) =
         runtime_store::load_runtime_by_external_id(&transaction, external_runtime_id)?
     {
-        if existing.deployment_id == *deployment_id
-            && existing.expected_endpoint == endpoint
-            && existing.container_port == container_port
-        {
+        if matches_existing_registration(&existing, deployment_id, endpoint, container_port) {
             transaction
                 .commit()
                 .map_err(|source| RegisterCandidateRuntimeError::Persistence { source })?;
@@ -410,6 +407,19 @@ pub fn register_candidate_runtime(
         .map_err(|source| RegisterCandidateRuntimeError::Persistence { source })?;
 
     Ok(runtime)
+}
+
+// A runtime already registered with the identical deployment, endpoint, and port
+// makes re-registering the same external container idempotent instead of conflicting.
+fn matches_existing_registration(
+    existing: &RuntimeInstance,
+    deployment_id: &DeploymentId,
+    endpoint: ExpectedRuntimeEndpoint,
+    container_port: ContainerPort,
+) -> bool {
+    existing.deployment_id == *deployment_id
+        && existing.expected_endpoint == endpoint
+        && existing.container_port == container_port
 }
 
 // Enforces the external container-ID invariant before persistence.

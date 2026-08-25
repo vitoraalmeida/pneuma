@@ -1,9 +1,9 @@
 use rusqlite::Connection;
 
 use crate::adapters::caddy_exposure::{
-    MaterializeCaddyFragmentError, MaterializedCaddyFragment, canonical_fragment_contents,
-    materialize_caddy_fragment, remove_caddy_fragment, restore_materialized_caddy_fragment,
-    restore_removed_caddy_fragment,
+    CaddyRecoveryError, MaterializeCaddyFragmentError, MaterializedCaddyFragment,
+    canonical_fragment_contents, materialize_caddy_fragment, remove_caddy_fragment,
+    restore_materialized_caddy_fragment, restore_removed_caddy_fragment,
 };
 use crate::adapters::health_check_external::check_external_health;
 use crate::adapters::health_check_internal::{HealthCheckResult, check_internal_health};
@@ -15,7 +15,7 @@ use crate::adapters::systemd_quadlet::{
 use crate::domain::application::{ApplicationDeploymentSpecification, ApplicationName};
 use crate::domain::exposure::{
     DomainName, ExposureConfigurationVersion, ExposureDiagnostic, ExposureIntent,
-    ExposureMaterializationState, Visibility,
+    ExposureMaterializationState, ExposureOutcome, Visibility,
 };
 use crate::domain::identity::ApplicationId;
 use crate::domain::reconciliation::{
@@ -274,7 +274,7 @@ fn remove_internal_route(
 ) -> Result<ReconciliationResult, ReconciliationReadError> {
     reserve_exposure(
         connection,
-        input.desired.application.id.as_str(),
+        &input.desired.application.id,
         Visibility::Internal,
         expected_state,
     )?;
@@ -287,12 +287,12 @@ fn remove_internal_route(
         Err(source) => {
             return record_exposure_failure(
                 connection,
-                input.desired.application.id.as_str(),
+                &input.desired.application.id,
                 Visibility::Internal,
                 ExposureMaterializationState::Removing,
                 "caddy_removal_failed",
                 &source.to_string(),
-                source.recovery_failed(),
+                recovery_outcome(source.recovery_failed()),
             );
         }
     };
@@ -304,15 +304,15 @@ fn remove_internal_route(
     .map_err(|source| ReconciliationReadError::Exposure { source })?;
     if completed == PersistenceOutcome::Stale {
         drop(transaction);
-        let recovery_failed = restore_removed_caddy_fragment(&removed, caddyfile_path).is_err();
+        let outcome = restoration_outcome(restore_removed_caddy_fragment(&removed, caddyfile_path));
         return record_exposure_failure(
             connection,
-            input.desired.application.id.as_str(),
+            &input.desired.application.id,
             Visibility::Internal,
             ExposureMaterializationState::Removing,
             "exposure_changed",
             "exposure changed while Caddy route removal was being confirmed",
-            recovery_failed,
+            outcome,
         );
     }
     transaction.commit().map_err(persistence_error)?;
@@ -335,7 +335,7 @@ fn materialize_public_route(
     let (domain, runtime, configuration_version) = prepare_public_route(input)?;
     reserve_exposure(
         connection,
-        input.desired.application.id.as_str(),
+        &input.desired.application.id,
         Visibility::Public,
         expected_state,
     )?;
@@ -401,12 +401,12 @@ fn record_materialization_failure(
 ) -> Result<ReconciliationResult, ReconciliationReadError> {
     record_exposure_failure(
         connection,
-        input.desired.application.id.as_str(),
+        &input.desired.application.id,
         Visibility::Public,
         ExposureMaterializationState::Applying,
         "caddy_materialization_failed",
         &source.to_string(),
-        source.recovery_failed(),
+        recovery_outcome(source.recovery_failed()),
     )
 }
 
@@ -429,16 +429,18 @@ fn verify_public_route_or_rollback(
     if let Err(source) =
         check_external_health(domain, health_check.path(), health_check.expected_status())
     {
-        let recovery_failed =
-            restore_materialized_caddy_fragment(materialized, caddyfile_path).is_err();
+        let outcome = restoration_outcome(restore_materialized_caddy_fragment(
+            materialized,
+            caddyfile_path,
+        ));
         return record_exposure_failure(
             connection,
-            input.desired.application.id.as_str(),
+            &input.desired.application.id,
             Visibility::Public,
             ExposureMaterializationState::Applying,
             "external_health_check_failed",
             &source.to_string(),
-            recovery_failed,
+            outcome,
         )
         .map(Some);
     }
@@ -465,16 +467,18 @@ fn confirm_public_route_or_rollback(
     .map_err(|source| ReconciliationReadError::Exposure { source })?;
     if completed == PersistenceOutcome::Stale {
         drop(transaction);
-        let recovery_failed =
-            restore_materialized_caddy_fragment(materialized, caddyfile_path).is_err();
+        let outcome = restoration_outcome(restore_materialized_caddy_fragment(
+            materialized,
+            caddyfile_path,
+        ));
         return record_exposure_failure(
             connection,
-            input.desired.application.id.as_str(),
+            &input.desired.application.id,
             Visibility::Public,
             ExposureMaterializationState::Applying,
             "exposure_changed",
             "exposure changed while Caddy route materialization was being confirmed",
-            recovery_failed,
+            outcome,
         );
     }
     transaction.commit().map_err(persistence_error)?;
@@ -488,30 +492,28 @@ fn record_public_exposure_failure(
 ) -> Result<ReconciliationResult, ReconciliationReadError> {
     record_exposure_failure(
         connection,
-        input.desired.application.id.as_str(),
+        &input.desired.application.id,
         Visibility::Public,
         failure.expected_state,
         failure.kind.code(),
         failure.kind.message(),
-        false,
+        ExposureOutcome::Failed,
     )
 }
 
 fn reserve_exposure(
     connection: &Connection,
-    application_id: &str,
+    application_id: &ApplicationId,
     visibility: Visibility,
     state: ExposureMaterializationState,
 ) -> Result<(), ReconciliationReadError> {
     let outcome = match visibility {
-        Visibility::Public => exposure_store::begin_public_exposure_reconciliation(
-            connection,
-            &ApplicationId::from(application_id),
-            state,
-        ),
+        Visibility::Public => {
+            exposure_store::begin_public_exposure_reconciliation(connection, application_id, state)
+        }
         Visibility::Internal => exposure_store::begin_internal_exposure_reconciliation(
             connection,
-            &ApplicationId::from(application_id),
+            application_id,
             state,
         ),
     }
@@ -524,48 +526,63 @@ fn reserve_exposure(
     Ok(())
 }
 
+// A failed adapter recovery leaves host state outside every persisted outcome;
+// a recovered one ends the change as a plain recorded failure.
+fn recovery_outcome(recovery_failed: bool) -> ExposureOutcome {
+    if recovery_failed {
+        ExposureOutcome::Diverged
+    } else {
+        ExposureOutcome::Failed
+    }
+}
+
+// A compensating restore either reinstates the recorded prior route (a clean
+// failure) or leaves host state no persisted outcome can describe (divergence).
+fn restoration_outcome(restored: Result<(), CaddyRecoveryError>) -> ExposureOutcome {
+    match restored {
+        Ok(()) => ExposureOutcome::Failed,
+        Err(_) => ExposureOutcome::Diverged,
+    }
+}
+
+// Persists why an exposure change ended abnormally and returns the matching
+// terminal reconciliation result; a lost reservation refuses to converge.
 fn record_exposure_failure(
     connection: &Connection,
-    application_id: &str,
+    application_id: &ApplicationId,
     visibility: Visibility,
     expected_state: ExposureMaterializationState,
     code: &str,
     message: &str,
-    diverged: bool,
+    outcome: ExposureOutcome,
 ) -> Result<ReconciliationResult, ReconciliationReadError> {
     let diagnostic = ExposureDiagnostic::new(code, message).map_err(|_| {
         ReconciliationReadError::NotConverged {
             reason: "reconciliation produced an invalid exposure diagnostic".to_owned(),
         }
     })?;
-    let state = if diverged {
-        ExposureMaterializationState::Diverged
-    } else {
-        ExposureMaterializationState::Failed
-    };
-    let outcome = exposure_store::record_reconciliation_exposure_failure(
+    let recorded = exposure_store::record_reconciliation_exposure_failure(
         connection,
-        &ApplicationId::from(application_id),
+        application_id,
         visibility,
         expected_state,
-        state,
+        outcome.state(),
         &diagnostic,
     )
     .map_err(|source| ReconciliationReadError::Exposure { source })?;
-    if outcome == PersistenceOutcome::Stale {
+    if recorded == PersistenceOutcome::Stale {
         return Err(ReconciliationReadError::NotConverged {
             reason: "exposure changed before reconciliation failure could be recorded".to_owned(),
         });
     }
-    if diverged {
-        Ok(ReconciliationResult::Diverged {
+    Ok(match outcome {
+        ExposureOutcome::Diverged => ReconciliationResult::Diverged {
             reason: message.to_owned(),
-        })
-    } else {
-        Ok(ReconciliationResult::Failed {
+        },
+        ExposureOutcome::Failed => ReconciliationResult::Failed {
             reason: message.to_owned(),
-        })
-    }
+        },
+    })
 }
 
 #[cfg(test)]
