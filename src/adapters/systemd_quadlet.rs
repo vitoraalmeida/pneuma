@@ -271,24 +271,20 @@ fn control(operation: &'static str, unit: &str, arguments: &[&str]) -> Result<()
 mod tests {
     use std::fs;
     use std::path::PathBuf;
-    use std::sync::{Mutex, MutexGuard};
 
     use super::*;
 
-    // Env overrides are process-global, so quadlet tests serialize directory access.
-    static QUADLET_DIRECTORY_LOCK: Mutex<()> = Mutex::new(());
-
+    // Env overrides are process-global, so quadlet tests serialize directory access
+    // through the shared test-support lock.
     struct ScopedQuadletDirectory {
-        _guard: MutexGuard<'static, ()>,
+        _guard: std::sync::MutexGuard<'static, ()>,
         previous: Option<std::ffi::OsString>,
         directory: PathBuf,
     }
 
     impl ScopedQuadletDirectory {
         fn new(name: &str) -> Self {
-            let guard = QUADLET_DIRECTORY_LOCK
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner());
+            let guard = crate::test_support::lock_quadlet_directory();
             let directory = std::env::temp_dir().join(format!(
                 "pneuma-quadlet-{name}-{}-{}",
                 std::process::id(),

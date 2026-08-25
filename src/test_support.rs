@@ -8,6 +8,15 @@ use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
 
 static EXTERNAL_PATH_LOCK: Mutex<()> = Mutex::new(());
+static QUADLET_DIRECTORY_LOCK: Mutex<()> = Mutex::new(());
+
+// Serializes every read or write of PNEUMA_QUADLET_DIR in test processes, because the
+// variable is process-global and adapter tests run concurrently.
+pub(crate) fn lock_quadlet_directory() -> MutexGuard<'static, ()> {
+    QUADLET_DIRECTORY_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+}
 
 // Installs a directory of fake executables as the only PATH entry for the
 // duration of the guard, so adapter tests never reach real external tools.
