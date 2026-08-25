@@ -308,28 +308,25 @@ fn finish_internal_deployment(
     candidate: &StartedCandidate,
     progress: &mut ProgressReporter<'_>,
 ) -> Result<CompletedDeploymentExecution, FailedExecution> {
+    let health_check = specification.runtime.health_check();
     progress.started(
         DeploymentStep::HealthCheckAndPromotion,
         format!(
             "runtime {}, path {}, expected status {}",
             candidate.runtime.id,
-            specification.runtime.health_check().path().as_str(),
-            specification.runtime.health_check().expected_status().get()
+            health_check.path().as_str(),
+            health_check.expected_status().get()
         ),
     );
-    let promoted = promote_internal_candidate(
-        connection,
-        &candidate.runtime.id,
-        specification.runtime.health_check(),
-    )
-    .map_err(|error| {
-        internal_promotion_failure(
-            error,
-            &candidate.runtime.external_runtime_id,
-            &candidate.runtime.id,
-            &candidate.unit_name,
-        )
-    })?;
+    let promoted = promote_internal_candidate(connection, &candidate.runtime.id, health_check)
+        .map_err(|error| {
+            internal_promotion_failure(
+                error,
+                &candidate.runtime.external_runtime_id,
+                &candidate.runtime.id,
+                &candidate.unit_name,
+            )
+        })?;
     progress.completed(
         DeploymentStep::HealthCheckAndPromotion,
         format!("runtime {} promoted to Current", candidate.runtime.id),
