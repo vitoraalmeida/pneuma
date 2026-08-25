@@ -1,8 +1,8 @@
-use std::error::Error;
 use std::fmt;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::thread;
+use thiserror::Error;
 
 use crate::domain::runtime::{HealthCheckSpecification, HealthCheckStatus};
 use std::time::Duration;
@@ -57,25 +57,11 @@ impl fmt::Display for HealthCheckFailure {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Error)]
 pub enum HealthCheckError {
+    #[error("internal health endpoint must be loopback: {endpoint}")]
     NonLoopbackEndpoint { endpoint: SocketAddr },
 }
-
-impl fmt::Display for HealthCheckError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NonLoopbackEndpoint { endpoint } => {
-                write!(
-                    formatter,
-                    "internal health endpoint must be loopback: {endpoint}"
-                )
-            }
-        }
-    }
-}
-
-impl Error for HealthCheckError {}
 
 // Checks a candidate's loopback endpoint with the fixed bounded retry policy used before promotion.
 pub(crate) fn check_internal_health(

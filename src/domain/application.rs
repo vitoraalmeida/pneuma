@@ -1,5 +1,6 @@
-use std::error::Error;
 use std::fmt;
+
+use thiserror::Error;
 
 use crate::domain::exposure::Visibility;
 use crate::domain::identity::{ApplicationId, DeploymentId, SystemId};
@@ -73,16 +74,11 @@ impl fmt::Display for ApplicationName {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Error)]
+#[error("invalid catalog name `{value}`")]
 pub struct InvalidApplicationName {
     pub value: String,
 }
-impl fmt::Display for InvalidApplicationName {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "invalid catalog name `{}`", self.value)
-    }
-}
-impl Error for InvalidApplicationName {}
 
 use crate::domain::identity::is_valid_catalog_name;
 

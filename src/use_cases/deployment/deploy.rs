@@ -1,7 +1,5 @@
-use std::error::Error;
-use std::fmt;
-
 use rusqlite::Connection;
+use thiserror::Error;
 
 use super::execute::{DeploymentResult, PublicDeploymentConfiguration, deploy_release_reporting};
 use super::failure::DeployReleaseError;
@@ -17,58 +15,35 @@ use crate::domain::identity::ApplicationId;
 use crate::domain::release::{DeliverySpecification, OciArtifact};
 use crate::use_cases::release::{CreateReleaseError, create_release};
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum DeployBranchError {
+    #[error(
+        "application `{application_id}` has no source configuration; re-import its manifest from a Git repository"
+    )]
     NoSourceConfiguration { application_id: String },
+    #[error("application `{application_id}` has no default branch and no branch was specified")]
     NoDefaultBranch { application_id: String },
+    #[error(
+        "application `{application_id}` has no delivery configuration; re-import its manifest with a [delivery] section"
+    )]
     NoDeliveryConfiguration { application_id: String },
-    SourceConfiguration { source: ApplicationStoreError },
-    ResolveBranch { source: ResolveBranchError },
-    ResolveImageDigest { source: ResolveImageDigestError },
+    #[error("failed to load source configuration: {source}")]
+    SourceConfiguration {
+        #[source]
+        source: ApplicationStoreError,
+    },
+    #[error("failed to resolve branch: {source}")]
+    ResolveBranch {
+        #[source]
+        source: ResolveBranchError,
+    },
+    #[error("failed to resolve image digest: {source}")]
+    ResolveImageDigest {
+        #[source]
+        source: ResolveImageDigestError,
+    },
+    #[error(transparent)]
     DeployOci { source: DeployOciError },
-}
-
-impl fmt::Display for DeployBranchError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NoSourceConfiguration { application_id } => write!(
-                formatter,
-                "application `{application_id}` has no source configuration; re-import its manifest from a Git repository"
-            ),
-            Self::NoDefaultBranch { application_id } => write!(
-                formatter,
-                "application `{application_id}` has no default branch and no branch was specified"
-            ),
-            Self::NoDeliveryConfiguration { application_id } => write!(
-                formatter,
-                "application `{application_id}` has no delivery configuration; re-import its manifest with a [delivery] section"
-            ),
-            Self::SourceConfiguration { source } => {
-                write!(formatter, "failed to load source configuration: {source}")
-            }
-            Self::ResolveBranch { source } => {
-                write!(formatter, "failed to resolve branch: {source}")
-            }
-            Self::ResolveImageDigest { source } => {
-                write!(formatter, "failed to resolve image digest: {source}")
-            }
-            Self::DeployOci { source } => write!(formatter, "{source}"),
-        }
-    }
-}
-
-impl Error for DeployBranchError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::SourceConfiguration { source } => Some(source),
-            Self::ResolveBranch { source } => Some(source),
-            Self::ResolveImageDigest { source } => Some(source),
-            Self::DeployOci { source } => Some(source),
-            Self::NoSourceConfiguration { .. }
-            | Self::NoDefaultBranch { .. }
-            | Self::NoDeliveryConfiguration { .. } => None,
-        }
-    }
 }
 
 // Resolves a branch to its immutable commit and image digest before delegating to OCI deployment.
@@ -153,65 +128,32 @@ fn deploy_branch_reporting(
     .map_err(|source| DeployBranchError::DeployOci { source })
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum DeployOciError {
-    NoDeliveryConfiguration {
-        application_id: String,
-    },
+    #[error(
+        "application `{application_id}` has no delivery configuration; re-import its manifest with a [delivery] section"
+    )]
+    NoDeliveryConfiguration { application_id: String },
+    #[error("application `{application_id}` only accepts images from `{allowed}`, not `{actual}`")]
     RepositoryMismatch {
         application_id: String,
         allowed: String,
         actual: String,
     },
+    #[error("failed to load delivery configuration: {source}")]
     DeliveryConfiguration {
+        #[source]
         source: ApplicationStoreError,
     },
+    #[error("failed to pull OCI image: {source}")]
     PullImage {
+        #[source]
         source: PullImageError,
     },
-    CreateRelease {
-        source: CreateReleaseError,
-    },
-    DeployRelease {
-        source: DeployReleaseError,
-    },
-}
-
-impl fmt::Display for DeployOciError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NoDeliveryConfiguration { application_id } => write!(
-                formatter,
-                "application `{application_id}` has no delivery configuration; re-import its manifest with a [delivery] section"
-            ),
-            Self::RepositoryMismatch {
-                application_id,
-                allowed,
-                actual,
-            } => write!(
-                formatter,
-                "application `{application_id}` only accepts images from `{allowed}`, not `{actual}`"
-            ),
-            Self::DeliveryConfiguration { source } => {
-                write!(formatter, "failed to load delivery configuration: {source}")
-            }
-            Self::PullImage { source } => write!(formatter, "failed to pull OCI image: {source}"),
-            Self::CreateRelease { source } => write!(formatter, "{source}"),
-            Self::DeployRelease { source } => write!(formatter, "{source}"),
-        }
-    }
-}
-
-impl Error for DeployOciError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::PullImage { source } => Some(source),
-            Self::CreateRelease { source } => Some(source),
-            Self::DeployRelease { source } => Some(source),
-            Self::DeliveryConfiguration { source } => Some(source),
-            Self::NoDeliveryConfiguration { .. } | Self::RepositoryMismatch { .. } => None,
-        }
-    }
+    #[error(transparent)]
+    CreateRelease { source: CreateReleaseError },
+    #[error(transparent)]
+    DeployRelease { source: DeployReleaseError },
 }
 
 // Validates the requested artifact against the persisted delivery policy, pulls it, records a

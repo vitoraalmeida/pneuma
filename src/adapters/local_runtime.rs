@@ -1,8 +1,9 @@
-use std::error::Error;
 use std::fmt;
 use std::io;
 use std::net::SocketAddr;
 use std::process::Command;
+
+use thiserror::Error;
 
 use crate::domain::reconciliation::NamedContainerObservation;
 use crate::domain::runtime::{
@@ -20,7 +21,10 @@ pub(crate) struct ContainerCommandOutput {
 // One failure vocabulary for the whole Podman process boundary: lifecycle
 // control, resolution, and observation report the same four infrastructure
 // shapes so callers wrap stages without re-matching adapter variants.
-#[derive(Debug)]
+//
+// `InvalidOutput` branches on output presence in `Display`, so the derive only
+// supplies the source chain.
+#[derive(Debug, Error)]
 pub enum PodmanError {
     // An input was rejected before any command ran.
     InvalidInput {
@@ -29,6 +33,7 @@ pub enum PodmanError {
     // The podman executable could not be spawned.
     Execute {
         operation: &'static str,
+        #[source]
         source: io::Error,
     },
     // Podman ran against a container but reported failure.
@@ -80,17 +85,6 @@ impl fmt::Display for PodmanError {
                     "Podman returned {description} for container `{target}`"
                 ),
             },
-        }
-    }
-}
-
-impl Error for PodmanError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Execute { source, .. } => Some(source),
-            Self::InvalidInput { .. } | Self::CommandFailed { .. } | Self::InvalidOutput { .. } => {
-                None
-            }
         }
     }
 }
@@ -410,6 +404,7 @@ fn diagnostic<'a>(stdout: &'a str, stderr: &'a str) -> &'a str {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
     use std::path::PathBuf;
 
     use super::*;

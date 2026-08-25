@@ -1,8 +1,7 @@
-use std::error::Error;
-use std::fmt;
 use std::net::SocketAddr;
 
 use rusqlite::Connection;
+use thiserror::Error;
 
 use crate::adapters::local_runtime::{
     ContainerCommandOutput, PodmanError, observe_container, resolve_container_id, start_container,
@@ -92,112 +91,53 @@ impl RuntimeCommand {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum RuntimeLifecycleError {
-    NotDeployed {
-        application_name: String,
-    },
-    ContainerMissing {
-        application_name: String,
-    },
-    RuntimeChanged {
-        runtime_id: String,
-    },
-    InvalidDesiredState {
-        state: String,
-    },
+    #[error("application `{application_name}` is not deployed")]
+    NotDeployed { application_name: String },
+    #[error(
+        "the container of application `{application_name}` is missing; run `pneuma app start` to recover it or `pneuma app deploy` to recreate it"
+    )]
+    ContainerMissing { application_name: String },
+    #[error("runtime `{runtime_id}` changed while it was being controlled")]
+    RuntimeChanged { runtime_id: String },
+    #[error("application has invalid persisted desired state `{state}`")]
+    InvalidDesiredState { state: String },
+    #[error("failed to control application runtime: {source}")]
     Store {
+        #[source]
         source: RuntimeStoreError,
     },
+    #[error("failed to control application runtime: {source}")]
     ApplicationStore {
+        #[source]
         source: ApplicationStoreError,
     },
+    #[error("failed to observe runtime `{runtime_id}`: {source}")]
     Observe {
         runtime_id: String,
+        #[source]
         source: PodmanError,
     },
+    #[error("failed while {operation} runtime `{runtime_id}`: {source}")]
     Control {
         operation: &'static str,
         runtime_id: String,
+        #[source]
         source: Box<PodmanError>,
     },
+    #[error("failed while {operation} supervised runtime `{runtime_id}`: {source}")]
     Supervision {
         operation: &'static str,
         runtime_id: String,
+        #[source]
         source: QuadletError,
     },
+    #[error("failed to control application runtime: {source}")]
     Persistence {
+        #[source]
         source: rusqlite::Error,
     },
-}
-
-impl fmt::Display for RuntimeLifecycleError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NotDeployed { application_name } => write!(
-                formatter,
-                "application `{application_name}` is not deployed"
-            ),
-            Self::ContainerMissing { application_name } => write!(
-                formatter,
-                "the container of application `{application_name}` is missing; run `pneuma app start` to recover it or `pneuma app deploy` to recreate it"
-            ),
-            Self::RuntimeChanged { runtime_id } => write!(
-                formatter,
-                "runtime `{runtime_id}` changed while it was being controlled"
-            ),
-            Self::InvalidDesiredState { state } => write!(
-                formatter,
-                "application has invalid persisted desired state `{state}`"
-            ),
-            Self::Store { source } => {
-                write!(formatter, "failed to control application runtime: {source}")
-            }
-            Self::ApplicationStore { source } => {
-                write!(formatter, "failed to control application runtime: {source}")
-            }
-            Self::Observe { runtime_id, source } => write!(
-                formatter,
-                "failed to observe runtime `{runtime_id}`: {source}"
-            ),
-            Self::Control {
-                operation,
-                runtime_id,
-                source,
-            } => write!(
-                formatter,
-                "failed while {operation} runtime `{runtime_id}`: {source}"
-            ),
-            Self::Supervision {
-                operation,
-                runtime_id,
-                source,
-            } => write!(
-                formatter,
-                "failed while {operation} supervised runtime `{runtime_id}`: {source}"
-            ),
-            Self::Persistence { source } => {
-                write!(formatter, "failed to control application runtime: {source}")
-            }
-        }
-    }
-}
-
-impl Error for RuntimeLifecycleError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Observe { source, .. } => Some(source),
-            Self::Control { source, .. } => Some(source.as_ref()),
-            Self::Supervision { source, .. } => Some(source),
-            Self::Store { source } => Some(source),
-            Self::ApplicationStore { source } => Some(source),
-            Self::Persistence { source } => Some(source),
-            Self::NotDeployed { .. }
-            | Self::ContainerMissing { .. }
-            | Self::RuntimeChanged { .. }
-            | Self::InvalidDesiredState { .. } => None,
-        }
-    }
 }
 
 // Observes the current runtime and persists its state without changing the operator's intent.

@@ -1,8 +1,7 @@
-use std::error::Error;
-use std::fmt;
 use std::path::Path;
 
 use rusqlite::Connection;
+use thiserror::Error;
 
 use crate::adapters::manifest::{ManifestError, load_manifest_at};
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
@@ -16,63 +15,32 @@ use crate::domain::system::SystemName;
 
 const DEFAULT_MANIFEST_PATH: &str = "pneuma.toml";
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ImportError {
-    Manifest { source: ManifestError },
-    Persistence { source: rusqlite::Error },
-    ApplicationStore { source: ApplicationStoreError },
-    ExposureStore { source: ExposureStoreError },
+    #[error("failed to import application: {source}")]
+    Manifest {
+        #[source]
+        source: ManifestError,
+    },
+    #[error("failed to persist imported application: {source}")]
+    Persistence {
+        #[source]
+        source: rusqlite::Error,
+    },
+    #[error("failed to persist imported application: {source}")]
+    ApplicationStore {
+        #[source]
+        source: ApplicationStoreError,
+    },
+    #[error("failed to persist imported application: {source}")]
+    ExposureStore {
+        #[source]
+        source: ExposureStoreError,
+    },
+    #[error("application `{application_id}` was not found")]
     ApplicationNotFound { application_id: String },
+    #[error("system is required: specify [system] in manifest or use --system flag")]
     SystemRequired,
-}
-
-impl fmt::Display for ImportError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Manifest { source } => {
-                write!(formatter, "failed to import application: {source}")
-            }
-            Self::Persistence { source } => {
-                write!(
-                    formatter,
-                    "failed to persist imported application: {source}"
-                )
-            }
-            Self::ApplicationStore { source } => {
-                write!(
-                    formatter,
-                    "failed to persist imported application: {source}"
-                )
-            }
-            Self::ExposureStore { source } => {
-                write!(
-                    formatter,
-                    "failed to persist imported application: {source}"
-                )
-            }
-            Self::ApplicationNotFound { application_id } => {
-                write!(formatter, "application `{application_id}` was not found")
-            }
-            Self::SystemRequired => {
-                write!(
-                    formatter,
-                    "system is required: specify [system] in manifest or use --system flag"
-                )
-            }
-        }
-    }
-}
-
-impl Error for ImportError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Manifest { source } => Some(source),
-            Self::Persistence { source } => Some(source),
-            Self::ApplicationStore { source } => Some(source),
-            Self::ExposureStore { source } => Some(source),
-            Self::ApplicationNotFound { .. } | Self::SystemRequired => None,
-        }
-    }
 }
 
 impl From<ApplicationStoreError> for ImportError {

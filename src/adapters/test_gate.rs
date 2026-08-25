@@ -1,51 +1,32 @@
 use std::env;
-use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 
-#[derive(Debug)]
+use thiserror::Error;
+
+#[derive(Debug, Error)]
 pub(crate) enum TestGateError {
+    #[error("failed to create test gate directory: {source}")]
     CreateDirectory {
+        #[source]
         source: std::io::Error,
     },
+    #[error("failed to create test gate marker `{}`: {source}", path.display())]
     CreateMarker {
         path: PathBuf,
+        #[source]
         source: std::io::Error,
     },
+    #[error("failed to write test gate marker `{}`: {source}", path.display())]
     WriteMarker {
         path: PathBuf,
+        #[source]
         source: std::io::Error,
     },
 }
-
-impl fmt::Display for TestGateError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::CreateDirectory { source } => {
-                write!(formatter, "failed to create test gate directory: {source}")
-            }
-            Self::CreateMarker { path, source } => {
-                write!(
-                    formatter,
-                    "failed to create test gate marker `{}`: {source}",
-                    path.display()
-                )
-            }
-            Self::WriteMarker { path, source } => {
-                write!(
-                    formatter,
-                    "failed to write test gate marker `{}`: {source}",
-                    path.display()
-                )
-            }
-        }
-    }
-}
-
-impl std::error::Error for TestGateError {}
 
 // Blocks only when the VM harness explicitly supplies a gate directory.
 pub(crate) fn wait_for_test_gate(name: &str) -> Result<(), TestGateError> {

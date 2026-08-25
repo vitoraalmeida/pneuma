@@ -1,6 +1,7 @@
 use serde::Deserialize;
-use std::error::Error;
 use std::fmt;
+
+use thiserror::Error;
 
 use crate::domain::identity::{ApplicationId, RuntimeInstanceId};
 
@@ -332,38 +333,24 @@ impl fmt::Display for DomainName {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Error)]
+#[error("invalid domain name `{value}`")]
 pub struct InvalidDomainName {
     pub value: String,
 }
-impl fmt::Display for InvalidDomainName {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "invalid domain name `{}`", self.value)
-    }
-}
-impl Error for InvalidDomainName {}
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Error)]
+#[error("invalid exposure configuration version `{value}`")]
 pub struct InvalidExposureConfigurationVersion {
     pub value: String,
 }
-impl fmt::Display for InvalidExposureConfigurationVersion {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "invalid exposure configuration version `{}`", self.value)
-    }
-}
-impl Error for InvalidExposureConfigurationVersion {}
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Error)]
+#[error("exposure diagnostic code and message must be trimmed and non-empty")]
 pub struct InvalidExposureDiagnostic;
-impl fmt::Display for InvalidExposureDiagnostic {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("exposure diagnostic code and message must be trimmed and non-empty")
-    }
-}
-impl Error for InvalidExposureDiagnostic {}
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Error)]
+#[error("{reason}")]
 pub struct InvalidExposure {
     pub reason: String,
 }
@@ -374,12 +361,6 @@ impl InvalidExposure {
         }
     }
 }
-impl fmt::Display for InvalidExposure {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.reason)
-    }
-}
-impl Error for InvalidExposure {}
 
 fn is_trimmed_nonempty(value: &str) -> bool {
     !value.is_empty() && value.trim() == value

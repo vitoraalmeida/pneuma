@@ -1,5 +1,6 @@
-use std::error::Error;
 use std::fmt;
+
+use thiserror::Error;
 
 use crate::domain::identity::SystemId;
 
@@ -39,18 +40,11 @@ impl fmt::Display for SystemName {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Error)]
+#[error("invalid system name `{value}`")]
 pub struct InvalidSystemName {
     pub value: String,
 }
-
-impl fmt::Display for InvalidSystemName {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "invalid system name `{}`", self.value)
-    }
-}
-
-impl Error for InvalidSystemName {}
 
 #[cfg(test)]
 mod tests {

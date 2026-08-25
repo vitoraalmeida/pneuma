@@ -1,9 +1,10 @@
-use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use thiserror::Error;
 
 use crate::domain::exposure::DomainName;
 use crate::domain::identity::ApplicationId;
@@ -33,26 +34,38 @@ pub struct RemovedCaddyFragment {
     temporary_path: PathBuf,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum CaddyCommandError {
-    Execute { source: io::Error },
+    #[error("could not execute Caddy: {source}")]
+    Execute {
+        #[source]
+        source: io::Error,
+    },
+    #[error("Caddy rejected the command: {}", diagnostic(stdout, stderr))]
     Rejected { stdout: String, stderr: String },
 }
 
-#[derive(Debug)]
+// `ValidateConfiguration` appends a recovery suffix only when recovery was
+// attempted, so `Display` stays hand-written while the derive supplies the
+// source chain.
+#[derive(Debug, Error)]
 pub enum CaddyRecoveryError {
     RestoreFragment {
         path: PathBuf,
+        #[source]
         source: io::Error,
     },
     Reload {
+        #[source]
         failure: CaddyCommandError,
     },
     ValidateConfiguration {
+        #[source]
         failure: CaddyCommandError,
         recovery: Option<Box<CaddyRecoveryError>>,
     },
     ReloadRecovery {
+        #[source]
         failure: CaddyCommandError,
         recovery: Box<CaddyRecoveryError>,
     },
@@ -69,37 +82,21 @@ pub enum CaddyFilesystemAction {
     ActivateFragment,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ObserveCaddyFragmentError {
+    #[error("application ID must be a 32-character hexadecimal value")]
     InvalidApplicationId,
-    Read { path: PathBuf, source: io::Error },
+    #[error("failed to read Caddy fragment at {}: {source}", path.display())]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
 }
 
-impl fmt::Display for ObserveCaddyFragmentError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidApplicationId => {
-                formatter.write_str("application ID must be a 32-character hexadecimal value")
-            }
-            Self::Read { path, source } => write!(
-                formatter,
-                "failed to read Caddy fragment at {}: {source}",
-                path.display()
-            ),
-        }
-    }
-}
-
-impl Error for ObserveCaddyFragmentError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Read { source, .. } => Some(source),
-            Self::InvalidApplicationId => None,
-        }
-    }
-}
-
-#[derive(Debug)]
+// `ValidateConfiguration` and `Reload` share the recovery suffix helper in
+// `Display`, so the derive only supplies the source chain.
+#[derive(Debug, Error)]
 pub enum MaterializeCaddyFragmentError {
     InvalidApplicationId,
     InvalidCaddyfile {
@@ -108,43 +105,23 @@ pub enum MaterializeCaddyFragmentError {
     Filesystem {
         action: CaddyFilesystemAction,
         path: PathBuf,
+        #[source]
         source: io::Error,
     },
     ValidateFragment {
+        #[source]
         failure: CaddyCommandError,
     },
     ValidateConfiguration {
+        #[source]
         failure: CaddyCommandError,
         recovery: Option<Box<CaddyRecoveryError>>,
     },
     Reload {
+        #[source]
         failure: CaddyCommandError,
         recovery: Option<Box<CaddyRecoveryError>>,
     },
-}
-
-impl fmt::Display for CaddyCommandError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Execute { source } => write!(formatter, "could not execute Caddy: {source}"),
-            Self::Rejected { stdout, stderr } => {
-                write!(
-                    formatter,
-                    "Caddy rejected the command: {}",
-                    diagnostic(stdout, stderr)
-                )
-            }
-        }
-    }
-}
-
-impl Error for CaddyCommandError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Execute { source } => Some(source),
-            Self::Rejected { .. } => None,
-        }
-    }
 }
 
 impl fmt::Display for CaddyFilesystemAction {
@@ -191,17 +168,6 @@ impl fmt::Display for CaddyRecoveryError {
     }
 }
 
-impl Error for CaddyRecoveryError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::RestoreFragment { source, .. } => Some(source),
-            Self::Reload { failure } => Some(failure),
-            Self::ValidateConfiguration { failure, .. } => Some(failure),
-            Self::ReloadRecovery { failure, .. } => Some(failure),
-        }
-    }
-}
-
 impl fmt::Display for MaterializeCaddyFragmentError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -235,18 +201,6 @@ impl fmt::Display for MaterializeCaddyFragmentError {
                 write!(formatter, "failed to reload Caddy: {failure}")?;
                 write_recovery(formatter, recovery.as_deref())
             }
-        }
-    }
-}
-
-impl Error for MaterializeCaddyFragmentError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Filesystem { source, .. } => Some(source),
-            Self::ValidateFragment { failure }
-            | Self::ValidateConfiguration { failure, .. }
-            | Self::Reload { failure, .. } => Some(failure),
-            Self::InvalidApplicationId | Self::InvalidCaddyfile { .. } => None,
         }
     }
 }

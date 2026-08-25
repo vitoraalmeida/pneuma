@@ -1,7 +1,5 @@
-use std::error::Error;
-use std::fmt;
-
 use rusqlite::{Connection, TransactionBehavior};
+use thiserror::Error;
 
 use super::transition::{TransitionDeploymentError, fail_deployment};
 use crate::adapters::health_check_internal::{
@@ -23,127 +21,57 @@ use crate::domain::exposure::{
 use crate::domain::identity::{ApplicationId, RuntimeInstanceId};
 use crate::domain::runtime::HealthCheckSpecification;
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum PromoteInternalCandidateError {
-    RuntimeNotFound {
-        runtime_id: String,
-    },
-    InvalidRuntimeState {
-        runtime_id: String,
-        actual: String,
-    },
-    RuntimeNotRunning {
-        runtime_id: String,
-        actual: String,
-    },
-    RuntimeRemoved {
-        runtime_id: String,
-    },
+    #[error("runtime `{runtime_id}` was not found")]
+    RuntimeNotFound { runtime_id: String },
+    #[error("runtime `{runtime_id}` must be Starting to be promoted, but is `{actual}`")]
+    InvalidRuntimeState { runtime_id: String, actual: String },
+    #[error("runtime `{runtime_id}` must be Running to be promoted, but is `{actual}`")]
+    RuntimeNotRunning { runtime_id: String, actual: String },
+    #[error("runtime `{runtime_id}` has already been removed")]
+    RuntimeRemoved { runtime_id: String },
+    #[error(
+        "deployment `{deployment_id}` must be Verifying to promote its candidate, but is `{actual}`"
+    )]
     InvalidDeploymentState {
         deployment_id: String,
         actual: String,
     },
-    PublicApplication {
-        application_id: String,
-    },
+    #[error("application `{application_id}` requires public route activation before promotion")]
+    PublicApplication { application_id: String },
+    #[error("{source}")]
     HealthCheck {
+        #[source]
         source: HealthCheckError,
     },
-    CandidateUnhealthy {
-        result: HealthCheckResult,
-    },
+    #[error("candidate failed its internal health check: {result:?}")]
+    CandidateUnhealthy { result: HealthCheckResult },
+    #[error("failed to record candidate health failure: {source}")]
     RecordFailure {
+        #[source]
         source: TransitionDeploymentError,
     },
+    #[error("failed to promote internal candidate: {source}")]
     Store {
+        #[source]
         source: DeploymentStoreError,
     },
+    #[error("failed to promote internal candidate: {source}")]
     ApplicationStore {
+        #[source]
         source: ApplicationStoreError,
     },
+    #[error("failed to promote internal candidate: {source}")]
     RuntimeStore {
+        #[source]
         source: RuntimeStoreError,
     },
+    #[error("failed to promote internal candidate: {source}")]
     Persistence {
+        #[source]
         source: rusqlite::Error,
     },
-}
-
-impl fmt::Display for PromoteInternalCandidateError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::RuntimeNotFound { runtime_id } => {
-                write!(formatter, "runtime `{runtime_id}` was not found")
-            }
-            Self::InvalidRuntimeState { runtime_id, actual } => write!(
-                formatter,
-                "runtime `{runtime_id}` must be Starting to be promoted, but is `{actual}`"
-            ),
-            Self::RuntimeNotRunning { runtime_id, actual } => write!(
-                formatter,
-                "runtime `{runtime_id}` must be Running to be promoted, but is `{actual}`"
-            ),
-            Self::RuntimeRemoved { runtime_id } => {
-                write!(formatter, "runtime `{runtime_id}` has already been removed")
-            }
-            Self::InvalidDeploymentState {
-                deployment_id,
-                actual,
-            } => write!(
-                formatter,
-                "deployment `{deployment_id}` must be Verifying to promote its candidate, but is `{actual}`"
-            ),
-            Self::PublicApplication { application_id } => write!(
-                formatter,
-                "application `{application_id}` requires public route activation before promotion"
-            ),
-            Self::HealthCheck { source } => write!(formatter, "{source}"),
-            Self::CandidateUnhealthy { result } => {
-                write!(
-                    formatter,
-                    "candidate failed its internal health check: {result:?}"
-                )
-            }
-            Self::RecordFailure { source } => {
-                write!(
-                    formatter,
-                    "failed to record candidate health failure: {source}"
-                )
-            }
-            Self::Store { source } => {
-                write!(formatter, "failed to promote internal candidate: {source}")
-            }
-            Self::ApplicationStore { source } => {
-                write!(formatter, "failed to promote internal candidate: {source}")
-            }
-            Self::RuntimeStore { source } => {
-                write!(formatter, "failed to promote internal candidate: {source}")
-            }
-            Self::Persistence { source } => {
-                write!(formatter, "failed to promote internal candidate: {source}")
-            }
-        }
-    }
-}
-
-impl Error for PromoteInternalCandidateError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::HealthCheck { source } => Some(source),
-            Self::RecordFailure { source } => Some(source),
-            Self::Store { source } => Some(source),
-            Self::ApplicationStore { source } => Some(source),
-            Self::RuntimeStore { source } => Some(source),
-            Self::Persistence { source } => Some(source),
-            Self::RuntimeNotFound { .. }
-            | Self::InvalidRuntimeState { .. }
-            | Self::RuntimeNotRunning { .. }
-            | Self::RuntimeRemoved { .. }
-            | Self::InvalidDeploymentState { .. }
-            | Self::PublicApplication { .. }
-            | Self::CandidateUnhealthy { .. } => None,
-        }
-    }
 }
 
 // Health-checks an internal candidate outside a transaction, then atomically promotes it.
@@ -313,99 +241,47 @@ fn load_target(
         })
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub(crate) enum PromotePublicCandidateError {
-    RuntimeNotFound {
-        runtime_id: String,
-    },
-    InvalidRuntime {
-        runtime_id: String,
-        reason: String,
-    },
+    #[error("runtime `{runtime_id}` was not found")]
+    RuntimeNotFound { runtime_id: String },
+    #[error("runtime `{runtime_id}` cannot be publicly promoted: {reason}")]
+    InvalidRuntime { runtime_id: String, reason: String },
+    #[error("deployment `{deployment_id}` is `{actual}` during public promotion")]
     InvalidDeploymentState {
         deployment_id: String,
         actual: String,
     },
+    #[error("application `{application_id}` has invalid public exposure: {reason}")]
     InvalidExposure {
         application_id: String,
         reason: String,
     },
+    #[error("failed to persist public promotion: {source}")]
     ExposureStore {
+        #[source]
         source: ExposureStoreError,
     },
+    #[error("failed to persist public promotion: {source}")]
     DeploymentStore {
+        #[source]
         source: DeploymentStoreError,
     },
+    #[error("failed to persist public promotion: {source}")]
     ApplicationStore {
+        #[source]
         source: ApplicationStoreError,
     },
+    #[error("failed to persist public promotion: {source}")]
     RuntimeStore {
+        #[source]
         source: RuntimeStoreError,
     },
+    #[error("failed to persist public promotion: {source}")]
     Persistence {
+        #[source]
         source: rusqlite::Error,
     },
-}
-
-impl fmt::Display for PromotePublicCandidateError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::RuntimeNotFound { runtime_id } => {
-                write!(formatter, "runtime `{runtime_id}` was not found")
-            }
-            Self::InvalidRuntime { runtime_id, reason } => {
-                write!(
-                    formatter,
-                    "runtime `{runtime_id}` cannot be publicly promoted: {reason}"
-                )
-            }
-            Self::InvalidDeploymentState {
-                deployment_id,
-                actual,
-            } => write!(
-                formatter,
-                "deployment `{deployment_id}` is `{actual}` during public promotion"
-            ),
-            Self::InvalidExposure {
-                application_id,
-                reason,
-            } => write!(
-                formatter,
-                "application `{application_id}` has invalid public exposure: {reason}"
-            ),
-            Self::ExposureStore { source } => {
-                write!(formatter, "failed to persist public promotion: {source}")
-            }
-            Self::DeploymentStore { source } => {
-                write!(formatter, "failed to persist public promotion: {source}")
-            }
-            Self::ApplicationStore { source } => {
-                write!(formatter, "failed to persist public promotion: {source}")
-            }
-            Self::RuntimeStore { source } => {
-                write!(formatter, "failed to persist public promotion: {source}")
-            }
-            Self::Persistence { source } => {
-                write!(formatter, "failed to persist public promotion: {source}")
-            }
-        }
-    }
-}
-
-impl Error for PromotePublicCandidateError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Persistence { source } => Some(source),
-            Self::ExposureStore { source } => Some(source),
-            Self::DeploymentStore { source } => Some(source),
-            Self::ApplicationStore { source } => Some(source),
-            Self::RuntimeStore { source } => Some(source),
-            Self::RuntimeNotFound { .. }
-            | Self::InvalidRuntime { .. }
-            | Self::InvalidDeploymentState { .. }
-            | Self::InvalidExposure { .. } => None,
-        }
-    }
 }
 
 // Marks public exposure as applying before Caddy effects occur outside SQLite transactions.

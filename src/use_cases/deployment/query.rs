@@ -1,7 +1,5 @@
-use std::error::Error;
-use std::fmt;
-
 use rusqlite::Connection;
+use thiserror::Error;
 
 use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
 use crate::domain::deployment::DeploymentHistory;
@@ -16,23 +14,8 @@ pub fn list_deployments(
         .map_err(ListDeploymentsError::Store)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ListDeploymentsError {
-    Store(DeploymentStoreError),
-}
-
-impl fmt::Display for ListDeploymentsError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Store(source) => write!(formatter, "failed to list deployments: {source}"),
-        }
-    }
-}
-
-impl Error for ListDeploymentsError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Store(source) => Some(source),
-        }
-    }
+    #[error("failed to list deployments: {0}")]
+    Store(#[source] DeploymentStoreError),
 }

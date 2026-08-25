@@ -1,8 +1,7 @@
-use std::error::Error;
-use std::fmt;
 use std::net::{Ipv4Addr, SocketAddr};
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use thiserror::Error;
 
 use crate::adapters::stores::PersistenceOutcome;
 use crate::adapters::stores::persistence::{
@@ -15,27 +14,13 @@ use crate::domain::runtime::{
     RuntimeInstance, RuntimeRegistration, RuntimeRetirement, RuntimeState,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum RuntimeStoreError {
-    Persistence { source: rusqlite::Error },
-}
-
-impl fmt::Display for RuntimeStoreError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Persistence { source } => {
-                write!(formatter, "runtime store error: {source}")
-            }
-        }
-    }
-}
-
-impl Error for RuntimeStoreError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Persistence { source } => Some(source),
-        }
-    }
+    #[error("runtime store error: {source}")]
+    Persistence {
+        #[source]
+        source: rusqlite::Error,
+    },
 }
 
 // Allocates a runtime ID beside endpoint registration in the same SQLite transaction.

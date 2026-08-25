@@ -1,7 +1,5 @@
-use std::error::Error;
-use std::fmt;
-
 use rusqlite::{Connection, TransactionBehavior};
+use thiserror::Error;
 
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
@@ -9,65 +7,39 @@ use crate::adapters::stores::operation_store::{self, OperationStoreError};
 use crate::domain::deployment::{Deployment, DeploymentType, SourceRevision};
 use crate::domain::identity::{ApplicationId, ReleaseId};
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum CreateDeploymentError {
+    #[error("release `{release_id}` was not found")]
     ReleaseNotFound { release_id: String },
+    #[error("application `{application_id}` was not found")]
     ApplicationNotFound { application_id: String },
+    #[error(
+        "application `{}` already has an active deployment",
+        deployment.application_id
+    )]
     ActiveDeployment { deployment: Box<Deployment> },
+    #[error("release `{release_id}` is already the active deployment")]
     AlreadyActive { release_id: String },
-    ApplicationStore { source: ApplicationStoreError },
-    DeploymentStore { source: DeploymentStoreError },
-    OperationStore { source: OperationStoreError },
-    Persistence { source: rusqlite::Error },
-}
-
-impl fmt::Display for CreateDeploymentError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ReleaseNotFound { release_id } => {
-                write!(formatter, "release `{release_id}` was not found")
-            }
-            Self::ApplicationNotFound { application_id } => {
-                write!(formatter, "application `{application_id}` was not found")
-            }
-            Self::ActiveDeployment { deployment } => write!(
-                formatter,
-                "application `{}` already has an active deployment",
-                deployment.application_id
-            ),
-            Self::AlreadyActive { release_id } => write!(
-                formatter,
-                "release `{release_id}` is already the active deployment"
-            ),
-            Self::ApplicationStore { source } => {
-                write!(formatter, "failed to create deployment: {source}")
-            }
-            Self::DeploymentStore { source } => {
-                write!(formatter, "failed to create deployment: {source}")
-            }
-            Self::OperationStore { source } => {
-                write!(formatter, "failed to create deployment: {source}")
-            }
-            Self::Persistence { source } => {
-                write!(formatter, "failed to create deployment: {source}")
-            }
-        }
-    }
-}
-
-impl Error for CreateDeploymentError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::ApplicationStore { source } => Some(source),
-            Self::DeploymentStore { source } => Some(source),
-            Self::OperationStore { source } => Some(source),
-            Self::Persistence { source } => Some(source),
-            Self::ReleaseNotFound { .. }
-            | Self::ApplicationNotFound { .. }
-            | Self::ActiveDeployment { .. }
-            | Self::AlreadyActive { .. } => None,
-        }
-    }
+    #[error("failed to create deployment: {source}")]
+    ApplicationStore {
+        #[source]
+        source: ApplicationStoreError,
+    },
+    #[error("failed to create deployment: {source}")]
+    DeploymentStore {
+        #[source]
+        source: DeploymentStoreError,
+    },
+    #[error("failed to create deployment: {source}")]
+    OperationStore {
+        #[source]
+        source: OperationStoreError,
+    },
+    #[error("failed to create deployment: {source}")]
+    Persistence {
+        #[source]
+        source: rusqlite::Error,
+    },
 }
 
 // Creates a deployment without source provenance for callers that deploy an existing release.

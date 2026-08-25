@@ -1,7 +1,5 @@
-use std::error::Error;
-use std::fmt;
-
 use rusqlite::{Connection, TransactionBehavior};
+use thiserror::Error;
 
 use crate::adapters::stores::PersistenceOutcome;
 use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
@@ -11,100 +9,47 @@ use crate::domain::deployment::{
 };
 use crate::domain::identity::DeploymentId;
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum TransitionDeploymentError {
-    DeploymentNotFound {
-        deployment_id: String,
-    },
+    #[error("deployment `{deployment_id}` was not found")]
+    DeploymentNotFound { deployment_id: String },
+    #[error("deployment `{deployment_id}` expected state {expected:?}, but is {actual:?}")]
     Conflict {
         deployment_id: String,
         expected: DeploymentStatus,
         actual: DeploymentStatus,
     },
+    #[error("deployment `{deployment_id}` cannot fail from state {actual:?}")]
     CannotFail {
         deployment_id: String,
         actual: DeploymentStatus,
     },
+    #[error("deployment `{deployment_id}`: {source}")]
     InvalidTransition {
         deployment_id: String,
+        #[source]
         source: InvalidDeploymentTransition,
     },
+    #[error("deployment `{deployment_id}` has invalid persisted state `{status}`")]
     InvalidPersistedStatus {
         deployment_id: String,
         status: String,
     },
+    #[error("deployment `{deployment_id}` has invalid persisted type `{deployment_type}`")]
     InvalidPersistedType {
         deployment_id: String,
         deployment_type: String,
     },
+    #[error("{source}")]
     InvalidFailure {
+        #[source]
         source: InvalidDeploymentFailure,
     },
+    #[error("failed to transition deployment: {source}")]
     Persistence {
+        #[source]
         source: rusqlite::Error,
     },
-}
-
-impl fmt::Display for TransitionDeploymentError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::DeploymentNotFound { deployment_id } => {
-                write!(formatter, "deployment `{deployment_id}` was not found")
-            }
-            Self::Conflict {
-                deployment_id,
-                expected,
-                actual,
-            } => write!(
-                formatter,
-                "deployment `{deployment_id}` expected state {expected:?}, but is {actual:?}"
-            ),
-            Self::CannotFail {
-                deployment_id,
-                actual,
-            } => write!(
-                formatter,
-                "deployment `{deployment_id}` cannot fail from state {actual:?}"
-            ),
-            Self::InvalidTransition {
-                deployment_id,
-                source,
-            } => write!(formatter, "deployment `{deployment_id}`: {source}"),
-            Self::InvalidPersistedStatus {
-                deployment_id,
-                status,
-            } => write!(
-                formatter,
-                "deployment `{deployment_id}` has invalid persisted state `{status}`"
-            ),
-            Self::InvalidPersistedType {
-                deployment_id,
-                deployment_type,
-            } => write!(
-                formatter,
-                "deployment `{deployment_id}` has invalid persisted type `{deployment_type}`"
-            ),
-            Self::InvalidFailure { source } => write!(formatter, "{source}"),
-            Self::Persistence { source } => {
-                write!(formatter, "failed to transition deployment: {source}")
-            }
-        }
-    }
-}
-
-impl Error for TransitionDeploymentError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Persistence { source } => Some(source),
-            Self::InvalidTransition { source, .. } => Some(source),
-            Self::DeploymentNotFound { .. }
-            | Self::Conflict { .. }
-            | Self::CannotFail { .. }
-            | Self::InvalidPersistedStatus { .. }
-            | Self::InvalidPersistedType { .. }
-            | Self::InvalidFailure { .. } => None,
-        }
-    }
 }
 
 impl From<DeploymentStoreError> for TransitionDeploymentError {

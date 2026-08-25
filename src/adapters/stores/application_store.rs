@@ -1,7 +1,5 @@
-use std::error::Error;
-use std::fmt;
-
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
+use thiserror::Error;
 
 use crate::adapters::stores::PersistenceOutcome;
 use crate::adapters::stores::persistence::{invalid_text_value, outcome, visibility_from_value};
@@ -22,43 +20,18 @@ use crate::domain::runtime::{
 // Every lookup in this store is an optional query: absence is `Ok(None)`, never
 // a dedicated error variant. Callers that require a row translate `None` into
 // their own domain error.
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ApplicationStoreError {
+    #[error("application `{application_id}` has invalid desired runtime state `{state}`")]
     InvalidDesiredRuntimeState {
         application_id: String,
         state: String,
     },
+    #[error("application store error: {source}")]
     Persistence {
+        #[source]
         source: rusqlite::Error,
     },
-}
-
-impl fmt::Display for ApplicationStoreError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidDesiredRuntimeState {
-                application_id,
-                state,
-            } => {
-                write!(
-                    formatter,
-                    "application `{application_id}` has invalid desired runtime state `{state}`"
-                )
-            }
-            Self::Persistence { source } => {
-                write!(formatter, "application store error: {source}")
-            }
-        }
-    }
-}
-
-impl Error for ApplicationStoreError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Persistence { source } => Some(source),
-            Self::InvalidDesiredRuntimeState { .. } => None,
-        }
-    }
 }
 
 // Allocates an ID inside the import transaction so related Application records share one boundary.

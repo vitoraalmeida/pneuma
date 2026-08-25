@@ -1,52 +1,27 @@
-use std::error::Error;
-use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 
+use thiserror::Error;
+
 use crate::domain::identity::ApplicationId;
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ApplicationLockError {
+    #[error("database path is unavailable for application locking")]
     DatabasePathUnavailable,
+    #[error("failed to open application lock {}: {source}", path.display())]
     Open {
         path: PathBuf,
+        #[source]
         source: std::io::Error,
     },
+    #[error("failed to acquire application lock {}: {source}", path.display())]
     Acquire {
         path: PathBuf,
+        #[source]
         source: std::io::Error,
     },
-}
-
-impl fmt::Display for ApplicationLockError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::DatabasePathUnavailable => write!(
-                formatter,
-                "database path is unavailable for application locking"
-            ),
-            Self::Open { path, source } => write!(
-                formatter,
-                "failed to open application lock {}: {source}",
-                path.display()
-            ),
-            Self::Acquire { path, source } => write!(
-                formatter,
-                "failed to acquire application lock {}: {source}",
-                path.display()
-            ),
-        }
-    }
-}
-
-impl Error for ApplicationLockError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Open { source, .. } | Self::Acquire { source, .. } => Some(source),
-            Self::DatabasePathUnavailable => None,
-        }
-    }
 }
 
 // Holds the kernel advisory lock until the operation and all of its external effects complete.

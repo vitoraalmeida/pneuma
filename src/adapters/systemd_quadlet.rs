@@ -1,10 +1,10 @@
 use std::env;
-use std::error::Error;
-use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use thiserror::Error;
 
 use crate::domain::application::ApplicationName;
 use crate::domain::identity::DeploymentId;
@@ -14,107 +14,49 @@ use crate::domain::runtime::{ContainerPort, HostPort, stable_runtime_name};
 
 pub(crate) const QUADLET_DIRECTORY_ENVIRONMENT_VARIABLE: &str = "PNEUMA_QUADLET_DIR";
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum QuadletError {
+    #[error("HOME is required to locate the Quadlet directory")]
     HomeUnavailable,
+    #[error("failed to create Quadlet directory: {source}")]
     CreateDirectory {
+        #[source]
         source: io::Error,
     },
+    #[error("failed to write Quadlet unit {}: {source}", path.display())]
     WriteUnit {
         path: PathBuf,
+        #[source]
         source: io::Error,
     },
+    #[error("failed to remove Quadlet unit {}: {source}", path.display())]
     RemoveUnit {
         path: PathBuf,
+        #[source]
         source: io::Error,
     },
+    #[error("failed to read Quadlet unit {}: {source}", path.display())]
     ReadUnit {
         path: PathBuf,
+        #[source]
         source: io::Error,
     },
-    ObserveUnit {
-        unit: String,
-        stderr: String,
-    },
+    #[error("systemctl failed while observing `{unit}`: {}", stderr.trim())]
+    ObserveUnit { unit: String, stderr: String },
+    #[error("failed to execute systemctl while {operation}: {source}")]
     Execute {
         operation: &'static str,
+        #[source]
         source: io::Error,
     },
+    #[error("systemctl failed while {operation} `{unit}`: {}", stderr.trim())]
     Systemd {
         operation: &'static str,
         unit: String,
         stderr: String,
     },
-    ReloadUnits {
-        stderr: String,
-    },
-}
-
-impl fmt::Display for QuadletError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::HomeUnavailable => {
-                formatter.write_str("HOME is required to locate the Quadlet directory")
-            }
-            Self::CreateDirectory { source } => {
-                write!(formatter, "failed to create Quadlet directory: {source}")
-            }
-            Self::WriteUnit { path, source } => write!(
-                formatter,
-                "failed to write Quadlet unit {}: {source}",
-                path.display()
-            ),
-            Self::RemoveUnit { path, source } => write!(
-                formatter,
-                "failed to remove Quadlet unit {}: {source}",
-                path.display()
-            ),
-            Self::ReadUnit { path, source } => write!(
-                formatter,
-                "failed to read Quadlet unit {}: {source}",
-                path.display()
-            ),
-            Self::ObserveUnit { unit, stderr } => write!(
-                formatter,
-                "systemctl failed while observing `{unit}`: {}",
-                stderr.trim()
-            ),
-            Self::Execute { operation, source } => write!(
-                formatter,
-                "failed to execute systemctl while {operation}: {source}"
-            ),
-            Self::Systemd {
-                operation,
-                unit,
-                stderr,
-            } => write!(
-                formatter,
-                "systemctl failed while {operation} `{unit}`: {}",
-                stderr.trim()
-            ),
-            Self::ReloadUnits { stderr } => write!(
-                formatter,
-                "systemctl failed while reloading user-systemd units: {}",
-                stderr.trim()
-            ),
-        }
-    }
-}
-
-impl Error for QuadletError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::CreateDirectory { source }
-            | Self::WriteUnit { source, .. }
-            | Self::RemoveUnit { source, .. }
-            | Self::ReadUnit { source, .. }
-            | Self::Execute { source, .. } => Some(source),
-            Self::HomeUnavailable
-            | Self::ObserveUnit { .. }
-            | Self::Systemd { .. }
-            | Self::ReloadUnits { .. } => None,
-        }
-    }
+    #[error("systemctl failed while reloading user-systemd units: {}", stderr.trim())]
+    ReloadUnits { stderr: String },
 }
 
 // Derives the stable Quadlet unit base name from the logical application and deployment identity.

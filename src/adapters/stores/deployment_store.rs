@@ -1,7 +1,5 @@
-use std::error::Error;
-use std::fmt;
-
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
+use thiserror::Error;
 
 use crate::adapters::stores::PersistenceOutcome;
 use crate::adapters::stores::persistence::{
@@ -20,76 +18,32 @@ use crate::domain::release::Release;
 use crate::domain::runtime::{ExpectedRuntimeEndpoint, RuntimeRetirement};
 use std::net::{Ipv4Addr, SocketAddr};
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum DeploymentStoreError {
-    NotFound {
-        deployment_id: String,
-    },
-    Stale {
-        deployment_id: String,
-    },
+    #[error("deployment `{deployment_id}` not found")]
+    NotFound { deployment_id: String },
+    #[error("deployment `{deployment_id}` changed before persistence")]
+    Stale { deployment_id: String },
+    #[error("deployment `{deployment_id}` has invalid status `{status}`")]
     InvalidStatus {
         deployment_id: String,
         status: String,
     },
+    #[error("deployment `{deployment_id}` has invalid type `{deployment_type}`")]
     InvalidType {
         deployment_id: String,
         deployment_type: String,
     },
+    #[error("deployment `{deployment_id}` has invalid lifecycle evidence: {reason}")]
     InvalidEvidence {
         deployment_id: String,
         reason: String,
     },
+    #[error("deployment store error: {source}")]
     Persistence {
+        #[source]
         source: rusqlite::Error,
     },
-}
-
-impl fmt::Display for DeploymentStoreError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NotFound { deployment_id } => {
-                write!(formatter, "deployment `{deployment_id}` not found")
-            }
-            Self::Stale { deployment_id } => {
-                write!(
-                    formatter,
-                    "deployment `{deployment_id}` changed before persistence"
-                )
-            }
-            Self::InvalidStatus {
-                deployment_id,
-                status,
-            } => write!(
-                formatter,
-                "deployment `{deployment_id}` has invalid status `{status}`"
-            ),
-            Self::InvalidType {
-                deployment_id,
-                deployment_type,
-            } => write!(
-                formatter,
-                "deployment `{deployment_id}` has invalid type `{deployment_type}`"
-            ),
-            Self::InvalidEvidence {
-                deployment_id,
-                reason,
-            } => write!(
-                formatter,
-                "deployment `{deployment_id}` has invalid lifecycle evidence: {reason}"
-            ),
-            Self::Persistence { source } => write!(formatter, "deployment store error: {source}"),
-        }
-    }
-}
-
-impl Error for DeploymentStoreError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Persistence { source } => Some(source),
-            _ => None,
-        }
-    }
 }
 
 // Allocates a deployment ID inside the transaction that reserves the Application for activation.
@@ -580,7 +534,10 @@ fn source_revision_from_value(
         Err(error) => Err(error),
     }
 }
-fn conversion_error(index: usize, error: impl Error + Send + Sync + 'static) -> rusqlite::Error {
+fn conversion_error(
+    index: usize,
+    error: impl std::error::Error + Send + Sync + 'static,
+) -> rusqlite::Error {
     rusqlite::Error::FromSqlConversionFailure(index, rusqlite::types::Type::Text, Box::new(error))
 }
 

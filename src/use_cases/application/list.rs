@@ -1,27 +1,15 @@
-use std::error::Error;
-use std::fmt;
-
 use rusqlite::Connection;
+use thiserror::Error;
 
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::domain::application::ApplicationSummary;
 use crate::domain::identity::ApplicationId;
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
+#[error("failed to list applications: {source}")]
 pub struct ListError {
+    #[source]
     source: ApplicationStoreError,
-}
-
-impl fmt::Display for ListError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "failed to list applications: {}", self.source)
-    }
-}
-
-impl Error for ListError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(&self.source)
-    }
 }
 
 // Reads application summaries in display order without mutating persisted state.

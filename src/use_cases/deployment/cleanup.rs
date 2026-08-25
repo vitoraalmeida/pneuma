@@ -1,7 +1,5 @@
-use std::error::Error;
-use std::fmt;
-
 use rusqlite::Connection;
+use thiserror::Error;
 
 use crate::adapters::local_runtime::{PodmanError, remove_container};
 use crate::adapters::port_allocator::{PortAllocationError, release_port};
@@ -81,55 +79,30 @@ impl CandidateResources {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum CandidateCleanupError {
+    #[error(transparent)]
     StopUnit { source: QuadletError },
+    #[error(transparent)]
     RemoveUnit { source: QuadletError },
+    #[error(transparent)]
     ReloadUnits { source: QuadletError },
+    #[error(transparent)]
     RemoveContainer { source: PodmanError },
+    #[error(transparent)]
     ReleasePort { source: PortAllocationError },
-    RuntimeStore { source: RuntimeStoreError },
+    #[error("failed to persist candidate removal: {source}")]
+    RuntimeStore {
+        #[source]
+        source: RuntimeStoreError,
+    },
+    #[error("runtime `{runtime_id}` changed while its candidate was being removed")]
     RuntimeChanged { runtime_id: RuntimeInstanceId },
-    Persistence { source: rusqlite::Error },
-}
-
-impl fmt::Display for CandidateCleanupError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::RemoveContainer { source } => write!(formatter, "{source}"),
-            Self::StopUnit { source }
-            | Self::RemoveUnit { source }
-            | Self::ReloadUnits { source } => write!(formatter, "{source}"),
-            Self::ReleasePort { source } => write!(formatter, "{source}"),
-            Self::RuntimeStore { source } => {
-                write!(formatter, "failed to persist candidate removal: {source}")
-            }
-            Self::RuntimeChanged { runtime_id } => {
-                write!(
-                    formatter,
-                    "runtime `{runtime_id}` changed while its candidate was being removed"
-                )
-            }
-            Self::Persistence { source } => {
-                write!(formatter, "failed to persist candidate removal: {source}")
-            }
-        }
-    }
-}
-
-impl Error for CandidateCleanupError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::RemoveContainer { source } => Some(source),
-            Self::StopUnit { source }
-            | Self::RemoveUnit { source }
-            | Self::ReloadUnits { source } => Some(source),
-            Self::ReleasePort { source } => Some(source),
-            Self::RuntimeStore { source } => Some(source),
-            Self::Persistence { source } => Some(source),
-            Self::RuntimeChanged { .. } => None,
-        }
-    }
+    #[error("failed to persist candidate removal: {source}")]
+    Persistence {
+        #[source]
+        source: rusqlite::Error,
+    },
 }
 
 // Loads the predecessor retained during candidate activation for post-promotion retirement.

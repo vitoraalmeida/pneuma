@@ -1,6 +1,7 @@
-use std::error::Error;
 use std::fmt;
+
 use std::path::{Component, Path};
+use thiserror::Error;
 
 // Git-domain concepts only: how an application's source repository is
 // classified and addressed, which manifest path inside a checkout is safe to
@@ -113,16 +114,9 @@ impl ApplicationSource {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Error)]
+#[error("invalid application source")]
 pub struct InvalidApplicationSource;
-
-impl fmt::Display for InvalidApplicationSource {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("invalid application source")
-    }
-}
-
-impl Error for InvalidApplicationSource {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelativeManifestPath(String);
@@ -153,18 +147,11 @@ impl RelativeManifestPath {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Error)]
+#[error("invalid relative manifest path `{path}`")]
 pub struct InvalidRelativeManifestPath {
     pub path: String,
 }
-
-impl fmt::Display for InvalidRelativeManifestPath {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "invalid relative manifest path `{}`", self.path)
-    }
-}
-
-impl Error for InvalidRelativeManifestPath {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 // Represents the immutable full commit identifier shared by Git, OCI tags, and Deployments.
@@ -198,18 +185,11 @@ impl fmt::Display for CommitSha {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Error)]
+#[error("invalid commit SHA `{value}`")]
 pub struct InvalidCommitSha {
     pub value: String,
 }
-
-impl fmt::Display for InvalidCommitSha {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "invalid commit SHA `{}`", self.value)
-    }
-}
-
-impl Error for InvalidCommitSha {}
 
 #[cfg(test)]
 mod tests {

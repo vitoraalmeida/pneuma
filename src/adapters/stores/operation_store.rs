@@ -1,7 +1,5 @@
-use std::error::Error;
-use std::fmt;
-
 use rusqlite::{Connection, Transaction, params};
+use thiserror::Error;
 
 use crate::domain::identity::ApplicationId;
 
@@ -13,25 +11,13 @@ pub(crate) struct OperationOwnership {
     pub(crate) generation: i64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum OperationStoreError {
-    Persistence { source: rusqlite::Error },
-}
-
-impl fmt::Display for OperationStoreError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Persistence { source } => write!(formatter, "operation store error: {source}"),
-        }
-    }
-}
-
-impl Error for OperationStoreError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Persistence { source } => Some(source),
-        }
-    }
+    #[error("operation store error: {source}")]
+    Persistence {
+        #[source]
+        source: rusqlite::Error,
+    },
 }
 
 // Generates an opaque owner token without inventing identity from process metadata.

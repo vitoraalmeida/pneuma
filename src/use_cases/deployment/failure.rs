@@ -6,9 +6,9 @@
 //! owns every decision about what happens to a deployment failure afterwards.
 
 use std::error::Error;
-use std::fmt;
 
 use rusqlite::Connection;
+use thiserror::Error;
 
 use super::activation::PublicActivationError;
 use super::candidate::{CandidateStartError, StartedCandidate};
@@ -23,116 +23,59 @@ use crate::adapters::stores::operation_store::OperationStoreError;
 use crate::domain::identity::{DeploymentId, RuntimeInstanceId};
 use crate::domain::runtime::ContainerId;
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum DeployReleaseError {
-    ApplicationNotFound {
-        application_id: String,
-    },
-    PublicApplication {
-        application_id: String,
-    },
+    #[error("application `{application_id}` was not found")]
+    ApplicationNotFound { application_id: String },
+    #[error("application `{application_id}` requires public deployment support")]
+    PublicApplication { application_id: String },
+    #[error("failed to load deployment specification: {source}")]
     LoadApplication {
+        #[source]
         source: ApplicationStoreError,
     },
+    #[error("{source}")]
     CreateDeployment {
+        #[source]
         source: CreateDeploymentError,
     },
+    #[error("deployment `{deployment_id}` failed with `{code}`: {source}")]
     DeploymentFailed {
         deployment_id: String,
         code: &'static str,
+        #[source]
         source: Box<dyn Error>,
     },
+    #[error(
+        "deployment `{deployment_id}` encountered `{failure}` and its failure could not be recorded: {source}"
+    )]
     RecordFailure {
         deployment_id: String,
         failure: String,
+        #[source]
         source: TransitionDeploymentError,
     },
+    #[error(
+        "deployment `{deployment_id}` encountered `{failure}` and its candidate could not be cleaned up: {source}"
+    )]
     Cleanup {
         deployment_id: String,
         failure: String,
+        #[source]
         source: Box<CandidateCleanupError>,
     },
+    #[error("failed to serialize deployment: {source}")]
     OperationLock {
+        #[source]
         source: ApplicationLockError,
     },
+    #[error("failed to create deployment ownership: {source}")]
     OperationToken {
+        #[source]
         source: OperationStoreError,
     },
-    OperationInProgress {
-        application_id: String,
-    },
-}
-
-impl fmt::Display for DeployReleaseError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ApplicationNotFound { application_id } => {
-                write!(formatter, "application `{application_id}` was not found")
-            }
-            Self::PublicApplication { application_id } => write!(
-                formatter,
-                "application `{application_id}` requires public deployment support"
-            ),
-            Self::LoadApplication { source } => {
-                write!(
-                    formatter,
-                    "failed to load deployment specification: {source}"
-                )
-            }
-            Self::CreateDeployment { source } => write!(formatter, "{source}"),
-            Self::DeploymentFailed {
-                deployment_id,
-                code,
-                source,
-            } => write!(
-                formatter,
-                "deployment `{deployment_id}` failed with `{code}`: {source}"
-            ),
-            Self::RecordFailure {
-                deployment_id,
-                failure,
-                source,
-            } => write!(
-                formatter,
-                "deployment `{deployment_id}` encountered `{failure}` and its failure could not be recorded: {source}"
-            ),
-            Self::Cleanup {
-                deployment_id,
-                failure,
-                source,
-            } => write!(
-                formatter,
-                "deployment `{deployment_id}` encountered `{failure}` and its candidate could not be cleaned up: {source}"
-            ),
-            Self::OperationLock { source } => {
-                write!(formatter, "failed to serialize deployment: {source}")
-            }
-            Self::OperationToken { source } => {
-                write!(formatter, "failed to create deployment ownership: {source}")
-            }
-            Self::OperationInProgress { application_id } => write!(
-                formatter,
-                "application `{application_id}` already has an operation in progress"
-            ),
-        }
-    }
-}
-
-impl Error for DeployReleaseError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::LoadApplication { source } => Some(source),
-            Self::CreateDeployment { source } => Some(source),
-            Self::DeploymentFailed { source, .. } => Some(source.as_ref()),
-            Self::RecordFailure { source, .. } => Some(source),
-            Self::Cleanup { source, .. } => Some(source.as_ref()),
-            Self::OperationLock { source } => Some(source),
-            Self::OperationToken { source } => Some(source),
-            Self::ApplicationNotFound { .. }
-            | Self::PublicApplication { .. }
-            | Self::OperationInProgress { .. } => None,
-        }
-    }
+    #[error("application `{application_id}` already has an operation in progress")]
+    OperationInProgress { application_id: String },
 }
 
 // Preserves failure provenance and every allocated candidate resource for ordered cleanup.

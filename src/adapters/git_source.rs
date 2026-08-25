@@ -1,17 +1,23 @@
-use std::error::Error;
-use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use thiserror::Error;
+
 use crate::domain::git::CommitSha;
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ResolveCommitError {
+    #[error("failed to execute Git: {source}")]
     Execute {
+        #[source]
         source: io::Error,
     },
+    #[error(
+        "failed to resolve Git revision `{revision}` in {}: {message}",
+        repository_path.display()
+    )]
     Resolve {
         repository_path: PathBuf,
         revision: String,
@@ -19,15 +25,20 @@ pub enum ResolveCommitError {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum CreateCheckoutError {
-    DestinationExists {
-        path: PathBuf,
-    },
+    #[error("checkout destination already exists: {}", path.display())]
+    DestinationExists { path: PathBuf },
+    #[error("failed to execute Git while {operation}: {source}")]
     Execute {
         operation: &'static str,
+        #[source]
         source: io::Error,
     },
+    #[error(
+        "Git failed while {operation} at {}: {message}",
+        path.display()
+    )]
     Git {
         operation: &'static str,
         path: PathBuf,
@@ -35,15 +46,17 @@ pub enum CreateCheckoutError {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum CloneRepositoryError {
-    DestinationExists {
-        path: PathBuf,
-    },
+    #[error("checkout destination already exists: {}", path.display())]
+    DestinationExists { path: PathBuf },
+    #[error("failed to execute Git while {operation}: {source}")]
     Execute {
         operation: &'static str,
+        #[source]
         source: io::Error,
     },
+    #[error("Git failed while {operation} of `{url}`: {message}")]
     Git {
         operation: &'static str,
         url: String,
@@ -51,171 +64,25 @@ pub enum CloneRepositoryError {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ResolveBranchError {
+    #[error("failed to execute Git: {source}")]
     Execute {
+        #[source]
         source: io::Error,
     },
-    RepositoryNotFound {
-        url: String,
-    },
-    AuthenticationFailed {
-        url: String,
-    },
-    BranchNotFound {
-        url: String,
-        branch: String,
-    },
+    #[error("Git repository `{url}` was not found or is unreachable")]
+    RepositoryNotFound { url: String },
+    #[error("authentication failed for Git repository `{url}`")]
+    AuthenticationFailed { url: String },
+    #[error("branch or tag `{branch}` was not found in Git repository `{url}`")]
+    BranchNotFound { url: String, branch: String },
+    #[error("Git returned an invalid commit for branch or tag `{branch}` in `{url}`: {message}")]
     InvalidCommit {
         url: String,
         branch: String,
         message: String,
     },
-}
-
-impl fmt::Display for ResolveCommitError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Execute { source } => write!(formatter, "failed to execute Git: {source}"),
-            Self::Resolve {
-                repository_path,
-                revision,
-                message,
-            } => write!(
-                formatter,
-                "failed to resolve Git revision `{revision}` in {}: {message}",
-                repository_path.display()
-            ),
-        }
-    }
-}
-
-impl Error for ResolveCommitError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Execute { source } => Some(source),
-            Self::Resolve { .. } => None,
-        }
-    }
-}
-
-impl fmt::Display for CreateCheckoutError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::DestinationExists { path } => {
-                write!(
-                    formatter,
-                    "checkout destination already exists: {}",
-                    path.display()
-                )
-            }
-            Self::Execute { operation, source } => {
-                write!(
-                    formatter,
-                    "failed to execute Git while {operation}: {source}"
-                )
-            }
-            Self::Git {
-                operation,
-                path,
-                message,
-            } => write!(
-                formatter,
-                "Git failed while {operation} at {}: {message}",
-                path.display()
-            ),
-        }
-    }
-}
-
-impl Error for CreateCheckoutError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Execute { source, .. } => Some(source),
-            Self::DestinationExists { .. } | Self::Git { .. } => None,
-        }
-    }
-}
-
-impl fmt::Display for CloneRepositoryError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::DestinationExists { path } => {
-                write!(
-                    formatter,
-                    "checkout destination already exists: {}",
-                    path.display()
-                )
-            }
-            Self::Execute { operation, source } => {
-                write!(
-                    formatter,
-                    "failed to execute Git while {operation}: {source}"
-                )
-            }
-            Self::Git {
-                operation,
-                url,
-                message,
-            } => write!(
-                formatter,
-                "Git failed while {operation} of `{url}`: {message}"
-            ),
-        }
-    }
-}
-
-impl Error for CloneRepositoryError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Execute { source, .. } => Some(source),
-            Self::DestinationExists { .. } | Self::Git { .. } => None,
-        }
-    }
-}
-
-impl fmt::Display for ResolveBranchError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Execute { source } => write!(formatter, "failed to execute Git: {source}"),
-            Self::RepositoryNotFound { url } => {
-                write!(
-                    formatter,
-                    "Git repository `{url}` was not found or is unreachable"
-                )
-            }
-            Self::AuthenticationFailed { url } => write!(
-                formatter,
-                "authentication failed for Git repository `{url}`"
-            ),
-            Self::BranchNotFound { url, branch } => {
-                write!(
-                    formatter,
-                    "branch or tag `{branch}` was not found in Git repository `{url}`"
-                )
-            }
-            Self::InvalidCommit {
-                url,
-                branch,
-                message,
-            } => write!(
-                formatter,
-                "Git returned an invalid commit for branch or tag `{branch}` in `{url}`: {message}"
-            ),
-        }
-    }
-}
-
-impl Error for ResolveBranchError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Execute { source } => Some(source),
-            Self::RepositoryNotFound { .. }
-            | Self::AuthenticationFailed { .. }
-            | Self::BranchNotFound { .. }
-            | Self::InvalidCommit { .. } => None,
-        }
-    }
 }
 
 // Resolves a local revision to a full commit while rejecting non-commit Git objects.

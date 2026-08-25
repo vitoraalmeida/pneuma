@@ -1,7 +1,8 @@
 use std::error::Error;
-use std::fmt;
 use std::net::SocketAddr;
 use std::path::Path;
+
+use thiserror::Error;
 
 use rusqlite::Connection;
 
@@ -415,63 +416,28 @@ fn rollback_public_route(
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
+#[error("candidate failed its internal health check: {:?}", result)]
 struct PublicHealthFailure {
     result: HealthCheckResult,
 }
 
-impl fmt::Display for PublicHealthFailure {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "candidate failed its internal health check: {:?}",
-            self.result
-        )
-    }
-}
-
-impl Error for PublicHealthFailure {}
-
-#[derive(Debug)]
+#[derive(Debug, Error)]
+#[error("{}; public route recovery also failed: {}", original, recovery)]
 struct PublicRouteRollbackError {
+    #[source]
     original: Box<dyn Error>,
     recovery: crate::adapters::caddy_exposure::CaddyRecoveryError,
 }
 
-impl fmt::Display for PublicRouteRollbackError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "{}; public route recovery also failed: {}",
-            self.original, self.recovery
-        )
-    }
-}
-
-impl Error for PublicRouteRollbackError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(self.original.as_ref())
-    }
-}
-
-#[derive(Debug)]
+#[derive(Debug, Error)]
+#[error(
+    "{}; exposure failure could not be recorded: {}",
+    original,
+    persistence
+)]
 struct ExposureFailureRecordingError {
+    #[source]
     original: Box<dyn Error>,
     persistence: PromotePublicCandidateError,
-}
-
-impl fmt::Display for ExposureFailureRecordingError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "{}; exposure failure could not be recorded: {}",
-            self.original, self.persistence
-        )
-    }
-}
-
-impl Error for ExposureFailureRecordingError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(self.original.as_ref())
-    }
 }

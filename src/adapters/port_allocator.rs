@@ -1,8 +1,7 @@
 use std::env;
-use std::error::Error;
-use std::fmt;
 
 use rusqlite::{Connection, TransactionBehavior, params};
+use thiserror::Error;
 
 use crate::domain::identity::{ApplicationId, DeploymentId};
 use crate::domain::runtime::HostPort;
@@ -10,40 +9,19 @@ use crate::domain::runtime::HostPort;
 pub(crate) const RUNTIME_PORT_RANGE_ENVIRONMENT_VARIABLE: &str = "PNEUMA_RUNTIME_PORT_RANGE";
 const DEFAULT_RUNTIME_PORT_RANGE: &str = "30000-39999";
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum PortAllocationError {
+    #[error(
+        "{RUNTIME_PORT_RANGE_ENVIRONMENT_VARIABLE} must be <start>-<end> within 1-65535, got `{value}`"
+    )]
     InvalidRange { value: String },
+    #[error("no free runtime port is available in {start}-{end}")]
     Exhausted { start: u16, end: u16 },
-    Persistence { source: rusqlite::Error },
-}
-
-impl fmt::Display for PortAllocationError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidRange { value } => write!(
-                formatter,
-                "{RUNTIME_PORT_RANGE_ENVIRONMENT_VARIABLE} must be <start>-<end> within 1-65535, got `{value}`"
-            ),
-            Self::Exhausted { start, end } => {
-                write!(
-                    formatter,
-                    "no free runtime port is available in {start}-{end}"
-                )
-            }
-            Self::Persistence { source } => {
-                write!(formatter, "failed to allocate runtime port: {source}")
-            }
-        }
-    }
-}
-
-impl Error for PortAllocationError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Persistence { source } => Some(source),
-            Self::InvalidRange { .. } | Self::Exhausted { .. } => None,
-        }
-    }
+    #[error("failed to allocate runtime port: {source}")]
+    Persistence {
+        #[source]
+        source: rusqlite::Error,
+    },
 }
 
 // Atomically reserves the first free configured loopback port across live runtimes and candidates.

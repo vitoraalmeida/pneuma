@@ -1,50 +1,25 @@
-use std::error::Error;
-use std::fmt;
-
 use rusqlite::Connection;
+use thiserror::Error;
 
 use crate::adapters::stores::application_store;
 use crate::adapters::stores::system_store;
 use crate::domain::application::ApplicationSummary;
 use crate::domain::system::{System, SystemName};
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ShowError {
-    NotFound {
-        system_name: String,
-    },
+    #[error("system `{system_name}` was not found")]
+    NotFound { system_name: String },
+    #[error("failed to show system: {source}")]
     ApplicationStore {
+        #[source]
         source: application_store::ApplicationStoreError,
     },
+    #[error("failed to show system: {source}")]
     Persistence {
+        #[source]
         source: rusqlite::Error,
     },
-}
-
-impl fmt::Display for ShowError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NotFound { system_name } => {
-                write!(formatter, "system `{system_name}` was not found")
-            }
-            Self::ApplicationStore { source } => {
-                write!(formatter, "failed to show system: {source}")
-            }
-            Self::Persistence { source } => {
-                write!(formatter, "failed to show system: {source}")
-            }
-        }
-    }
-}
-
-impl Error for ShowError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::NotFound { .. } => None,
-            Self::ApplicationStore { source } => Some(source),
-            Self::Persistence { source } => Some(source),
-        }
-    }
 }
 
 // Combines a System with its catalog applications for the details view.

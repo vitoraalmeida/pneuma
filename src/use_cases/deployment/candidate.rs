@@ -1,8 +1,8 @@
 use std::error::Error;
-use std::fmt;
 use std::net::SocketAddr;
 
 use rusqlite::{Connection, TransactionBehavior};
+use thiserror::Error;
 
 use super::cleanup::CandidateResources;
 use super::transition::{TransitionDeploymentError, advance_deployment};
@@ -78,30 +78,15 @@ pub(crate) enum CandidateStartError {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 enum RuntimeObservationFailure {
+    #[error("expected runtime to be Running, got {actual:?}")]
     NotRunning { actual: ObservedRuntimeState },
+    #[error("running runtime has no loopback endpoint")]
     MissingEndpoint,
+    #[error("running runtime has an invalid loopback endpoint")]
     InvalidEndpoint,
 }
-
-impl fmt::Display for RuntimeObservationFailure {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NotRunning { actual } => {
-                write!(formatter, "expected runtime to be Running, got {actual:?}")
-            }
-            Self::MissingEndpoint => {
-                formatter.write_str("running runtime has no loopback endpoint")
-            }
-            Self::InvalidEndpoint => {
-                formatter.write_str("running runtime has an invalid loopback endpoint")
-            }
-        }
-    }
-}
-
-impl Error for RuntimeObservationFailure {}
 
 // Materializes a candidate in ordered external steps, retaining resources for compensation on failure.
 pub(crate) fn start_candidate(
@@ -223,94 +208,40 @@ pub(crate) fn start_candidate(
     })
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum RegisterCandidateRuntimeError {
+    #[error("external runtime ID must be a non-empty hexadecimal value")]
     InvalidExternalRuntimeId,
-    DeploymentNotFound {
-        deployment_id: String,
-    },
+    #[error("deployment `{deployment_id}` was not found")]
+    DeploymentNotFound { deployment_id: String },
+    #[error(
+        "deployment `{deployment_id}` must be Starting to register a candidate, but is `{actual}`"
+    )]
     InvalidDeploymentState {
         deployment_id: String,
         actual: String,
     },
-    ExternalRuntimeConflict {
-        external_runtime_id: String,
-    },
-    EndpointConflict {
-        endpoint: SocketAddr,
-    },
-    RegistrationNotFound {
-        runtime_id: RuntimeInstanceId,
-    },
+    #[error("external runtime `{external_runtime_id}` is already registered with different data")]
+    ExternalRuntimeConflict { external_runtime_id: String },
+    #[error("runtime endpoint `{endpoint}` is already active")]
+    EndpointConflict { endpoint: SocketAddr },
+    #[error("registered runtime `{runtime_id}` could not be reloaded")]
+    RegistrationNotFound { runtime_id: RuntimeInstanceId },
+    #[error("failed to register candidate runtime: {source}")]
     Store {
+        #[source]
         source: RuntimeStoreError,
     },
+    #[error("failed to register candidate runtime: {source}")]
     DeploymentStore {
+        #[source]
         source: DeploymentStoreError,
     },
+    #[error("failed to register candidate runtime: {source}")]
     Persistence {
+        #[source]
         source: rusqlite::Error,
     },
-}
-
-impl fmt::Display for RegisterCandidateRuntimeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidExternalRuntimeId => {
-                formatter.write_str("external runtime ID must be a non-empty hexadecimal value")
-            }
-            Self::DeploymentNotFound { deployment_id } => {
-                write!(formatter, "deployment `{deployment_id}` was not found")
-            }
-            Self::InvalidDeploymentState {
-                deployment_id,
-                actual,
-            } => write!(
-                formatter,
-                "deployment `{deployment_id}` must be Starting to register a candidate, but is `{actual}`"
-            ),
-            Self::ExternalRuntimeConflict {
-                external_runtime_id,
-            } => write!(
-                formatter,
-                "external runtime `{external_runtime_id}` is already registered with different data"
-            ),
-            Self::EndpointConflict { endpoint } => {
-                write!(formatter, "runtime endpoint `{endpoint}` is already active")
-            }
-            Self::RegistrationNotFound { runtime_id } => {
-                write!(
-                    formatter,
-                    "registered runtime `{runtime_id}` could not be reloaded"
-                )
-            }
-            Self::Store { source } => {
-                write!(formatter, "failed to register candidate runtime: {source}")
-            }
-            Self::DeploymentStore { source } => {
-                write!(formatter, "failed to register candidate runtime: {source}")
-            }
-            Self::Persistence { source } => {
-                write!(formatter, "failed to register candidate runtime: {source}")
-            }
-        }
-    }
-}
-
-impl Error for RegisterCandidateRuntimeError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Store { source } => Some(source),
-            Self::DeploymentStore { source } => Some(source),
-            Self::Persistence { source } => Some(source),
-            Self::InvalidExternalRuntimeId
-            | Self::DeploymentNotFound { .. }
-            | Self::InvalidDeploymentState { .. }
-            | Self::ExternalRuntimeConflict { .. }
-            | Self::EndpointConflict { .. } => None,
-            Self::RegistrationNotFound { .. } => None,
-        }
-    }
 }
 
 impl From<DeploymentStoreError> for RegisterCandidateRuntimeError {

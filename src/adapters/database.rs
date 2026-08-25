@@ -1,11 +1,10 @@
-use std::error::Error;
-use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, DatabaseName, OpenFlags};
+use thiserror::Error;
 
 pub(crate) const DATABASE_PATH_ENVIRONMENT_VARIABLE: &str = "PNEUMA_DATABASE_PATH";
 pub(crate) const DEFAULT_DATABASE_PATH: &str = "/var/lib/pneuma/database/pneuma.sqlite3";
@@ -53,107 +52,65 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (15, APPLICATION_OPERATIONS_MIGRATION),
 ];
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum DatabaseError {
+    #[error("failed to open database at {}: {source}", path.display())]
     Open {
         path: PathBuf,
+        #[source]
         source: rusqlite::Error,
     },
+    #[error("failed to configure database: {source}")]
     Configure {
+        #[source]
         source: rusqlite::Error,
     },
+    #[error("failed to migrate database: {source}")]
     Migrate {
+        #[source]
         source: rusqlite::Error,
     },
-    BackupDestinationExists {
-        path: PathBuf,
-    },
+    #[error("backup destination already exists: {}", path.display())]
+    BackupDestinationExists { path: PathBuf },
+    #[error(
+        "failed to create backup directory {}: {source}",
+        path.display()
+    )]
     BackupDestinationParent {
         path: PathBuf,
+        #[source]
         source: io::Error,
     },
+    #[error("database backup failed: {source}")]
     Backup {
+        #[source]
         source: rusqlite::Error,
     },
+    #[error("failed to open restore source {}: {source}", path.display())]
     RestoreSource {
         path: PathBuf,
+        #[source]
         source: rusqlite::Error,
     },
-    RestoreIntegrity {
-        path: PathBuf,
-        result: String,
-    },
+    #[error(
+        "restore source {} failed integrity check: {result}",
+        path.display()
+    )]
+    RestoreIntegrity { path: PathBuf, result: String },
+    #[error(
+        "database restore is already in progress ({}) : {source}",
+        path.display()
+    )]
     RestoreLock {
         path: PathBuf,
+        #[source]
         source: io::Error,
     },
+    #[error("failed to replace database during restore: {source}")]
     RestoreReplace {
+        #[source]
         source: io::Error,
     },
-}
-
-impl fmt::Display for DatabaseError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Open { path, source } => {
-                write!(
-                    formatter,
-                    "failed to open database at {}: {source}",
-                    path.display()
-                )
-            }
-            Self::Configure { source } => {
-                write!(formatter, "failed to configure database: {source}")
-            }
-            Self::Migrate { source } => write!(formatter, "failed to migrate database: {source}"),
-            Self::BackupDestinationExists { path } => write!(
-                formatter,
-                "backup destination already exists: {}",
-                path.display()
-            ),
-            Self::BackupDestinationParent { path, source } => write!(
-                formatter,
-                "failed to create backup directory {}: {source}",
-                path.display()
-            ),
-            Self::Backup { source } => write!(formatter, "database backup failed: {source}"),
-            Self::RestoreSource { path, source } => write!(
-                formatter,
-                "failed to open restore source {}: {source}",
-                path.display()
-            ),
-            Self::RestoreIntegrity { path, result } => write!(
-                formatter,
-                "restore source {} failed integrity check: {result}",
-                path.display()
-            ),
-            Self::RestoreLock { path, source } => write!(
-                formatter,
-                "database restore is already in progress ({}) : {source}",
-                path.display()
-            ),
-            Self::RestoreReplace { source } => write!(
-                formatter,
-                "failed to replace database during restore: {source}"
-            ),
-        }
-    }
-}
-
-impl Error for DatabaseError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Open { source, .. }
-            | Self::Configure { source }
-            | Self::Migrate { source }
-            | Self::Backup { source }
-            | Self::RestoreSource { source, .. } => Some(source),
-            Self::BackupDestinationParent { source, .. }
-            | Self::RestoreLock { source, .. }
-            | Self::RestoreReplace { source } => Some(source),
-            Self::BackupDestinationExists { .. } | Self::RestoreIntegrity { .. } => None,
-        }
-    }
 }
 
 // Creates a SQLite-consistent backup without overwriting an existing operator-selected destination.

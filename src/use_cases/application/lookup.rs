@@ -1,26 +1,14 @@
-use std::error::Error;
-use std::fmt;
-
 use rusqlite::Connection;
+use thiserror::Error;
 
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::domain::application::{Application, ApplicationName};
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
+#[error("failed to list applications: {source}")]
 pub struct LookupError {
+    #[source]
     source: ApplicationStoreError,
-}
-
-impl fmt::Display for LookupError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "failed to list applications: {}", self.source)
-    }
-}
-
-impl Error for LookupError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(&self.source)
-    }
 }
 
 // Looks up the full application record by its operator-facing name.

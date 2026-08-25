@@ -1,30 +1,17 @@
-use std::error::Error;
-use std::fmt;
-
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use thiserror::Error;
 
 use crate::domain::identity::SystemId;
 use crate::domain::system::System;
 use crate::domain::system::SystemName;
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub(crate) enum SystemStoreError {
-    Persistence { source: rusqlite::Error },
-}
-
-impl fmt::Display for SystemStoreError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Persistence { source } => write!(formatter, "system store error: {source}"),
-        }
-    }
-}
-impl Error for SystemStoreError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Persistence { source } => Some(source),
-        }
-    }
+    #[error("system store error: {source}")]
+    Persistence {
+        #[source]
+        source: rusqlite::Error,
+    },
 }
 
 pub(crate) fn create_or_load(

@@ -1,7 +1,7 @@
-use std::error::Error;
-use std::fmt;
 use std::io;
 use std::process::Command;
+
+use thiserror::Error;
 
 use crate::domain::exposure::DomainName;
 use crate::domain::runtime::{HealthCheckPath, HealthCheckStatus};
@@ -12,50 +12,19 @@ pub(crate) struct ExternalHealthCheck {
     pub(crate) response_status: u16,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ExternalHealthCheckError {
-    Execute { source: io::Error },
+    #[error("failed to execute external health check: {source}")]
+    Execute {
+        #[source]
+        source: io::Error,
+    },
+    #[error("external HTTPS request failed: {}", stderr.trim())]
     RequestFailed { stderr: String },
+    #[error("external health check returned an invalid status: {}", stdout.trim())]
     InvalidResponse { stdout: String },
+    #[error("external health check expected HTTP {expected}, got {actual}")]
     UnexpectedStatus { expected: u16, actual: u16 },
-}
-
-impl fmt::Display for ExternalHealthCheckError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Execute { source } => {
-                write!(
-                    formatter,
-                    "failed to execute external health check: {source}"
-                )
-            }
-            Self::RequestFailed { stderr } => write!(
-                formatter,
-                "external HTTPS request failed: {}",
-                stderr.trim()
-            ),
-            Self::InvalidResponse { stdout } => write!(
-                formatter,
-                "external health check returned an invalid status: {}",
-                stdout.trim()
-            ),
-            Self::UnexpectedStatus { expected, actual } => write!(
-                formatter,
-                "external health check expected HTTP {expected}, got {actual}"
-            ),
-        }
-    }
-}
-
-impl Error for ExternalHealthCheckError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Execute { source } => Some(source),
-            Self::RequestFailed { .. }
-            | Self::InvalidResponse { .. }
-            | Self::UnexpectedStatus { .. } => None,
-        }
-    }
 }
 
 // Checks the public HTTPS listener through local Caddy, verifying TLS and routing without external DNS.

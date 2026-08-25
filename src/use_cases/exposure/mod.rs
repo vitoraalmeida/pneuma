@@ -1,8 +1,7 @@
-use std::error::Error;
-use std::fmt;
 use std::path::Path;
 
 use rusqlite::{Connection, TransactionBehavior};
+use thiserror::Error;
 
 use crate::adapters::caddy_exposure::{
     CaddyRecoveryError, MaterializeCaddyFragmentError, canonical_fragment_contents,
@@ -29,166 +28,70 @@ pub struct ExposureChange {
     pub domain: Option<DomainName>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ExposureChangeError {
-    ApplicationNotFound {
-        application_id: String,
-    },
-    NoActiveRuntime {
-        application_id: String,
-    },
-    DomainRequired {
-        application_id: String,
-    },
-    ExposureChanged {
-        application_id: String,
-    },
-    InvalidVisibility {
-        visibility: String,
-    },
-    InvalidMaterializationState {
-        state: String,
-    },
-    InvalidExposure {
-        reason: String,
-    },
+    #[error("application `{application_id}` was not found")]
+    ApplicationNotFound { application_id: String },
+    #[error("application `{application_id}` has no active runtime to expose")]
+    NoActiveRuntime { application_id: String },
+    #[error("application `{application_id}` requires a domain for public exposure")]
+    DomainRequired { application_id: String },
+    #[error("exposure of application `{application_id}` changed while it was being materialized")]
+    ExposureChanged { application_id: String },
+    #[error("application has invalid persisted visibility `{visibility}`")]
+    InvalidVisibility { visibility: String },
+    #[error("application has invalid persisted exposure materialization state `{state}`")]
+    InvalidMaterializationState { state: String },
+    #[error("application has invalid persisted exposure: {reason}")]
+    InvalidExposure { reason: String },
+    #[error("generated exposure configuration version is invalid")]
     InvalidConfigurationVersion,
+    #[error("exposure diagnostic code and message must be trimmed and non-empty")]
     InvalidDiagnostic,
+    #[error("failed to change exposure: {source}")]
     Store {
+        #[source]
         source: ExposureStoreError,
     },
+    #[error("failed to read runtime: {source}")]
     RuntimeStore {
+        #[source]
         source: RuntimeStoreError,
     },
+    #[error("failed to read application specification: {source}")]
     ApplicationStore {
+        #[source]
         source: crate::adapters::stores::application_store::ApplicationStoreError,
     },
+    #[error("failed to observe runtime: {source}")]
     ObserveFailed {
+        #[source]
         source: PodmanError,
     },
-    RuntimeNotRunning {
-        state: ObservedRuntimeState,
-    },
-    InvalidObservedEndpoint {
-        container_id: String,
-    },
+    #[error("runtime is not running (state: {state:?})")]
+    RuntimeNotRunning { state: ObservedRuntimeState },
+    #[error("runtime `{container_id}` observed a non-loopback endpoint")]
+    InvalidObservedEndpoint { container_id: String },
+    #[error("failed to materialize Caddy fragment: {source}")]
     MaterializeFailed {
+        #[source]
         source: MaterializeCaddyFragmentError,
     },
+    #[error("failed to remove Caddy fragment: {source}")]
     RemoveFragmentFailed {
+        #[source]
         source: CaddyRecoveryError,
     },
+    #[error("external health check failed: {source}")]
     ExternalHealthFailed {
+        #[source]
         source: ExternalHealthCheckError,
     },
+    #[error("failed to persist exposure change: {source}")]
     Persistence {
+        #[source]
         source: rusqlite::Error,
     },
-}
-
-impl fmt::Display for ExposureChangeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ApplicationNotFound { application_id } => {
-                write!(formatter, "application `{application_id}` was not found")
-            }
-            Self::NoActiveRuntime { application_id } => {
-                write!(
-                    formatter,
-                    "application `{application_id}` has no active runtime to expose"
-                )
-            }
-            Self::DomainRequired { application_id } => write!(
-                formatter,
-                "application `{application_id}` requires a domain for public exposure"
-            ),
-            Self::ExposureChanged { application_id } => write!(
-                formatter,
-                "exposure of application `{application_id}` changed while it was being materialized"
-            ),
-            Self::InvalidVisibility { visibility } => {
-                write!(
-                    formatter,
-                    "application has invalid persisted visibility `{visibility}`"
-                )
-            }
-            Self::InvalidMaterializationState { state } => {
-                write!(
-                    formatter,
-                    "application has invalid persisted exposure materialization state `{state}`"
-                )
-            }
-            Self::InvalidExposure { reason } => {
-                write!(
-                    formatter,
-                    "application has invalid persisted exposure: {reason}"
-                )
-            }
-            Self::InvalidConfigurationVersion => {
-                formatter.write_str("generated exposure configuration version is invalid")
-            }
-            Self::InvalidDiagnostic => formatter
-                .write_str("exposure diagnostic code and message must be trimmed and non-empty"),
-            Self::Store { source } => write!(formatter, "failed to change exposure: {source}"),
-            Self::RuntimeStore { source } => {
-                write!(formatter, "failed to read runtime: {source}")
-            }
-            Self::ApplicationStore { source } => {
-                write!(
-                    formatter,
-                    "failed to read application specification: {source}"
-                )
-            }
-            Self::ObserveFailed { source } => {
-                write!(formatter, "failed to observe runtime: {source}")
-            }
-            Self::RuntimeNotRunning { state } => {
-                write!(formatter, "runtime is not running (state: {state:?})")
-            }
-            Self::InvalidObservedEndpoint { container_id } => write!(
-                formatter,
-                "runtime `{container_id}` observed a non-loopback endpoint"
-            ),
-            Self::MaterializeFailed { source } => {
-                write!(formatter, "failed to materialize Caddy fragment: {source}")
-            }
-            Self::RemoveFragmentFailed { source } => {
-                write!(formatter, "failed to remove Caddy fragment: {source}")
-            }
-            Self::ExternalHealthFailed { source } => {
-                write!(formatter, "external health check failed: {source}")
-            }
-            Self::Persistence { source } => {
-                write!(formatter, "failed to persist exposure change: {source}")
-            }
-        }
-    }
-}
-
-impl Error for ExposureChangeError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Store { source } => Some(source),
-            Self::RuntimeStore { source } => Some(source),
-            Self::ApplicationStore { source } => Some(source),
-            Self::ObserveFailed { source } => Some(source),
-            Self::MaterializeFailed { source } => Some(source),
-            Self::RemoveFragmentFailed { source } => Some(source),
-            Self::ExternalHealthFailed { source } => Some(source),
-            Self::Persistence { source } => Some(source),
-            Self::ApplicationNotFound { .. }
-            | Self::NoActiveRuntime { .. }
-            | Self::DomainRequired { .. }
-            | Self::ExposureChanged { .. }
-            | Self::InvalidVisibility { .. }
-            | Self::InvalidMaterializationState { .. }
-            | Self::InvalidExposure { .. }
-            | Self::InvalidConfigurationVersion
-            | Self::InvalidDiagnostic
-            | Self::InvalidObservedEndpoint { .. }
-            | Self::RuntimeNotRunning { .. } => None,
-        }
-    }
 }
 
 // Orchestrates visibility intent, external Caddy effects, and short confirmation transactions.

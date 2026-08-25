@@ -1,5 +1,4 @@
-use std::error::Error;
-use std::fmt;
+use thiserror::Error;
 
 use crate::domain::application::ApplicationName;
 
@@ -11,49 +10,23 @@ pub enum CiCommand {
     Version,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum CiDispatchError {
+    #[error("SSH_ORIGINAL_COMMAND not set")]
     MissingSshOriginalCommand,
+    #[error("empty command")]
     EmptyCommand,
+    #[error("unknown command: {command}")]
     UnknownCommand { command: String },
+    #[error(
+        "invalid application name `{name}`: use 1-63 lowercase alphanumeric characters or hyphens"
+    )]
     InvalidApplicationName { name: String },
+    #[error("invalid branch name `{name}`: shell metacharacters are not allowed")]
     InvalidBranchName { name: String },
+    #[error("invalid deploy format: expected `deploy <application> <branch>`")]
     InvalidDeployFormat,
 }
-
-impl fmt::Display for CiDispatchError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingSshOriginalCommand => {
-                write!(formatter, "SSH_ORIGINAL_COMMAND not set")
-            }
-            Self::EmptyCommand => write!(formatter, "empty command"),
-            Self::UnknownCommand { command } => {
-                write!(formatter, "unknown command: {command}")
-            }
-            Self::InvalidApplicationName { name } => {
-                write!(
-                    formatter,
-                    "invalid application name `{name}`: use 1-63 lowercase alphanumeric characters or hyphens"
-                )
-            }
-            Self::InvalidBranchName { name } => {
-                write!(
-                    formatter,
-                    "invalid branch name `{name}`: shell metacharacters are not allowed"
-                )
-            }
-            Self::InvalidDeployFormat => {
-                write!(
-                    formatter,
-                    "invalid deploy format: expected `deploy <application> <branch>`"
-                )
-            }
-        }
-    }
-}
-
-impl Error for CiDispatchError {}
 
 // Rejects shell metacharacters because branch names cross the SSH command boundary.
 fn is_valid_branch_name(name: &str) -> bool {

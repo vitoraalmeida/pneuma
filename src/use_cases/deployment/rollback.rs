@@ -1,7 +1,5 @@
-use std::error::Error;
-use std::fmt;
-
 use rusqlite::Connection;
+use thiserror::Error;
 
 use super::execute::{DeploymentResult, PublicDeploymentConfiguration, deploy_release};
 use super::failure::DeployReleaseError;
@@ -11,69 +9,34 @@ use crate::adapters::stores::deployment_store;
 use crate::domain::deployment::{DeploymentType, RollbackTarget};
 use crate::domain::identity::ApplicationId;
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum RollbackError {
-    ApplicationNotFound {
-        application_id: String,
-    },
-    NoPreviousDeployment {
-        application_id: String,
-    },
+    #[error("application `{application_id}` was not found")]
+    ApplicationNotFound { application_id: String },
+    #[error("application `{application_id}` has no previous successful deployment to roll back to")]
+    NoPreviousDeployment { application_id: String },
+    #[error("failed to load rollback release: {source}")]
     ApplicationStore {
+        #[source]
         source: application_store::ApplicationStoreError,
     },
+    #[error("failed to load rollback release: {source}")]
     DeploymentStore {
+        #[source]
         source: deployment_store::DeploymentStoreError,
     },
+    #[error("failed to load rollback release: {source}")]
     Persistence {
+        #[source]
         source: rusqlite::Error,
     },
+    #[error("failed to pull rollback image: {source}")]
     PullImage {
+        #[source]
         source: PullImageError,
     },
-    DeployRelease {
-        source: DeployReleaseError,
-    },
-}
-
-impl fmt::Display for RollbackError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ApplicationNotFound { application_id } => {
-                write!(formatter, "application `{application_id}` was not found")
-            }
-            Self::NoPreviousDeployment { application_id } => write!(
-                formatter,
-                "application `{application_id}` has no previous successful deployment to roll back to"
-            ),
-            Self::ApplicationStore { source } => {
-                write!(formatter, "failed to load rollback release: {source}")
-            }
-            Self::DeploymentStore { source } => {
-                write!(formatter, "failed to load rollback release: {source}")
-            }
-            Self::Persistence { source } => {
-                write!(formatter, "failed to load rollback release: {source}")
-            }
-            Self::PullImage { source } => {
-                write!(formatter, "failed to pull rollback image: {source}")
-            }
-            Self::DeployRelease { source } => write!(formatter, "{source}"),
-        }
-    }
-}
-
-impl Error for RollbackError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Persistence { source } => Some(source),
-            Self::ApplicationStore { source } => Some(source),
-            Self::DeploymentStore { source } => Some(source),
-            Self::PullImage { source } => Some(source),
-            Self::DeployRelease { source } => Some(source),
-            Self::ApplicationNotFound { .. } | Self::NoPreviousDeployment { .. } => None,
-        }
-    }
+    #[error(transparent)]
+    DeployRelease { source: DeployReleaseError },
 }
 
 // Reuses a historical immutable artifact through the normal deployment flow, preserving history.

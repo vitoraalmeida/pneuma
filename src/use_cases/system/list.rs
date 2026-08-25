@@ -1,26 +1,14 @@
-use std::error::Error;
-use std::fmt;
-
 use rusqlite::Connection;
+use thiserror::Error;
 
 use crate::adapters::stores::system_store;
 use crate::domain::system::System;
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
+#[error("failed to list systems: {source}")]
 pub struct ListSystemsError {
+    #[source]
     source: rusqlite::Error,
-}
-
-impl fmt::Display for ListSystemsError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "failed to list systems: {}", self.source)
-    }
-}
-
-impl Error for ListSystemsError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(&self.source)
-    }
 }
 
 // Lists catalog systems in stable name order without modifying persisted state.

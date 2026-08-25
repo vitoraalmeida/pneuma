@@ -1,7 +1,5 @@
-use std::error::Error;
-use std::fmt;
-
 use serde::Deserialize;
+use thiserror::Error;
 
 use crate::domain::identity::{ApplicationId, ReleaseId};
 
@@ -123,33 +121,19 @@ impl DeliverySpecification {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Error)]
+#[error("invalid OCI repository `{repository}`")]
 pub struct InvalidOciRepository {
     pub repository: String,
 }
-impl fmt::Display for InvalidOciRepository {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "invalid OCI repository `{}`", self.repository)
-    }
-}
-impl Error for InvalidOciRepository {}
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Error)]
+#[error(
+    "image reference `{reference}` must be <repository>@sha256:<64 lowercase hexadecimal characters>"
+)]
 pub struct InvalidOciArtifact {
     pub reference: String,
 }
-
-impl fmt::Display for InvalidOciArtifact {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "image reference `{}` must be <repository>@sha256:<64 lowercase hexadecimal characters>",
-            self.reference
-        )
-    }
-}
-
-impl Error for InvalidOciArtifact {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 // Entity: one immutable artifact reusable by an Application; the invariant

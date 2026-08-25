@@ -1,7 +1,7 @@
-use std::error::Error;
-use std::fmt;
 use std::io;
 use std::process::Command;
+
+use thiserror::Error;
 
 use crate::domain::git::CommitSha;
 use crate::domain::release::{OciArtifact, OciRepository, is_sha256_digest};
@@ -12,86 +12,40 @@ pub(crate) struct PulledImage {
     pub(crate) artifact: OciArtifact,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum PullImageError {
+    #[error("failed to execute Podman while {operation}: {source}")]
     Execute {
         operation: &'static str,
+        #[source]
         source: io::Error,
     },
+    #[error(
+        "failed to pull image `{reference}` with Podman: {}",
+        diagnostic(stdout, stderr)
+    )]
     Pull {
         reference: String,
         stdout: String,
         stderr: String,
     },
+    #[error(
+        "failed to inspect image `{reference}` with Podman: {}",
+        diagnostic(stdout, stderr)
+    )]
     Inspect {
         reference: String,
         stdout: String,
         stderr: String,
     },
-    InvalidInspectOutput {
-        reference: String,
-        output: String,
-    },
+    #[error("Podman returned an invalid digest while inspecting image `{reference}`: {output}")]
+    InvalidInspectOutput { reference: String, output: String },
+    #[error("Podman inspected image `{reference}` as `{actual}`, expected `{expected}`")]
     DigestMismatch {
         reference: String,
         expected: String,
         actual: String,
     },
-}
-
-impl fmt::Display for PullImageError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Execute { operation, source } => {
-                write!(
-                    formatter,
-                    "failed to execute Podman while {operation}: {source}"
-                )
-            }
-            Self::Pull {
-                reference,
-                stdout,
-                stderr,
-            } => write!(
-                formatter,
-                "failed to pull image `{reference}` with Podman: {}",
-                diagnostic(stdout, stderr)
-            ),
-            Self::Inspect {
-                reference,
-                stdout,
-                stderr,
-            } => write!(
-                formatter,
-                "failed to inspect image `{reference}` with Podman: {}",
-                diagnostic(stdout, stderr)
-            ),
-            Self::InvalidInspectOutput { reference, output } => write!(
-                formatter,
-                "Podman returned an invalid digest while inspecting image `{reference}`: {output}"
-            ),
-            Self::DigestMismatch {
-                reference,
-                expected,
-                actual,
-            } => write!(
-                formatter,
-                "Podman inspected image `{reference}` as `{actual}`, expected `{expected}`"
-            ),
-        }
-    }
-}
-
-impl Error for PullImageError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Execute { source, .. } => Some(source),
-            Self::Pull { .. }
-            | Self::Inspect { .. }
-            | Self::InvalidInspectOutput { .. }
-            | Self::DigestMismatch { .. } => None,
-        }
-    }
 }
 
 // Pulls a digest-pinned artifact and confirms Podman resolved exactly that digest.
@@ -155,68 +109,34 @@ pub(crate) fn pull_image(artifact: &OciArtifact) -> Result<PulledImage, PullImag
     })
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ResolveImageDigestError {
+    #[error("failed to execute Podman while {operation}: {source}")]
     Execute {
         operation: &'static str,
+        #[source]
         source: io::Error,
     },
+    #[error(
+        "failed to pull image `{reference}` with Podman: {}",
+        diagnostic(stdout, stderr)
+    )]
     Pull {
         reference: String,
         stdout: String,
         stderr: String,
     },
+    #[error(
+        "failed to inspect image `{reference}` with Podman: {}",
+        diagnostic(stdout, stderr)
+    )]
     Inspect {
         reference: String,
         stdout: String,
         stderr: String,
     },
-    InvalidInspectOutput {
-        reference: String,
-        output: String,
-    },
-}
-
-impl fmt::Display for ResolveImageDigestError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Execute { operation, source } => write!(
-                formatter,
-                "failed to execute Podman while {operation}: {source}"
-            ),
-            Self::Pull {
-                reference,
-                stdout,
-                stderr,
-            } => write!(
-                formatter,
-                "failed to pull image `{reference}` with Podman: {}",
-                diagnostic(stdout, stderr)
-            ),
-            Self::Inspect {
-                reference,
-                stdout,
-                stderr,
-            } => write!(
-                formatter,
-                "failed to inspect image `{reference}` with Podman: {}",
-                diagnostic(stdout, stderr)
-            ),
-            Self::InvalidInspectOutput { reference, output } => write!(
-                formatter,
-                "Podman returned an invalid digest while inspecting image `{reference}`: {output}"
-            ),
-        }
-    }
-}
-
-impl Error for ResolveImageDigestError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Execute { source, .. } => Some(source),
-            Self::Pull { .. } | Self::Inspect { .. } | Self::InvalidInspectOutput { .. } => None,
-        }
-    }
+    #[error("Podman returned an invalid digest while inspecting image `{reference}`: {output}")]
+    InvalidInspectOutput { reference: String, output: String },
 }
 
 // Resolves a CI commit tag to a validated immutable artifact for Release creation.

@@ -1,7 +1,5 @@
-use std::error::Error;
-use std::fmt;
-
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use thiserror::Error;
 
 use crate::adapters::stores::PersistenceOutcome;
 use crate::adapters::stores::persistence::{
@@ -13,63 +11,30 @@ use crate::domain::exposure::{
 };
 use crate::domain::identity::{ApplicationId, RuntimeInstanceId};
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ExposureStoreError {
+    #[error("application `{application_id}` has invalid persisted visibility `{visibility}`")]
     InvalidVisibility {
         application_id: String,
         visibility: String,
     },
+    #[error(
+        "application `{application_id}` has invalid persisted exposure materialization state `{state}`"
+    )]
     InvalidMaterializationState {
         application_id: String,
         state: String,
     },
+    #[error("application `{application_id}` has invalid persisted exposure: {reason}")]
     InvalidExposure {
         application_id: String,
         reason: String,
     },
+    #[error("exposure store error: {source}")]
     Persistence {
+        #[source]
         source: rusqlite::Error,
     },
-}
-
-impl fmt::Display for ExposureStoreError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidVisibility {
-                application_id,
-                visibility,
-            } => write!(
-                formatter,
-                "application `{application_id}` has invalid persisted visibility `{visibility}`"
-            ),
-            Self::InvalidMaterializationState {
-                application_id,
-                state,
-            } => write!(
-                formatter,
-                "application `{application_id}` has invalid persisted exposure materialization state `{state}`"
-            ),
-            Self::InvalidExposure {
-                application_id,
-                reason,
-            } => write!(
-                formatter,
-                "application `{application_id}` has invalid persisted exposure: {reason}"
-            ),
-            Self::Persistence { source } => write!(formatter, "exposure store error: {source}"),
-        }
-    }
-}
-
-impl Error for ExposureStoreError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::InvalidVisibility { .. }
-            | Self::InvalidMaterializationState { .. }
-            | Self::InvalidExposure { .. } => None,
-            Self::Persistence { source } => Some(source),
-        }
-    }
 }
 
 // Persists initial visibility intent; route materialization remains unconfirmed.

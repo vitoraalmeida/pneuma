@@ -1,53 +1,25 @@
-use std::error::Error;
-use std::fmt;
 use std::io;
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use thiserror::Error;
 
 use crate::domain::identity::{ApplicationId, ReleaseId};
 use crate::domain::release::{OciArtifact, Release};
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ReleaseStoreError {
-    NotFound {
-        release_id: String,
-    },
+    #[error("release `{release_id}` not found")]
+    NotFound { release_id: String },
+    #[error("release for application `{application_id}` and digest `{image_digest}` not found")]
     NotFoundByArtifact {
         application_id: String,
         image_digest: String,
     },
+    #[error("release store error: {source}")]
     Persistence {
+        #[source]
         source: rusqlite::Error,
     },
-}
-
-impl fmt::Display for ReleaseStoreError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NotFound { release_id } => {
-                write!(formatter, "release `{release_id}` not found")
-            }
-            Self::NotFoundByArtifact {
-                application_id,
-                image_digest,
-            } => write!(
-                formatter,
-                "release for application `{application_id}` and digest `{image_digest}` not found"
-            ),
-            Self::Persistence { source } => {
-                write!(formatter, "release store error: {source}")
-            }
-        }
-    }
-}
-
-impl Error for ReleaseStoreError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Persistence { source } => Some(source),
-            Self::NotFound { .. } | Self::NotFoundByArtifact { .. } => None,
-        }
-    }
 }
 
 // Allocates a Release ID beside its digest-uniqueness check in the same transaction.

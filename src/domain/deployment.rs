@@ -1,3 +1,5 @@
+use thiserror::Error;
+
 use crate::domain::exposure::{DomainName, Visibility};
 use crate::domain::git::CommitSha;
 use crate::domain::identity::{ApplicationId, DeploymentId, ReleaseId, RuntimeInstanceId};
@@ -5,7 +7,6 @@ use crate::domain::release::Release;
 use crate::domain::runtime::{
     ExpectedRuntimeEndpoint, ObservedRuntimeState, RuntimeRetirement, RuntimeState,
 };
-use std::error::Error;
 use std::fmt;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -108,14 +109,9 @@ impl DeploymentFailure {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Error)]
+#[error("deployment failure requires trimmed code, message, timestamp, and a non-terminal stage")]
 pub struct InvalidDeploymentFailure;
-impl fmt::Display for InvalidDeploymentFailure {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("deployment failure requires trimmed code, message, timestamp, and a non-terminal stage")
-    }
-}
-impl Error for InvalidDeploymentFailure {}
 
 #[derive(Debug, PartialEq, Eq)]
 // Read model (projection): couples a hydrated deployment with its immutable artifact
@@ -245,23 +241,13 @@ impl DeploymentStatus {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Error)]
 // Rejects an event that has no legal edge from the current Deployment status.
+#[error("cannot apply deployment event `{event}` while in state `{current}`")]
 pub struct InvalidDeploymentTransition {
     pub current: DeploymentStatus,
     pub event: DeploymentEvent,
 }
-
-impl fmt::Display for InvalidDeploymentTransition {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "cannot apply deployment event `{}` while in state `{}`",
-            self.event, self.current
-        )
-    }
-}
-impl Error for InvalidDeploymentTransition {}
 
 #[derive(Debug, PartialEq, Eq)]
 // Identifies a candidate whose runtime, route, and deployment were atomically promoted.

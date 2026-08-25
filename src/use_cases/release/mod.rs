@@ -1,49 +1,30 @@
-use std::error::Error;
-use std::fmt;
-
 use rusqlite::Connection;
+use thiserror::Error;
 
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::adapters::stores::release_store::{self, ReleaseStoreError};
 use crate::domain::identity::ApplicationId;
 use crate::domain::release::{OciArtifact, Release};
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum CreateReleaseError {
+    #[error("application `{application_id}` was not found")]
     ApplicationNotFound { application_id: String },
-    ApplicationStore { source: ApplicationStoreError },
-    ReleaseStore { source: ReleaseStoreError },
-    Persistence { source: rusqlite::Error },
-}
-
-impl fmt::Display for CreateReleaseError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ApplicationNotFound { application_id } => {
-                write!(formatter, "application `{application_id}` was not found")
-            }
-            Self::ApplicationStore { source } => {
-                write!(formatter, "failed to create release: {source}")
-            }
-            Self::ReleaseStore { source } => {
-                write!(formatter, "failed to create release: {source}")
-            }
-            Self::Persistence { source } => {
-                write!(formatter, "failed to create release: {source}")
-            }
-        }
-    }
-}
-
-impl Error for CreateReleaseError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::ApplicationNotFound { .. } => None,
-            Self::ApplicationStore { source } => Some(source),
-            Self::ReleaseStore { source } => Some(source),
-            Self::Persistence { source } => Some(source),
-        }
-    }
+    #[error("failed to create release: {source}")]
+    ApplicationStore {
+        #[source]
+        source: ApplicationStoreError,
+    },
+    #[error("failed to create release: {source}")]
+    ReleaseStore {
+        #[source]
+        source: ReleaseStoreError,
+    },
+    #[error("failed to create release: {source}")]
+    Persistence {
+        #[source]
+        source: rusqlite::Error,
+    },
 }
 
 impl From<ApplicationStoreError> for CreateReleaseError {

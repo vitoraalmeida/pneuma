@@ -1,6 +1,7 @@
-use std::error::Error;
 use std::fmt;
+
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use thiserror::Error;
 
 use crate::domain::identity::{ApplicationId, DeploymentId, RuntimeInstanceId};
 
@@ -68,23 +69,11 @@ impl std::fmt::Display for ObservedRuntimeState {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Error)]
 pub enum RuntimeEndpointError {
+    #[error("runtime endpoint must be IPv4 loopback with a nonzero port: {endpoint}")]
     NotIpv4Loopback { endpoint: SocketAddr },
 }
-
-impl std::fmt::Display for RuntimeEndpointError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NotIpv4Loopback { endpoint } => write!(
-                formatter,
-                "runtime endpoint must be IPv4 loopback with a nonzero port: {endpoint}"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for RuntimeEndpointError {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 // Identifies the loopback endpoint reserved for a logical runtime before external effects.
@@ -239,15 +228,10 @@ impl ContainerPort {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Error)]
+#[error("invalid container port {value}")]
 pub struct InvalidContainerPort {
     pub value: u16,
-}
-
-impl fmt::Display for InvalidContainerPort {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "invalid container port {}", self.value)
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -267,20 +251,11 @@ impl HostPort {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Error)]
+#[error("invalid host port {value}")]
 pub struct InvalidHostPort {
     pub value: u16,
 }
-
-impl fmt::Display for InvalidHostPort {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "invalid host port {}", self.value)
-    }
-}
-
-impl Error for InvalidHostPort {}
-
-impl Error for InvalidContainerPort {}
 
 // HTTP path probed to verify runtime health. Must start with `/` and stay
 // whitespace-free so it can be embedded safely in curl invocations and
@@ -303,18 +278,11 @@ impl HealthCheckPath {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Error)]
+#[error("invalid health check path `{value}`")]
 pub struct InvalidHealthCheckPath {
     pub value: String,
 }
-
-impl fmt::Display for InvalidHealthCheckPath {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "invalid health check path `{}`", self.value)
-    }
-}
-
-impl Error for InvalidHealthCheckPath {}
 
 // HTTP status considered healthy, bounded to the valid HTTP range so adapters
 // never compare against an impossible expectation.
@@ -334,18 +302,11 @@ impl HealthCheckStatus {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Error)]
+#[error("invalid health check status {value}")]
 pub struct InvalidHealthCheckStatus {
     pub value: u16,
 }
-
-impl fmt::Display for InvalidHealthCheckStatus {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "invalid health check status {}", self.value)
-    }
-}
-
-impl Error for InvalidHealthCheckStatus {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 // Groups the HTTP response contract used to verify a runtime.

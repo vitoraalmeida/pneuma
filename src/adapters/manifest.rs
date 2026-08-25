@@ -1,10 +1,9 @@
-use std::error::Error;
-use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+use thiserror::Error;
 
 use crate::domain::application::ApplicationName;
 use crate::domain::exposure::{DomainName, ExposureIntent, Visibility};
@@ -75,58 +74,26 @@ struct ExposureSection {
     domain: Option<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ManifestError {
+    #[error("failed to read manifest at {}: {source}", path.display())]
     Read {
         path: PathBuf,
+        #[source]
         source: io::Error,
     },
+    #[error("invalid manifest TOML: {source}")]
     Parse {
+        #[source]
         source: toml::de::Error,
     },
-    UnsupportedSchemaVersion {
-        found: u32,
-    },
+    #[error("unsupported schema_version {found}; expected {SUPPORTED_SCHEMA_VERSION}")]
+    UnsupportedSchemaVersion { found: u32 },
+    #[error("invalid manifest field `{field}`: {reason}")]
     InvalidField {
         field: &'static str,
         reason: &'static str,
     },
-}
-
-impl fmt::Display for ManifestError {
-    // `Error` requires `Display`; this is the user-facing message shown at the
-    // manifest boundary, with enough context to identify the failed operation.
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Read { path, source } => {
-                write!(
-                    formatter,
-                    "failed to read manifest at {}: {source}",
-                    path.display()
-                )
-            }
-            Self::Parse { source } => write!(formatter, "invalid manifest TOML: {source}"),
-            Self::UnsupportedSchemaVersion { found } => write!(
-                formatter,
-                "unsupported schema_version {found}; expected {SUPPORTED_SCHEMA_VERSION}"
-            ),
-            Self::InvalidField { field, reason } => {
-                write!(formatter, "invalid manifest field `{field}`: {reason}")
-            }
-        }
-    }
-}
-
-impl Error for ManifestError {
-    // Exposing wrapped library errors lets reporters traverse the cause chain.
-    // Validation errors originate in Pneuma, so they have no deeper source.
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Read { source, .. } => Some(source),
-            Self::Parse { source } => Some(source),
-            Self::UnsupportedSchemaVersion { .. } | Self::InvalidField { .. } => None,
-        }
-    }
 }
 
 // Loads the manifest from Pneuma's fixed repository-relative filename.

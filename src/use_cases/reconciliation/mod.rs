@@ -1,7 +1,5 @@
-use std::error::Error;
-use std::fmt;
-
 use rusqlite::Connection;
+use thiserror::Error;
 
 use crate::adapters::application_lock::{ApplicationLock, ApplicationLockError};
 use crate::adapters::caddy_exposure::ObserveCaddyFragmentError;
@@ -52,126 +50,72 @@ pub enum ReconciliationResult {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ReconciliationReadError {
-    ApplicationNotFound {
-        application_name: String,
-    },
+    #[error("application `{application_name}` was not found")]
+    ApplicationNotFound { application_name: String },
+    #[error("failed to load reconciliation application: {source}")]
     Application {
+        #[source]
         source: application_store::ApplicationStoreError,
     },
+    #[error("failed to load reconciliation deployment: {source}")]
     Deployment {
+        #[source]
         source: deployment_store::DeploymentStoreError,
     },
+    #[error("failed to load reconciliation release: {source}")]
     Release {
+        #[source]
         source: release_store::ReleaseStoreError,
     },
+    #[error("failed to load reconciliation runtime: {source}")]
     Runtime {
+        #[source]
         source: runtime_store::RuntimeStoreError,
     },
+    #[error("failed to load reconciliation exposure: {source}")]
     Exposure {
+        #[source]
         source: exposure_store::ExposureStoreError,
     },
+    #[error("failed to serialize reconciliation: {source}")]
     OperationLock {
+        #[source]
         source: ApplicationLockError,
     },
+    #[error("failed to acquire reconciliation ownership: {source}")]
     Operation {
+        #[source]
         source: OperationStoreError,
     },
+    #[error("failed to observe recorded runtime: {source}")]
     ObserveContainer {
+        #[source]
         source: PodmanError,
     },
+    #[error("failed to observe named runtime: {source}")]
     ObserveNamedContainer {
+        #[source]
         source: PodmanError,
     },
+    #[error("failed to observe Quadlet: {source}")]
     ObserveQuadlet {
+        #[source]
         source: QuadletError,
     },
+    #[error("failed to observe Caddy fragment: {source}")]
     ObserveCaddy {
+        #[source]
         source: ObserveCaddyFragmentError,
     },
+    #[error("runtime has an invalid expected host port: {source}")]
     InvalidExpectedPort {
+        #[source]
         source: InvalidHostPort,
     },
-    NotConverged {
-        reason: String,
-    },
-}
-
-impl fmt::Display for ReconciliationReadError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ApplicationNotFound { application_name } => {
-                write!(formatter, "application `{application_name}` was not found")
-            }
-            Self::Application { source } => write!(
-                formatter,
-                "failed to load reconciliation application: {source}"
-            ),
-            Self::Deployment { source } => write!(
-                formatter,
-                "failed to load reconciliation deployment: {source}"
-            ),
-            Self::Release { source } => {
-                write!(formatter, "failed to load reconciliation release: {source}")
-            }
-            Self::Runtime { source } => {
-                write!(formatter, "failed to load reconciliation runtime: {source}")
-            }
-            Self::Exposure { source } => write!(
-                formatter,
-                "failed to load reconciliation exposure: {source}"
-            ),
-            Self::OperationLock { source } => {
-                write!(formatter, "failed to serialize reconciliation: {source}")
-            }
-            Self::Operation { source } => {
-                write!(
-                    formatter,
-                    "failed to acquire reconciliation ownership: {source}"
-                )
-            }
-            Self::ObserveContainer { source } => {
-                write!(formatter, "failed to observe recorded runtime: {source}")
-            }
-            Self::ObserveNamedContainer { source } => {
-                write!(formatter, "failed to observe named runtime: {source}")
-            }
-            Self::ObserveQuadlet { source } => {
-                write!(formatter, "failed to observe Quadlet: {source}")
-            }
-            Self::ObserveCaddy { source } => {
-                write!(formatter, "failed to observe Caddy fragment: {source}")
-            }
-            Self::InvalidExpectedPort { source } => write!(
-                formatter,
-                "runtime has an invalid expected host port: {source}"
-            ),
-            Self::NotConverged { reason } => {
-                write!(formatter, "reconciliation is not yet converged: {reason}")
-            }
-        }
-    }
-}
-
-impl Error for ReconciliationReadError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Application { source } => Some(source),
-            Self::Deployment { source } => Some(source),
-            Self::Release { source } => Some(source),
-            Self::Runtime { source } => Some(source),
-            Self::Exposure { source } => Some(source),
-            Self::OperationLock { source } => Some(source),
-            Self::Operation { source } => Some(source),
-            Self::ObserveContainer { source } => Some(source),
-            Self::ObserveNamedContainer { source } => Some(source),
-            Self::ObserveQuadlet { source } => Some(source),
-            Self::ObserveCaddy { source } => Some(source),
-            Self::InvalidExpectedPort { source } => Some(source),
-            Self::ApplicationNotFound { .. } | Self::NotConverged { .. } => None,
-        }
-    }
+    #[error("reconciliation is not yet converged: {reason}")]
+    NotConverged { reason: String },
 }
 
 // Reconciles only confirmed runtime and route drift, leaving ambiguous materialization untouched.
