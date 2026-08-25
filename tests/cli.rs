@@ -1182,6 +1182,160 @@ fn reconcile_rematerializes_a_missing_quadlet_and_container() {
 }
 
 #[test]
+fn reconcile_refuses_a_rematerialized_container_that_differs_from_persisted_intent() {
+    let mut environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || respond_once(&listener, 200));
+    assert_command_succeeded(&environment.deploy(port, false));
+    server.join().unwrap();
+    environment.reconciliation_port = Some(port);
+    let connection = database::open(&environment.database_path).unwrap();
+    let (deployment_id, recorded_id): (String, String) = connection
+        .query_row(
+            "SELECT deployment_id, external_runtime_id FROM runtime_instances",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    drop(connection);
+    fs::remove_file(
+        environment
+            .root
+            .join("quadlets")
+            .join(format!("pneuma-another-site-{deployment_id}.container")),
+    )
+    .unwrap();
+    fs::write(environment.root.join("podman-removed"), "removed\n").unwrap();
+    environment.replacement_application_label = Some("other-app".to_owned());
+
+    let output = environment.run_reconcile();
+
+    assert_command_succeeded(&output);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Result: manual-intervention"), "{stdout}");
+    let connection = database::open(&environment.database_path).unwrap();
+    let persisted_id: String = connection
+        .query_row(
+            "SELECT external_runtime_id FROM runtime_instances",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(persisted_id, recorded_id);
+}
+
+#[test]
+fn reconcile_reports_failure_when_the_rematerialized_runtime_fails_its_health_check() {
+    let mut environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || respond_once(&listener, 200));
+    assert_command_succeeded(&environment.deploy(port, false));
+    server.join().unwrap();
+    environment.reconciliation_port = Some(port);
+    let connection = database::open(&environment.database_path).unwrap();
+    let (deployment_id, recorded_id): (String, String) = connection
+        .query_row(
+            "SELECT deployment_id, external_runtime_id FROM runtime_instances",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    drop(connection);
+    fs::remove_file(
+        environment
+            .root
+            .join("quadlets")
+            .join(format!("pneuma-another-site-{deployment_id}.container")),
+    )
+    .unwrap();
+    // No listener serves the reserved endpoint after rematerialization, so the
+    // started container must fail its internal health check.
+    fs::write(environment.root.join("podman-removed"), "removed\n").unwrap();
+
+    let output = environment.run_reconcile();
+
+    assert_command_succeeded(&output);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Result: failed"), "{stdout}");
+    assert!(
+        stdout.contains("internal health check"),
+        "unexpected diagnostic: {stdout}"
+    );
+    let connection = database::open(&environment.database_path).unwrap();
+    let persisted_id: String = connection
+        .query_row(
+            "SELECT external_runtime_id FROM runtime_instances",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(persisted_id, recorded_id);
+}
+
+#[test]
+fn a_lost_runtime_confirmation_during_reconcile_surfaces_as_not_converged() {
+    let mut environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || respond_once(&listener, 200));
+    assert_command_succeeded(&environment.deploy(port, false));
+    server.join().unwrap();
+    environment.reconciliation_port = Some(port);
+    let connection = database::open(&environment.database_path).unwrap();
+    let (deployment_id, host_port, recorded_id): (String, u16, String) = connection
+        .query_row(
+            "SELECT deployment_id, host_port, external_runtime_id FROM runtime_instances",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    connection
+        .execute_batch(
+            "CREATE TRIGGER reject_runtime_identity_swap
+             BEFORE UPDATE OF external_runtime_id ON runtime_instances
+             BEGIN
+                 SELECT RAISE(IGNORE);
+             END",
+        )
+        .unwrap();
+    drop(connection);
+    fs::remove_file(
+        environment
+            .root
+            .join("quadlets")
+            .join(format!("pneuma-another-site-{deployment_id}.container")),
+    )
+    .unwrap();
+    fs::write(environment.root.join("podman-removed"), "removed\n").unwrap();
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, host_port)).unwrap();
+    let server = thread::spawn(move || respond_once(&listener, 200));
+
+    let output = environment.run_reconcile();
+
+    server.join().unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("changed before rematerialization could be confirmed"),
+        "unexpected stderr: {stderr}"
+    );
+    let connection = database::open(&environment.database_path).unwrap();
+    let persisted_id: String = connection
+        .query_row(
+            "SELECT external_runtime_id FROM runtime_instances",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(persisted_id, recorded_id);
+}
+
+#[test]
 fn reconcile_restarts_a_canonical_quadlet_after_its_container_is_removed() {
     let mut environment = DeploymentEnvironment::new();
     assert_command_succeeded(&environment.import());
@@ -1351,6 +1505,114 @@ fn reconcile_records_failed_public_exposure_when_external_health_cannot_confirm_
         })
         .unwrap();
     assert_eq!(state, "failed");
+}
+
+#[test]
+fn reconcile_records_failed_public_exposure_when_caddy_rejects_the_materialization() {
+    let mut environment = DeploymentEnvironment::public();
+    assert_command_succeeded(&environment.import());
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || respond_once(&listener, 200));
+    assert_command_succeeded(&environment.deploy(port, false));
+    server.join().unwrap();
+    environment.reconciliation_port = Some(port);
+    let application_id: String = database::open(&environment.database_path)
+        .unwrap()
+        .query_row("SELECT id FROM applications", [], |row| row.get(0))
+        .unwrap();
+    let fragment = environment
+        .managed_caddy_directory
+        .join(format!("{application_id}.caddy"));
+    fs::remove_file(&fragment).unwrap();
+    fs::write(
+        environment.fake_bin.join("caddy"),
+        "#!/bin/sh\nprintf 'caddy rejected the configuration\\n' >&2\nexit 1\n",
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(environment.fake_bin.join("caddy"))
+        .unwrap()
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(environment.fake_bin.join("caddy"), permissions).unwrap();
+
+    let output = environment.run_reconcile();
+
+    assert_command_succeeded(&output);
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("Result: failed")
+    );
+    assert!(
+        !fragment.exists(),
+        "a rejected materialization must not leave a fragment behind"
+    );
+    let (state, code): (String, String) = database::open(&environment.database_path)
+        .unwrap()
+        .query_row(
+            "SELECT materialization_state, last_error_code FROM exposures",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(state, "failed");
+    assert_eq!(code, "caddy_materialization_failed");
+}
+
+#[test]
+fn a_lost_public_confirmation_restores_the_fragment_and_records_failure_during_reconcile() {
+    let mut environment = DeploymentEnvironment::public();
+    assert_command_succeeded(&environment.import());
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || respond_once(&listener, 200));
+    assert_command_succeeded(&environment.deploy(port, false));
+    server.join().unwrap();
+    environment.reconciliation_port = Some(port);
+    let application_id: String = database::open(&environment.database_path)
+        .unwrap()
+        .query_row("SELECT id FROM applications", [], |row| row.get(0))
+        .unwrap();
+    let fragment = environment
+        .managed_caddy_directory
+        .join(format!("{application_id}.caddy"));
+    fs::remove_file(&fragment).unwrap();
+
+    let connection = database::open(&environment.database_path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TRIGGER reject_public_exposure_completion
+             BEFORE UPDATE OF active_runtime_id ON exposures
+             BEGIN
+                 SELECT RAISE(IGNORE);
+             END",
+        )
+        .unwrap();
+    drop(connection);
+
+    let output = environment.run_reconcile();
+
+    assert_command_succeeded(&output);
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains("Result: failed")
+    );
+    assert!(
+        !fragment.exists(),
+        "a lost confirmation CAS must restore the absent fragment"
+    );
+    let (state, code): (String, String) = database::open(&environment.database_path)
+        .unwrap()
+        .query_row(
+            "SELECT materialization_state, last_error_code FROM exposures",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(state, "failed");
+    assert_eq!(code, "exposure_changed");
 }
 
 #[test]
