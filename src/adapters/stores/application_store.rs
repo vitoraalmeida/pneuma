@@ -19,11 +19,11 @@ use crate::domain::runtime::{
     RuntimeSpecification,
 };
 
+// Every lookup in this store is an optional query: absence is `Ok(None)`, never
+// a dedicated error variant. Callers that require a row translate `None` into
+// their own domain error.
 #[derive(Debug)]
 pub enum ApplicationStoreError {
-    NotFound {
-        application_id: String,
-    },
     InvalidDesiredRuntimeState {
         application_id: String,
         state: String,
@@ -36,9 +36,6 @@ pub enum ApplicationStoreError {
 impl fmt::Display for ApplicationStoreError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotFound { application_id } => {
-                write!(formatter, "application `{application_id}` not found")
-            }
             Self::InvalidDesiredRuntimeState {
                 application_id,
                 state,
@@ -59,7 +56,7 @@ impl Error for ApplicationStoreError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Persistence { source } => Some(source),
-            Self::NotFound { .. } | Self::InvalidDesiredRuntimeState { .. } => None,
+            Self::InvalidDesiredRuntimeState { .. } => None,
         }
     }
 }
@@ -585,12 +582,39 @@ mod tests {
 
     use super::{
         ApplicationStoreError, DesiredRuntimeState, compare_and_set_desired_runtime_state,
-        insert_application, insert_delivery_spec, insert_runtime_spec, load_delivery_specification,
-        load_deployment_specification, load_desired_runtime_state, load_source,
+        insert_application, insert_delivery_spec, insert_runtime_spec, load_application_by_name,
+        load_application_for_import, load_delivery_specification, load_deployment_specification,
+        load_desired_runtime_state, load_source,
     };
 
     fn application_id() -> ApplicationId {
         ApplicationId::from("app")
+    }
+
+    #[test]
+    fn absent_lookups_are_ok_none_never_a_not_found_error() {
+        let mut connection = database::open(Path::new(":memory:")).unwrap();
+        let name = ApplicationName::new("missing").unwrap();
+
+        let transaction = connection.transaction().unwrap();
+        assert_eq!(
+            load_application_by_name(&transaction, &name).unwrap(),
+            None,
+            "absence must be Ok(None): this store has no NotFound variant"
+        );
+        assert_eq!(
+            load_application_for_import(&transaction, &name).unwrap(),
+            None
+        );
+        assert_eq!(
+            load_delivery_specification(&transaction, &application_id()).unwrap(),
+            None
+        );
+        assert_eq!(load_source(&transaction, &application_id()).unwrap(), None);
+        assert_eq!(
+            load_deployment_specification(&transaction, &application_id()).unwrap(),
+            None
+        );
     }
 
     fn seed_application(connection: &Connection, id: &str) {

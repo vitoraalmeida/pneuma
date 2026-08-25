@@ -79,9 +79,6 @@ impl From<ApplicationStoreError> for ImportError {
     fn from(error: ApplicationStoreError) -> Self {
         match error {
             ApplicationStoreError::Persistence { source } => Self::Persistence { source },
-            ApplicationStoreError::NotFound { application_id } => {
-                Self::ApplicationNotFound { application_id }
-            }
             ApplicationStoreError::InvalidDesiredRuntimeState { .. } => {
                 Self::ApplicationStore { source: error }
             }

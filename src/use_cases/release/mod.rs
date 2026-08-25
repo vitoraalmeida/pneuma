@@ -49,9 +49,6 @@ impl Error for CreateReleaseError {
 impl From<ApplicationStoreError> for CreateReleaseError {
     fn from(error: ApplicationStoreError) -> Self {
         match error {
-            ApplicationStoreError::NotFound { application_id } => {
-                Self::ApplicationNotFound { application_id }
-            }
             ApplicationStoreError::InvalidDesiredRuntimeState { .. } => {
                 Self::ApplicationStore { source: error }
             }

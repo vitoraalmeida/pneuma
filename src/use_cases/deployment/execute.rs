@@ -290,22 +290,11 @@ fn load_specification(
     connection: &Connection,
     application_id: &ApplicationId,
 ) -> Result<ApplicationDeploymentSpecification, DeployReleaseError> {
-    let spec = match application_store::load_deployment_specification(connection, application_id) {
-        Ok(Some(spec)) => spec,
-        Ok(None) => {
-            return Err(DeployReleaseError::ApplicationNotFound {
-                application_id: application_id.to_string(),
-            });
-        }
-        Err(ApplicationStoreError::NotFound { application_id }) => {
-            return Err(DeployReleaseError::ApplicationNotFound { application_id });
-        }
-        Err(source) => {
-            return Err(DeployReleaseError::LoadApplication { source });
-        }
-    };
-
-    Ok(spec)
+    application_store::load_deployment_specification(connection, application_id)
+        .map_err(|source| DeployReleaseError::LoadApplication { source })?
+        .ok_or_else(|| DeployReleaseError::ApplicationNotFound {
+            application_id: application_id.to_string(),
+        })
 }
 
 // Preserves failure provenance and every allocated candidate resource for ordered cleanup.
