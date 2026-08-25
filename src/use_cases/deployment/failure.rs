@@ -301,23 +301,14 @@ fn candidate_failure(
     unit_name: Option<&str>,
     port_reserved: bool,
 ) -> FailedExecution {
-    let mut resources = match (container_id, runtime_id) {
-        (Some(cid), Some(rid)) => CandidateResources::with_container_and_runtime(cid, rid),
-        (Some(cid), None) => CandidateResources::with_container(cid),
-        _ => CandidateResources::empty(),
-    };
+    let mut failed = failure_needing_persistence(code, source, container_id, runtime_id);
     if let Some(unit) = unit_name {
-        resources = resources.with_unit(unit);
+        failed.resources = failed.resources.with_unit(unit);
     }
     if port_reserved {
-        resources = resources.with_port();
+        failed.resources = failed.resources.with_port();
     }
-    FailedExecution {
-        code,
-        source: Box::new(source),
-        failure_persisted: false,
-        resources,
-    }
+    failed
 }
 
 // Tags a failure after full candidate startup so compensation retains every resource

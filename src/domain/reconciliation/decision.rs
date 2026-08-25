@@ -131,6 +131,19 @@ pub(crate) fn decide(
     Err(ReconciliationDecisionError::UnhandledDrift)
 }
 
+// Single owner of the canonicality rule: the observed Quadlet source must equal
+// the boundary-rendered canonical bytes exactly, in every classification path
+// that would rewrite or keep the unit.
+fn quadlet_source_is_canonical(
+    observation: &ReconciliationObservation,
+    expectations: &ReconciliationExpectations,
+) -> bool {
+    observation.quadlet_source
+        == (QuadletSourceObservation::Present {
+            contents: expectations.canonical_quadlet_contents.clone(),
+        })
+}
+
 // Repairs only a recreated container whose full identity matches the persisted
 // active runtime while the recorded container is gone and no public route exists.
 fn classify_runtime_identity_repair(
@@ -149,16 +162,12 @@ fn classify_runtime_identity_repair(
     let NamedContainerObservation::Present { id, .. } = &observation.named_container else {
         return None;
     };
-    let quadlet_is_canonical = observation.quadlet_source
-        == (QuadletSourceObservation::Present {
-            contents: expectations.canonical_quadlet_contents.clone(),
-        });
     if !observation.named_container.matches_expected_runtime(
         &expectations.container_name,
         &active.release.artifact,
         input.desired.application.name.as_str(),
         runtime.expected_endpoint.socket_addr(),
-    ) || !quadlet_is_canonical
+    ) || !quadlet_source_is_canonical(observation, expectations)
     {
         return None;
     }
@@ -191,10 +200,7 @@ fn classify_runtime_rematerialization(
     else {
         return None;
     };
-    let quadlet_is_canonical = observation.quadlet_source
-        == (QuadletSourceObservation::Present {
-            contents: expectations.canonical_quadlet_contents.clone(),
-        });
+    let quadlet_is_canonical = quadlet_source_is_canonical(observation, expectations);
     let generated_unit_can_start = match &observation.systemd_unit {
         SystemdUnitObservation::Missing => true,
         SystemdUnitObservation::Present { active_state } => {
