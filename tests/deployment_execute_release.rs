@@ -285,6 +285,83 @@ fn new_deploy_removes_previous_runtime() {
 }
 
 #[test]
+fn failed_internal_verification_does_not_retire_the_healthy_previous_runtime() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+
+    let first_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let first_port = first_listener.local_addr().unwrap().port();
+    let first_server = thread::spawn(move || respond_until_timeout(&first_listener, 200));
+    let first_output = environment.deploy(first_port, false);
+    first_server.join().unwrap();
+    assert_command_succeeded(&first_output);
+    let first_runtime_id = extract_runtime_id(&first_output);
+    let first_deployment_id = extract_deployment_id(&first_output);
+
+    let failing_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let failing_port = failing_listener.local_addr().unwrap().port();
+    let failing_server = thread::spawn(move || respond_until_timeout(&failing_listener, 500));
+    let output = environment.deploy_with_different_digest(failing_port, 'b');
+    failing_server.join().unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("health_check_failed"),
+        "expected health_check_failed error, got: {stderr}"
+    );
+
+    let connection = database::open(&environment.database_path).unwrap();
+
+    let app_id: String = connection
+        .query_row(
+            "SELECT id FROM applications WHERE name = ?1",
+            [&environment.application_name],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    let (first_state, first_removed_at): (String, Option<String>) = connection
+        .query_row(
+            "SELECT last_observed_state, removed_at FROM runtime_instances WHERE id = ?1",
+            [&first_runtime_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(first_state, "running");
+    assert!(
+        first_removed_at.is_none(),
+        "a failed replacement must not retire the healthy previous runtime"
+    );
+
+    let active_deployment: String = connection
+        .query_row(
+            "SELECT active_deployment_id FROM applications WHERE id = ?1",
+            [&app_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(active_deployment, first_deployment_id);
+
+    let first_unit = environment.root.join("quadlets").join(format!(
+        "pneuma-another-site-{first_deployment_id}.container"
+    ));
+    assert!(first_unit.exists(), "previous unit file must survive");
+
+    let port_reservation_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM runtime_port_reservations",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        port_reservation_count, 0,
+        "the rejected candidate's port reservation must be released"
+    );
+}
+
+#[test]
 fn public_deploy_succeeds_with_caddy_and_external_health() {
     let environment = DeploymentEnvironment::public();
     assert_command_succeeded(&environment.import());

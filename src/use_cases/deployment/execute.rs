@@ -5,7 +5,9 @@ use std::path::PathBuf;
 use rusqlite::Connection;
 
 use super::activation::{PublicActivationError, PublicActivationInput, activate_public_candidate};
-use super::candidate::{CandidateStartError, CandidateStartInput, start_candidate};
+use super::candidate::{
+    CandidateStartError, CandidateStartInput, StartedCandidate, start_candidate,
+};
 use super::cleanup::{
     CandidateCleanupError, CandidateResources, cleanup_failed_candidate, load_previous_runtime,
     retire_previous_runtime,
@@ -389,27 +391,11 @@ fn execute_deployment(
         DeploymentStep::RegisterCandidate,
         format!("runtime {}", candidate.runtime.id),
     );
-    wait_for_test_gate("deployment.starting-registered").map_err(|source| {
-        candidate_failure(
-            "test_gate_failed",
-            source,
-            Some(&candidate.runtime.external_runtime_id),
-            Some(&candidate.runtime.id),
-            Some(&candidate.unit_name),
-            true,
-        )
-    })?;
+    wait_for_test_gate("deployment.starting-registered")
+        .map_err(|source| started_candidate_failure("test_gate_failed", source, &candidate))?;
     progress.state_changed(deployment_id.as_str(), DeploymentStatus::Verifying);
-    wait_for_test_gate("deployment.verifying").map_err(|source| {
-        candidate_failure(
-            "test_gate_failed",
-            source,
-            Some(&candidate.runtime.external_runtime_id),
-            Some(&candidate.runtime.id),
-            Some(&candidate.unit_name),
-            true,
-        )
-    })?;
+    wait_for_test_gate("deployment.verifying")
+        .map_err(|source| started_candidate_failure("test_gate_failed", source, &candidate))?;
 
     let previous_runtime = load_previous_runtime(
         connection,
@@ -417,50 +403,77 @@ fn execute_deployment(
         &candidate.runtime.id,
     )
     .map_err(|source| {
-        candidate_failure(
-            "runtime_reconciliation_failed",
-            source,
-            Some(&candidate.runtime.external_runtime_id),
-            Some(&candidate.runtime.id),
-            Some(&candidate.unit_name),
-            true,
-        )
+        started_candidate_failure("runtime_reconciliation_failed", source, &candidate)
     })?;
 
-    if specification.visibility == Visibility::Public {
-        let Some(public_configuration) = public_configuration else {
-            return Err(failure_needing_persistence(
-                "public_configuration_missing",
-                DeployReleaseError::PublicApplication {
-                    application_id: specification.application_id.to_string(),
-                },
-                Some(&candidate.runtime.external_runtime_id),
-                Some(&candidate.runtime.id),
-            ));
-        };
-        let input = PublicActivationInput {
+    let execution = match specification.visibility {
+        Visibility::Public => finish_public_deployment(
             connection,
-            runtime: &candidate.runtime,
-            application_id: &specification.application_id,
-            health_check: specification.runtime.health_check(),
-            managed_caddy_directory: &public_configuration.managed_caddy_directory,
-            caddyfile_path: &public_configuration.caddyfile_path,
-        };
-        let completed = activate_public_candidate(input, progress)
-            .map_err(|error| public_activation_failure(error, &candidate.unit_name))?;
-        retire_previous_runtime(
-            connection,
-            &specification.application_name,
-            previous_runtime.as_ref(),
-        );
+            specification,
+            &candidate,
+            public_configuration,
+            progress,
+        )?,
+        Visibility::Internal => {
+            finish_internal_deployment(connection, specification, &candidate, progress)?
+        }
+    };
 
-        return Ok(CompletedDeploymentExecution {
-            runtime_id: candidate.runtime.id,
-            container_name: candidate.container_name,
-            finished_at: completed.finished_at,
-        });
-    }
+    retire_previous_runtime(
+        connection,
+        &specification.application_name,
+        previous_runtime.as_ref(),
+    );
 
+    Ok(execution)
+}
+
+// Completes a public deployment by exposing the verified candidate through Caddy and
+// confirming its external route; the caller retires the previous runtime afterwards.
+fn finish_public_deployment(
+    connection: &mut Connection,
+    specification: &ApplicationDeploymentSpecification,
+    candidate: &StartedCandidate,
+    public_configuration: Option<&PublicDeploymentConfiguration>,
+    progress: &mut ProgressReporter<'_>,
+) -> Result<CompletedDeploymentExecution, FailedExecution> {
+    let Some(public_configuration) = public_configuration else {
+        return Err(failure_needing_persistence(
+            "public_configuration_missing",
+            DeployReleaseError::PublicApplication {
+                application_id: specification.application_id.to_string(),
+            },
+            Some(&candidate.runtime.external_runtime_id),
+            Some(&candidate.runtime.id),
+        ));
+    };
+
+    let input = PublicActivationInput {
+        connection,
+        runtime: &candidate.runtime,
+        application_id: &specification.application_id,
+        health_check: specification.runtime.health_check(),
+        managed_caddy_directory: &public_configuration.managed_caddy_directory,
+        caddyfile_path: &public_configuration.caddyfile_path,
+    };
+    let activated = activate_public_candidate(input, progress)
+        .map_err(|error| public_activation_failure(error, &candidate.unit_name))?;
+
+    Ok(CompletedDeploymentExecution {
+        runtime_id: candidate.runtime.id.clone(),
+        container_name: candidate.container_name.clone(),
+        finished_at: activated.finished_at,
+    })
+}
+
+// Completes an internal deployment by promoting the verified candidate to Current;
+// the caller retires the previous runtime only after this promotion succeeds.
+fn finish_internal_deployment(
+    connection: &mut Connection,
+    specification: &ApplicationDeploymentSpecification,
+    candidate: &StartedCandidate,
+    progress: &mut ProgressReporter<'_>,
+) -> Result<CompletedDeploymentExecution, FailedExecution> {
     progress.started(
         DeploymentStep::HealthCheckAndPromotion,
         format!(
@@ -487,16 +500,14 @@ fn execute_deployment(
         DeploymentStep::HealthCheckAndPromotion,
         format!("runtime {} promoted to Current", candidate.runtime.id),
     );
-    progress.state_changed(deployment_id.as_str(), DeploymentStatus::Succeeded);
-    retire_previous_runtime(
-        connection,
-        &specification.application_name,
-        previous_runtime.as_ref(),
+    progress.state_changed(
+        candidate.runtime.deployment_id.as_str(),
+        DeploymentStatus::Succeeded,
     );
 
     Ok(CompletedDeploymentExecution {
-        runtime_id: candidate.runtime.id,
-        container_name: candidate.container_name,
+        runtime_id: candidate.runtime.id.clone(),
+        container_name: candidate.container_name.clone(),
         finished_at: promoted.finished_at,
     })
 }
@@ -660,6 +671,23 @@ fn candidate_failure(
         failure_persisted: false,
         resources,
     }
+}
+
+// Tags a failure after full candidate startup so compensation retains every resource
+// a started candidate holds: container, runtime, unit, and reserved port.
+fn started_candidate_failure(
+    code: &'static str,
+    source: impl Error + 'static,
+    candidate: &StartedCandidate,
+) -> FailedExecution {
+    candidate_failure(
+        code,
+        source,
+        Some(&candidate.runtime.external_runtime_id),
+        Some(&candidate.runtime.id),
+        Some(&candidate.unit_name),
+        true,
+    )
 }
 
 // An unhealthy-candidate result is different: promotion persists `Failed` before it
