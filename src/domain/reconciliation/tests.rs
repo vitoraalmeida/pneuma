@@ -1,14 +1,19 @@
+use super::decision::PublicExposureFailureKind;
 use super::*;
-use crate::domain::application::ApplicationName;
+use crate::domain::application::{
+    Application, ApplicationDeploymentSpecification, ApplicationName, DesiredRuntimeState,
+};
 use crate::domain::deployment::{Deployment, DeploymentLifecycle, DeploymentType};
 use crate::domain::exposure::{
-    ConfirmedRoute, ExposureDiagnostic, ExposureIntent, ExposureMaterialization,
+    ConfirmedRoute, Exposure, ExposureConfigurationVersion, ExposureDiagnostic, ExposureIntent,
+    ExposureMaterialization, ExposureMaterializationState, Visibility,
 };
-use crate::domain::identity::{ApplicationId, DeploymentId, ReleaseId};
+use crate::domain::identity::{ApplicationId, DeploymentId, ReleaseId, RuntimeInstanceId};
 use crate::domain::release::{OciArtifact, Release};
 use crate::domain::runtime::{
-    ContainerPort, ExpectedRuntimeEndpoint, HealthCheckPath, HealthCheckSpecification,
-    HealthCheckStatus, RuntimeSpecification, RuntimeState,
+    ContainerId, ContainerObservation, ContainerPort, ExpectedRuntimeEndpoint, HealthCheckPath,
+    HealthCheckSpecification, HealthCheckStatus, ObservedRuntimeState, RuntimeInstance,
+    RuntimeSpecification, RuntimeState,
 };
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
