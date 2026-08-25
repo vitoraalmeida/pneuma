@@ -7,145 +7,52 @@ use std::fmt;
 // (INV-DB-006), so imposing a format here would break hydration of real data.
 // Construction is unrestricted (`From`) because only stores mint identifiers;
 // everywhere else they flow in as already-persisted facts.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct SystemId(String);
+//
+// All identifiers share the same mechanical shape, so a private local macro
+// stamps out the identical tuple struct, `as_str`, `From`, and `Display`
+// impls while each invocation still declares a genuinely distinct type.
+// The only per-type difference today is the visibility of `as_str`: types
+// whose inner text integration tests read directly expose it as `pub`,
+// while internal-only identifiers keep it crate-private. Any future
+// identifier with its own validation or semantics must stay out of this
+// macro and be written by hand.
+macro_rules! identity_newtype {
+    ($name:ident, $as_str_visibility:vis) => {
+        #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+        pub struct $name(String);
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct ApplicationId(String);
+        impl $name {
+            // Preserves legacy SQLite text without imposing a new identifier format.
+            $as_str_visibility fn as_str(&self) -> &str {
+                &self.0
+            }
+        }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct ReleaseId(String);
+        impl From<String> for $name {
+            fn from(value: String) -> Self {
+                Self(value)
+            }
+        }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct DeploymentId(String);
+        impl From<&str> for $name {
+            fn from(value: &str) -> Self {
+                Self(value.to_owned())
+            }
+        }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct RuntimeInstanceId(String);
-
-impl SystemId {
-    // Preserves legacy SQLite text without imposing a new identifier format.
-    pub(crate) fn as_str(&self) -> &str {
-        &self.0
-    }
+        impl fmt::Display for $name {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str(&self.0)
+            }
+        }
+    };
 }
 
-impl ApplicationId {
-    // Preserves legacy SQLite text without imposing a new identifier format.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl ReleaseId {
-    // Preserves legacy SQLite text without imposing a new identifier format.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl DeploymentId {
-    // Preserves legacy SQLite text without imposing a new identifier format.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl RuntimeInstanceId {
-    // Preserves legacy SQLite text without imposing a new identifier format.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl From<String> for SystemId {
-    fn from(value: String) -> Self {
-        Self(value)
-    }
-}
-
-impl From<&str> for SystemId {
-    fn from(value: &str) -> Self {
-        Self(value.to_owned())
-    }
-}
-
-impl fmt::Display for SystemId {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
-
-impl From<String> for ApplicationId {
-    fn from(value: String) -> Self {
-        Self(value)
-    }
-}
-
-impl From<&str> for ApplicationId {
-    fn from(value: &str) -> Self {
-        Self(value.to_owned())
-    }
-}
-
-impl fmt::Display for ApplicationId {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
-
-impl From<String> for ReleaseId {
-    fn from(value: String) -> Self {
-        Self(value)
-    }
-}
-
-impl From<&str> for ReleaseId {
-    fn from(value: &str) -> Self {
-        Self(value.to_owned())
-    }
-}
-
-impl fmt::Display for ReleaseId {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
-
-impl From<String> for DeploymentId {
-    fn from(value: String) -> Self {
-        Self(value)
-    }
-}
-
-impl From<&str> for DeploymentId {
-    fn from(value: &str) -> Self {
-        Self(value.to_owned())
-    }
-}
-
-impl fmt::Display for DeploymentId {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
-
-impl From<String> for RuntimeInstanceId {
-    fn from(value: String) -> Self {
-        Self(value)
-    }
-}
-
-impl From<&str> for RuntimeInstanceId {
-    fn from(value: &str) -> Self {
-        Self(value.to_owned())
-    }
-}
-
-impl fmt::Display for RuntimeInstanceId {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
+identity_newtype!(SystemId, pub(crate));
+identity_newtype!(ApplicationId, pub);
+identity_newtype!(ReleaseId, pub);
+identity_newtype!(DeploymentId, pub);
+identity_newtype!(RuntimeInstanceId, pub);
 
 // Single authority for the Application/System name grammar so both entities
 // (and the SSH dispatcher, which must reject exactly what the catalog rejects)
