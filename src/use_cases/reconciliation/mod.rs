@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use crate::adapters::application_lock::{ApplicationLock, ApplicationLockError};
 use crate::adapters::caddy_exposure::ObserveCaddyFragmentError;
-use crate::adapters::local_runtime::{ObserveContainerError, ObserveNamedContainerError};
+use crate::adapters::local_runtime::PodmanError;
 use crate::adapters::stores::operation_store::{self, OperationStoreError};
 use crate::adapters::stores::{
     application_store, deployment_store, exposure_store, release_store, runtime_store,
@@ -79,10 +79,10 @@ pub enum ReconciliationReadError {
         source: OperationStoreError,
     },
     ObserveContainer {
-        source: ObserveContainerError,
+        source: PodmanError,
     },
     ObserveNamedContainer {
-        source: ObserveNamedContainerError,
+        source: PodmanError,
     },
     ObserveQuadlet {
         source: QuadletError,

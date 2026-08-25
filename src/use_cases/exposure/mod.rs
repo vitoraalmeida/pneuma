@@ -10,7 +10,7 @@ use crate::adapters::caddy_exposure::{
     restore_removed_caddy_fragment,
 };
 use crate::adapters::health_check_external::{ExternalHealthCheckError, check_external_health};
-use crate::adapters::local_runtime::{ObserveContainerError, observe_container};
+use crate::adapters::local_runtime::{PodmanError, observe_container};
 use crate::adapters::stores::application_store;
 use crate::adapters::stores::exposure_store::{self, ExposureStoreError};
 use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
@@ -64,7 +64,7 @@ pub enum ExposureChangeError {
         source: crate::adapters::stores::application_store::ApplicationStoreError,
     },
     ObserveFailed {
-        source: ObserveContainerError,
+        source: PodmanError,
     },
     RuntimeNotRunning {
         state: ObservedRuntimeState,

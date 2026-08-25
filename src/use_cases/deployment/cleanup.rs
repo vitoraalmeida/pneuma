@@ -3,7 +3,7 @@ use std::fmt;
 
 use rusqlite::Connection;
 
-use crate::adapters::local_runtime::{ControlContainerError, remove_container};
+use crate::adapters::local_runtime::{PodmanError, remove_container};
 use crate::adapters::port_allocator::{PortAllocationError, release_port};
 use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
 use crate::adapters::systemd_quadlet::{QuadletError, daemon_reload, remove_unit, stop, unit_name};
@@ -86,7 +86,7 @@ pub enum CandidateCleanupError {
     StopUnit { source: QuadletError },
     RemoveUnit { source: QuadletError },
     ReloadUnits { source: QuadletError },
-    RemoveContainer { source: ControlContainerError },
+    RemoveContainer { source: PodmanError },
     ReleasePort { source: PortAllocationError },
     RuntimeStore { source: RuntimeStoreError },
     RuntimeChanged { runtime_id: RuntimeInstanceId },

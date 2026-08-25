@@ -5,8 +5,8 @@ use std::net::SocketAddr;
 use rusqlite::Connection;
 
 use crate::adapters::local_runtime::{
-    ContainerCommandOutput, ControlContainerError, ObserveContainerError, observe_container,
-    resolve_container_id, start_container, stop_container,
+    ContainerCommandOutput, PodmanError, observe_container, resolve_container_id, start_container,
+    stop_container,
 };
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::adapters::stores::runtime_store::{self, RuntimeStoreError};
@@ -84,7 +84,7 @@ impl RuntimeCommand {
 
     // Fallback lifecycle command applied straight to the container when the
     // managed unit does not exist.
-    fn direct_control(self) -> fn(&str) -> Result<ContainerCommandOutput, ControlContainerError> {
+    fn direct_control(self) -> fn(&str) -> Result<ContainerCommandOutput, PodmanError> {
         match self {
             Self::Start => start_container,
             Self::Stop => stop_container,
@@ -114,12 +114,12 @@ pub enum RuntimeLifecycleError {
     },
     Observe {
         runtime_id: String,
-        source: ObserveContainerError,
+        source: PodmanError,
     },
     Control {
         operation: &'static str,
         runtime_id: String,
-        source: Box<ControlContainerError>,
+        source: Box<PodmanError>,
     },
     Supervision {
         operation: &'static str,
