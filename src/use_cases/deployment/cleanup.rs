@@ -74,6 +74,11 @@ impl CandidateResources {
         self.runtime_id = Some(runtime_id.clone());
         self
     }
+
+    // Reports whether any compensable resource is held so cleanup runs only when needed.
+    pub(crate) fn needs_cleanup(&self) -> bool {
+        self.container_id.is_some() || self.unit_name.is_some() || self.port_reserved
+    }
 }
 
 #[derive(Debug)]
@@ -218,4 +223,37 @@ pub(crate) fn cleanup_failed_candidate(
     release_port(connection, deployment_id)
         .map_err(|source| CandidateCleanupError::ReleasePort { source })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CandidateResources, ContainerId, RuntimeInstanceId};
+
+    fn container_id() -> ContainerId {
+        ContainerId::from("abc123")
+    }
+
+    fn runtime_id() -> RuntimeInstanceId {
+        RuntimeInstanceId::from("runtime-1")
+    }
+
+    #[test]
+    fn empty_resources_need_no_cleanup() {
+        assert!(!CandidateResources::empty().needs_cleanup());
+    }
+
+    #[test]
+    fn any_held_resource_needs_cleanup() {
+        assert!(CandidateResources::empty().with_port().needs_cleanup());
+        assert!(
+            CandidateResources::empty()
+                .with_unit("unit")
+                .needs_cleanup()
+        );
+        assert!(CandidateResources::with_container(&container_id()).needs_cleanup());
+        assert!(
+            CandidateResources::with_container_and_runtime(&container_id(), &runtime_id())
+                .needs_cleanup()
+        );
+    }
 }
