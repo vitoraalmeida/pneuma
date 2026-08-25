@@ -45,6 +45,9 @@ pub enum QuadletError {
         unit: String,
         stderr: String,
     },
+    ReloadUnits {
+        stderr: String,
+    },
 }
 
 impl fmt::Display for QuadletError {
@@ -89,6 +92,11 @@ impl fmt::Display for QuadletError {
                 "systemctl failed while {operation} `{unit}`: {}",
                 stderr.trim()
             ),
+            Self::ReloadUnits { stderr } => write!(
+                formatter,
+                "systemctl failed while reloading user-systemd units: {}",
+                stderr.trim()
+            ),
         }
     }
 }
@@ -101,7 +109,10 @@ impl Error for QuadletError {
             | Self::RemoveUnit { source, .. }
             | Self::ReadUnit { source, .. }
             | Self::Execute { source, .. } => Some(source),
-            Self::HomeUnavailable | Self::ObserveUnit { .. } | Self::Systemd { .. } => None,
+            Self::HomeUnavailable
+            | Self::ObserveUnit { .. }
+            | Self::Systemd { .. }
+            | Self::ReloadUnits { .. } => None,
         }
     }
 }
@@ -217,9 +228,22 @@ pub(crate) fn observe_generated_unit(unit: &str) -> Result<SystemdUnitObservatio
     Ok(SystemdUnitObservation::Present { active_state })
 }
 
-// Regenerates user-systemd units after a Quadlet file changes.
+// Regenerates user-systemd units after a Quadlet file changes; no unit is targeted.
 pub(crate) fn daemon_reload() -> Result<(), QuadletError> {
-    control("reloading units", "", &["daemon-reload"])
+    let output = Command::new("systemctl")
+        .arg("--user")
+        .arg("daemon-reload")
+        .output()
+        .map_err(|source| QuadletError::Execute {
+            operation: "reloading units",
+            source,
+        })?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(QuadletError::ReloadUnits {
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    })
 }
 // Starts the generated user service for a logical Quadlet unit.
 pub(crate) fn start(unit: &str) -> Result<(), QuadletError> {
@@ -241,30 +265,22 @@ fn quadlet_directory() -> Result<PathBuf, QuadletError> {
     Ok(Path::new(&home).join(".config/containers/systemd"))
 }
 
-// Invokes systemctl --user and preserves the service-specific failure diagnostic.
+// Invokes systemctl --user for a generated service and preserves its failure diagnostic.
 fn control(operation: &'static str, unit: &str, arguments: &[&str]) -> Result<(), QuadletError> {
-    let service = if unit.is_empty() {
-        String::new()
-    } else {
-        format!("{unit}.service")
-    };
+    let service = format!("{unit}.service");
     let mut command = Command::new("systemctl");
-    command.arg("--user").args(arguments);
-    if !service.is_empty() {
-        command.arg(&service);
-    }
+    command.arg("--user").args(arguments).arg(&service);
     let output = command
         .output()
         .map_err(|source| QuadletError::Execute { operation, source })?;
     if output.status.success() {
-        Ok(())
-    } else {
-        Err(QuadletError::Systemd {
-            operation,
-            unit: service,
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        })
+        return Ok(());
     }
+    Err(QuadletError::Systemd {
+        operation,
+        unit: service,
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    })
 }
 
 #[cfg(test)]
@@ -467,6 +483,11 @@ exit \"${PNEUMA_FAKE_SYSTEMCTL_EXIT:-0}\"
                 operation: "starting",
                 ..
             })
+        ));
+        // The global reload targets no unit, so its failure carries no unit either.
+        assert!(matches!(
+            daemon_reload(),
+            Err(QuadletError::ReloadUnits { .. })
         ));
     }
 
