@@ -10,8 +10,11 @@ use crate::domain::application::ApplicationName;
 use crate::domain::exposure::{DomainName, ExposureIntent, Visibility};
 use crate::domain::git::RelativeManifestPath;
 use crate::domain::manifest::ImportSpecification;
-use crate::domain::release::{DeliveryType, OciRepository};
-use crate::domain::runtime::{ContainerPort, HealthCheckPath, HealthCheckStatus};
+use crate::domain::release::{DeliverySpecification, DeliveryType, OciRepository};
+use crate::domain::runtime::{
+    ContainerPort, HealthCheckPath, HealthCheckSpecification, HealthCheckStatus,
+    RuntimeSpecification,
+};
 use crate::domain::system::SystemName;
 
 const SUPPORTED_SCHEMA_VERSION: u32 = 3;
@@ -226,15 +229,19 @@ fn import_specification(document: &ManifestDocument) -> Result<ImportSpecificati
                 reason: "is required for public exposure",
             }
         })?;
+    // Each part was validated above, so constructing the canonical aggregates
+    // here is infallible and import carries no second field-by-field copy.
+    let delivery = DeliverySpecification::new(delivery_type, repository);
+    let runtime = RuntimeSpecification::new(
+        container_port,
+        HealthCheckSpecification::new(healthcheck_path, expected_status),
+    );
     Ok(ImportSpecification {
         schema_version: document.schema_version,
         system_name,
         application_name,
-        delivery_type,
-        repository,
-        container_port,
-        healthcheck_path,
-        expected_status,
+        delivery,
+        runtime,
         exposure,
     })
 }

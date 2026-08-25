@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use pneuma::adapters::manifest::{ManifestError, load_manifest, load_manifest_at, parse_manifest};
 use pneuma::domain::exposure::Visibility;
+use pneuma::domain::release::DeliveryType;
 
 const VALID_MANIFEST: &str = include_str!("fixtures/valid/pneuma.toml");
 
@@ -13,13 +14,20 @@ fn loads_and_validates_a_repository_manifest() {
 
     assert_eq!(specification.schema_version, 3);
     assert_eq!(specification.application_name.as_str(), "personal-site");
+    assert_eq!(specification.delivery.delivery_type(), DeliveryType::Oci);
     assert_eq!(
-        specification.repository.as_str(),
+        specification.delivery.image_repository().as_str(),
         "ghcr.io/vitoraalmeida/vitoralmeida.tech"
     );
-    assert_eq!(specification.container_port.get(), 8080);
-    assert_eq!(specification.healthcheck_path.as_str(), "/healthz");
-    assert_eq!(specification.expected_status.get(), 200);
+    assert_eq!(specification.runtime.container_port().get(), 8080);
+    assert_eq!(
+        specification.runtime.health_check().path().as_str(),
+        "/healthz"
+    );
+    assert_eq!(
+        specification.runtime.health_check().expected_status().get(),
+        200
+    );
     assert_eq!(specification.exposure.visibility(), Visibility::Public);
     assert_eq!(
         specification
@@ -190,7 +198,10 @@ fn accepts_name_domain_and_status_boundaries() {
                 .map(|domain| domain.as_str()),
             Some(maximum_domain.as_str())
         );
-        assert_eq!(specification.expected_status.get(), expected_status);
+        assert_eq!(
+            specification.runtime.health_check().expected_status().get(),
+            expected_status
+        );
     }
 }
 

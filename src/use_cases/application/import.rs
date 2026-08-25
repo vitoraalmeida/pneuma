@@ -187,8 +187,8 @@ fn persist_specification(
     application_store::insert_delivery_spec(
         transaction,
         application_id,
-        specification.delivery_type,
-        &specification.repository,
+        specification.delivery.delivery_type(),
+        specification.delivery.image_repository(),
     )?;
 
     if let Some(repository_url) = repository_url {
@@ -214,13 +214,13 @@ fn persist_specification(
     application_store::insert_runtime_spec(
         transaction,
         application_id,
-        specification.container_port,
+        specification.runtime.container_port(),
     )?;
     application_store::insert_health_check_spec(
         transaction,
         application_id,
-        &specification.healthcheck_path,
-        specification.expected_status,
+        specification.runtime.health_check().path(),
+        specification.runtime.health_check().expected_status(),
     )?;
     exposure_store::insert_exposure(transaction, application_id, &specification.exposure)?;
 
