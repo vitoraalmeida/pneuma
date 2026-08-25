@@ -21,7 +21,6 @@ use crate::domain::reconciliation::{
     ReconciliationDecisionError, ReconciliationExpectations, ReconciliationInput,
     RuntimeIdentityRepair, RuntimeRematerialization,
 };
-use crate::domain::runtime::ObservedRuntimeState;
 
 use super::load::persistence_error;
 use super::{
@@ -136,31 +135,22 @@ fn rematerialize_runtime(
         daemon_reload().map_err(|source| ReconciliationReadError::ObserveQuadlet { source })?;
     }
     start(&unit).map_err(|source| ReconciliationReadError::ObserveQuadlet { source })?;
-    let NamedContainerObservation::Present {
-        id,
-        name,
-        image_reference,
-        application_label,
-        image_digest_label,
-        observation: container_observation,
-    } = observe_named_container(
+    let observed_named_container = observe_named_container(
         &container_name(&application.name, &active.deployment.id),
         runtime.container_port,
     )
-    .map_err(|source| ReconciliationReadError::ObserveNamedContainer { source })?
-    else {
+    .map_err(|source| ReconciliationReadError::ObserveNamedContainer { source })?;
+    let NamedContainerObservation::Present { id, .. } = &observed_named_container else {
         return Ok(ReconciliationResult::Failed {
             reason: "rematerialized Quadlet did not create its expected container".to_owned(),
         });
     };
-    if *container_observation.state() != ObservedRuntimeState::Running
-        || name.trim_start_matches('/') != expectations.container_name
-        || image_reference != active.release.artifact.reference()
-        || application_label.as_deref() != Some(application.name.as_str())
-        || image_digest_label.as_deref() != Some(active.release.artifact.digest())
-        || container_observation.observed_endpoint()
-            != Some(runtime.expected_endpoint.socket_addr())
-    {
+    if !observed_named_container.matches_expected_runtime(
+        &expectations.container_name,
+        &active.release.artifact,
+        application.name.as_str(),
+        runtime.expected_endpoint.socket_addr(),
+    ) {
         return Ok(ReconciliationResult::ManualIntervention {
             reason: "rematerialized container identity or endpoint differs from persisted intent"
                 .to_owned(),
@@ -186,7 +176,7 @@ fn rematerialize_runtime(
         connection,
         &runtime.id,
         &runtime.external_runtime_id,
-        &id,
+        id,
     )
     .map_err(|source| ReconciliationReadError::Runtime { source })?;
     if outcome == PersistenceOutcome::Stale {

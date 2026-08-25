@@ -7,10 +7,11 @@ use crate::domain::exposure::{
     InvalidExposureConfigurationVersion, Visibility,
 };
 use crate::domain::identity::RuntimeInstanceId;
-use crate::domain::release::Release;
+use crate::domain::release::{OciArtifact, Release};
 use crate::domain::runtime::{
     ContainerId, ContainerObservation, ObservedRuntimeState, RuntimeInstance,
 };
+use std::net::SocketAddr;
 
 // Desired intent as recorded in SQLite: which runtime state and route Pneuma should converge to.
 #[derive(Debug)]
@@ -57,6 +58,42 @@ pub(crate) enum NamedContainerObservation {
         image_digest_label: Option<String>,
         observation: ContainerObservation,
     },
+}
+
+impl NamedContainerObservation {
+    // Single owner of the rule deciding whether an observed named container is
+    // exactly the runtime Pneuma persisted: running state, stable container
+    // name, release artifact reference, application and digest labels, and the
+    // reserved endpoint must all agree. Planning and post-effect confirmation
+    // ask this one predicate so they can never diverge field by field.
+    //
+    // Podman reports named containers with a leading slash; trimming happens
+    // only here so callers never re-implement the normalization.
+    pub(crate) fn matches_expected_runtime(
+        &self,
+        expected_name: &str,
+        artifact: &OciArtifact,
+        application_name: &str,
+        expected_endpoint: SocketAddr,
+    ) -> bool {
+        let Self::Present {
+            name,
+            image_reference,
+            application_label,
+            image_digest_label,
+            observation,
+            ..
+        } = self
+        else {
+            return false;
+        };
+        *observation.state() == ObservedRuntimeState::Running
+            && name.trim_start_matches('/') == expected_name
+            && image_reference == artifact.reference()
+            && application_label.as_deref() == Some(application_name)
+            && image_digest_label.as_deref() == Some(artifact.digest())
+            && observation.observed_endpoint() == Some(expected_endpoint)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -222,34 +259,25 @@ fn classify_runtime_identity_repair(
 ) -> Option<ReconciliationDecision> {
     if input.desired.application.desired_runtime_state != DesiredRuntimeState::Running
         || observation.caddy_fragment != CaddyFragmentObservation::Missing
+        || *observation.recorded_container.state() != ObservedRuntimeState::Missing
     {
         return None;
     }
     let active = input.persisted.active.as_ref()?;
     let runtime = active.runtime.as_ref()?;
-    let NamedContainerObservation::Present {
-        id,
-        name,
-        image_reference,
-        application_label,
-        image_digest_label,
-        observation: container_observation,
-    } = &observation.named_container
-    else {
+    let NamedContainerObservation::Present { id, .. } = &observation.named_container else {
         return None;
     };
-    if *observation.recorded_container.state() != ObservedRuntimeState::Missing
-        || *container_observation.state() != ObservedRuntimeState::Running
-        || name.trim_start_matches('/') != expectations.container_name
-        || image_reference != active.release.artifact.reference()
-        || application_label.as_deref() != Some(input.desired.application.name.as_str())
-        || image_digest_label.as_deref() != Some(active.release.artifact.digest())
-        || container_observation.observed_endpoint()
-            != Some(runtime.expected_endpoint.socket_addr())
-        || observation.quadlet_source
-            != (QuadletSourceObservation::Present {
-                contents: expectations.canonical_quadlet_contents.clone(),
-            })
+    let quadlet_is_canonical = observation.quadlet_source
+        == (QuadletSourceObservation::Present {
+            contents: expectations.canonical_quadlet_contents.clone(),
+        });
+    if !observation.named_container.matches_expected_runtime(
+        &expectations.container_name,
+        &active.release.artifact,
+        input.desired.application.name.as_str(),
+        runtime.expected_endpoint.socket_addr(),
+    ) || !quadlet_is_canonical
     {
         return None;
     }
@@ -654,6 +682,96 @@ mod tests {
                 container_id: ContainerId::from(CONTAINER_ID),
             })
         );
+    }
+
+    // Pins the canonical identity predicate as a table: each wrong identity
+    // dimension independently fails the match, absence never matches, and
+    // Podman's leading-slash name form is normalized inside the predicate.
+    #[test]
+    fn expected_runtime_matching_fails_for_each_wrong_identity_dimension() {
+        let artifact = release().artifact;
+        let matches = |observed: &NamedContainerObservation| {
+            observed.matches_expected_runtime(
+                &format!("pneuma-app-{DEPLOYMENT_ID}"),
+                &artifact,
+                "app",
+                socket_addr(),
+            )
+        };
+        let matching = |name: String| {
+            recreated_container(
+                name,
+                artifact.reference().to_owned(),
+                Some("app".to_owned()),
+                Some(artifact.digest().to_owned()),
+                ContainerObservation::running(socket_addr()).unwrap(),
+            )
+        };
+
+        assert!(matches(&matching(format!("/pneuma-app-{DEPLOYMENT_ID}"))));
+        assert!(matches(&matching(format!("pneuma-app-{DEPLOYMENT_ID}"))));
+
+        let foreign_endpoint = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 30001);
+        let wrong_dimensions: [(&str, NamedContainerObservation); 7] = [
+            (
+                "state",
+                recreated_container(
+                    format!("/pneuma-app-{DEPLOYMENT_ID}"),
+                    artifact.reference().to_owned(),
+                    Some("app".to_owned()),
+                    Some(artifact.digest().to_owned()),
+                    ContainerObservation::not_running(ObservedRuntimeState::Stopped).unwrap(),
+                ),
+            ),
+            ("name", matching("/pneuma-app-foreign".to_owned())),
+            (
+                "image",
+                recreated_container(
+                    format!("/pneuma-app-{DEPLOYMENT_ID}"),
+                    format!("registry.example/team/app@sha256:{}", "b".repeat(64)),
+                    Some("app".to_owned()),
+                    Some(artifact.digest().to_owned()),
+                    ContainerObservation::running(socket_addr()).unwrap(),
+                ),
+            ),
+            (
+                "application label",
+                recreated_container(
+                    format!("/pneuma-app-{DEPLOYMENT_ID}"),
+                    artifact.reference().to_owned(),
+                    Some("other".to_owned()),
+                    Some(artifact.digest().to_owned()),
+                    ContainerObservation::running(socket_addr()).unwrap(),
+                ),
+            ),
+            (
+                "digest label",
+                recreated_container(
+                    format!("/pneuma-app-{DEPLOYMENT_ID}"),
+                    artifact.reference().to_owned(),
+                    Some("app".to_owned()),
+                    Some(format!("sha256:{}", "c".repeat(64))),
+                    ContainerObservation::running(socket_addr()).unwrap(),
+                ),
+            ),
+            (
+                "endpoint",
+                recreated_container(
+                    format!("/pneuma-app-{DEPLOYMENT_ID}"),
+                    artifact.reference().to_owned(),
+                    Some("app".to_owned()),
+                    Some(artifact.digest().to_owned()),
+                    ContainerObservation::running(foreign_endpoint).unwrap(),
+                ),
+            ),
+            ("missing", NamedContainerObservation::Missing),
+        ];
+        for (dimension, observed) in wrong_dimensions {
+            assert!(
+                !matches(&observed),
+                "a wrong {dimension} must not count as the expected runtime"
+            );
+        }
     }
 
     #[test]
