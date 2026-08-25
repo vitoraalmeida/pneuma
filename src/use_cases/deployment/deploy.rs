@@ -4,10 +4,9 @@ use std::fmt;
 use rusqlite::Connection;
 
 use super::execute::{
-    DeployReleaseError, DeploymentResult, PublicDeploymentConfiguration, deploy_release,
-    deploy_release_with_progress,
+    DeployReleaseError, DeploymentResult, PublicDeploymentConfiguration, deploy_release_reporting,
 };
-use super::progress::DeploymentProgress;
+use super::progress::{DeploymentProgress, ProgressReporter};
 use crate::adapters::git_source::{ResolveBranchError, resolve_branch};
 use crate::adapters::oci_image::{
     PullImageError, ResolveImageDigestError, pull_image, resolve_image_digest,
@@ -16,7 +15,7 @@ use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::domain::deployment::{DeploymentType, SourceRevision};
 use crate::domain::git::CommitSha;
 use crate::domain::identity::ApplicationId;
-use crate::domain::release::OciArtifact;
+use crate::domain::release::{DeliverySpecification, OciArtifact};
 use crate::use_cases::release::{CreateReleaseError, create_release};
 
 #[derive(Debug)]
@@ -80,12 +79,13 @@ pub fn deploy_branch(
     branch: Option<&str>,
     public_configuration: Option<&PublicDeploymentConfiguration>,
 ) -> Result<DeploymentResult, DeployBranchError> {
+    let mut progress = ProgressReporter::disabled();
     deploy_branch_reporting(
         connection,
         application_id,
         branch,
         public_configuration,
-        None,
+        &mut progress,
     )
 }
 
@@ -97,12 +97,13 @@ pub fn deploy_branch_with_progress(
     public_configuration: Option<&PublicDeploymentConfiguration>,
     progress: &mut dyn FnMut(DeploymentProgress),
 ) -> Result<DeploymentResult, DeployBranchError> {
+    let mut progress = ProgressReporter::enabled(progress);
     deploy_branch_reporting(
         connection,
         application_id,
         branch,
         public_configuration,
-        Some(progress),
+        &mut progress,
     )
 }
 
@@ -111,7 +112,7 @@ fn deploy_branch_reporting(
     application_id: &ApplicationId,
     branch: Option<&str>,
     public_configuration: Option<&PublicDeploymentConfiguration>,
-    progress: Option<&mut dyn FnMut(DeploymentProgress)>,
+    progress: &mut ProgressReporter<'_>,
 ) -> Result<DeploymentResult, DeployBranchError> {
     let source = application_store::load_source(connection, application_id)
         .map_err(|source| DeployBranchError::SourceConfiguration { source })?
@@ -140,24 +141,17 @@ fn deploy_branch_reporting(
     let reference = resolve_image_digest(delivery.image_repository(), &commit_sha)
         .map_err(|source| DeployBranchError::ResolveImageDigest { source })?;
 
-    let deployed = match progress {
-        Some(progress) => deploy_oci_with_progress(
-            connection,
-            application_id,
-            &reference,
-            Some(&commit_sha),
-            public_configuration,
-            progress,
-        ),
-        None => deploy_oci(
-            connection,
-            application_id,
-            &reference,
-            Some(&commit_sha),
-            public_configuration,
-        ),
-    };
-    deployed.map_err(|source| DeployBranchError::DeployOci { source })
+    // The delivery policy was already loaded above; pass it down instead of re-reading it.
+    deploy_artifact_for_delivery(
+        connection,
+        application_id,
+        &reference,
+        Some(&commit_sha),
+        public_configuration,
+        &delivery,
+        progress,
+    )
+    .map_err(|source| DeployBranchError::DeployOci { source })
 }
 
 #[derive(Debug)]
@@ -221,8 +215,8 @@ impl Error for DeployOciError {
     }
 }
 
-// Validates the requested artifact against delivery policy, pulls it, records a release, and
-// delegates runtime orchestration to the release deployment workflow.
+// Validates the requested artifact against the persisted delivery policy, pulls it, records a
+// release, and delegates runtime orchestration to the release deployment workflow.
 pub fn deploy_oci(
     connection: &mut Connection,
     application_id: &ApplicationId,
@@ -230,13 +224,14 @@ pub fn deploy_oci(
     source_commit: Option<&CommitSha>,
     public_configuration: Option<&PublicDeploymentConfiguration>,
 ) -> Result<DeploymentResult, DeployOciError> {
+    let mut progress = ProgressReporter::disabled();
     deploy_oci_reporting(
         connection,
         application_id,
         artifact,
         source_commit,
         public_configuration,
-        None,
+        &mut progress,
     )
 }
 
@@ -249,13 +244,14 @@ pub fn deploy_oci_with_progress(
     public_configuration: Option<&PublicDeploymentConfiguration>,
     progress: &mut dyn FnMut(DeploymentProgress),
 ) -> Result<DeploymentResult, DeployOciError> {
+    let mut progress = ProgressReporter::enabled(progress);
     deploy_oci_reporting(
         connection,
         application_id,
         artifact,
         source_commit,
         public_configuration,
-        Some(progress),
+        &mut progress,
     )
 }
 
@@ -265,7 +261,7 @@ fn deploy_oci_reporting(
     artifact: &OciArtifact,
     source_commit: Option<&CommitSha>,
     public_configuration: Option<&PublicDeploymentConfiguration>,
-    progress: Option<&mut dyn FnMut(DeploymentProgress)>,
+    progress: &mut ProgressReporter<'_>,
 ) -> Result<DeploymentResult, DeployOciError> {
     let delivery = application_store::load_delivery_specification(connection, application_id)
         .map_err(|source| DeployOciError::DeliveryConfiguration { source })?;
@@ -274,6 +270,29 @@ fn deploy_oci_reporting(
             application_id: application_id.to_string(),
         });
     };
+    deploy_artifact_for_delivery(
+        connection,
+        application_id,
+        artifact,
+        source_commit,
+        public_configuration,
+        &delivery,
+        progress,
+    )
+}
+
+// Checks an artifact against caller-established delivery policy, pulls it, records a release,
+// and delegates runtime orchestration to the release deployment workflow. Callers that already
+// loaded the specification pass it down instead of re-reading it from the store.
+fn deploy_artifact_for_delivery(
+    connection: &mut Connection,
+    application_id: &ApplicationId,
+    artifact: &OciArtifact,
+    source_commit: Option<&CommitSha>,
+    public_configuration: Option<&PublicDeploymentConfiguration>,
+    delivery: &DeliverySpecification,
+    progress: &mut ProgressReporter<'_>,
+) -> Result<DeploymentResult, DeployOciError> {
     if !delivery.permits(artifact) {
         return Err(DeployOciError::RepositoryMismatch {
             application_id: application_id.to_string(),
@@ -285,24 +304,14 @@ fn deploy_oci_reporting(
     let release = create_release(connection, application_id, &image.artifact)
         .map_err(|source| DeployOciError::CreateRelease { source })?;
     let source_revision = source_commit.cloned().map(SourceRevision::from_commit);
-    let deployed = match progress {
-        Some(progress) => deploy_release_with_progress(
-            connection,
-            application_id,
-            &release,
-            DeploymentType::Deploy,
-            source_revision.as_ref(),
-            public_configuration,
-            progress,
-        ),
-        None => deploy_release(
-            connection,
-            application_id,
-            &release,
-            DeploymentType::Deploy,
-            source_revision.as_ref(),
-            public_configuration,
-        ),
-    };
-    deployed.map_err(|source| DeployOciError::DeployRelease { source })
+    deploy_release_reporting(
+        connection,
+        application_id,
+        &release,
+        DeploymentType::Deploy,
+        source_revision.as_ref(),
+        public_configuration,
+        progress,
+    )
+    .map_err(|source| DeployOciError::DeployRelease { source })
 }

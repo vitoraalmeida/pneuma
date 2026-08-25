@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::env;
 use std::fs;
 use std::io::{Read, Write};
@@ -5,13 +6,18 @@ use std::net::{Ipv4Addr, TcpListener};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::rc::Rc;
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use pneuma::adapters::database;
+use pneuma::domain::deployment::{DeploymentStatus, SourceRevision};
 use pneuma::use_cases::application::import_application;
-use pneuma::use_cases::deployment::{DeployBranchError, deploy_branch};
+use pneuma::use_cases::deployment::{
+    DeployBranchError, DeploymentProgress, DeploymentStep, deploy_branch,
+    deploy_branch_with_progress,
+};
 
 #[test]
 fn deploys_a_branch_and_persists_source_revision() {
@@ -130,6 +136,128 @@ fn fails_for_a_missing_branch() {
         DeployBranchError::ResolveBranch {
             source: pneuma::adapters::git_source::ResolveBranchError::BranchNotFound { .. }
         }
+    ));
+    let release_count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM releases", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(release_count, 0);
+}
+
+#[test]
+fn deploys_a_branch_with_the_same_semantic_progress_order_and_result() {
+    let mut connection = database::open(Path::new(":memory:")).unwrap();
+    let repository = GitRepository::new();
+    let staging_commit = repository.commit_on_new_branch("staging", "staging contents");
+    let application = import_application(
+        &mut connection,
+        &repository.path,
+        None,
+        Some(&repository.url()),
+        None,
+    )
+    .unwrap();
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let environment = FakePodman::new(port);
+    let server = thread::spawn(move || respond_once(&listener));
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let sink = Rc::clone(&events);
+    let mut report = move |event: DeploymentProgress| sink.borrow_mut().push(event);
+
+    let deployed = environment.run(|| {
+        deploy_branch_with_progress(
+            &mut connection,
+            &application.id,
+            Some("staging"),
+            None,
+            &mut report,
+        )
+    });
+    server.join().unwrap();
+
+    // The reported run must persist the same outcome as the silent branch deployment.
+    let deployed = deployed.unwrap();
+    assert_eq!(
+        deployed
+            .source_revision
+            .as_ref()
+            .map(SourceRevision::as_str),
+        Some(staging_commit.as_str())
+    );
+    let (status, source_revision): (String, Option<String>) = connection
+        .query_row(
+            "SELECT d.status, d.source_revision FROM deployments d",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(status, "succeeded");
+    assert_eq!(source_revision.as_deref(), Some(staging_commit.as_str()));
+
+    let observed: Vec<EventShape> = events.borrow().iter().map(event_shape).collect();
+    assert_eq!(observed, internal_deployment_progress_sequence());
+}
+
+#[test]
+fn fails_identically_while_reporting_nothing_when_the_branch_is_missing() {
+    let mut connection = database::open(Path::new(":memory:")).unwrap();
+    let repository = GitRepository::new();
+    let application = import_application(
+        &mut connection,
+        &repository.path,
+        None,
+        Some(&repository.url()),
+        None,
+    )
+    .unwrap();
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let sink = Rc::clone(&events);
+    let mut report = move |event: DeploymentProgress| sink.borrow_mut().push(event);
+
+    let error = deploy_branch_with_progress(
+        &mut connection,
+        &application.id,
+        Some("missing"),
+        None,
+        &mut report,
+    )
+    .unwrap_err();
+
+    // Source resolution stays ahead of every external effect and of any progress event.
+    assert!(matches!(
+        error,
+        DeployBranchError::ResolveBranch {
+            source: pneuma::adapters::git_source::ResolveBranchError::BranchNotFound { .. }
+        }
+    ));
+    assert!(events.borrow().is_empty());
+}
+
+#[test]
+fn still_requires_a_delivery_configuration_after_resolving_the_source() {
+    let mut connection = database::open(Path::new(":memory:")).unwrap();
+    let repository = GitRepository::new();
+    let application = import_application(
+        &mut connection,
+        &repository.path,
+        None,
+        Some(&repository.url()),
+        None,
+    )
+    .unwrap();
+    connection
+        .execute(
+            "DELETE FROM application_delivery_specs WHERE application_id = ?1",
+            [application.id.as_str()],
+        )
+        .unwrap();
+
+    let error = deploy_branch(&mut connection, &application.id, Some("main"), None).unwrap_err();
+
+    // Reusing the loaded delivery context must not weaken its validation semantics.
+    assert!(matches!(
+        error,
+        DeployBranchError::NoDeliveryConfiguration { .. }
     ));
     let release_count: i64 = connection
         .query_row("SELECT COUNT(*) FROM releases", [], |row| row.get(0))
@@ -373,6 +501,45 @@ fn fixture_path(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
         .join(name)
+}
+
+// Semantic progress shape: step boundaries and persisted state transitions without detail text.
+#[derive(Debug, PartialEq, Eq)]
+enum EventShape {
+    Started(DeploymentStep),
+    Completed(DeploymentStep),
+    StateChanged(DeploymentStatus),
+    FailurePersisted,
+}
+
+fn event_shape(event: &DeploymentProgress) -> EventShape {
+    match event {
+        DeploymentProgress::StepStarted { step, .. } => EventShape::Started(*step),
+        DeploymentProgress::StepCompleted { step, .. } => EventShape::Completed(*step),
+        DeploymentProgress::StateChanged { status, .. } => EventShape::StateChanged(*status),
+        DeploymentProgress::FailurePersisted { .. } => EventShape::FailurePersisted,
+    }
+}
+
+// The milestone order every internal deployment reports, regardless of reporting being enabled.
+fn internal_deployment_progress_sequence() -> Vec<EventShape> {
+    vec![
+        EventShape::Started(DeploymentStep::LoadSpecification),
+        EventShape::Completed(DeploymentStep::LoadSpecification),
+        EventShape::Started(DeploymentStep::CreateDeployment),
+        EventShape::Completed(DeploymentStep::CreateDeployment),
+        EventShape::StateChanged(DeploymentStatus::Pending),
+        EventShape::StateChanged(DeploymentStatus::Starting),
+        EventShape::Started(DeploymentStep::CreateContainer),
+        EventShape::Completed(DeploymentStep::CreateContainer),
+        EventShape::Completed(DeploymentStep::StartContainer),
+        EventShape::Completed(DeploymentStep::ObserveContainer),
+        EventShape::Completed(DeploymentStep::RegisterCandidate),
+        EventShape::StateChanged(DeploymentStatus::Verifying),
+        EventShape::Started(DeploymentStep::HealthCheckAndPromotion),
+        EventShape::Completed(DeploymentStep::HealthCheckAndPromotion),
+        EventShape::StateChanged(DeploymentStatus::Succeeded),
+    ]
 }
 
 fn respond_once(listener: &TcpListener) {

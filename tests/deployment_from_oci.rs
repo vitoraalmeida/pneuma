@@ -1,18 +1,22 @@
+use std::cell::RefCell;
 use std::env;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, TcpListener};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use pneuma::adapters::database;
-use pneuma::domain::deployment::SourceRevision;
+use pneuma::domain::deployment::{DeploymentStatus, SourceRevision};
 use pneuma::domain::release::OciArtifact;
 use pneuma::use_cases::application::import_application;
-use pneuma::use_cases::deployment::{DeployOciError, deploy_oci};
+use pneuma::use_cases::deployment::{
+    DeployOciError, DeploymentProgress, DeploymentStep, deploy_oci, deploy_oci_with_progress,
+};
 
 #[test]
 fn deploys_a_verified_oci_image_and_persists_its_exact_reference() {
@@ -76,6 +80,88 @@ fn deploys_a_verified_oci_image_and_persists_its_exact_reference() {
 #[test]
 fn rejects_an_unpinned_oci_reference_at_the_validation_boundary() {
     assert!(OciArtifact::parse("registry.example/service:latest").is_err());
+}
+
+#[test]
+fn deploys_with_progress_events_in_the_same_semantic_order_and_the_same_result() {
+    let database_path = temporary_database_path();
+    let mut connection = database::open(&database_path).unwrap();
+    let application =
+        import_application(&mut connection, &fixture_path("another"), None, None, None).unwrap();
+    let digest = format!("sha256:{}", "a".repeat(64));
+    let reference = format!("registry.example/team/service@{digest}");
+    let artifact = OciArtifact::parse(&reference).unwrap();
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let environment = FakePodman::new(port);
+    let server = thread::spawn(move || respond_once(&listener));
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let sink = Rc::clone(&events);
+    let mut report = move |event: DeploymentProgress| sink.borrow_mut().push(event);
+
+    let deployed = environment.run(|| {
+        deploy_oci_with_progress(
+            &mut connection,
+            &application.id,
+            &artifact,
+            None,
+            None,
+            &mut report,
+        )
+    });
+    server.join().unwrap();
+
+    let deployed = deployed.unwrap();
+
+    // The reported run must persist the same outcome as the silent deployment contract.
+    let (status, image_reference): (String, String) = connection
+        .query_row(
+            "SELECT d.status, r.image_reference
+             FROM deployments d
+             JOIN releases r ON r.id = d.release_id",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(status, "succeeded");
+    assert_eq!(image_reference, reference);
+    assert_eq!(deployed.artifact.reference(), reference);
+    assert!(deployed.source_revision.is_none());
+
+    let observed: Vec<EventShape> = events.borrow().iter().map(event_shape).collect();
+    assert_eq!(observed, internal_deployment_progress_sequence());
+}
+
+#[test]
+fn rejects_a_mismatched_repository_identically_while_reporting_nothing() {
+    let mut connection = database::open(Path::new(":memory:")).unwrap();
+    let application =
+        import_application(&mut connection, &fixture_path("another"), None, None, None).unwrap();
+    let digest = format!("sha256:{}", "a".repeat(64));
+    let reference = format!("registry.example/other/service@{digest}");
+    let artifact = OciArtifact::parse(&reference).unwrap();
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let sink = Rc::clone(&events);
+    let mut report = move |event: DeploymentProgress| sink.borrow_mut().push(event);
+
+    let error = deploy_oci_with_progress(
+        &mut connection,
+        &application.id,
+        &artifact,
+        None,
+        None,
+        &mut report,
+    )
+    .unwrap_err();
+
+    // Delivery validation stays ahead of every external effect and of any progress event.
+    assert!(matches!(
+        error,
+        DeployOciError::RepositoryMismatch { allowed, actual, .. }
+            if allowed == "registry.example/team/service"
+                && actual == "registry.example/other/service"
+    ));
+    assert!(events.borrow().is_empty());
 }
 
 #[test]
@@ -186,6 +272,45 @@ fn fixture_path(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
         .join(name)
+}
+
+// Semantic progress shape: step boundaries and persisted state transitions without detail text.
+#[derive(Debug, PartialEq, Eq)]
+enum EventShape {
+    Started(DeploymentStep),
+    Completed(DeploymentStep),
+    StateChanged(DeploymentStatus),
+    FailurePersisted,
+}
+
+fn event_shape(event: &DeploymentProgress) -> EventShape {
+    match event {
+        DeploymentProgress::StepStarted { step, .. } => EventShape::Started(*step),
+        DeploymentProgress::StepCompleted { step, .. } => EventShape::Completed(*step),
+        DeploymentProgress::StateChanged { status, .. } => EventShape::StateChanged(*status),
+        DeploymentProgress::FailurePersisted { .. } => EventShape::FailurePersisted,
+    }
+}
+
+// The milestone order every internal deployment reports, regardless of reporting being enabled.
+fn internal_deployment_progress_sequence() -> Vec<EventShape> {
+    vec![
+        EventShape::Started(DeploymentStep::LoadSpecification),
+        EventShape::Completed(DeploymentStep::LoadSpecification),
+        EventShape::Started(DeploymentStep::CreateDeployment),
+        EventShape::Completed(DeploymentStep::CreateDeployment),
+        EventShape::StateChanged(DeploymentStatus::Pending),
+        EventShape::StateChanged(DeploymentStatus::Starting),
+        EventShape::Started(DeploymentStep::CreateContainer),
+        EventShape::Completed(DeploymentStep::CreateContainer),
+        EventShape::Completed(DeploymentStep::StartContainer),
+        EventShape::Completed(DeploymentStep::ObserveContainer),
+        EventShape::Completed(DeploymentStep::RegisterCandidate),
+        EventShape::StateChanged(DeploymentStatus::Verifying),
+        EventShape::Started(DeploymentStep::HealthCheckAndPromotion),
+        EventShape::Completed(DeploymentStep::HealthCheckAndPromotion),
+        EventShape::StateChanged(DeploymentStatus::Succeeded),
+    ]
 }
 
 fn temporary_database_path() -> PathBuf {

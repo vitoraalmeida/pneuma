@@ -13,7 +13,7 @@ use super::cleanup::{
     retire_previous_runtime,
 };
 use super::create::{CreateDeploymentError, create_deployment_with_source_revision_and_ownership};
-use super::progress::{DeploymentProgress, DeploymentStep, ProgressReporter};
+use super::progress::{DeploymentStep, ProgressReporter};
 use super::promotion::{PromoteInternalCandidateError, promote_internal_candidate};
 use super::transition::{TransitionDeploymentError, fail_deployment};
 use crate::adapters::application_lock::{ApplicationLock, ApplicationLockError};
@@ -177,31 +177,10 @@ pub(crate) fn deploy_release(
     )
 }
 
-// Deploys a release while reporting durable lifecycle milestones to the supplied callback.
-pub(crate) fn deploy_release_with_progress(
-    connection: &mut Connection,
-    application_id: &ApplicationId,
-    release: &Release,
-    deployment_type: DeploymentType,
-    source_revision: Option<&SourceRevision>,
-    public_configuration: Option<&PublicDeploymentConfiguration>,
-    progress: &mut dyn FnMut(DeploymentProgress),
-) -> Result<DeploymentResult, DeployReleaseError> {
-    let mut progress = ProgressReporter::enabled(progress);
-    deploy_release_reporting(
-        connection,
-        application_id,
-        release,
-        deployment_type,
-        source_revision,
-        public_configuration,
-        &mut progress,
-    )
-}
-
 // Creates the durable deployment record before external effects, then routes failures through
-// one finalizer that records failure and cleans up candidate resources.
-fn deploy_release_reporting(
+// one finalizer that records failure and cleans up candidate resources. Callers supply the
+// reporter they want: disabled for silent execution, enabled for lifecycle milestones.
+pub(crate) fn deploy_release_reporting(
     connection: &mut Connection,
     application_id: &ApplicationId,
     release: &Release,
