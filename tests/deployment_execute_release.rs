@@ -5,12 +5,13 @@ use std::io::{Read, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use pneuma::adapters::database;
 use pneuma::domain::exposure::ExposureMaterialization;
+use rusqlite::Connection;
 
 #[test]
 fn internal_deploy_succeeds_when_candidate_is_healthy() {
@@ -495,6 +496,188 @@ fn public_deploy_rolls_back_caddy_when_external_health_fails() {
 }
 
 #[test]
+fn public_deploy_fails_when_internal_health_check_fails() {
+    let environment = DeploymentEnvironment::public();
+    assert_command_succeeded(&environment.import());
+    environment.set_public_visibility();
+
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || respond_until_timeout(&listener, 500));
+
+    let output = environment.deploy(port, false);
+    server.join().unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("health_check_failed"),
+        "expected health_check_failed error, got: {stderr}"
+    );
+
+    let connection = database::open(&environment.database_path).unwrap();
+
+    let (status, failure_code): (String, String) = connection
+        .query_row(
+            "SELECT status, failure_code FROM deployments ORDER BY created_at DESC LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(status, "failed");
+    assert_eq!(failure_code, "health_check_failed");
+
+    // The exposure is only prepared after internal verification succeeds.
+    let exposure_state: String = connection
+        .query_row(
+            "SELECT materialization_state FROM exposures WHERE desired_visibility = 'public'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(exposure_state, "not_materialized");
+
+    // Activation retains candidate resources so the centralized finalizer cleans them up.
+    assert_candidate_resources_released(&environment, &connection);
+}
+
+#[test]
+fn public_deploy_fails_when_caddy_rejects_route_reload() {
+    let environment = DeploymentEnvironment::public();
+    assert_command_succeeded(&environment.import());
+    environment.set_public_visibility();
+    fs::write(environment.root.join("caddy-reload-failure"), "fail").unwrap();
+
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || respond_until_timeout(&listener, 200));
+
+    let output = environment.deploy(port, false);
+    server.join().unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("caddy_materialization_failed"),
+        "expected caddy_materialization_failed error, got: {stderr}"
+    );
+    // The reload outage also breaks the adapter's own compensation, so the failure must
+    // be recorded as divergence instead of a confirmed safe rollback.
+    assert!(
+        stderr.contains("recovery also failed"),
+        "expected unconfirmed route recovery, got: {stderr}"
+    );
+
+    let connection = database::open(&environment.database_path).unwrap();
+
+    let (status, failure_code): (String, String) = connection
+        .query_row(
+            "SELECT status, failure_code FROM deployments ORDER BY created_at DESC LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(status, "failed");
+    assert_eq!(failure_code, "caddy_materialization_failed");
+
+    let (exposure_state, last_error_code): (String, String) = connection
+        .query_row(
+            "SELECT materialization_state, last_error_code FROM exposures WHERE desired_visibility = 'public'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(exposure_state, "diverged");
+    assert_eq!(last_error_code, "caddy_materialization_failed");
+
+    // The adapter's own rollback must leave no fragment behind.
+    let fragments = count_directory_entries(&environment.managed_caddy_directory);
+    assert_eq!(
+        fragments, 0,
+        "materialization rollback must remove the route"
+    );
+
+    let curl_log = fs::read_to_string(environment.root.join("curl.log")).unwrap_or_default();
+    assert!(
+        !curl_log.contains("--resolve"),
+        "external verification must not run after materialization fails"
+    );
+
+    // Activation retains candidate resources so the centralized finalizer cleans them up.
+    assert_candidate_resources_released(&environment, &connection);
+}
+
+#[test]
+fn public_deploy_rolls_back_route_when_promotion_is_rejected() {
+    let environment = DeploymentEnvironment::public();
+    assert_command_succeeded(&environment.import());
+    environment.set_public_visibility();
+
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || respond_until_timeout(&listener, 200));
+
+    let gate_directory = environment.root.join("gates");
+    let mut child = environment.deploy_gated_with_curl_delay(port, &gate_directory, "10");
+
+    for gate in [
+        "deployment.pending",
+        "deployment.starting-registered",
+        "deployment.verifying",
+        "deployment.activating",
+    ] {
+        wait_for_path(&gate_directory.join(format!("{gate}.ready")));
+        fs::write(gate_directory.join(format!("{gate}.release")), "go").unwrap();
+    }
+
+    // External verification now sleeps; once the fragment exists the run is between
+    // materialization and promotion, so concurrent state changes become observable.
+    wait_for_first_file(&environment.managed_caddy_directory);
+
+    let connection = database::open(&environment.database_path).unwrap();
+    let updated = connection
+        .execute(
+            "UPDATE exposures SET materialization_state = 'diverged'
+             WHERE desired_visibility = 'public' AND materialization_state = 'applying'",
+            [],
+        )
+        .unwrap();
+    assert_eq!(updated, 1, "exposure must be applying during activation");
+
+    let status = wait_for_child(&mut child);
+    server.join().unwrap();
+
+    assert!(!status.success());
+
+    let (status_text, failure_code): (String, String) = connection
+        .query_row(
+            "SELECT status, failure_code FROM deployments ORDER BY created_at DESC LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(status_text, "failed");
+    assert_eq!(failure_code, "candidate_promotion_failed");
+
+    let (exposure_state, last_error_code): (String, String) = connection
+        .query_row(
+            "SELECT materialization_state, last_error_code FROM exposures WHERE desired_visibility = 'public'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(exposure_state, "failed");
+    assert_eq!(last_error_code, "candidate_promotion_failed");
+
+    // The rejected promotion must roll the materialized route back.
+    let fragments = count_directory_entries(&environment.managed_caddy_directory);
+    assert_eq!(fragments, 0, "promotion rejection must roll the route back");
+
+    // The candidate was still only Starting, so its resources are released by cleanup.
+    assert_candidate_resources_released(&environment, &connection);
+}
+
+#[test]
 fn rollback_executes_a_new_deployment_from_historical_provenance() {
     let environment = DeploymentEnvironment::new();
     assert_command_succeeded(&environment.import());
@@ -766,6 +949,34 @@ impl DeploymentEnvironment {
         external_status: u16,
         systemctl_start_failure: bool,
     ) -> Output {
+        self.deploy_command(port, verbose, external_status, systemctl_start_failure)
+            .output()
+            .unwrap()
+    }
+
+    fn deploy_gated_with_curl_delay(
+        &self,
+        port: u16,
+        gate_directory: &Path,
+        curl_delay_seconds: &str,
+    ) -> Child {
+        let mut command = self.deploy_command(port, false, 200, false);
+        command
+            .env("PNEUMA_TEST_GATE_DIRECTORY", gate_directory)
+            .env("PNEUMA_FAKE_CURL_DELAY", curl_delay_seconds)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        command.spawn().unwrap()
+    }
+
+    fn deploy_command(
+        &self,
+        port: u16,
+        verbose: bool,
+        external_status: u16,
+        systemctl_start_failure: bool,
+    ) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_pneuma"));
         command
             .env("PNEUMA_DATABASE_PATH", &self.database_path)
@@ -781,6 +992,10 @@ impl DeploymentEnvironment {
             .env("PNEUMA_FAKE_CURL_LOG", self.root.join("curl.log"))
             .env("PNEUMA_FAKE_CURL_STATUS", external_status.to_string())
             .env(
+                "PNEUMA_FAKE_CADDY_RELOAD_FAILURE",
+                self.root.join("caddy-reload-failure"),
+            )
+            .env(
                 "PNEUMA_FAKE_PODMAN_DIGEST",
                 format!("sha256:{}", "a".repeat(64)),
             );
@@ -795,16 +1010,14 @@ impl DeploymentEnvironment {
         }
         let digest = format!("sha256:{}", "a".repeat(64));
         let reference = format!("{}@{digest}", self.image_repository);
+        command.args([
+            "app",
+            "deploy",
+            &self.application_name,
+            "--image",
+            &reference,
+        ]);
         command
-            .args([
-                "app",
-                "deploy",
-                &self.application_name,
-                "--image",
-                &reference,
-            ])
-            .output()
-            .unwrap()
     }
 
     fn deploy_with_different_digest(&self, port: u16, digest_char: char) -> Output {
@@ -1062,11 +1275,11 @@ fn install_fake_caddy_and_curl(fake_bin: &Path) {
     for (name, script) in [
         (
             "caddy",
-            "#!/bin/sh\nset -eu\ncase \"$1\" in validate) printf 'valid configuration\\n' ;; reload) printf 'reload complete\\n' ;; *) exit 1 ;; esac\n",
+            "#!/bin/sh\nset -eu\ncase \"$1\" in\nvalidate) printf 'valid configuration\\n' ;;\nreload)\nif [ -f \"${PNEUMA_FAKE_CADDY_RELOAD_FAILURE:-}\" ]; then\nprintf 'reload failed\\n' >&2\nexit 1\nfi\nprintf 'reload complete\\n' ;;\n*) exit 1 ;;\nesac\n",
         ),
         (
             "curl",
-            "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >> \"$PNEUMA_FAKE_CURL_LOG\"\nprintf '%s' \"${PNEUMA_FAKE_CURL_STATUS:-200}\"\n",
+            "#!/bin/sh\nset -eu\nif [ -n \"${PNEUMA_FAKE_CURL_DELAY:-}\" ]; then\nsleep \"$PNEUMA_FAKE_CURL_DELAY\"\nfi\nprintf '%s\\n' \"$*\" >> \"$PNEUMA_FAKE_CURL_LOG\"\nprintf '%s' \"${PNEUMA_FAKE_CURL_STATUS:-200}\"\n",
         ),
     ] {
         let executable = fake_bin.join(name);
@@ -1127,6 +1340,100 @@ fn unique_suffix() -> u128 {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos()
+}
+
+fn wait_for_path(path: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !path.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {}",
+            path.display()
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn wait_for_first_file(directory: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if count_directory_entries(directory) > 0 {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for a file in {}",
+            directory.display()
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn wait_for_child(child: &mut Child) -> ExitStatus {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            return status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for the deployment process"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn count_directory_entries(directory: &Path) -> usize {
+    fs::read_dir(directory)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .count()
+}
+
+// Verifies the centralized finalizer released every retained candidate resource.
+fn assert_candidate_resources_released(
+    environment: &DeploymentEnvironment,
+    connection: &Connection,
+) {
+    let deployment_id: String = connection
+        .query_row(
+            "SELECT id FROM deployments ORDER BY created_at DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let unit_path = environment.root.join("quadlets").join(format!(
+        "pneuma-{}-{deployment_id}.container",
+        environment.application_name
+    ));
+    assert!(
+        !unit_path.exists(),
+        "candidate unit must be removed by centralized cleanup"
+    );
+
+    let port_reservation_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM runtime_port_reservations",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        port_reservation_count, 0,
+        "port reservation must be released"
+    );
+
+    let runtime_state: String = connection
+        .query_row(
+            "SELECT last_observed_state FROM runtime_instances ORDER BY created_at DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        runtime_state, "missing",
+        "rejected candidate runtime must be marked missing"
+    );
 }
 
 fn assert_command_succeeded(output: &Output) {
