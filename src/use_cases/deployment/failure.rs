@@ -157,6 +157,21 @@ impl FailedExecution {
             resources,
         }
     }
+
+    // Creates a failure whose step already persisted the terminal stage before returning.
+    fn already_persisted(
+        code: &'static str,
+        source: impl Error + 'static,
+        container_id: &ContainerId,
+        runtime_id: &RuntimeInstanceId,
+    ) -> Self {
+        Self {
+            code,
+            source: Box::new(source),
+            failure_persisted: true,
+            resources: CandidateResources::with_container_and_runtime(container_id, runtime_id),
+        }
+    }
 }
 
 // Finalizes a failed deployment: records its failure stage, releases candidate resources,
@@ -279,16 +294,22 @@ pub(crate) fn failure_needing_persistence(
     container_id: Option<&ContainerId>,
     runtime_id: Option<&RuntimeInstanceId>,
 ) -> FailedExecution {
-    let resources = match (container_id, runtime_id) {
+    FailedExecution::needing_persistence(
+        code,
+        Box::new(source),
+        candidate_resources(container_id, runtime_id),
+    )
+}
+
+// Collects whatever a candidate allocated so far from its optional tracking identifiers.
+fn candidate_resources(
+    container_id: Option<&ContainerId>,
+    runtime_id: Option<&RuntimeInstanceId>,
+) -> CandidateResources {
+    match (container_id, runtime_id) {
         (Some(cid), Some(rid)) => CandidateResources::with_container_and_runtime(cid, rid),
         (Some(cid), None) => CandidateResources::with_container(cid),
         _ => CandidateResources::empty(),
-    };
-    FailedExecution {
-        code,
-        source: Box::new(source),
-        failure_persisted: false,
-        resources,
     }
 }
 
@@ -326,23 +347,6 @@ pub(crate) fn started_candidate_failure(
         Some(&candidate.unit_name),
         true,
     )
-}
-
-// An unhealthy-candidate result is different: promotion persists `Failed` before it
-// returns the error. Tag it as already persisted so the finalizer removes the rejected
-// candidate without trying to fail an already-terminal deployment a second time.
-fn failure_already_persisted(
-    code: &'static str,
-    source: impl Error + 'static,
-    container_id: &ContainerId,
-    runtime_id: &RuntimeInstanceId,
-) -> FailedExecution {
-    FailedExecution {
-        code,
-        source: Box::new(source),
-        failure_persisted: true,
-        resources: CandidateResources::with_container_and_runtime(container_id, runtime_id),
-    }
 }
 
 // Maps candidate startup failures to their durable failure codes, retaining whatever
@@ -451,7 +455,7 @@ pub(crate) fn internal_promotion_failure(
         &error,
         PromoteInternalCandidateError::CandidateUnhealthy { .. }
     ) {
-        failure_already_persisted("health_check_failed", error, container_id, runtime_id)
+        FailedExecution::already_persisted("health_check_failed", error, container_id, runtime_id)
     } else {
         failure_needing_persistence(
             "candidate_promotion_failed",
