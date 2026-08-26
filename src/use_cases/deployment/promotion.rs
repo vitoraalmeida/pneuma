@@ -3,6 +3,7 @@ use std::error::Error;
 use rusqlite::{Connection, TransactionBehavior};
 use thiserror::Error;
 
+use super::failure::DeploymentFailureCode;
 use super::transition::{TransitionDeploymentError, fail_deployment};
 use crate::adapters::health_check_internal::{HealthCheckResult, check_internal_health};
 use crate::adapters::stores::PersistenceOutcome;
@@ -125,7 +126,7 @@ pub fn promote_internal_candidate(
             fail_deployment(
                 connection,
                 &target.deployment_id,
-                "health_check_failed",
+                DeploymentFailureCode::HealthCheck.as_str(),
                 &message,
             )
             .map_err(|source| PromoteInternalCandidateError::RecordFailure { source })?;

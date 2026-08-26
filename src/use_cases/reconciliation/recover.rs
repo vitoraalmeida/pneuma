@@ -13,7 +13,9 @@ use crate::domain::identity::ApplicationId;
 use crate::domain::reconciliation::{
     ActiveRuntime, CaddyFragmentObservation, NamedContainerObservation, QuadletSourceObservation,
 };
-use crate::use_cases::deployment::{cleanup_failed_candidate, fail_deployment};
+use crate::use_cases::deployment::{
+    DeploymentFailureCode, cleanup_failed_candidate, fail_deployment,
+};
 
 use super::{ReconciliationReadError, ReconciliationResult};
 
@@ -176,7 +178,7 @@ fn record_interrupted_failure(
     fail_deployment(
         connection,
         &deployment.id,
-        "operation_interrupted",
+        DeploymentFailureCode::OperationInterrupted.as_str(),
         "operation owner exited before deployment completion",
     )
     .map_err(|source| ReconciliationReadError::NotConverged {

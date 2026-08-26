@@ -43,6 +43,7 @@ pub use self::deploy::{
 };
 pub use self::execute::{DeploymentResult, PublicDeploymentConfiguration};
 pub use self::failure::DeployReleaseError;
+pub(crate) use self::failure::DeploymentFailureCode;
 pub use self::progress::{DeploymentProgress, DeploymentStep};
 pub use self::promotion::{PromoteInternalCandidateError, promote_internal_candidate};
 pub use self::query::{ListDeploymentsError, list_deployments};

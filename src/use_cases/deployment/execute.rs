@@ -7,9 +7,9 @@ use super::candidate::{CandidateStartInput, StartedCandidate, start_candidate};
 use super::cleanup::{load_previous_runtime, retire_previous_runtime};
 use super::create::create_deployment_with_source_revision_and_ownership;
 use super::failure::{
-    DeployReleaseError, FailedExecution, candidate_start_failure, failure_needing_persistence,
-    finish_failed_deployment, internal_promotion_failure, public_activation_failure,
-    started_candidate_failure,
+    DeployReleaseError, DeploymentFailureCode, FailedExecution, candidate_start_failure,
+    failure_needing_persistence, finish_failed_deployment, internal_promotion_failure,
+    public_activation_failure, started_candidate_failure,
 };
 use super::progress::{DeploymentStep, ProgressReporter};
 use super::promotion::promote_internal_candidate;
@@ -183,8 +183,9 @@ fn execute_deployment(
     public_configuration: Option<&PublicDeploymentConfiguration>,
     progress: &mut ProgressReporter<'_>,
 ) -> Result<CompletedDeploymentExecution, FailedExecution> {
-    wait_for_test_gate("deployment.pending")
-        .map_err(|source| failure_needing_persistence("test_gate_failed", source, None, None))?;
+    wait_for_test_gate("deployment.pending").map_err(|source| {
+        failure_needing_persistence(DeploymentFailureCode::TestGate, source, None, None)
+    })?;
     progress.state_changed(deployment_id.as_str(), DeploymentStatus::Starting);
     progress.started(
         DeploymentStep::CreateContainer,
@@ -225,11 +226,13 @@ fn execute_deployment(
         DeploymentStep::RegisterCandidate,
         format!("runtime {}", candidate.runtime.id),
     );
-    wait_for_test_gate("deployment.starting-registered")
-        .map_err(|source| started_candidate_failure("test_gate_failed", source, &candidate))?;
+    wait_for_test_gate("deployment.starting-registered").map_err(|source| {
+        started_candidate_failure(DeploymentFailureCode::TestGate, source, &candidate)
+    })?;
     progress.state_changed(deployment_id.as_str(), DeploymentStatus::Verifying);
-    wait_for_test_gate("deployment.verifying")
-        .map_err(|source| started_candidate_failure("test_gate_failed", source, &candidate))?;
+    wait_for_test_gate("deployment.verifying").map_err(|source| {
+        started_candidate_failure(DeploymentFailureCode::TestGate, source, &candidate)
+    })?;
 
     let previous_runtime = load_previous_runtime(
         connection,
@@ -237,7 +240,11 @@ fn execute_deployment(
         &candidate.runtime.id,
     )
     .map_err(|source| {
-        started_candidate_failure("runtime_reconciliation_failed", source, &candidate)
+        started_candidate_failure(
+            DeploymentFailureCode::RuntimeReconciliation,
+            source,
+            &candidate,
+        )
     })?;
 
     let execution = match specification.visibility {
@@ -273,7 +280,7 @@ fn finish_public_deployment(
 ) -> Result<CompletedDeploymentExecution, FailedExecution> {
     let Some(public_configuration) = public_configuration else {
         return Err(failure_needing_persistence(
-            "public_configuration_missing",
+            DeploymentFailureCode::PublicConfigurationMissing,
             DeployReleaseError::PublicApplication {
                 application_id: specification.application_id.to_string(),
             },

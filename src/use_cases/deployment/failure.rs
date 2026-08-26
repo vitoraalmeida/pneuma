@@ -22,6 +22,56 @@ use crate::adapters::stores::application_store::ApplicationStoreError;
 use crate::domain::identity::{DeploymentId, RuntimeInstanceId};
 use crate::domain::runtime::ContainerId;
 
+// The authoritative registry of deployment failure classifications. Each variant is one
+// semantic failure stage; `as_str` yields its stable persisted string, which historical
+// rows and integration tests depend on verbatim. Producers must never pass raw literals.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DeploymentFailureCode {
+    TestGate,
+    RuntimeReconciliation,
+    PublicConfigurationMissing,
+    RuntimePortAllocation,
+    RuntimeUnitCreation,
+    RuntimeUnitReload,
+    RuntimeStart,
+    RuntimeResolution,
+    RuntimeObservation,
+    RuntimeRegistration,
+    RuntimePortPersistence,
+    DeploymentTransition,
+    HealthCheck,
+    ExposurePreparation,
+    CaddyMaterialization,
+    ExternalHealthCheck,
+    CandidatePromotion,
+    OperationInterrupted,
+}
+
+impl DeploymentFailureCode {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::TestGate => "test_gate_failed",
+            Self::RuntimeReconciliation => "runtime_reconciliation_failed",
+            Self::PublicConfigurationMissing => "public_configuration_missing",
+            Self::RuntimePortAllocation => "runtime_port_allocation_failed",
+            Self::RuntimeUnitCreation => "runtime_unit_creation_failed",
+            Self::RuntimeUnitReload => "runtime_unit_reload_failed",
+            Self::RuntimeStart => "runtime_start_failed",
+            Self::RuntimeResolution => "runtime_resolution_failed",
+            Self::RuntimeObservation => "runtime_observation_failed",
+            Self::RuntimeRegistration => "runtime_registration_failed",
+            Self::RuntimePortPersistence => "runtime_port_persistence_failed",
+            Self::DeploymentTransition => "deployment_transition_failed",
+            Self::HealthCheck => "health_check_failed",
+            Self::ExposurePreparation => "exposure_preparation_failed",
+            Self::CaddyMaterialization => "caddy_materialization_failed",
+            Self::ExternalHealthCheck => "external_health_check_failed",
+            Self::CandidatePromotion => "candidate_promotion_failed",
+            Self::OperationInterrupted => "operation_interrupted",
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum DeployReleaseError {
     #[error("application `{application_id}` was not found")]
@@ -76,7 +126,7 @@ pub enum DeployReleaseError {
 
 // Preserves failure provenance and every allocated candidate resource for ordered cleanup.
 pub(crate) struct FailedExecution {
-    code: &'static str,
+    code: DeploymentFailureCode,
     source: Box<dyn Error>,
     failure_persisted: bool,
     resources: CandidateResources,
@@ -85,7 +135,7 @@ pub(crate) struct FailedExecution {
 impl FailedExecution {
     // Creates a failure whose stage still requires persistence before candidate cleanup.
     fn needing_persistence(
-        code: &'static str,
+        code: DeploymentFailureCode,
         source: Box<dyn Error>,
         resources: CandidateResources,
     ) -> Self {
@@ -99,7 +149,7 @@ impl FailedExecution {
 
     // Creates a failure whose step already persisted the terminal stage before returning.
     fn already_persisted(
-        code: &'static str,
+        code: DeploymentFailureCode,
         source: impl Error + 'static,
         container_id: &ContainerId,
         runtime_id: &RuntimeInstanceId,
@@ -147,12 +197,12 @@ fn persist_failure_if_needed(
     progress: &mut ProgressReporter<'_>,
 ) -> Option<TransitionDeploymentError> {
     if failed.failure_persisted {
-        progress.failure_persisted(deployment_id.as_str(), failed.code);
+        progress.failure_persisted(deployment_id.as_str(), failed.code.as_str());
         return None;
     }
-    match fail_deployment(connection, deployment_id, failed.code, failure) {
+    match fail_deployment(connection, deployment_id, failed.code.as_str(), failure) {
         Ok(_) => {
-            progress.failure_persisted(deployment_id.as_str(), failed.code);
+            progress.failure_persisted(deployment_id.as_str(), failed.code.as_str());
             None
         }
         Err(source) => Some(source),
@@ -196,7 +246,7 @@ fn cleanup_candidate_if_needed(
 // recording divergence, and finally the original deployment failure itself.
 fn resolve_failure_recovery(
     deployment_id: &DeploymentId,
-    code: &'static str,
+    code: DeploymentFailureCode,
     source: Box<dyn Error>,
     failure: String,
     record_error: Option<TransitionDeploymentError>,
@@ -219,7 +269,7 @@ fn resolve_failure_recovery(
 
     DeployReleaseError::DeploymentFailed {
         deployment_id: deployment_id.to_string(),
-        code,
+        code: code.as_str(),
         source,
     }
 }
@@ -228,7 +278,7 @@ fn resolve_failure_recovery(
 // themselves. Tag them as needing persistence so the common finalizer records the
 // correct failure stage before performing any candidate cleanup.
 pub(crate) fn failure_needing_persistence(
-    code: &'static str,
+    code: DeploymentFailureCode,
     source: impl Error + 'static,
     container_id: Option<&ContainerId>,
     runtime_id: Option<&RuntimeInstanceId>,
@@ -254,7 +304,7 @@ fn candidate_resources(
 
 // Collects all resources allocated before a failure so the common finalizer can clean them up.
 fn candidate_failure(
-    code: &'static str,
+    code: DeploymentFailureCode,
     source: impl Error + 'static,
     container_id: Option<&ContainerId>,
     runtime_id: Option<&RuntimeInstanceId>,
@@ -274,7 +324,7 @@ fn candidate_failure(
 // Tags a failure after full candidate startup so compensation retains every resource
 // a started candidate holds: container, runtime, unit, and reserved port.
 pub(crate) fn started_candidate_failure(
-    code: &'static str,
+    code: DeploymentFailureCode,
     source: impl Error + 'static,
     candidate: &StartedCandidate,
 ) -> FailedExecution {
@@ -292,49 +342,64 @@ pub(crate) fn started_candidate_failure(
 // resources each stage had already allocated for compensation.
 pub(crate) fn candidate_start_failure(error: CandidateStartError) -> FailedExecution {
     match error {
-        CandidateStartError::PortAllocation { source } => {
-            failure_needing_persistence("runtime_port_allocation_failed", source, None, None)
-        }
+        CandidateStartError::PortAllocation { source } => failure_needing_persistence(
+            DeploymentFailureCode::RuntimePortAllocation,
+            source,
+            None,
+            None,
+        ),
         CandidateStartError::UnitCreation { source, resources } => {
             FailedExecution::needing_persistence(
-                "runtime_unit_creation_failed",
+                DeploymentFailureCode::RuntimeUnitCreation,
                 Box::new(source),
                 *resources,
             )
         }
         CandidateStartError::UnitReload { source, resources } => {
             FailedExecution::needing_persistence(
-                "runtime_unit_reload_failed",
+                DeploymentFailureCode::RuntimeUnitReload,
                 Box::new(source),
                 *resources,
             )
         }
         CandidateStartError::UnitStart { source, resources } => {
             FailedExecution::needing_persistence(
-                "runtime_start_failed",
+                DeploymentFailureCode::RuntimeStart,
                 Box::new(source),
                 *resources,
             )
         }
         CandidateStartError::ContainerResolution { source, resources } => {
-            FailedExecution::needing_persistence("runtime_resolution_failed", source, *resources)
+            FailedExecution::needing_persistence(
+                DeploymentFailureCode::RuntimeResolution,
+                source,
+                *resources,
+            )
         }
         CandidateStartError::ContainerObservation { source, resources } => {
-            FailedExecution::needing_persistence("runtime_observation_failed", source, *resources)
+            FailedExecution::needing_persistence(
+                DeploymentFailureCode::RuntimeObservation,
+                source,
+                *resources,
+            )
         }
         CandidateStartError::RuntimeRegistration { source, resources } => {
-            FailedExecution::needing_persistence("runtime_registration_failed", source, *resources)
+            FailedExecution::needing_persistence(
+                DeploymentFailureCode::RuntimeRegistration,
+                source,
+                *resources,
+            )
         }
         CandidateStartError::PortPersistence { source, resources } => {
             FailedExecution::needing_persistence(
-                "runtime_port_persistence_failed",
+                DeploymentFailureCode::RuntimePortPersistence,
                 Box::new(source),
                 *resources,
             )
         }
         CandidateStartError::DeploymentTransition { source, resources } => {
             FailedExecution::needing_persistence(
-                "deployment_transition_failed",
+                DeploymentFailureCode::DeploymentTransition,
                 Box::new(source),
                 *resources,
             )
@@ -350,29 +415,53 @@ pub(crate) fn public_activation_failure(
 ) -> FailedExecution {
     let failed = match error {
         PublicActivationError::InternalHealth { source, resources } => {
-            FailedExecution::needing_persistence("health_check_failed", source, *resources)
+            FailedExecution::needing_persistence(
+                DeploymentFailureCode::HealthCheck,
+                source,
+                *resources,
+            )
         }
         PublicActivationError::DeploymentTransition { source, resources } => {
             FailedExecution::needing_persistence(
-                "deployment_transition_failed",
+                DeploymentFailureCode::DeploymentTransition,
                 Box::new(source),
                 *resources,
             )
         }
         PublicActivationError::ExposurePreparation { source, resources } => {
-            FailedExecution::needing_persistence("exposure_preparation_failed", source, *resources)
+            FailedExecution::needing_persistence(
+                DeploymentFailureCode::ExposurePreparation,
+                source,
+                *resources,
+            )
         }
         PublicActivationError::TestGate { source, resources } => {
-            FailedExecution::needing_persistence("test_gate_failed", source, *resources)
+            FailedExecution::needing_persistence(
+                DeploymentFailureCode::TestGate,
+                source,
+                *resources,
+            )
         }
         PublicActivationError::CaddyMaterialization { source, resources } => {
-            FailedExecution::needing_persistence("caddy_materialization_failed", source, *resources)
+            FailedExecution::needing_persistence(
+                DeploymentFailureCode::CaddyMaterialization,
+                source,
+                *resources,
+            )
         }
         PublicActivationError::ExternalHealth { source, resources } => {
-            FailedExecution::needing_persistence("external_health_check_failed", source, *resources)
+            FailedExecution::needing_persistence(
+                DeploymentFailureCode::ExternalHealthCheck,
+                source,
+                *resources,
+            )
         }
         PublicActivationError::PublicPromotion { source, resources } => {
-            FailedExecution::needing_persistence("candidate_promotion_failed", source, *resources)
+            FailedExecution::needing_persistence(
+                DeploymentFailureCode::CandidatePromotion,
+                source,
+                *resources,
+            )
         }
     };
     FailedExecution {
@@ -394,10 +483,15 @@ pub(crate) fn internal_promotion_failure(
         &error,
         PromoteInternalCandidateError::CandidateUnhealthy { .. }
     ) {
-        FailedExecution::already_persisted("health_check_failed", error, container_id, runtime_id)
+        FailedExecution::already_persisted(
+            DeploymentFailureCode::HealthCheck,
+            error,
+            container_id,
+            runtime_id,
+        )
     } else {
         failure_needing_persistence(
-            "candidate_promotion_failed",
+            DeploymentFailureCode::CandidatePromotion,
             error,
             Some(container_id),
             Some(runtime_id),
@@ -415,8 +509,8 @@ mod tests {
     use super::super::cleanup::{CandidateCleanupError, CandidateResources};
     use super::super::transition::TransitionDeploymentError;
     use super::{
-        DeployReleaseError, candidate_start_failure, internal_promotion_failure,
-        public_activation_failure, resolve_failure_recovery,
+        DeployReleaseError, DeploymentFailureCode, candidate_start_failure,
+        internal_promotion_failure, public_activation_failure, resolve_failure_recovery,
     };
     use crate::adapters::health_check_internal::{HealthCheckFailure, HealthCheckResult};
     use crate::adapters::port_allocator::PortAllocationError;
@@ -460,57 +554,130 @@ mod tests {
     }
 
     #[test]
+    fn failure_codes_map_to_their_stable_persisted_strings() {
+        let cases = [
+            (DeploymentFailureCode::TestGate, "test_gate_failed"),
+            (
+                DeploymentFailureCode::RuntimeReconciliation,
+                "runtime_reconciliation_failed",
+            ),
+            (
+                DeploymentFailureCode::PublicConfigurationMissing,
+                "public_configuration_missing",
+            ),
+            (
+                DeploymentFailureCode::RuntimePortAllocation,
+                "runtime_port_allocation_failed",
+            ),
+            (
+                DeploymentFailureCode::RuntimeUnitCreation,
+                "runtime_unit_creation_failed",
+            ),
+            (
+                DeploymentFailureCode::RuntimeUnitReload,
+                "runtime_unit_reload_failed",
+            ),
+            (DeploymentFailureCode::RuntimeStart, "runtime_start_failed"),
+            (
+                DeploymentFailureCode::RuntimeResolution,
+                "runtime_resolution_failed",
+            ),
+            (
+                DeploymentFailureCode::RuntimeObservation,
+                "runtime_observation_failed",
+            ),
+            (
+                DeploymentFailureCode::RuntimeRegistration,
+                "runtime_registration_failed",
+            ),
+            (
+                DeploymentFailureCode::RuntimePortPersistence,
+                "runtime_port_persistence_failed",
+            ),
+            (
+                DeploymentFailureCode::DeploymentTransition,
+                "deployment_transition_failed",
+            ),
+            (DeploymentFailureCode::HealthCheck, "health_check_failed"),
+            (
+                DeploymentFailureCode::ExposurePreparation,
+                "exposure_preparation_failed",
+            ),
+            (
+                DeploymentFailureCode::CaddyMaterialization,
+                "caddy_materialization_failed",
+            ),
+            (
+                DeploymentFailureCode::ExternalHealthCheck,
+                "external_health_check_failed",
+            ),
+            (
+                DeploymentFailureCode::CandidatePromotion,
+                "candidate_promotion_failed",
+            ),
+            (
+                DeploymentFailureCode::OperationInterrupted,
+                "operation_interrupted",
+            ),
+        ];
+
+        for (code, persisted) in cases {
+            assert_eq!(code.as_str(), persisted);
+        }
+    }
+
+    #[test]
     fn candidate_start_failures_keep_their_stage_codes_and_resources() {
-        let cases: Vec<(CandidateStartError, &'static str)> = vec![
+        let cases: Vec<(CandidateStartError, DeploymentFailureCode)> = vec![
             (
                 CandidateStartError::PortAllocation {
                     source: PortAllocationError::InvalidRange {
                         value: "x".to_owned(),
                     },
                 },
-                "runtime_port_allocation_failed",
+                DeploymentFailureCode::RuntimePortAllocation,
             ),
             (
                 CandidateStartError::UnitCreation {
                     source: QuadletError::HomeUnavailable,
                     resources: Box::new(CandidateResources::empty().with_port()),
                 },
-                "runtime_unit_creation_failed",
+                DeploymentFailureCode::RuntimeUnitCreation,
             ),
             (
                 CandidateStartError::UnitReload {
                     source: QuadletError::HomeUnavailable,
                     resources: Box::new(CandidateResources::empty().with_port()),
                 },
-                "runtime_unit_reload_failed",
+                DeploymentFailureCode::RuntimeUnitReload,
             ),
             (
                 CandidateStartError::UnitStart {
                     source: QuadletError::HomeUnavailable,
                     resources: Box::new(CandidateResources::empty().with_port()),
                 },
-                "runtime_start_failed",
+                DeploymentFailureCode::RuntimeStart,
             ),
             (
                 CandidateStartError::ContainerResolution {
                     source: Box::new(TestFailure),
                     resources: Box::new(started_resources()),
                 },
-                "runtime_resolution_failed",
+                DeploymentFailureCode::RuntimeResolution,
             ),
             (
                 CandidateStartError::ContainerObservation {
                     source: Box::new(TestFailure),
                     resources: Box::new(started_resources()),
                 },
-                "runtime_observation_failed",
+                DeploymentFailureCode::RuntimeObservation,
             ),
             (
                 CandidateStartError::RuntimeRegistration {
                     source: Box::new(TestFailure),
                     resources: Box::new(CandidateResources::with_container(&container_id())),
                 },
-                "runtime_registration_failed",
+                DeploymentFailureCode::RuntimeRegistration,
             ),
             (
                 CandidateStartError::PortPersistence {
@@ -519,14 +686,14 @@ mod tests {
                     },
                     resources: Box::new(started_resources()),
                 },
-                "runtime_port_persistence_failed",
+                DeploymentFailureCode::RuntimePortPersistence,
             ),
             (
                 CandidateStartError::DeploymentTransition {
                     source: transition_error(),
                     resources: Box::new(started_resources()),
                 },
-                "deployment_transition_failed",
+                DeploymentFailureCode::DeploymentTransition,
             ),
         ];
 
@@ -537,7 +704,7 @@ mod tests {
             let failed = candidate_start_failure(error);
             assert_eq!(failed.code, expected_code);
             assert!(!failed.failure_persisted);
-            if expected_code == "runtime_port_allocation_failed" {
+            if expected_code == DeploymentFailureCode::RuntimePortAllocation {
                 assert!(
                     !failed.resources.needs_cleanup(),
                     "port allocation failures hold nothing to clean up"
@@ -545,7 +712,8 @@ mod tests {
             } else {
                 assert!(
                     failed.resources.needs_cleanup(),
-                    "{expected_code} must retain resources for cleanup"
+                    "{} must retain resources for cleanup",
+                    expected_code.as_str()
                 );
             }
         }
@@ -553,55 +721,55 @@ mod tests {
 
     #[test]
     fn public_activation_failures_keep_their_stage_codes_and_add_the_started_unit_and_port() {
-        let cases: Vec<(PublicActivationError, &'static str)> = vec![
+        let cases: Vec<(PublicActivationError, DeploymentFailureCode)> = vec![
             (
                 PublicActivationError::InternalHealth {
                     source: Box::new(TestFailure),
                     resources: Box::new(started_resources()),
                 },
-                "health_check_failed",
+                DeploymentFailureCode::HealthCheck,
             ),
             (
                 PublicActivationError::DeploymentTransition {
                     source: transition_error(),
                     resources: Box::new(started_resources()),
                 },
-                "deployment_transition_failed",
+                DeploymentFailureCode::DeploymentTransition,
             ),
             (
                 PublicActivationError::ExposurePreparation {
                     source: Box::new(TestFailure),
                     resources: Box::new(started_resources()),
                 },
-                "exposure_preparation_failed",
+                DeploymentFailureCode::ExposurePreparation,
             ),
             (
                 PublicActivationError::TestGate {
                     source: Box::new(TestFailure),
                     resources: Box::new(started_resources()),
                 },
-                "test_gate_failed",
+                DeploymentFailureCode::TestGate,
             ),
             (
                 PublicActivationError::CaddyMaterialization {
                     source: Box::new(TestFailure),
                     resources: Box::new(started_resources()),
                 },
-                "caddy_materialization_failed",
+                DeploymentFailureCode::CaddyMaterialization,
             ),
             (
                 PublicActivationError::ExternalHealth {
                     source: Box::new(TestFailure),
                     resources: Box::new(started_resources()),
                 },
-                "external_health_check_failed",
+                DeploymentFailureCode::ExternalHealthCheck,
             ),
             (
                 PublicActivationError::PublicPromotion {
                     source: Box::new(TestFailure),
                     resources: Box::new(started_resources()),
                 },
-                "candidate_promotion_failed",
+                DeploymentFailureCode::CandidatePromotion,
             ),
         ];
 
@@ -632,7 +800,7 @@ mod tests {
             "unit-1",
         );
 
-        assert_eq!(failed.code, "health_check_failed");
+        assert_eq!(failed.code, DeploymentFailureCode::HealthCheck);
         assert!(failed.failure_persisted);
         assert_eq!(failed.resources.unit_name.as_deref(), Some("unit-1"));
         assert!(failed.resources.port_reserved);
@@ -649,7 +817,7 @@ mod tests {
             "unit-1",
         );
 
-        assert_eq!(failed.code, "candidate_promotion_failed");
+        assert_eq!(failed.code, DeploymentFailureCode::CandidatePromotion);
         assert!(!failed.failure_persisted);
         assert_eq!(failed.resources.unit_name.as_deref(), Some("unit-1"));
         assert!(failed.resources.port_reserved);
@@ -659,7 +827,7 @@ mod tests {
     fn cleanup_divergence_outranks_failure_recording_divergence() {
         let error = resolve_failure_recovery(
             &deployment_id(),
-            "runtime_start_failed",
+            DeploymentFailureCode::RuntimeStart,
             Box::new(TestFailure),
             "test failure".to_owned(),
             Some(transition_error()),
@@ -680,7 +848,7 @@ mod tests {
     fn failure_recording_divergence_outranks_the_original_failure() {
         let error = resolve_failure_recovery(
             &deployment_id(),
-            "runtime_start_failed",
+            DeploymentFailureCode::RuntimeStart,
             Box::new(TestFailure),
             "test failure".to_owned(),
             Some(transition_error()),
@@ -694,7 +862,7 @@ mod tests {
     fn without_recovery_divergence_the_original_failure_wins() {
         let error = resolve_failure_recovery(
             &deployment_id(),
-            "runtime_start_failed",
+            DeploymentFailureCode::RuntimeStart,
             Box::new(TestFailure),
             "test failure".to_owned(),
             None,
