@@ -2,7 +2,14 @@
 //! small, predictable set of modules.
 //!
 //! The public commands are re-exported here; every internal step stays private to this
-//! module tree. Reading a deploy top-down:
+//! module tree. Successful-path reading order:
+//!
+//! ```text
+//! deploy → execute → candidate → activation/promotion → cleanup
+//!            \→ failure
+//! ```
+//!
+//! Module responsibilities:
 //!
 //! - [`deploy`] resolves sources into releases (`deploy_branch`, `deploy_oci`);
 //! - [`execute`] runs the release workflow (`deploy_release`);

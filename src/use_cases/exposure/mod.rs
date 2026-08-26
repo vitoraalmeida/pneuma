@@ -1,3 +1,13 @@
+//! Public exposure changes for one application, driven by [`change_exposure`]:
+//!
+//! ```text
+//! begin_change (persist intent) → make_public | make_internal → confirm
+//!                                     \→ record_failure (diagnose after compensation)
+//! ```
+//!
+//! Caddy is the external effect; every failure path compensates it first, then
+//! records a compare-and-set diagnostic before returning.
+
 use std::path::Path;
 
 use rusqlite::{Connection, TransactionBehavior};

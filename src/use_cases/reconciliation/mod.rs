@@ -1,3 +1,19 @@
+//! Reconciles one application's persisted state with what the host actually runs.
+//!
+//! Pipeline, coordinated by [`reconcile_application`]:
+//!
+//! ```text
+//! load desired/persisted state → observe host → domain::reconciliation::decide
+//!   → execute effect → record/recover divergence
+//! ```
+//!
+//! - [`load`] reads desired and persisted facts into [`ReconciliationInput`];
+//! - [`observe`] inspects Podman, Quadlet, and Caddy for external facts and
+//!   derives the expectations the decision compares against;
+//! - [`execute`] applies exactly the decided variant;
+//! - [`recover`] finishes deployments interrupted mid-lifecycle before drift
+//!   observation makes sense.
+
 use rusqlite::Connection;
 use thiserror::Error;
 

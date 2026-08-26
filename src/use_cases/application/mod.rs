@@ -1,6 +1,12 @@
 //! Application use cases, grouped by capability: importing applications, querying the
 //! catalog, and controlling application runtimes.
 //!
+//! - [`import`] imports from a local repository by parsing its `pneuma.toml`;
+//! - [`remote_import`] clones a remote repository into the workspace first;
+//! - [`list`] summarizes the catalog (`list_applications`, deployed check);
+//! - [`lookup`] resolves one application by name;
+//! - [`runtime`] starts/stops runtimes and reports observed status.
+//!
 //! The public commands are re-exported here; every internal step stays private to this
 //! module tree.
 
