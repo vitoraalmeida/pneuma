@@ -28,7 +28,7 @@ overrides current architecture.
 |---|---|
 | Understand Pneuma | [`../README.md`](../README.md) → `architecture/system-context.md` → `architecture/architecture.md` → `architecture/data-model.md` → `architecture/security-model.md` → relevant ADR |
 | Deploy Pneuma | [`getting-started.md`](getting-started.md) → [`operations/`](operations/) for disposable VM validation |
-| Contribute | system context → architecture → [`code-guide.md`](code-guide.md) → [`rust-guidelines.md`](rust-guidelines.md) → active iteration |
+| Contribute | system context → architecture → [`core-concepts.md`](core-concepts.md) → [`code-map.md`](code-map.md) → [`code-guide.md`](code-guide.md) → [`rust-guidelines.md`](rust-guidelines.md) → active iteration |
 | Understand future work | [`roadmap.md`](roadmap.md) → [`iterations/next-iteration.md`](iterations/next-iteration.md) |
 
 ## Operating Environments
@@ -57,6 +57,8 @@ product direction (`roadmap.md`).
 | [`getting-started.md`](getting-started.md) | Living | Debian 13 VPS setup, application delivery, and reference |
 | [`operations/dev-vm-tutorial.md`](operations/dev-vm-tutorial.md) | Living | Disposable Debian 13 VM provisioning and E2E procedure |
 | [`architecture/system-context.md`](architecture/system-context.md) | Living | Problem, intended environment, goals, constraints, and vocabulary |
+| [`core-concepts.md`](core-concepts.md) | Living | Domain concepts: applications, releases, deployments, runtimes, exposure, and reconciliation vocabulary |
+| [`code-map.md`](code-map.md) | Living | Business-flow reading order: entry points, happy paths, branches, and failure paths per command |
 | [`code-guide.md`](code-guide.md) | Living | Code navigation guide: each user-facing flow traced through CLI, use cases, domain, stores, adapters, and tests |
 | [`architecture/architecture.md`](architecture/architecture.md) | Living | Implemented architecture, authority boundaries, rules, and flows |
 | [`architecture/data-model.md`](architecture/data-model.md) | Living | Implemented SQLite model and persistence invariants |
