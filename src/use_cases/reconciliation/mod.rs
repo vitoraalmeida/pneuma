@@ -10,7 +10,8 @@
 //! - [`load`] reads desired and persisted facts into [`ReconciliationInput`];
 //! - [`observe`] inspects Podman, Quadlet, and Caddy for external facts and
 //!   derives the expectations the decision compares against;
-//! - [`execute`] applies exactly the decided variant;
+//! - [`execute`] maps each decided variant to its effect; runtime effects live
+//!   in `runtime_effects`, exposure effects in `exposure_effects`;
 //! - [`recover`] finishes deployments interrupted mid-lifecycle before drift
 //!   observation makes sense.
 
@@ -31,9 +32,11 @@ use crate::domain::reconciliation::{ActiveRuntime, ReconciliationInput, decide};
 use crate::domain::runtime::{InvalidHostPort, RuntimeInstance};
 
 mod execute;
+mod exposure_effects;
 mod load;
 mod observe;
 mod recover;
+mod runtime_effects;
 
 pub use load::load_reconciliation_input;
 pub(crate) use observe::observe_reconciliation_input;

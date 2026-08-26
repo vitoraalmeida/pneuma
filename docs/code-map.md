@@ -260,9 +260,10 @@ Pipeline (`src/use_cases/reconciliation/mod.rs::reconcile_application`):
    pure decision `src/domain/reconciliation/decision.rs::decide` →
    `execute.rs::execute_reconciliation_decision`
 
-Execution variants: runtime identity repair (`swap_recorded_container_id`),
-rematerialization (`rematerialize_runtime`), route removal/materialization
-with restore-on-failure compensation.
+Execution variants: runtime effects in `runtime_effects.rs` (identity repair
+`swap_recorded_container_id`, rematerialization `rematerialize_runtime`) and
+exposure effects in `exposure_effects.rs` (route removal/materialization with
+restore-on-failure compensation).
 
 Outcome vocabulary: `ReconciliationResult` — `NoOp`, `Deferred`, `Repaired`,
 `ExposureRepaired`, `ManualIntervention`, `Failed`, `Diverged`.
