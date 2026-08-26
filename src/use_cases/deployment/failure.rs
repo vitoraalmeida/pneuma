@@ -136,15 +136,21 @@ impl FailedExecution {
     // Creates a failure whose stage still requires persistence before candidate cleanup.
     fn needing_persistence(
         code: DeploymentFailureCode,
-        source: Box<dyn Error>,
+        source: impl Into<Box<dyn Error>>,
         resources: CandidateResources,
     ) -> Self {
         Self {
             code,
-            source,
+            source: source.into(),
             failure_persisted: false,
             resources,
         }
+    }
+
+    // A started candidate always owns its unit and reserved port; both join compensation.
+    fn with_started_unit(mut self, unit_name: &str) -> Self {
+        self.resources = self.resources.with_unit(unit_name).with_port();
+        self
     }
 
     // Creates a failure whose step already persisted the terminal stage before returning.
@@ -285,12 +291,11 @@ pub(crate) fn failure_needing_persistence(
 ) -> FailedExecution {
     FailedExecution::needing_persistence(
         code,
-        Box::new(source),
+        source,
         candidate_resources(container_id, runtime_id),
     )
 }
 
-// Collects whatever a candidate allocated so far from its optional tracking identifiers.
 fn candidate_resources(
     container_id: Option<&ContainerId>,
     runtime_id: Option<&RuntimeInstanceId>,
@@ -302,25 +307,6 @@ fn candidate_resources(
     }
 }
 
-// Collects all resources allocated before a failure so the common finalizer can clean them up.
-fn candidate_failure(
-    code: DeploymentFailureCode,
-    source: impl Error + 'static,
-    container_id: Option<&ContainerId>,
-    runtime_id: Option<&RuntimeInstanceId>,
-    unit_name: Option<&str>,
-    port_reserved: bool,
-) -> FailedExecution {
-    let mut failed = failure_needing_persistence(code, source, container_id, runtime_id);
-    if let Some(unit) = unit_name {
-        failed.resources = failed.resources.with_unit(unit);
-    }
-    if port_reserved {
-        failed.resources = failed.resources.with_port();
-    }
-    failed
-}
-
 // Tags a failure after full candidate startup so compensation retains every resource
 // a started candidate holds: container, runtime, unit, and reserved port.
 pub(crate) fn started_candidate_failure(
@@ -328,44 +314,44 @@ pub(crate) fn started_candidate_failure(
     source: impl Error + 'static,
     candidate: &StartedCandidate,
 ) -> FailedExecution {
-    candidate_failure(
+    FailedExecution::needing_persistence(
         code,
         source,
-        Some(&candidate.runtime.external_runtime_id),
-        Some(&candidate.runtime.id),
-        Some(&candidate.unit_name),
-        true,
+        CandidateResources::with_container_and_runtime(
+            &candidate.runtime.external_runtime_id,
+            &candidate.runtime.id,
+        ),
     )
+    .with_started_unit(&candidate.unit_name)
 }
 
 // Maps candidate startup failures to their durable failure codes, retaining whatever
 // resources each stage had already allocated for compensation.
 pub(crate) fn candidate_start_failure(error: CandidateStartError) -> FailedExecution {
     match error {
-        CandidateStartError::PortAllocation { source } => failure_needing_persistence(
+        CandidateStartError::PortAllocation { source } => FailedExecution::needing_persistence(
             DeploymentFailureCode::RuntimePortAllocation,
             source,
-            None,
-            None,
+            CandidateResources::empty(),
         ),
         CandidateStartError::UnitCreation { source, resources } => {
             FailedExecution::needing_persistence(
                 DeploymentFailureCode::RuntimeUnitCreation,
-                Box::new(source),
+                source,
                 *resources,
             )
         }
         CandidateStartError::UnitReload { source, resources } => {
             FailedExecution::needing_persistence(
                 DeploymentFailureCode::RuntimeUnitReload,
-                Box::new(source),
+                source,
                 *resources,
             )
         }
         CandidateStartError::UnitStart { source, resources } => {
             FailedExecution::needing_persistence(
                 DeploymentFailureCode::RuntimeStart,
-                Box::new(source),
+                source,
                 *resources,
             )
         }
@@ -393,14 +379,14 @@ pub(crate) fn candidate_start_failure(error: CandidateStartError) -> FailedExecu
         CandidateStartError::PortPersistence { source, resources } => {
             FailedExecution::needing_persistence(
                 DeploymentFailureCode::RuntimePortPersistence,
-                Box::new(source),
+                source,
                 *resources,
             )
         }
         CandidateStartError::DeploymentTransition { source, resources } => {
             FailedExecution::needing_persistence(
                 DeploymentFailureCode::DeploymentTransition,
-                Box::new(source),
+                source,
                 *resources,
             )
         }
@@ -424,7 +410,7 @@ pub(crate) fn public_activation_failure(
         PublicActivationError::DeploymentTransition { source, resources } => {
             FailedExecution::needing_persistence(
                 DeploymentFailureCode::DeploymentTransition,
-                Box::new(source),
+                source,
                 *resources,
             )
         }
@@ -464,10 +450,7 @@ pub(crate) fn public_activation_failure(
             )
         }
     };
-    FailedExecution {
-        resources: failed.resources.with_unit(unit_name).with_port(),
-        ..failed
-    }
+    failed.with_started_unit(unit_name)
 }
 
 // Distinguishes an unhealthy candidate, whose rejection promotion already persisted as
@@ -479,7 +462,7 @@ pub(crate) fn internal_promotion_failure(
     runtime_id: &RuntimeInstanceId,
     unit_name: &str,
 ) -> FailedExecution {
-    let mut failed = if matches!(
+    let failed = if matches!(
         &error,
         PromoteInternalCandidateError::CandidateUnhealthy { .. }
     ) {
@@ -490,15 +473,13 @@ pub(crate) fn internal_promotion_failure(
             runtime_id,
         )
     } else {
-        failure_needing_persistence(
+        FailedExecution::needing_persistence(
             DeploymentFailureCode::CandidatePromotion,
             error,
-            Some(container_id),
-            Some(runtime_id),
+            CandidateResources::with_container_and_runtime(container_id, runtime_id),
         )
     };
-    failed.resources = failed.resources.with_unit(unit_name).with_port();
-    failed
+    failed.with_started_unit(unit_name)
 }
 
 #[cfg(test)]
