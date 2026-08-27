@@ -14,7 +14,7 @@ use crate::domain::deployment::{
     PromotionTarget,
 };
 use crate::domain::exposure::Visibility;
-use crate::domain::identity::RuntimeInstanceId;
+use crate::domain::identity::{DeploymentId, RuntimeInstanceId};
 use crate::domain::runtime::{HealthCheckSpecification, RuntimeEndpointError};
 
 #[derive(Debug, Error)]
@@ -122,10 +122,7 @@ pub fn promote_internal_candidate(
     )?;
     if runtime_store::start_runtime(&transaction, &target.runtime_id)? == PersistenceOutcome::Stale
     {
-        return Err(PromoteInternalCandidateError::InvalidDeploymentState {
-            deployment_id: target.deployment_id.to_string(),
-            actual: "changed during promotion".to_owned(),
-        });
+        return Err(changed_during_promotion(&target.deployment_id));
     }
     if deployment_store::mark_succeeded(
         &transaction,
@@ -133,10 +130,7 @@ pub fn promote_internal_candidate(
         target.deployment_status,
     )? == PersistenceOutcome::Stale
     {
-        return Err(PromoteInternalCandidateError::InvalidDeploymentState {
-            deployment_id: target.deployment_id.to_string(),
-            actual: "changed during promotion".to_owned(),
-        });
+        return Err(changed_during_promotion(&target.deployment_id));
     }
     if application_store::activate_deployment(
         &transaction,
@@ -144,10 +138,7 @@ pub fn promote_internal_candidate(
         &target.deployment_id,
     )? == PersistenceOutcome::Stale
     {
-        return Err(PromoteInternalCandidateError::InvalidDeploymentState {
-            deployment_id: target.deployment_id.to_string(),
-            actual: "changed during promotion".to_owned(),
-        });
+        return Err(changed_during_promotion(&target.deployment_id));
     }
     let finished_at = deployment_store::load_finished_at(&transaction, &target.deployment_id)?;
     transaction.commit()?;
@@ -189,6 +180,14 @@ fn ensure_internal_promotable(
         });
     }
     Ok(())
+}
+
+// Names the concurrent-change rejection shared by every compare-and-set promotion write.
+fn changed_during_promotion(deployment_id: &DeploymentId) -> PromoteInternalCandidateError {
+    PromoteInternalCandidateError::InvalidDeploymentState {
+        deployment_id: deployment_id.to_string(),
+        actual: "changed during promotion".to_owned(),
+    }
 }
 
 // Asks the domain whether the loaded deployment may record its candidate activation.

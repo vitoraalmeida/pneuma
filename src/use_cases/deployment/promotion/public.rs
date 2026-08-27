@@ -171,10 +171,7 @@ pub(crate) fn promote_public_candidate(
     )?;
     if runtime_store::start_runtime(&transaction, &target.runtime_id)? == PersistenceOutcome::Stale
     {
-        return Err(PromotePublicCandidateError::InvalidRuntime {
-            runtime_id: runtime_id.to_string(),
-            reason: "state changed during promotion".to_owned(),
-        });
+        return Err(changed_during_promotion(runtime_id));
     }
     if exposure_store::complete_public_exposure_change(
         &transaction,
@@ -183,10 +180,7 @@ pub(crate) fn promote_public_candidate(
         configuration_version,
     )? == PersistenceOutcome::Stale
     {
-        return Err(PromotePublicCandidateError::InvalidRuntime {
-            runtime_id: runtime_id.to_string(),
-            reason: "state changed during promotion".to_owned(),
-        });
+        return Err(changed_during_promotion(runtime_id));
     }
     if deployment_store::mark_succeeded(
         &transaction,
@@ -194,10 +188,7 @@ pub(crate) fn promote_public_candidate(
         target.deployment_status,
     )? == PersistenceOutcome::Stale
     {
-        return Err(PromotePublicCandidateError::InvalidRuntime {
-            runtime_id: runtime_id.to_string(),
-            reason: "state changed during promotion".to_owned(),
-        });
+        return Err(changed_during_promotion(runtime_id));
     }
     if application_store::activate_deployment(
         &transaction,
@@ -205,10 +196,7 @@ pub(crate) fn promote_public_candidate(
         &target.deployment_id,
     )? == PersistenceOutcome::Stale
     {
-        return Err(PromotePublicCandidateError::InvalidRuntime {
-            runtime_id: runtime_id.to_string(),
-            reason: "state changed during promotion".to_owned(),
-        });
+        return Err(changed_during_promotion(runtime_id));
     }
     let finished_at = deployment_store::load_finished_at(&transaction, &target.deployment_id)?;
     transaction.commit()?;
@@ -218,6 +206,14 @@ pub(crate) fn promote_public_candidate(
         deployment_id: target.deployment_id,
         finished_at,
     })
+}
+
+// Names the concurrent-change rejection shared by every compare-and-set promotion write.
+fn changed_during_promotion(runtime_id: &RuntimeInstanceId) -> PromotePublicCandidateError {
+    PromotePublicCandidateError::InvalidRuntime {
+        runtime_id: runtime_id.to_string(),
+        reason: "state changed during promotion".to_owned(),
+    }
 }
 
 // Rejects runtimes whose declared or observed state forbids a public promotion write.
