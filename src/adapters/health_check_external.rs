@@ -6,12 +6,6 @@ use thiserror::Error;
 use crate::domain::exposure::DomainName;
 use crate::domain::runtime::{HealthCheckPath, HealthCheckStatus};
 
-#[derive(Debug, PartialEq, Eq)]
-// Captures the confirmed public HTTP status for exposure materialization evidence.
-pub(crate) struct ExternalHealthCheck {
-    pub(crate) response_status: u16,
-}
-
 #[derive(Debug, Error)]
 pub enum ExternalHealthCheckError {
     #[error("failed to execute external health check: {source}")]
@@ -32,7 +26,7 @@ pub(crate) fn check_external_health(
     domain: &DomainName,
     path: &HealthCheckPath,
     expected_status: HealthCheckStatus,
-) -> Result<ExternalHealthCheck, ExternalHealthCheckError> {
+) -> Result<(), ExternalHealthCheckError> {
     let domain = domain.as_str();
     let path = path.as_str();
     let url = format!("https://{domain}{path}");
@@ -85,7 +79,5 @@ pub(crate) fn check_external_health(
         });
     }
 
-    Ok(ExternalHealthCheck {
-        response_status: response_status.get(),
-    })
+    Ok(())
 }

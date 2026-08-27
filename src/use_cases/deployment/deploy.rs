@@ -241,8 +241,8 @@ fn deploy_artifact_for_delivery(
             actual: artifact.repository().to_owned(),
         });
     }
-    let image = pull_image(artifact).map_err(|source| DeployOciError::PullImage { source })?;
-    let release = create_release(connection, application_id, &image.artifact)
+    pull_image(artifact).map_err(|source| DeployOciError::PullImage { source })?;
+    let release = create_release(connection, application_id, artifact)
         .map_err(|source| DeployOciError::CreateRelease { source })?;
     let source_revision = source_commit.cloned().map(SourceRevision::from_commit);
     deploy_release_reporting(

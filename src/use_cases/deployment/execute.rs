@@ -294,12 +294,12 @@ fn finish_public_deployment(
         caddyfile_path: &public_configuration.caddyfile_path,
         unit_name: &candidate.unit_name,
     };
-    let activated = activate_public_candidate(input, progress)?;
+    let promoted = activate_public_candidate(input, progress)?;
 
     Ok(CompletedDeploymentExecution {
         runtime_id: candidate.runtime.id.clone(),
         container_name: candidate.container_name.clone(),
-        finished_at: activated.finished_at,
+        finished_at: promoted.finished_at,
     })
 }
 

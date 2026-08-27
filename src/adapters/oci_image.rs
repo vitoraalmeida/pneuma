@@ -6,12 +6,7 @@ use thiserror::Error;
 use crate::domain::git::CommitSha;
 use crate::domain::release::{OciArtifact, OciRepository, is_sha256_digest};
 
-#[derive(Debug, PartialEq, Eq)]
-// Represents an OCI artifact that Podman pulled and verified against its immutable digest.
-pub(crate) struct PulledImage {
-    pub(crate) artifact: OciArtifact,
-}
-
+// Pulls a digest-pinned artifact and confirms Podman resolved exactly that digest.
 #[derive(Debug, Error)]
 pub enum PullImageError {
     #[error("failed to execute Podman while {operation}: {source}")]
@@ -49,7 +44,7 @@ pub enum PullImageError {
 }
 
 // Pulls a digest-pinned artifact and confirms Podman resolved exactly that digest.
-pub(crate) fn pull_image(artifact: &OciArtifact) -> Result<PulledImage, PullImageError> {
+pub(crate) fn pull_image(artifact: &OciArtifact) -> Result<(), PullImageError> {
     let pull = Command::new("podman")
         .args(["pull", artifact.reference()])
         .output()
@@ -104,9 +99,7 @@ pub(crate) fn pull_image(artifact: &OciArtifact) -> Result<PulledImage, PullImag
         });
     }
 
-    Ok(PulledImage {
-        artifact: artifact.clone(),
-    })
+    Ok(())
 }
 
 #[derive(Debug, Error)]
@@ -308,9 +301,8 @@ exit \"${PNEUMA_FAKE_PODMAN_PULL_EXIT:-0}\"
     fn pull_image_pulls_the_pinned_reference_and_confirms_the_digest() {
         let scoped = ScopedPodman::new("pull-verified", &format!("sha256:{}", "a".repeat(64)));
 
-        let pulled = pull_image(&artifact('a')).unwrap();
+        pull_image(&artifact('a')).unwrap();
 
-        assert_eq!(pulled.artifact, artifact('a'));
         assert_eq!(
             scoped.invocations(),
             [

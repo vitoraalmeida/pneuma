@@ -42,19 +42,15 @@ pub(crate) struct PublicActivationInput<'a> {
     pub(crate) unit_name: &'a str,
 }
 
-// Returns activation data needed by the enclosing deployment finalization.
-pub(crate) struct PublicActivationOutput {
-    pub(crate) finished_at: String,
-}
-
 // Activates a public candidate in order: internal health, route materialization, external
-// health, then persisted promotion. Activation runs on a fully started candidate, so its
-// container, runtime, unit, and reserved port stay in one compensation set, and every
-// failure returns the canonical execution failure with its durable code directly.
+// health, then persisted promotion, returning the promoted candidate. Activation runs on a
+// fully started candidate, so its container, runtime, unit, and reserved port stay in one
+// compensation set, and every failure returns the canonical execution failure with its
+// durable code directly.
 pub(crate) fn activate_public_candidate(
     input: PublicActivationInput<'_>,
     progress: &mut ProgressReporter<'_>,
-) -> Result<PublicActivationOutput, FailedExecution> {
+) -> Result<PromotedCandidate, FailedExecution> {
     let PublicActivationInput {
         connection,
         runtime,
@@ -119,9 +115,7 @@ pub(crate) fn activate_public_candidate(
     );
     progress.state_changed(deployment_id, DeploymentStatus::Succeeded);
 
-    Ok(PublicActivationOutput {
-        finished_at: promoted.finished_at,
-    })
+    Ok(promoted)
 }
 
 // Verifies candidate health over its loopback endpoint before any public effect occurs.
