@@ -7,15 +7,13 @@ use crate::adapters::systemd_quadlet::{
     canonical_unit_contents, container_name, observe_unit_source, unit_name,
 };
 use crate::domain::application::Application;
-use crate::domain::deployment::{Deployment, DeploymentStatus};
+use crate::domain::deployment::{Deployment, DeploymentFailureCode, DeploymentStatus};
 use crate::domain::exposure::{Exposure, ExposureDiagnostic, ExposureMaterializationState};
 use crate::domain::identity::ApplicationId;
 use crate::domain::reconciliation::{
     ActiveRuntime, CaddyFragmentObservation, NamedContainerObservation, QuadletSourceObservation,
 };
-use crate::use_cases::deployment::{
-    DeploymentFailureCode, cleanup_failed_candidate, fail_deployment,
-};
+use crate::use_cases::deployment::{cleanup_failed_candidate, fail_deployment};
 
 use super::{ReconciliationReadError, ReconciliationResult};
 

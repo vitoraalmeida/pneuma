@@ -23,6 +23,7 @@ use crate::adapters::local_runtime::{PodmanError, observe_container};
 use crate::adapters::stores::application_store;
 use crate::adapters::stores::exposure_store::{self, ExposureStoreError};
 use crate::adapters::stores::runtime_store;
+use crate::domain::deployment::DeploymentFailureCode;
 use crate::domain::exposure::{
     DomainName, Exposure, ExposureConfigurationVersion, ExposureDiagnostic, ExposureIntent,
     ExposureMaterializationState, Visibility,
@@ -253,7 +254,7 @@ fn make_public(
             return fail_public(
                 connection,
                 application_id,
-                "runtime_observation_failed",
+                DeploymentFailureCode::RuntimeObservation.as_str(),
                 &message,
                 false,
                 ExposureChangeError::ObserveFailed { source },
@@ -292,7 +293,7 @@ fn make_public(
             return fail_public(
                 connection,
                 application_id,
-                "caddy_materialization_failed",
+                DeploymentFailureCode::CaddyMaterialization.as_str(),
                 &message,
                 diverged,
                 ExposureChangeError::MaterializeFailed { source },
@@ -316,7 +317,7 @@ fn make_public(
         return fail_public(
             connection,
             application_id,
-            "external_health_check_failed",
+            DeploymentFailureCode::ExternalHealthCheck.as_str(),
             &message,
             recovery_failed,
             ExposureChangeError::ExternalHealthFailed { source },

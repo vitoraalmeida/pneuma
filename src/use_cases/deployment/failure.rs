@@ -19,58 +19,9 @@ use super::promotion::PromoteInternalCandidateError;
 use super::transition::{TransitionDeploymentError, fail_deployment};
 use crate::adapters::application_lock::ApplicationLockError;
 use crate::adapters::stores::application_store::ApplicationStoreError;
+use crate::domain::deployment::DeploymentFailureCode;
 use crate::domain::identity::{DeploymentId, RuntimeInstanceId};
 use crate::domain::runtime::ContainerId;
-
-// The authoritative registry of deployment failure classifications. Each variant is one
-// semantic failure stage; `as_str` yields its stable persisted string, which historical
-// rows and integration tests depend on verbatim. Producers must never pass raw literals.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DeploymentFailureCode {
-    TestGate,
-    RuntimeReconciliation,
-    PublicConfigurationMissing,
-    RuntimePortAllocation,
-    RuntimeUnitCreation,
-    RuntimeUnitReload,
-    RuntimeStart,
-    RuntimeResolution,
-    RuntimeObservation,
-    RuntimeRegistration,
-    RuntimePortPersistence,
-    DeploymentTransition,
-    HealthCheck,
-    ExposurePreparation,
-    CaddyMaterialization,
-    ExternalHealthCheck,
-    CandidatePromotion,
-    OperationInterrupted,
-}
-
-impl DeploymentFailureCode {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::TestGate => "test_gate_failed",
-            Self::RuntimeReconciliation => "runtime_reconciliation_failed",
-            Self::PublicConfigurationMissing => "public_configuration_missing",
-            Self::RuntimePortAllocation => "runtime_port_allocation_failed",
-            Self::RuntimeUnitCreation => "runtime_unit_creation_failed",
-            Self::RuntimeUnitReload => "runtime_unit_reload_failed",
-            Self::RuntimeStart => "runtime_start_failed",
-            Self::RuntimeResolution => "runtime_resolution_failed",
-            Self::RuntimeObservation => "runtime_observation_failed",
-            Self::RuntimeRegistration => "runtime_registration_failed",
-            Self::RuntimePortPersistence => "runtime_port_persistence_failed",
-            Self::DeploymentTransition => "deployment_transition_failed",
-            Self::HealthCheck => "health_check_failed",
-            Self::ExposurePreparation => "exposure_preparation_failed",
-            Self::CaddyMaterialization => "caddy_materialization_failed",
-            Self::ExternalHealthCheck => "external_health_check_failed",
-            Self::CandidatePromotion => "candidate_promotion_failed",
-            Self::OperationInterrupted => "operation_interrupted",
-        }
-    }
-}
 
 #[derive(Debug, Error)]
 pub enum DeployReleaseError {
@@ -533,79 +484,6 @@ mod tests {
     fn transition_error() -> TransitionDeploymentError {
         TransitionDeploymentError::DeploymentNotFound {
             deployment_id: "deployment-1".to_owned(),
-        }
-    }
-
-    #[test]
-    fn failure_codes_map_to_their_stable_persisted_strings() {
-        let cases = [
-            (DeploymentFailureCode::TestGate, "test_gate_failed"),
-            (
-                DeploymentFailureCode::RuntimeReconciliation,
-                "runtime_reconciliation_failed",
-            ),
-            (
-                DeploymentFailureCode::PublicConfigurationMissing,
-                "public_configuration_missing",
-            ),
-            (
-                DeploymentFailureCode::RuntimePortAllocation,
-                "runtime_port_allocation_failed",
-            ),
-            (
-                DeploymentFailureCode::RuntimeUnitCreation,
-                "runtime_unit_creation_failed",
-            ),
-            (
-                DeploymentFailureCode::RuntimeUnitReload,
-                "runtime_unit_reload_failed",
-            ),
-            (DeploymentFailureCode::RuntimeStart, "runtime_start_failed"),
-            (
-                DeploymentFailureCode::RuntimeResolution,
-                "runtime_resolution_failed",
-            ),
-            (
-                DeploymentFailureCode::RuntimeObservation,
-                "runtime_observation_failed",
-            ),
-            (
-                DeploymentFailureCode::RuntimeRegistration,
-                "runtime_registration_failed",
-            ),
-            (
-                DeploymentFailureCode::RuntimePortPersistence,
-                "runtime_port_persistence_failed",
-            ),
-            (
-                DeploymentFailureCode::DeploymentTransition,
-                "deployment_transition_failed",
-            ),
-            (DeploymentFailureCode::HealthCheck, "health_check_failed"),
-            (
-                DeploymentFailureCode::ExposurePreparation,
-                "exposure_preparation_failed",
-            ),
-            (
-                DeploymentFailureCode::CaddyMaterialization,
-                "caddy_materialization_failed",
-            ),
-            (
-                DeploymentFailureCode::ExternalHealthCheck,
-                "external_health_check_failed",
-            ),
-            (
-                DeploymentFailureCode::CandidatePromotion,
-                "candidate_promotion_failed",
-            ),
-            (
-                DeploymentFailureCode::OperationInterrupted,
-                "operation_interrupted",
-            ),
-        ];
-
-        for (code, persisted) in cases {
-            assert_eq!(code.as_str(), persisted);
         }
     }
 

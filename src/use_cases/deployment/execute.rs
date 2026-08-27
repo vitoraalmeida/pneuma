@@ -7,9 +7,9 @@ use super::candidate::{CandidateStartInput, StartedCandidate, start_candidate};
 use super::cleanup::{load_previous_runtime, retire_previous_runtime};
 use super::create::create_deployment_with_source_revision_and_ownership;
 use super::failure::{
-    DeployReleaseError, DeploymentFailureCode, FailedExecution, candidate_start_failure,
-    failure_needing_persistence, finish_failed_deployment, internal_promotion_failure,
-    public_activation_failure, started_candidate_failure,
+    DeployReleaseError, FailedExecution, candidate_start_failure, failure_needing_persistence,
+    finish_failed_deployment, internal_promotion_failure, public_activation_failure,
+    started_candidate_failure,
 };
 use super::progress::{DeploymentStep, ProgressReporter};
 use super::promotion::promote_internal_candidate;
@@ -18,7 +18,9 @@ use crate::adapters::stores::application_store;
 use crate::adapters::stores::operation_store;
 use crate::adapters::test_gate::wait_for_test_gate;
 use crate::domain::application::ApplicationDeploymentSpecification;
-use crate::domain::deployment::{DeploymentStatus, DeploymentType, SourceRevision};
+use crate::domain::deployment::{
+    DeploymentFailureCode, DeploymentStatus, DeploymentType, SourceRevision,
+};
 use crate::domain::exposure::Visibility;
 use crate::domain::identity::{ApplicationId, DeploymentId, RuntimeInstanceId};
 use crate::domain::release::{OciArtifact, Release};

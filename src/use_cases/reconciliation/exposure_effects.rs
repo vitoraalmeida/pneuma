@@ -7,6 +7,7 @@ use crate::adapters::caddy_exposure::{
 };
 use crate::adapters::health_check_external::check_external_health;
 use crate::adapters::stores::{PersistenceOutcome, exposure_store};
+use crate::domain::deployment::DeploymentFailureCode;
 use crate::domain::exposure::{
     DomainName, ExposureConfigurationVersion, ExposureDiagnostic, ExposureIntent,
     ExposureMaterializationState, ExposureOutcome, Visibility,
@@ -160,7 +161,7 @@ fn record_materialization_failure(
         &input.desired.application.id,
         Visibility::Public,
         ExposureMaterializationState::Applying,
-        "caddy_materialization_failed",
+        DeploymentFailureCode::CaddyMaterialization.as_str(),
         &source.to_string(),
         recovery_outcome(source.recovery_failed()),
     )
@@ -194,7 +195,7 @@ fn verify_public_route_or_rollback(
             &input.desired.application.id,
             Visibility::Public,
             ExposureMaterializationState::Applying,
-            "external_health_check_failed",
+            DeploymentFailureCode::ExternalHealthCheck.as_str(),
             &source.to_string(),
             outcome,
         )

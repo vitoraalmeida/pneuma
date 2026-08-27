@@ -3,7 +3,6 @@ use std::error::Error;
 use rusqlite::{Connection, TransactionBehavior};
 use thiserror::Error;
 
-use super::super::failure::DeploymentFailureCode;
 use super::super::transition::{TransitionDeploymentError, fail_deployment};
 use crate::adapters::health_check_internal::{HealthCheckResult, check_internal_health};
 use crate::adapters::stores::PersistenceOutcome;
@@ -11,7 +10,8 @@ use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
 use crate::adapters::stores::runtime_store;
 use crate::domain::deployment::{
-    DeploymentEvent, PromotedCandidate, PromotionCandidateRejection, PromotionTarget,
+    DeploymentEvent, DeploymentFailureCode, PromotedCandidate, PromotionCandidateRejection,
+    PromotionTarget,
 };
 use crate::domain::exposure::Visibility;
 use crate::domain::identity::RuntimeInstanceId;

@@ -113,6 +113,56 @@ impl DeploymentFailure {
 #[error("deployment failure requires trimmed code, message, timestamp, and a non-terminal stage")]
 pub struct InvalidDeploymentFailure;
 
+// The authoritative registry of deployment failure classifications. Each variant is one
+// semantic failure stage; `as_str` yields its stable persisted string, which historical
+// rows and integration tests depend on verbatim. Producers must never pass raw literals.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeploymentFailureCode {
+    TestGate,
+    RuntimeReconciliation,
+    PublicConfigurationMissing,
+    RuntimePortAllocation,
+    RuntimeUnitCreation,
+    RuntimeUnitReload,
+    RuntimeStart,
+    RuntimeResolution,
+    RuntimeObservation,
+    RuntimeRegistration,
+    RuntimePortPersistence,
+    DeploymentTransition,
+    HealthCheck,
+    ExposurePreparation,
+    CaddyMaterialization,
+    ExternalHealthCheck,
+    CandidatePromotion,
+    OperationInterrupted,
+}
+
+impl DeploymentFailureCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::TestGate => "test_gate_failed",
+            Self::RuntimeReconciliation => "runtime_reconciliation_failed",
+            Self::PublicConfigurationMissing => "public_configuration_missing",
+            Self::RuntimePortAllocation => "runtime_port_allocation_failed",
+            Self::RuntimeUnitCreation => "runtime_unit_creation_failed",
+            Self::RuntimeUnitReload => "runtime_unit_reload_failed",
+            Self::RuntimeStart => "runtime_start_failed",
+            Self::RuntimeResolution => "runtime_resolution_failed",
+            Self::RuntimeObservation => "runtime_observation_failed",
+            Self::RuntimeRegistration => "runtime_registration_failed",
+            Self::RuntimePortPersistence => "runtime_port_persistence_failed",
+            Self::DeploymentTransition => "deployment_transition_failed",
+            Self::HealthCheck => "health_check_failed",
+            Self::ExposurePreparation => "exposure_preparation_failed",
+            Self::CaddyMaterialization => "caddy_materialization_failed",
+            Self::ExternalHealthCheck => "external_health_check_failed",
+            Self::CandidatePromotion => "candidate_promotion_failed",
+            Self::OperationInterrupted => "operation_interrupted",
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 // Read model (projection): couples a hydrated deployment with its immutable artifact
 // and active marker for history views only. Transitions and promotions must load the
@@ -342,6 +392,85 @@ mod tests {
         DeploymentEvent::Activated,
         DeploymentEvent::Fail,
     ];
+
+    #[test]
+    fn failure_codes_map_to_their_stable_persisted_strings() {
+        let cases = [
+            (super::DeploymentFailureCode::TestGate, "test_gate_failed"),
+            (
+                super::DeploymentFailureCode::RuntimeReconciliation,
+                "runtime_reconciliation_failed",
+            ),
+            (
+                super::DeploymentFailureCode::PublicConfigurationMissing,
+                "public_configuration_missing",
+            ),
+            (
+                super::DeploymentFailureCode::RuntimePortAllocation,
+                "runtime_port_allocation_failed",
+            ),
+            (
+                super::DeploymentFailureCode::RuntimeUnitCreation,
+                "runtime_unit_creation_failed",
+            ),
+            (
+                super::DeploymentFailureCode::RuntimeUnitReload,
+                "runtime_unit_reload_failed",
+            ),
+            (
+                super::DeploymentFailureCode::RuntimeStart,
+                "runtime_start_failed",
+            ),
+            (
+                super::DeploymentFailureCode::RuntimeResolution,
+                "runtime_resolution_failed",
+            ),
+            (
+                super::DeploymentFailureCode::RuntimeObservation,
+                "runtime_observation_failed",
+            ),
+            (
+                super::DeploymentFailureCode::RuntimeRegistration,
+                "runtime_registration_failed",
+            ),
+            (
+                super::DeploymentFailureCode::RuntimePortPersistence,
+                "runtime_port_persistence_failed",
+            ),
+            (
+                super::DeploymentFailureCode::DeploymentTransition,
+                "deployment_transition_failed",
+            ),
+            (
+                super::DeploymentFailureCode::HealthCheck,
+                "health_check_failed",
+            ),
+            (
+                super::DeploymentFailureCode::ExposurePreparation,
+                "exposure_preparation_failed",
+            ),
+            (
+                super::DeploymentFailureCode::CaddyMaterialization,
+                "caddy_materialization_failed",
+            ),
+            (
+                super::DeploymentFailureCode::ExternalHealthCheck,
+                "external_health_check_failed",
+            ),
+            (
+                super::DeploymentFailureCode::CandidatePromotion,
+                "candidate_promotion_failed",
+            ),
+            (
+                super::DeploymentFailureCode::OperationInterrupted,
+                "operation_interrupted",
+            ),
+        ];
+
+        for (code, persisted) in cases {
+            assert_eq!(code.as_str(), persisted);
+        }
+    }
 
     #[test]
     fn applies_every_valid_transition() {
