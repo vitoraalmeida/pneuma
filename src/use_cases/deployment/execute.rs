@@ -7,9 +7,8 @@ use super::candidate::{CandidateStartInput, StartedCandidate, start_candidate};
 use super::cleanup::{load_previous_runtime, retire_previous_runtime};
 use super::create::create_deployment_with_source_revision_and_ownership;
 use super::failure::{
-    DeployReleaseError, FailedExecution, candidate_start_failure, failure_needing_persistence,
-    finish_failed_deployment, internal_promotion_failure, public_activation_failure,
-    started_candidate_failure,
+    DeployReleaseError, FailedExecution, failure_needing_persistence, finish_failed_deployment,
+    internal_promotion_failure, public_activation_failure,
 };
 use super::progress::{DeploymentStep, ProgressReporter};
 use super::promotion::promote_internal_candidate;
@@ -203,7 +202,7 @@ fn execute_deployment(
         runtime: &specification.runtime,
     };
 
-    let candidate = start_candidate(input).map_err(candidate_start_failure)?;
+    let candidate = start_candidate(input)?;
 
     progress.completed(
         DeploymentStep::CreateContainer,
@@ -228,13 +227,11 @@ fn execute_deployment(
         DeploymentStep::RegisterCandidate,
         format!("runtime {}", candidate.runtime.id),
     );
-    wait_for_test_gate("deployment.starting-registered").map_err(|source| {
-        started_candidate_failure(DeploymentFailureCode::TestGate, source, &candidate)
-    })?;
+    wait_for_test_gate("deployment.starting-registered")
+        .map_err(|source| candidate.failed_execution(DeploymentFailureCode::TestGate, source))?;
     progress.state_changed(deployment_id.as_str(), DeploymentStatus::Verifying);
-    wait_for_test_gate("deployment.verifying").map_err(|source| {
-        started_candidate_failure(DeploymentFailureCode::TestGate, source, &candidate)
-    })?;
+    wait_for_test_gate("deployment.verifying")
+        .map_err(|source| candidate.failed_execution(DeploymentFailureCode::TestGate, source))?;
 
     let previous_runtime = load_previous_runtime(
         connection,
@@ -242,11 +239,7 @@ fn execute_deployment(
         &candidate.runtime.id,
     )
     .map_err(|source| {
-        started_candidate_failure(
-            DeploymentFailureCode::RuntimeReconciliation,
-            source,
-            &candidate,
-        )
+        candidate.failed_execution(DeploymentFailureCode::RuntimeReconciliation, source)
     })?;
 
     let execution = match specification.visibility {

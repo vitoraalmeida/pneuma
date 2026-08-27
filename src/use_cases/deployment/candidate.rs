@@ -5,16 +5,15 @@ use rusqlite::{Connection, TransactionBehavior};
 use thiserror::Error;
 
 use super::cleanup::CandidateResources;
-use super::transition::{TransitionDeploymentError, advance_deployment};
+use super::failure::FailedExecution;
+use super::transition::advance_deployment;
 use crate::adapters::local_runtime::{observe_container, resolve_container_id};
 use crate::adapters::port_allocator::{consume_port_reservation, reserve_port};
 use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
 use crate::adapters::stores::runtime_store;
-use crate::adapters::systemd_quadlet::{
-    QuadletError, container_name, daemon_reload, start, write_unit,
-};
+use crate::adapters::systemd_quadlet::{container_name, daemon_reload, start, write_unit};
 use crate::domain::application::ApplicationName;
-use crate::domain::deployment::{DeploymentEvent, DeploymentStatus};
+use crate::domain::deployment::{DeploymentEvent, DeploymentFailureCode, DeploymentStatus};
 use crate::domain::identity::{ApplicationId, DeploymentId, RuntimeInstanceId};
 use crate::domain::release::OciArtifact;
 use crate::domain::runtime::{
@@ -23,11 +22,32 @@ use crate::domain::runtime::{
 };
 
 // Returns the observed candidate identity needed by verification and cleanup orchestration.
+#[derive(Debug)]
 pub(crate) struct StartedCandidate {
     pub(crate) runtime: RuntimeInstance,
     pub(crate) container_name: String,
     pub(crate) unit_name: String,
     pub(crate) port: HostPort,
+}
+
+impl StartedCandidate {
+    // Tags a failure after full candidate startup so compensation retains every
+    // resource a started candidate holds: container, runtime, unit, and reserved port.
+    pub(crate) fn failed_execution(
+        &self,
+        code: DeploymentFailureCode,
+        source: impl Error + 'static,
+    ) -> FailedExecution {
+        FailedExecution::needing_persistence(
+            code,
+            source,
+            CandidateResources::with_container_and_runtime(
+                &self.runtime.external_runtime_id,
+                &self.runtime.id,
+            ),
+        )
+        .with_started_unit(&self.unit_name)
+    }
 }
 
 // Groups the persisted deployment context and immutable artifact inputs for candidate startup.
@@ -38,44 +58,6 @@ pub(crate) struct CandidateStartInput<'a> {
     pub(crate) application_name: &'a ApplicationName,
     pub(crate) artifact: &'a OciArtifact,
     pub(crate) runtime: &'a RuntimeSpecification,
-}
-
-pub(crate) enum CandidateStartError {
-    PortAllocation {
-        source: crate::adapters::port_allocator::PortAllocationError,
-    },
-    UnitCreation {
-        source: QuadletError,
-        resources: Box<CandidateResources>,
-    },
-    UnitReload {
-        source: QuadletError,
-        resources: Box<CandidateResources>,
-    },
-    UnitStart {
-        source: QuadletError,
-        resources: Box<CandidateResources>,
-    },
-    ContainerResolution {
-        source: Box<dyn Error>,
-        resources: Box<CandidateResources>,
-    },
-    ContainerObservation {
-        source: Box<dyn Error>,
-        resources: Box<CandidateResources>,
-    },
-    RuntimeRegistration {
-        source: Box<dyn Error>,
-        resources: Box<CandidateResources>,
-    },
-    PortPersistence {
-        source: crate::adapters::port_allocator::PortAllocationError,
-        resources: Box<CandidateResources>,
-    },
-    DeploymentTransition {
-        source: TransitionDeploymentError,
-        resources: Box<CandidateResources>,
-    },
 }
 
 #[derive(Debug, Error)]
@@ -91,7 +73,7 @@ enum RuntimeObservationFailure {
 // Materializes a candidate in ordered external steps, retaining resources for compensation on failure.
 pub(crate) fn start_candidate(
     input: CandidateStartInput<'_>,
-) -> Result<StartedCandidate, CandidateStartError> {
+) -> Result<StartedCandidate, FailedExecution> {
     let CandidateStartInput {
         connection,
         deployment_id,
@@ -102,14 +84,20 @@ pub(crate) fn start_candidate(
     } = input;
 
     advance_deployment(connection, deployment_id, DeploymentEvent::Start).map_err(|source| {
-        CandidateStartError::DeploymentTransition {
+        FailedExecution::needing_persistence(
+            DeploymentFailureCode::DeploymentTransition,
             source,
-            resources: Box::new(CandidateResources::empty()),
-        }
+            CandidateResources::empty(),
+        )
     })?;
 
-    let host_port = reserve_port(connection, application_id, deployment_id)
-        .map_err(|source| CandidateStartError::PortAllocation { source })?;
+    let host_port = reserve_port(connection, application_id, deployment_id).map_err(|source| {
+        FailedExecution::needing_persistence(
+            DeploymentFailureCode::RuntimePortAllocation,
+            source,
+            CandidateResources::empty(),
+        )
+    })?;
     let mut resources = CandidateResources::empty().with_port();
 
     let unit = write_unit(
@@ -119,58 +107,73 @@ pub(crate) fn start_candidate(
         runtime.container_port(),
         host_port,
     )
-    .map_err(|source| CandidateStartError::UnitCreation {
-        source,
-        resources: Box::new(resources.clone()),
+    .map_err(|source| {
+        FailedExecution::needing_persistence(
+            DeploymentFailureCode::RuntimeUnitCreation,
+            source,
+            resources.clone(),
+        )
     })?;
     resources = resources.with_unit(&unit);
 
-    daemon_reload().map_err(|source| CandidateStartError::UnitReload {
-        source,
-        resources: Box::new(resources.clone()),
+    daemon_reload().map_err(|source| {
+        FailedExecution::needing_persistence(
+            DeploymentFailureCode::RuntimeUnitReload,
+            source,
+            resources.clone(),
+        )
     })?;
 
-    start(&unit).map_err(|source| CandidateStartError::UnitStart {
-        source,
-        resources: Box::new(resources.clone()),
+    start(&unit).map_err(|source| {
+        FailedExecution::needing_persistence(
+            DeploymentFailureCode::RuntimeStart,
+            source,
+            resources.clone(),
+        )
     })?;
 
     let name = container_name(application_name, deployment_id);
-    let container_id =
-        resolve_container_id(&name).map_err(|source| CandidateStartError::ContainerResolution {
-            source: Box::new(source),
-            resources: Box::new(resources.clone()),
-        })?;
+    let container_id = resolve_container_id(&name).map_err(|source| {
+        FailedExecution::needing_persistence(
+            DeploymentFailureCode::RuntimeResolution,
+            Box::new(source),
+            resources.clone(),
+        )
+    })?;
     resources = resources.with_container_mut(&container_id);
 
     let observation =
         observe_container(&container_id, runtime.container_port()).map_err(|source| {
-            CandidateStartError::ContainerObservation {
-                source: Box::new(source),
-                resources: Box::new(resources.clone()),
-            }
+            FailedExecution::needing_persistence(
+                DeploymentFailureCode::RuntimeObservation,
+                Box::new(source),
+                resources.clone(),
+            )
         })?;
 
     if *observation.state() != ObservedRuntimeState::Running {
-        return Err(CandidateStartError::ContainerObservation {
-            source: Box::new(RuntimeObservationFailure::NotRunning {
+        return Err(FailedExecution::needing_persistence(
+            DeploymentFailureCode::RuntimeObservation,
+            RuntimeObservationFailure::NotRunning {
                 actual: observation.state().clone(),
-            }),
-            resources: Box::new(resources.clone()),
-        });
+            },
+            resources.clone(),
+        ));
     }
 
     let endpoint = observation.observed_endpoint().ok_or_else(|| {
-        CandidateStartError::ContainerObservation {
-            source: Box::new(RuntimeObservationFailure::MissingEndpoint),
-            resources: Box::new(resources.clone()),
-        }
+        FailedExecution::needing_persistence(
+            DeploymentFailureCode::RuntimeObservation,
+            RuntimeObservationFailure::MissingEndpoint,
+            resources.clone(),
+        )
     })?;
     let endpoint = ExpectedRuntimeEndpoint::new(endpoint).map_err(|_| {
-        CandidateStartError::ContainerObservation {
-            source: Box::new(RuntimeObservationFailure::InvalidEndpoint),
-            resources: Box::new(resources.clone()),
-        }
+        FailedExecution::needing_persistence(
+            DeploymentFailureCode::RuntimeObservation,
+            RuntimeObservationFailure::InvalidEndpoint,
+            resources.clone(),
+        )
     })?;
 
     let runtime = register_candidate_runtime(
@@ -180,23 +183,30 @@ pub(crate) fn start_candidate(
         endpoint,
         runtime.container_port(),
     )
-    .map_err(|source| CandidateStartError::RuntimeRegistration {
-        source: Box::new(source),
-        resources: Box::new(resources.clone()),
+    .map_err(|source| {
+        FailedExecution::needing_persistence(
+            DeploymentFailureCode::RuntimeRegistration,
+            Box::new(source),
+            resources.clone(),
+        )
     })?;
     resources = resources.with_runtime_mut(&runtime.id);
 
     consume_port_reservation(connection, deployment_id).map_err(|source| {
-        CandidateStartError::PortPersistence {
+        FailedExecution::needing_persistence(
+            DeploymentFailureCode::RuntimePortPersistence,
             source,
-            resources: Box::new(resources.clone()),
-        }
+            resources.clone(),
+        )
     })?;
 
     advance_deployment(connection, deployment_id, DeploymentEvent::RuntimeRunning).map_err(
-        |source| CandidateStartError::DeploymentTransition {
-            source,
-            resources: Box::new(resources.clone()),
+        |source| {
+            FailedExecution::needing_persistence(
+                DeploymentFailureCode::DeploymentTransition,
+                source,
+                resources.clone(),
+            )
         },
     )?;
 
@@ -345,4 +355,344 @@ fn validate_external_runtime_id(
         return Err(RegisterCandidateRuntimeError::InvalidExternalRuntimeId);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    use rusqlite::Connection;
+
+    use super::*;
+    use crate::adapters::database;
+    use crate::domain::application::ApplicationName;
+    use crate::domain::identity::{ApplicationId, DeploymentId};
+    use crate::domain::release::OciArtifact;
+    use crate::domain::runtime::{
+        ContainerPort, HealthCheckPath, HealthCheckSpecification, HealthCheckStatus,
+        RuntimeSpecification,
+    };
+
+    // Fake `systemctl`: every invocation is logged; daemon-reload and start fail
+    // only when their marker file exists.
+    const FAKE_SYSTEMCTL: &str = "#!/bin/sh
+printf '%s\\n' \"$*\" >> \"$PNEUMA_FAKE_SYSTEMCTL_LOG\"
+if [ \"$1\" = \"--user\" ]; then shift; fi
+case \"$1\" in
+    daemon-reload) if [ -f \"$PNEUMA_FAKE_SYSTEMCTL_RELOAD_FAILURE\" ]; then exit 1; fi ;;
+    start) if [ -f \"$PNEUMA_FAKE_SYSTEMCTL_START_FAILURE\" ]; then exit 1; fi ;;
+esac
+exit 0
+";
+
+    // Fake `podman`: identity/state resolution and endpoint observation answer through
+    // PNEUMA_FAKE_PODMAN_* variables so every candidate-start stage is controllable.
+    const FAKE_PODMAN: &str = "#!/bin/sh
+printf '%s\\n' \"$*\" >> \"$PNEUMA_FAKE_PODMAN_LOG\"
+case \"$1\" in
+    inspect)
+        case \"$3\" in
+            \"{{.Id}}\") printf '%s\\n' \"${PNEUMA_FAKE_PODMAN_ID:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}\" ;;
+            \"{{.State.Status}}\") printf '%s\\n' \"${PNEUMA_FAKE_PODMAN_STATUS:-running}\" ;;
+        esac
+        exit \"${PNEUMA_FAKE_PODMAN_INSPECT_EXIT:-0}\" ;;
+    container)
+        exit \"${PNEUMA_FAKE_PODMAN_EXISTS:-0}\" ;;
+    port)
+        printf '%s\\n' \"${PNEUMA_FAKE_PODMAN_PORT:-127.0.0.1:30000}\" ;;
+esac
+exit 0
+";
+
+    const SYSTEMCTL_BEHAVIOR_VARIABLES: [&str; 2] = [
+        "PNEUMA_FAKE_SYSTEMCTL_RELOAD_FAILURE",
+        "PNEUMA_FAKE_SYSTEMCTL_START_FAILURE",
+    ];
+
+    const PODMAN_BEHAVIOR_VARIABLES: [&str; 2] = [
+        "PNEUMA_FAKE_PODMAN_EXISTS",
+        "PNEUMA_FAKE_PODMAN_INSPECT_EXIT",
+    ];
+
+    // Owns the in-memory database and the faked external boundary for one start_candidate
+    // scenario. The process-global environment is serialized behind the shared guards.
+    struct CandidateScenario {
+        connection: Connection,
+        external_path: crate::test_support::ScopedExternalPath,
+        quadlet_directory: PathBuf,
+        _quadlet_guard: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl CandidateScenario {
+        fn new() -> Self {
+            let external_path = crate::test_support::ScopedExternalPath::new(
+                "candidate-start",
+                &[("systemctl", FAKE_SYSTEMCTL), ("podman", FAKE_PODMAN)],
+            );
+            for variable in SYSTEMCTL_BEHAVIOR_VARIABLES {
+                external_path.remove_var(variable);
+            }
+            for variable in PODMAN_BEHAVIOR_VARIABLES {
+                external_path.remove_var(variable);
+            }
+            let log_directory = external_path.directory().join("logs");
+            fs::create_dir_all(&log_directory).unwrap();
+            external_path.set_var(
+                "PNEUMA_FAKE_SYSTEMCTL_LOG",
+                &log_directory.join("systemctl.log").to_string_lossy(),
+            );
+            external_path.set_var(
+                "PNEUMA_FAKE_PODMAN_LOG",
+                &log_directory.join("podman.log").to_string_lossy(),
+            );
+            external_path.set_var("PNEUMA_FAKE_PODMAN_ID", &"a".repeat(64));
+
+            let _quadlet_guard = crate::test_support::lock_quadlet_directory();
+            let quadlet_directory = std::env::temp_dir().join(format!(
+                "pneuma-candidate-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            // Safety: the guard held in the scenario serializes every PNEUMA_QUADLET_DIR write.
+            unsafe { std::env::set_var("PNEUMA_QUADLET_DIR", &quadlet_directory) };
+
+            let connection = database::open(Path::new(":memory:")).unwrap();
+            Self {
+                connection,
+                external_path,
+                quadlet_directory,
+                _quadlet_guard,
+            }
+        }
+    }
+
+    impl Drop for CandidateScenario {
+        fn drop(&mut self) {
+            // Safety: _quadlet_guard is still held while this body runs.
+            unsafe { std::env::remove_var("PNEUMA_QUADLET_DIR") };
+            let _ = fs::remove_dir_all(&self.quadlet_directory);
+        }
+    }
+
+    fn seed_deployment(connection: &Connection, status: &str) {
+        connection
+            .execute_batch(
+                "INSERT INTO applications (
+                     id, name, desired_runtime_state, spec_version, created_at, updated_at
+                 ) VALUES ('app', 'app', 'stopped', 1, 'now', 'now');
+                 INSERT INTO releases (
+                     id, application_id, image_repository, image_digest, image_reference, created_at
+                 ) VALUES (
+                     'release', 'app', 'registry.example/app',
+                     'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                     'registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                     'now'
+                 );",
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO deployments (
+                     id, application_id, release_id, type, status, requested_at
+                 ) VALUES ('deployment', 'app', 'release', 'deploy', ?1, 'now')",
+                [status],
+            )
+            .unwrap();
+    }
+
+    fn app_id() -> ApplicationId {
+        ApplicationId::from("app")
+    }
+
+    fn artifact() -> OciArtifact {
+        OciArtifact::parse(
+            "registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        .unwrap()
+    }
+
+    fn runtime() -> RuntimeSpecification {
+        RuntimeSpecification::new(
+            ContainerPort::new(8080).unwrap(),
+            HealthCheckSpecification::new(
+                HealthCheckPath::new("/health").unwrap(),
+                HealthCheckStatus::new(200).unwrap(),
+            ),
+        )
+    }
+
+    fn run_start_candidate(
+        scenario: &mut CandidateScenario,
+        application_id: &ApplicationId,
+    ) -> Result<StartedCandidate, FailedExecution> {
+        let deployment_id = DeploymentId::from("deployment");
+        let application_name = ApplicationName::new("app").unwrap();
+        let artifact = artifact();
+        let runtime = runtime();
+        start_candidate(CandidateStartInput {
+            connection: &mut scenario.connection,
+            deployment_id: &deployment_id,
+            application_id,
+            application_name: &application_name,
+            artifact: &artifact,
+            runtime: &runtime,
+        })
+    }
+
+    // Asserts the exact compensation payload a stage must carry: which resource kinds
+    // were already allocated when that stage failed.
+    fn assert_resources(
+        resources: &CandidateResources,
+        port_reserved: bool,
+        unit: bool,
+        container: bool,
+        runtime: bool,
+    ) {
+        assert_eq!(resources.port_reserved, port_reserved);
+        assert_eq!(resources.unit_name.is_some(), unit);
+        assert_eq!(resources.container_id.is_some(), container);
+        assert_eq!(resources.runtime_id.is_some(), runtime);
+    }
+
+    #[test]
+    fn start_failure_keeps_transition_code_and_empty_resources_when_the_first_advance_fails() {
+        let mut scenario = CandidateScenario::new();
+
+        let failed = run_start_candidate(&mut scenario, &app_id())
+            .expect_err("a missing deployment must fail the Start transition");
+
+        assert_eq!(failed.code(), DeploymentFailureCode::DeploymentTransition);
+        assert!(!failed.failure_persisted());
+        assert_resources(failed.resources(), false, false, false, false);
+    }
+
+    #[test]
+    fn start_failure_keeps_port_allocation_code_and_empty_resources() {
+        let mut scenario = CandidateScenario::new();
+        seed_deployment(&scenario.connection, "pending");
+
+        // A nonexistent application makes the reservation insert violate its foreign key.
+        let failed = run_start_candidate(&mut scenario, &ApplicationId::from("missing-app"))
+            .expect_err("port reservation must fail for an unknown application");
+
+        assert_eq!(failed.code(), DeploymentFailureCode::RuntimePortAllocation);
+        assert!(!failed.failure_persisted());
+        assert_resources(failed.resources(), false, false, false, false);
+    }
+
+    #[test]
+    fn start_failure_keeps_unit_creation_code_and_reserved_port() {
+        let mut scenario = CandidateScenario::new();
+        seed_deployment(&scenario.connection, "pending");
+        // A file blocking the quadlet directory makes unit materialization fail.
+        fs::write(&scenario.quadlet_directory, "blocker").unwrap();
+
+        let failed = run_start_candidate(&mut scenario, &app_id())
+            .expect_err("unit creation must fail against a blocked directory");
+
+        assert_eq!(failed.code(), DeploymentFailureCode::RuntimeUnitCreation);
+        assert!(!failed.failure_persisted());
+        assert_resources(failed.resources(), true, false, false, false);
+    }
+
+    #[test]
+    fn start_failure_keeps_unit_reload_code_and_created_unit() {
+        let mut scenario = CandidateScenario::new();
+        seed_deployment(&scenario.connection, "pending");
+        let marker = scenario.external_path.directory().join("reload-failure");
+        fs::write(&marker, "fail").unwrap();
+        scenario.external_path.set_var(
+            "PNEUMA_FAKE_SYSTEMCTL_RELOAD_FAILURE",
+            &marker.to_string_lossy(),
+        );
+
+        let failed = run_start_candidate(&mut scenario, &app_id())
+            .expect_err("daemon reload must fail against the fake systemctl");
+
+        assert_eq!(failed.code(), DeploymentFailureCode::RuntimeUnitReload);
+        assert!(!failed.failure_persisted());
+        assert_resources(failed.resources(), true, true, false, false);
+    }
+
+    #[test]
+    fn start_failure_keeps_unit_start_code_and_created_unit() {
+        let mut scenario = CandidateScenario::new();
+        seed_deployment(&scenario.connection, "pending");
+        let marker = scenario.external_path.directory().join("start-failure");
+        fs::write(&marker, "fail").unwrap();
+        scenario.external_path.set_var(
+            "PNEUMA_FAKE_SYSTEMCTL_START_FAILURE",
+            &marker.to_string_lossy(),
+        );
+
+        let failed = run_start_candidate(&mut scenario, &app_id())
+            .expect_err("unit start must fail against the fake systemctl");
+
+        assert_eq!(failed.code(), DeploymentFailureCode::RuntimeStart);
+        assert!(!failed.failure_persisted());
+        assert_resources(failed.resources(), true, true, false, false);
+    }
+
+    #[test]
+    fn start_failure_keeps_resolution_code_and_created_unit() {
+        let mut scenario = CandidateScenario::new();
+        seed_deployment(&scenario.connection, "pending");
+        scenario
+            .external_path
+            .set_var("PNEUMA_FAKE_PODMAN_INSPECT_EXIT", "1");
+
+        let failed = run_start_candidate(&mut scenario, &app_id())
+            .expect_err("container resolution must fail against the fake podman");
+
+        assert_eq!(failed.code(), DeploymentFailureCode::RuntimeResolution);
+        assert!(!failed.failure_persisted());
+        assert_resources(failed.resources(), true, true, false, false);
+    }
+
+    #[test]
+    fn start_failure_keeps_observation_code_and_resolved_container() {
+        let mut scenario = CandidateScenario::new();
+        seed_deployment(&scenario.connection, "pending");
+        scenario
+            .external_path
+            .set_var("PNEUMA_FAKE_PODMAN_EXISTS", "1");
+
+        let failed = run_start_candidate(&mut scenario, &app_id())
+            .expect_err("observation must report a missing container");
+
+        assert_eq!(failed.code(), DeploymentFailureCode::RuntimeObservation);
+        assert!(!failed.failure_persisted());
+        assert_resources(failed.resources(), true, true, true, false);
+    }
+
+    #[test]
+    fn start_failure_keeps_registration_code_and_resolved_container() {
+        let mut scenario = CandidateScenario::new();
+        seed_deployment(&scenario.connection, "pending");
+        // The fake container ID is already registered to a different endpoint.
+        scenario
+            .connection
+            .execute(
+                "INSERT INTO runtime_instances (
+                     id, application_id, deployment_id, external_runtime_id, state,
+                     host_address, host_port, container_port, last_observed_state,
+                     last_observed_at, created_at, updated_at, removed_at
+                 ) VALUES ('runtime', 'app', 'deployment', ?1, 'starting',
+                           '127.0.0.1', 39999, 8080, 'running',
+                           'now', 'now', 'now', NULL)",
+                ["a".repeat(64)],
+            )
+            .unwrap();
+
+        let failed = run_start_candidate(&mut scenario, &app_id())
+            .expect_err("a conflicting external runtime id must fail registration");
+
+        assert_eq!(failed.code(), DeploymentFailureCode::RuntimeRegistration);
+        assert!(!failed.failure_persisted());
+        assert_resources(failed.resources(), true, true, true, false);
+    }
 }
