@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.4.3 — Disposable Regression Automation (2026-08-27)
+
+### Added
+
+- `scripts/dev-vm/test-regression.sh`, a one-command disposable-VM regression
+  orchestrator: it clones the immutable `pneuma-dev-base` template as
+  `pneuma-dev-base-test`, pins a static DHCP lease that survives in-suite
+  reboots, provisions the host, installs the binary and the restricted CI
+  dispatcher key, runs the requested suites (`all`, `e2e`, `reconciliation`,
+  `bootstrap`), and always destroys the clone including its storage.
+
+### Fixed
+
+- Deployment rollback executes its happy path and persists a hydratable
+  runtime tombstone.
+- Reconciliation classifies unknown external states conservatively instead of
+  assuming convergence, and reports the correct refusal reason for unhandled
+  drift.
+
+### Changed
+
+- Error and type redundancy cleanup across the deployment pipeline: one
+  canonical `FailedExecution` failure carrier, one durable failure-code
+  vocabulary in the domain, and table-driven CLI classification. The
+  store-specific persistence variants of `ImportError` and `RollbackError`
+  merged into single operation-level variants; messages, source chains, CLI
+  classification, and exit codes are unchanged.
+
 ## v0.4.2 — Domain Type Closure (2026-08-21)
 
 ### Changed
