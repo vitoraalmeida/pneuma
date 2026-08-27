@@ -1,3 +1,4 @@
+use std::error::Error;
 use std::path::Path;
 
 use rusqlite::Connection;
@@ -25,17 +26,7 @@ pub enum ImportError {
     #[error("failed to persist imported application: {source}")]
     Persistence {
         #[source]
-        source: rusqlite::Error,
-    },
-    #[error("failed to persist imported application: {source}")]
-    ApplicationStore {
-        #[source]
-        source: ApplicationStoreError,
-    },
-    #[error("failed to persist imported application: {source}")]
-    ExposureStore {
-        #[source]
-        source: ExposureStoreError,
+        source: Box<dyn Error>,
     },
     #[error("application `{application_id}` was not found")]
     ApplicationNotFound { application_id: String },
@@ -44,28 +35,26 @@ pub enum ImportError {
 }
 
 impl From<ApplicationStoreError> for ImportError {
-    fn from(error: ApplicationStoreError) -> Self {
-        match error {
-            ApplicationStoreError::Persistence { source } => Self::Persistence { source },
-            ApplicationStoreError::InvalidDesiredRuntimeState { .. } => {
-                Self::ApplicationStore { source: error }
-            }
+    fn from(source: ApplicationStoreError) -> Self {
+        Self::Persistence {
+            source: Box::new(source),
         }
     }
 }
 
 impl From<ExposureStoreError> for ImportError {
-    fn from(error: ExposureStoreError) -> Self {
-        match error {
-            ExposureStoreError::Persistence { source } => Self::Persistence { source },
-            error => Self::ExposureStore { source: error },
+    fn from(source: ExposureStoreError) -> Self {
+        Self::Persistence {
+            source: Box::new(source),
         }
     }
 }
 
 impl From<rusqlite::Error> for ImportError {
     fn from(source: rusqlite::Error) -> Self {
-        Self::Persistence { source }
+        Self::Persistence {
+            source: Box::new(source),
+        }
     }
 }
 
@@ -191,7 +180,7 @@ fn persist_specification(
 mod tests {
     use std::error::Error as _;
 
-    use super::{ImportError, ManifestError};
+    use super::{ApplicationStoreError, ExposureStoreError, ImportError, ManifestError};
 
     #[test]
     fn import_errors_expose_their_underlying_causes() {
@@ -205,7 +194,7 @@ mod tests {
         ));
 
         let error = ImportError::Persistence {
-            source: rusqlite::Error::InvalidParameterName("test".to_owned()),
+            source: Box::new(rusqlite::Error::InvalidParameterName("test".to_owned())),
         };
         let source = error.source().expect("Persistence must keep its cause");
         assert!(
@@ -213,5 +202,28 @@ mod tests {
                 .downcast_ref::<rusqlite::Error>()
                 .is_some_and(|source| source.to_string() == "Invalid parameter name: test")
         );
+    }
+
+    #[test]
+    fn store_errors_funnel_into_one_operation_level_persistence_error() {
+        let error = ImportError::from(ApplicationStoreError::Persistence {
+            source: rusqlite::Error::InvalidParameterName("test".to_owned()),
+        });
+        assert!(matches!(error, ImportError::Persistence { .. }));
+        let source = error.source().expect("Persistence must keep its cause");
+        assert!(
+            source
+                .downcast_ref::<ApplicationStoreError>()
+                .is_some_and(|source| source.to_string()
+                    == "application store error: Invalid parameter name: test")
+        );
+
+        let error = ImportError::from(ExposureStoreError::InvalidVisibility {
+            application_id: "app-id".to_owned(),
+            visibility: "unknown".to_owned(),
+        });
+        assert!(matches!(error, ImportError::Persistence { .. }));
+        let source = error.source().expect("Persistence must keep its cause");
+        assert!(source.downcast_ref::<ExposureStoreError>().is_some());
     }
 }

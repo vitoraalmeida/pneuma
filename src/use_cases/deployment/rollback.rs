@@ -1,4 +1,5 @@
 use rusqlite::Connection;
+use std::error::Error;
 use thiserror::Error;
 
 use super::execute::{DeploymentResult, PublicDeploymentConfiguration, deploy_release};
@@ -16,19 +17,9 @@ pub enum RollbackError {
     #[error("application `{application_id}` has no previous successful deployment to roll back to")]
     NoPreviousDeployment { application_id: String },
     #[error("failed to load rollback release: {source}")]
-    ApplicationStore {
+    LoadTarget {
         #[source]
-        source: application_store::ApplicationStoreError,
-    },
-    #[error("failed to load rollback release: {source}")]
-    DeploymentStore {
-        #[source]
-        source: deployment_store::DeploymentStoreError,
-    },
-    #[error("failed to load rollback release: {source}")]
-    Persistence {
-        #[source]
-        source: rusqlite::Error,
+        source: Box<dyn Error>,
     },
     #[error("failed to pull rollback image: {source}")]
     PullImage {
@@ -45,8 +36,12 @@ pub fn rollback_deployment(
     application_id: &ApplicationId,
     public_configuration: Option<&PublicDeploymentConfiguration>,
 ) -> Result<DeploymentResult, RollbackError> {
-    let exists = application_store::application_exists(connection, application_id)
-        .map_err(|source| RollbackError::ApplicationStore { source })?;
+    let exists =
+        application_store::application_exists(connection, application_id).map_err(|source| {
+            RollbackError::LoadTarget {
+                source: Box::new(source),
+            }
+        })?;
     if !exists {
         return Err(RollbackError::ApplicationNotFound {
             application_id: application_id.to_string(),
@@ -71,7 +66,9 @@ fn previous_release(
     application_id: &ApplicationId,
 ) -> Result<RollbackTarget, RollbackError> {
     deployment_store::load_rollback_target(connection, application_id)
-        .map_err(|source| RollbackError::DeploymentStore { source })?
+        .map_err(|source| RollbackError::LoadTarget {
+            source: Box::new(source),
+        })?
         .ok_or_else(|| RollbackError::NoPreviousDeployment {
             application_id: application_id.to_string(),
         })
@@ -131,26 +128,27 @@ mod tests {
         use super::{DeployReleaseError, RollbackError, application_store};
         use crate::adapters::oci_image::PullImageError;
 
-        let error = RollbackError::ApplicationStore {
-            source: application_store::ApplicationStoreError::Persistence {
+        let error = RollbackError::LoadTarget {
+            source: Box::new(application_store::ApplicationStoreError::Persistence {
                 source: rusqlite::Error::InvalidParameterName("test".to_owned()),
-            },
+            }),
         };
-        let source = error
-            .source()
-            .expect("ApplicationStore must keep its cause");
+        let source = error.source().expect("LoadTarget must keep its cause");
         assert!(
             source
                 .downcast_ref::<application_store::ApplicationStoreError>()
-                .is_some()
+                .is_some_and(|source| source.to_string()
+                    == "application store error: Invalid parameter name: test")
         );
 
-        let error = RollbackError::DeploymentStore {
-            source: crate::adapters::stores::deployment_store::DeploymentStoreError::Persistence {
-                source: rusqlite::Error::InvalidParameterName("test".to_owned()),
-            },
+        let error = RollbackError::LoadTarget {
+            source: Box::new(
+                crate::adapters::stores::deployment_store::DeploymentStoreError::Persistence {
+                    source: rusqlite::Error::InvalidParameterName("test".to_owned()),
+                },
+            ),
         };
-        let source = error.source().expect("DeploymentStore must keep its cause");
+        let source = error.source().expect("LoadTarget must keep its cause");
         assert!(
             source
                 .downcast_ref::<crate::adapters::stores::deployment_store::DeploymentStoreError>()
