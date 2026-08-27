@@ -186,3 +186,32 @@ fn persist_specification(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error as _;
+
+    use super::{ImportError, ManifestError};
+
+    #[test]
+    fn import_errors_expose_their_underlying_causes() {
+        let error = ImportError::Manifest {
+            source: ManifestError::UnsupportedSchemaVersion { found: 1 },
+        };
+        let source = error.source().expect("Manifest must keep its cause");
+        assert!(matches!(
+            source.downcast_ref::<ManifestError>(),
+            Some(ManifestError::UnsupportedSchemaVersion { found: 1 })
+        ));
+
+        let error = ImportError::Persistence {
+            source: rusqlite::Error::InvalidParameterName("test".to_owned()),
+        };
+        let source = error.source().expect("Persistence must keep its cause");
+        assert!(
+            source
+                .downcast_ref::<rusqlite::Error>()
+                .is_some_and(|source| source.to_string() == "Invalid parameter name: test")
+        );
+    }
+}

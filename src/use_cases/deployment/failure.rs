@@ -484,14 +484,16 @@ pub(crate) fn internal_promotion_failure(
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error as _;
     use std::fmt;
 
     use super::super::candidate::CandidateStartError;
     use super::super::cleanup::{CandidateCleanupError, CandidateResources};
     use super::super::transition::TransitionDeploymentError;
     use super::{
-        DeployReleaseError, DeploymentFailureCode, candidate_start_failure,
-        internal_promotion_failure, public_activation_failure, resolve_failure_recovery,
+        DeployReleaseError, DeploymentFailureCode, FailedExecution, ProgressReporter,
+        candidate_start_failure, internal_promotion_failure, persist_failure_if_needed,
+        public_activation_failure, resolve_failure_recovery,
     };
     use crate::adapters::health_check_internal::{HealthCheckFailure, HealthCheckResult};
     use crate::adapters::port_allocator::PortAllocationError;
@@ -607,9 +609,31 @@ mod tests {
         }
     }
 
+    // Asserts the exact compensation payload a stage must carry: which resource kinds
+    // were already allocated when that stage failed.
+    fn assert_resources(
+        resources: &CandidateResources,
+        port_reserved: bool,
+        unit: bool,
+        container: bool,
+        runtime: bool,
+    ) {
+        assert_eq!(resources.port_reserved, port_reserved);
+        assert_eq!(resources.unit_name.is_some(), unit);
+        assert_eq!(resources.container_id.is_some(), container);
+        assert_eq!(resources.runtime_id.is_some(), runtime);
+    }
+
     #[test]
     fn candidate_start_failures_keep_their_stage_codes_and_resources() {
-        let cases: Vec<(CandidateStartError, DeploymentFailureCode)> = vec![
+        // Each case records the exact compensation payload start_candidate attaches at
+        // that stage; the mapping must carry it verbatim without dropping or adding.
+        type StageCase = (
+            CandidateStartError,
+            DeploymentFailureCode,
+            fn(&CandidateResources),
+        );
+        let cases: Vec<StageCase> = vec![
             (
                 CandidateStartError::PortAllocation {
                     source: PortAllocationError::InvalidRange {
@@ -617,6 +641,7 @@ mod tests {
                     },
                 },
                 DeploymentFailureCode::RuntimePortAllocation,
+                |resources| assert_resources(resources, false, false, false, false),
             ),
             (
                 CandidateStartError::UnitCreation {
@@ -624,6 +649,7 @@ mod tests {
                     resources: Box::new(CandidateResources::empty().with_port()),
                 },
                 DeploymentFailureCode::RuntimeUnitCreation,
+                |resources| assert_resources(resources, true, false, false, false),
             ),
             (
                 CandidateStartError::UnitReload {
@@ -631,6 +657,7 @@ mod tests {
                     resources: Box::new(CandidateResources::empty().with_port()),
                 },
                 DeploymentFailureCode::RuntimeUnitReload,
+                |resources| assert_resources(resources, true, false, false, false),
             ),
             (
                 CandidateStartError::UnitStart {
@@ -638,20 +665,29 @@ mod tests {
                     resources: Box::new(CandidateResources::empty().with_port()),
                 },
                 DeploymentFailureCode::RuntimeStart,
+                |resources| assert_resources(resources, true, false, false, false),
             ),
             (
                 CandidateStartError::ContainerResolution {
                     source: Box::new(TestFailure),
-                    resources: Box::new(started_resources()),
+                    resources: Box::new(
+                        CandidateResources::empty().with_port().with_unit("unit-1"),
+                    ),
                 },
                 DeploymentFailureCode::RuntimeResolution,
+                |resources| assert_resources(resources, true, true, false, false),
             ),
             (
                 CandidateStartError::ContainerObservation {
                     source: Box::new(TestFailure),
-                    resources: Box::new(started_resources()),
+                    resources: Box::new(
+                        CandidateResources::with_container(&container_id())
+                            .with_port()
+                            .with_unit("unit-1"),
+                    ),
                 },
                 DeploymentFailureCode::RuntimeObservation,
+                |resources| assert_resources(resources, true, true, true, false),
             ),
             (
                 CandidateStartError::RuntimeRegistration {
@@ -659,6 +695,7 @@ mod tests {
                     resources: Box::new(CandidateResources::with_container(&container_id())),
                 },
                 DeploymentFailureCode::RuntimeRegistration,
+                |resources| assert_resources(resources, false, false, true, false),
             ),
             (
                 CandidateStartError::PortPersistence {
@@ -668,6 +705,7 @@ mod tests {
                     resources: Box::new(started_resources()),
                 },
                 DeploymentFailureCode::RuntimePortPersistence,
+                |resources| assert_resources(resources, false, false, true, true),
             ),
             (
                 CandidateStartError::DeploymentTransition {
@@ -675,28 +713,15 @@ mod tests {
                     resources: Box::new(started_resources()),
                 },
                 DeploymentFailureCode::DeploymentTransition,
+                |resources| assert_resources(resources, false, false, true, true),
             ),
         ];
 
-        // Port allocation fails before anything is allocated, so only later stages
-        // retain resources for compensation.
-        let mut cases = cases;
-        for (error, expected_code) in cases.drain(..) {
+        for (error, expected_code, expected_resources) in cases {
             let failed = candidate_start_failure(error);
             assert_eq!(failed.code, expected_code);
             assert!(!failed.failure_persisted);
-            if expected_code == DeploymentFailureCode::RuntimePortAllocation {
-                assert!(
-                    !failed.resources.needs_cleanup(),
-                    "port allocation failures hold nothing to clean up"
-                );
-            } else {
-                assert!(
-                    failed.resources.needs_cleanup(),
-                    "{} must retain resources for cleanup",
-                    expected_code.as_str()
-                );
-            }
+            expected_resources(&failed.resources);
         }
     }
 
@@ -856,5 +881,134 @@ mod tests {
             }
             other => panic!("expected the original failure, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn already_persisted_failures_are_not_recorded_a_second_time() {
+        let mut connection =
+            crate::adapters::database::open(std::path::Path::new(":memory:")).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO applications (
+                    id, name, desired_runtime_state, spec_version, created_at, updated_at
+                 ) VALUES ('app-1', 'app', 'stopped', 1, 'now', 'now');
+                 INSERT INTO releases (
+                    id, application_id, image_repository, image_digest, image_reference, created_at
+                 ) VALUES (
+                    'release-1', 'app-1', 'registry.example/app',
+                    'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                    'registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                    'now'
+                 );
+                 INSERT INTO deployments (
+                    id, application_id, release_id, type, status, requested_at
+                 ) VALUES ('deployment-1', 'app-1', 'release-1', 'deploy', 'starting', 'now');",
+            )
+            .unwrap();
+
+        let mut failed = FailedExecution {
+            code: DeploymentFailureCode::RuntimeStart,
+            source: Box::new(TestFailure),
+            failure_persisted: true,
+            resources: CandidateResources::empty(),
+        };
+        let progress = &mut ProgressReporter::disabled();
+
+        // A failure whose stage was already persisted must leave the deployment row alone.
+        let recorded = persist_failure_if_needed(
+            &mut connection,
+            &deployment_id(),
+            &failed,
+            "test failure",
+            progress,
+        );
+        assert!(recorded.is_none(), "no recording divergence is expected");
+        let (status, failure_code): (String, Option<String>) = connection
+            .query_row(
+                "SELECT status, failure_code FROM deployments WHERE id = 'deployment-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "starting");
+        assert_eq!(failure_code, None);
+
+        // The same failure needing persistence is recorded exactly once.
+        failed.failure_persisted = false;
+        let recorded = persist_failure_if_needed(
+            &mut connection,
+            &deployment_id(),
+            &failed,
+            "test failure",
+            progress,
+        );
+        assert!(recorded.is_none(), "no recording divergence is expected");
+        let (status, failure_code): (String, Option<String>) = connection
+            .query_row(
+                "SELECT status, failure_code FROM deployments WHERE id = 'deployment-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "failed");
+        assert_eq!(failure_code.as_deref(), Some("runtime_start_failed"));
+    }
+
+    #[test]
+    fn deployment_failure_errors_expose_their_original_cause() {
+        let original = resolve_failure_recovery(
+            &deployment_id(),
+            DeploymentFailureCode::RuntimeStart,
+            Box::new(TestFailure),
+            "test failure".to_owned(),
+            None,
+            None,
+        );
+        let source = original
+            .source()
+            .expect("DeploymentFailed must keep its cause");
+        assert!(source.downcast_ref::<TestFailure>().is_some());
+
+        let record_failure = resolve_failure_recovery(
+            &deployment_id(),
+            DeploymentFailureCode::RuntimeStart,
+            Box::new(TestFailure),
+            "test failure".to_owned(),
+            Some(transition_error()),
+            None,
+        );
+        let source = record_failure
+            .source()
+            .expect("RecordFailure must keep its cause");
+        assert!(
+            source
+                .downcast_ref::<TransitionDeploymentError>()
+                .is_some_and(|error| matches!(
+                    error,
+                    TransitionDeploymentError::DeploymentNotFound { .. }
+                ))
+        );
+
+        let cleanup = resolve_failure_recovery(
+            &deployment_id(),
+            DeploymentFailureCode::RuntimeStart,
+            Box::new(TestFailure),
+            "test failure".to_owned(),
+            None,
+            Some(CandidateCleanupError::RuntimeChanged {
+                runtime_id: runtime_id(),
+            }),
+        );
+        let source = cleanup.source().expect("Cleanup must keep its cause");
+        // The cleanup cause is stored boxed, so the first `source()` layer is the box
+        // itself; the chain still reaches the cleanup error through it.
+        assert!(
+            source
+                .downcast_ref::<Box<CandidateCleanupError>>()
+                .is_some_and(|error| matches!(
+                    error.as_ref(),
+                    CandidateCleanupError::RuntimeChanged { .. }
+                ))
+        );
     }
 }

@@ -2309,6 +2309,29 @@ fn external_failures_exit_with_code_five_and_report_the_integration() {
 }
 
 #[test]
+fn rollback_without_previous_deployment_exits_with_code_four() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+
+    let output = run_pneuma_env(
+        &environment.database_path,
+        Some(&environment.workspace_path),
+        &[
+            OsStr::new("deployment"),
+            OsStr::new("rollback"),
+            OsStr::new(&environment.application_name),
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(4));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("no previous successful deployment"),
+        "unexpected stderr: {stderr}"
+    );
+}
+
+#[test]
 fn fake_external_commands_fail_when_the_database_has_an_open_write_transaction() {
     let environment = DeploymentEnvironment::new();
     let journal = environment.database_path.with_file_name(format!(

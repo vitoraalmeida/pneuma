@@ -209,6 +209,7 @@ fn classify_reconciliation_read(source: &ReconciliationReadError) -> CliErrorCla
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error as _;
     use std::io;
 
     use super::*;
@@ -383,5 +384,29 @@ mod tests {
             },
             CliErrorClass::Usage,
         );
+    }
+
+    #[test]
+    fn transparent_cli_errors_forward_their_source_chain() {
+        // Transparent CLI variants forward Display and the source chain to the inner
+        // use-case error, so a caused inner error surfaces through the CLI error.
+        let error = CliError::Import {
+            source: RemoteImportError::Workspace {
+                source: io::Error::other("disk full"),
+            },
+        };
+        assert!(error.to_string().contains("disk full"));
+        let source = error
+            .source()
+            .expect("a caused inner error must surface its cause");
+        assert!(source.downcast_ref::<io::Error>().is_some());
+
+        let error = CliError::Rollback {
+            source: RollbackError::ApplicationNotFound {
+                application_id: "app-1".to_owned(),
+            },
+        };
+        assert_eq!(error.to_string(), "application `app-1` was not found");
+        assert!(error.source().is_none());
     }
 }

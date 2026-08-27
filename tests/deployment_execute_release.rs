@@ -86,6 +86,7 @@ fn deploy_fails_when_systemctl_start_fails() {
     let output = environment.deploy_with_start_failure(30000);
 
     assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("runtime_start_failed"),
@@ -489,10 +490,9 @@ fn public_deploy_rolls_back_caddy_when_external_health_fails() {
             |row| row.get(0),
         )
         .unwrap();
-    assert!(
-        exposure_state == "failed" || exposure_state == "diverged",
-        "exposure must be marked as failed or diverged"
-    );
+    // The adapter's route rollback succeeds in this environment, so the exposure
+    // outcome must be a confirmed failure, not an unresolved divergence.
+    assert_eq!(exposure_state, "failed");
 }
 
 #[test]

@@ -122,4 +122,58 @@ mod tests {
             Some("historical-commit")
         );
     }
+
+    #[test]
+    fn rollback_errors_expose_their_underlying_causes() {
+        use std::error::Error as _;
+        use std::io;
+
+        use super::{DeployReleaseError, RollbackError, application_store};
+        use crate::adapters::oci_image::PullImageError;
+
+        let error = RollbackError::ApplicationStore {
+            source: application_store::ApplicationStoreError::Persistence {
+                source: rusqlite::Error::InvalidParameterName("test".to_owned()),
+            },
+        };
+        let source = error
+            .source()
+            .expect("ApplicationStore must keep its cause");
+        assert!(
+            source
+                .downcast_ref::<application_store::ApplicationStoreError>()
+                .is_some()
+        );
+
+        let error = RollbackError::DeploymentStore {
+            source: crate::adapters::stores::deployment_store::DeploymentStoreError::Persistence {
+                source: rusqlite::Error::InvalidParameterName("test".to_owned()),
+            },
+        };
+        let source = error.source().expect("DeploymentStore must keep its cause");
+        assert!(
+            source
+                .downcast_ref::<crate::adapters::stores::deployment_store::DeploymentStoreError>()
+                .is_some()
+        );
+
+        let error = RollbackError::PullImage {
+            source: PullImageError::Execute {
+                operation: "pull",
+                source: io::Error::other("no podman"),
+            },
+        };
+        let source = error.source().expect("PullImage must keep its cause");
+        assert!(source.downcast_ref::<PullImageError>().is_some());
+
+        let error = RollbackError::DeployRelease {
+            source: DeployReleaseError::ApplicationNotFound {
+                application_id: "app-1".to_owned(),
+            },
+        };
+        // `DeployRelease` is transparent: its display carries the inner message and its
+        // source chain is the inner error's own chain, which ends here.
+        assert_eq!(error.to_string(), "application `app-1` was not found");
+        assert!(error.source().is_none());
+    }
 }
