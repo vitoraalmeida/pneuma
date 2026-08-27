@@ -7,12 +7,13 @@ use thiserror::Error;
 use rusqlite::Connection;
 
 use super::cleanup::CandidateResources;
+use super::failure::FailedExecution;
 use super::progress::{DeploymentStep, ProgressReporter};
 use super::promotion::{
     PromotePublicCandidateError, begin_public_exposure, promote_public_candidate,
     record_public_exposure_failure,
 };
-use super::transition::{TransitionDeploymentError, advance_deployment};
+use super::transition::advance_deployment;
 use crate::adapters::caddy_exposure::{
     MaterializeCaddyFragmentError, MaterializedCaddyFragment, canonical_fragment_contents,
     materialize_caddy_fragment, restore_materialized_caddy_fragment,
@@ -29,7 +30,8 @@ use crate::domain::exposure::{
 use crate::domain::identity::{ApplicationId, DeploymentId, RuntimeInstanceId};
 use crate::domain::runtime::{HealthCheckSpecification, RuntimeInstance};
 
-// Carries the persisted candidate and host paths needed to expose it after internal validation.
+// Carries the persisted candidate, its started unit, and host paths needed to expose it
+// after internal validation.
 pub(crate) struct PublicActivationInput<'a> {
     pub(crate) connection: &'a mut Connection,
     pub(crate) runtime: &'a RuntimeInstance,
@@ -37,6 +39,7 @@ pub(crate) struct PublicActivationInput<'a> {
     pub(crate) health_check: &'a HealthCheckSpecification,
     pub(crate) managed_caddy_directory: &'a Path,
     pub(crate) caddyfile_path: &'a Path,
+    pub(crate) unit_name: &'a str,
 }
 
 // Returns activation data needed by the enclosing deployment finalization.
@@ -44,43 +47,14 @@ pub(crate) struct PublicActivationOutput {
     pub(crate) finished_at: String,
 }
 
-pub(crate) enum PublicActivationError {
-    InternalHealth {
-        source: Box<dyn Error>,
-        resources: Box<CandidateResources>,
-    },
-    DeploymentTransition {
-        source: TransitionDeploymentError,
-        resources: Box<CandidateResources>,
-    },
-    ExposurePreparation {
-        source: Box<dyn Error>,
-        resources: Box<CandidateResources>,
-    },
-    TestGate {
-        source: Box<dyn Error>,
-        resources: Box<CandidateResources>,
-    },
-    CaddyMaterialization {
-        source: Box<dyn Error>,
-        resources: Box<CandidateResources>,
-    },
-    ExternalHealth {
-        source: Box<dyn Error>,
-        resources: Box<CandidateResources>,
-    },
-    PublicPromotion {
-        source: Box<dyn Error>,
-        resources: Box<CandidateResources>,
-    },
-}
-
 // Activates a public candidate in order: internal health, route materialization, external
-// health, then persisted promotion; failures retain resources for centralized cleanup.
+// health, then persisted promotion. Activation runs on a fully started candidate, so its
+// container, runtime, unit, and reserved port stay in one compensation set, and every
+// failure returns the canonical execution failure with its durable code directly.
 pub(crate) fn activate_public_candidate(
     input: PublicActivationInput<'_>,
     progress: &mut ProgressReporter<'_>,
-) -> Result<PublicActivationOutput, PublicActivationError> {
+) -> Result<PublicActivationOutput, FailedExecution> {
     let PublicActivationInput {
         connection,
         runtime,
@@ -88,12 +62,15 @@ pub(crate) fn activate_public_candidate(
         health_check,
         managed_caddy_directory,
         caddyfile_path,
+        unit_name,
     } = input;
 
     let runtime_id = runtime.id.as_str();
     let deployment_id = runtime.deployment_id.as_str();
     let resources =
-        CandidateResources::with_container_and_runtime(&runtime.external_runtime_id, &runtime.id);
+        CandidateResources::with_container_and_runtime(&runtime.external_runtime_id, &runtime.id)
+            .with_unit(unit_name)
+            .with_port();
 
     verify_internal_health(
         runtime_id,
@@ -154,7 +131,7 @@ fn verify_internal_health(
     health_check: &HealthCheckSpecification,
     resources: &CandidateResources,
     progress: &mut ProgressReporter<'_>,
-) -> Result<(), PublicActivationError> {
+) -> Result<(), FailedExecution> {
     progress.started(
         DeploymentStep::InternalHealthCheck,
         format!(
@@ -165,19 +142,17 @@ fn verify_internal_health(
     );
 
     let internal_health = check_internal_health(socket_addr, health_check).map_err(|source| {
-        PublicActivationError::InternalHealth {
-            source: Box::new(source),
-            resources: Box::new(resources.clone()),
-        }
+        failed_activation(DeploymentFailureCode::HealthCheck, source, resources)
     })?;
 
     if !matches!(internal_health, HealthCheckResult::Healthy { .. }) {
-        return Err(PublicActivationError::InternalHealth {
-            source: Box::new(PublicHealthFailure {
+        return Err(failed_activation(
+            DeploymentFailureCode::HealthCheck,
+            PublicHealthFailure {
                 result: internal_health,
-            }),
-            resources: Box::new(resources.clone()),
-        });
+            },
+            resources,
+        ));
     }
 
     progress.completed(
@@ -193,21 +168,18 @@ fn mark_activating(
     deployment_id: &DeploymentId,
     resources: &CandidateResources,
     progress: &mut ProgressReporter<'_>,
-) -> Result<(), PublicActivationError> {
+) -> Result<(), FailedExecution> {
     advance_deployment(connection, deployment_id, DeploymentEvent::Verified).map_err(|source| {
-        PublicActivationError::DeploymentTransition {
+        failed_activation(
+            DeploymentFailureCode::DeploymentTransition,
             source,
-            resources: Box::new(resources.clone()),
-        }
+            resources,
+        )
     })?;
 
     progress.state_changed(deployment_id.as_str(), DeploymentStatus::Activating);
-    wait_for_test_gate("deployment.activating").map_err(|source| {
-        PublicActivationError::TestGate {
-            source: Box::new(source),
-            resources: Box::new(resources.clone()),
-        }
-    })?;
+    wait_for_test_gate("deployment.activating")
+        .map_err(|source| failed_activation(DeploymentFailureCode::TestGate, source, resources))?;
     Ok(())
 }
 
@@ -229,12 +201,13 @@ fn materialize_public_route(
     caddyfile_path: &Path,
     resources: &CandidateResources,
     progress: &mut ProgressReporter<'_>,
-) -> Result<MaterializedPublicRoute, PublicActivationError> {
+) -> Result<MaterializedPublicRoute, FailedExecution> {
     let exposure = begin_public_exposure(connection, &runtime.id).map_err(|source| {
-        PublicActivationError::ExposurePreparation {
-            source: Box::new(source),
-            resources: Box::new(resources.clone()),
-        }
+        failed_activation(
+            DeploymentFailureCode::ExposurePreparation,
+            source,
+            resources,
+        )
     })?;
 
     let endpoint = runtime.expected_endpoint;
@@ -244,9 +217,8 @@ fn materialize_public_route(
     );
     let configuration_version =
         ExposureConfigurationVersion::new(&canonical_fragment_contents(&exposure.domain, endpoint))
-            .map_err(|source| PublicActivationError::PublicPromotion {
-                source: Box::new(source),
-                resources: Box::new(resources.clone()),
+            .map_err(|source| {
+                failed_activation(DeploymentFailureCode::CandidatePromotion, source, resources)
             })?;
 
     let fragment = materialize_caddy_fragment(
@@ -271,14 +243,14 @@ fn materialize_public_route(
     })
 }
 
-// Translates failed route materialization into its activation error while persisting the
+// Translates failed route materialization into its canonical failure while persisting the
 // exposure diagnostic; an unsuccessful adapter rollback upgrades the outcome to divergence.
 fn record_materialization_failure(
     connection: &Connection,
     application_id: &ApplicationId,
     source: MaterializeCaddyFragmentError,
     resources: &CandidateResources,
-) -> PublicActivationError {
+) -> FailedExecution {
     let outcome = if source.recovery_failed() {
         ExposureOutcome::Diverged
     } else {
@@ -299,10 +271,11 @@ fn record_materialization_failure(
         source,
     );
 
-    PublicActivationError::CaddyMaterialization {
+    FailedExecution::needing_persistence(
+        DeploymentFailureCode::CaddyMaterialization,
         source,
-        resources: Box::new(resources.clone()),
-    }
+        resources.clone(),
+    )
 }
 
 // Checks the deployed route through its public domain; on rejection it restores the prior
@@ -315,7 +288,7 @@ fn verify_external_health_or_rollback(
     caddyfile_path: &Path,
     resources: &CandidateResources,
     progress: &mut ProgressReporter<'_>,
-) -> Result<(), PublicActivationError> {
+) -> Result<(), FailedExecution> {
     let MaterializedPublicRoute {
         fragment: materialized,
         domain,
@@ -342,10 +315,11 @@ fn verify_external_health_or_rollback(
             source,
         );
 
-        return Err(PublicActivationError::ExternalHealth {
+        return Err(FailedExecution::needing_persistence(
+            DeploymentFailureCode::ExternalHealthCheck,
             source,
-            resources: Box::new(resources.clone()),
-        });
+            resources.clone(),
+        ));
     }
 
     progress.completed(
@@ -365,7 +339,7 @@ fn promote_public_runtime_or_rollback(
     materialized: &MaterializedCaddyFragment,
     caddyfile_path: &Path,
     resources: &CandidateResources,
-) -> Result<PromotedCandidate, PublicActivationError> {
+) -> Result<PromotedCandidate, FailedExecution> {
     match promote_public_candidate(connection, runtime_id, configuration_version) {
         Ok(promoted) => Ok(promoted),
         Err(source) => {
@@ -382,12 +356,22 @@ fn promote_public_runtime_or_rollback(
                 source,
             );
 
-            Err(PublicActivationError::PublicPromotion {
+            Err(FailedExecution::needing_persistence(
+                DeploymentFailureCode::CandidatePromotion,
                 source,
-                resources: Box::new(resources.clone()),
-            })
+                resources.clone(),
+            ))
         }
     }
+}
+
+// Builds the canonical failure for one activation stage; resources are cloned only on failure.
+fn failed_activation(
+    code: DeploymentFailureCode,
+    source: impl Error + 'static,
+    resources: &CandidateResources,
+) -> FailedExecution {
+    FailedExecution::needing_persistence(code, source, resources.clone())
 }
 
 // Records an exposure failure so persisted state matches the host, wrapping persistence
@@ -451,4 +435,205 @@ struct ExposureFailureRecordingError {
     #[source]
     original: Box<dyn Error>,
     persistence: PromotePublicCandidateError,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::{Ipv4Addr, SocketAddr, TcpListener};
+    use std::path::Path;
+    use std::thread;
+
+    use super::*;
+    use crate::adapters::database;
+    use crate::domain::identity::{ApplicationId, DeploymentId};
+    use crate::domain::runtime::{
+        ContainerId, ContainerPort, ExpectedRuntimeEndpoint, HealthCheckPath,
+        HealthCheckSpecification, HealthCheckStatus, ObservedRuntimeState, RuntimeState,
+    };
+    use crate::test_support::ScopedExternalPath;
+
+    // The persisted candidate whose started unit and port join every activation failure.
+    fn runtime_instance(endpoint: SocketAddr) -> RuntimeInstance {
+        RuntimeInstance {
+            id: RuntimeInstanceId::from("runtime"),
+            application_id: ApplicationId::from("app"),
+            deployment_id: DeploymentId::from("deployment"),
+            external_runtime_id: ContainerId::from("abc123def456"),
+            state: RuntimeState::Starting,
+            expected_endpoint: ExpectedRuntimeEndpoint::new(endpoint).unwrap(),
+            container_port: ContainerPort::new(8080).unwrap(),
+            observed_state: ObservedRuntimeState::Running,
+            observed_at: "now".to_owned(),
+            exit_code: None,
+            observation_reason: None,
+            retirement: None,
+        }
+    }
+
+    // A loopback endpoint that answers every internal probe with the expected status.
+    fn healthy_endpoint() -> SocketAddr {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let endpoint = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream);
+                let mut request = String::new();
+                while !request.ends_with("\r\n\r\n") {
+                    if reader.read_line(&mut request).unwrap_or(0) == 0 {
+                        break;
+                    }
+                }
+                let _ = reader
+                    .get_mut()
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+            }
+        });
+        endpoint
+    }
+
+    // A loopback endpoint with no listener, so every internal probe is refused.
+    fn dead_endpoint() -> SocketAddr {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        listener.local_addr().unwrap()
+    }
+
+    fn seed_deployment(connection: &Connection, status: &str) {
+        connection
+            .execute_batch(
+                "INSERT INTO applications (
+                     id, name, desired_runtime_state, spec_version, created_at, updated_at
+                 ) VALUES ('app', 'app', 'stopped', 1, 'now', 'now');
+                 INSERT INTO releases (
+                     id, application_id, image_repository, image_digest, image_reference, created_at
+                 ) VALUES (
+                     'release', 'app', 'registry.example/app',
+                     'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                     'registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                     'now'
+                 );",
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO deployments (
+                     id, application_id, release_id, type, status, requested_at
+                 ) VALUES ('deployment', 'app', 'release', 'deploy', ?1, 'now')",
+                [status],
+            )
+            .unwrap();
+    }
+
+    fn run_activation(
+        connection: &mut Connection,
+        runtime: &RuntimeInstance,
+    ) -> Result<(), FailedExecution> {
+        let health_check = HealthCheckSpecification::new(
+            HealthCheckPath::new("/health").unwrap(),
+            HealthCheckStatus::new(200).unwrap(),
+        );
+        let managed_caddy_directory = std::env::temp_dir().join("pneuma-activation-managed-caddy");
+        let caddyfile_path = std::env::temp_dir().join("pneuma-activation-caddyfile");
+        activate_public_candidate(
+            PublicActivationInput {
+                connection,
+                runtime,
+                application_id: &runtime.application_id,
+                health_check: &health_check,
+                managed_caddy_directory: &managed_caddy_directory,
+                caddyfile_path: &caddyfile_path,
+                unit_name: "unit-1",
+            },
+            &mut ProgressReporter::disabled(),
+        )
+        .map(|_| ())
+    }
+
+    // Activation runs on a fully started candidate, so every failure must carry the whole
+    // compensation set: container, runtime, unit, and reserved port.
+    fn assert_started_candidate_resources(failed: &FailedExecution) {
+        assert!(!failed.failure_persisted());
+        let resources = failed.resources();
+        assert!(resources.container_id.is_some());
+        assert!(resources.runtime_id.is_some());
+        assert_eq!(resources.unit_name.as_deref(), Some("unit-1"));
+        assert!(resources.port_reserved);
+    }
+
+    // Removes the process-global test-gate override even when an assertion fails, because
+    // a leaked override would block unrelated gate calls in concurrent tests.
+    struct ScopedTestGateDirectory {
+        external: ScopedExternalPath,
+    }
+
+    impl Drop for ScopedTestGateDirectory {
+        fn drop(&mut self) {
+            self.external.remove_var("PNEUMA_TEST_GATE_DIRECTORY");
+        }
+    }
+
+    #[test]
+    fn internal_health_failure_returns_the_health_check_code_with_started_resources() {
+        let mut connection = database::open(Path::new(":memory:")).unwrap();
+        let runtime = runtime_instance(dead_endpoint());
+
+        let failed = run_activation(&mut connection, &runtime)
+            .expect_err("an endpoint with no listener must fail internal health");
+
+        assert_eq!(failed.code(), DeploymentFailureCode::HealthCheck);
+        assert_started_candidate_resources(&failed);
+    }
+
+    #[test]
+    fn deployment_transition_failure_returns_the_transition_code_with_started_resources() {
+        let mut connection = database::open(Path::new(":memory:")).unwrap();
+        // The Verified event requires the Verifying stage, so a pending deployment
+        // makes the first activation transition fail.
+        seed_deployment(&connection, "pending");
+        let runtime = runtime_instance(healthy_endpoint());
+
+        let failed = run_activation(&mut connection, &runtime)
+            .expect_err("a pending deployment must fail the Verified transition");
+
+        assert_eq!(failed.code(), DeploymentFailureCode::DeploymentTransition);
+        assert_started_candidate_resources(&failed);
+    }
+
+    #[test]
+    fn test_gate_failure_returns_the_test_gate_code_with_started_resources() {
+        let external_path = ScopedExternalPath::new("activation-gate", &[]);
+        // A regular file where the gate directory should be makes gate setup fail.
+        let blocker = external_path.directory().join("gate");
+        fs::write(&blocker, "blocker").unwrap();
+        external_path.set_var("PNEUMA_TEST_GATE_DIRECTORY", &blocker.to_string_lossy());
+        let _gate = ScopedTestGateDirectory {
+            external: external_path,
+        };
+
+        let mut connection = database::open(Path::new(":memory:")).unwrap();
+        seed_deployment(&connection, "verifying");
+        let runtime = runtime_instance(healthy_endpoint());
+
+        let failed = run_activation(&mut connection, &runtime)
+            .expect_err("an unusable gate directory must fail the activating gate");
+
+        assert_eq!(failed.code(), DeploymentFailureCode::TestGate);
+        assert_started_candidate_resources(&failed);
+    }
+
+    #[test]
+    fn exposure_preparation_failure_returns_the_preparation_code_with_started_resources() {
+        let mut connection = database::open(Path::new(":memory:")).unwrap();
+        // The deployment reaches Activating, but the candidate runtime was never
+        // persisted, so exposure preparation cannot load its promotion target.
+        seed_deployment(&connection, "verifying");
+        let runtime = runtime_instance(healthy_endpoint());
+
+        let failed = run_activation(&mut connection, &runtime)
+            .expect_err("a missing persisted runtime must fail exposure preparation");
+
+        assert_eq!(failed.code(), DeploymentFailureCode::ExposurePreparation);
+        assert_started_candidate_resources(&failed);
+    }
 }

@@ -10,7 +10,6 @@ use std::error::Error;
 use rusqlite::Connection;
 use thiserror::Error;
 
-use super::activation::PublicActivationError;
 use super::cleanup::{CandidateCleanupError, CandidateResources, cleanup_failed_candidate};
 use super::create::CreateDeploymentError;
 use super::progress::{DeploymentStep, ProgressReporter};
@@ -272,66 +271,6 @@ fn candidate_resources(
     }
 }
 
-// Maps public activation failures to their durable failure codes. The activation input is
-// a fully started candidate, so its unit and port are always part of the compensation set.
-pub(crate) fn public_activation_failure(
-    error: PublicActivationError,
-    unit_name: &str,
-) -> FailedExecution {
-    let failed = match error {
-        PublicActivationError::InternalHealth { source, resources } => {
-            FailedExecution::needing_persistence(
-                DeploymentFailureCode::HealthCheck,
-                source,
-                *resources,
-            )
-        }
-        PublicActivationError::DeploymentTransition { source, resources } => {
-            FailedExecution::needing_persistence(
-                DeploymentFailureCode::DeploymentTransition,
-                source,
-                *resources,
-            )
-        }
-        PublicActivationError::ExposurePreparation { source, resources } => {
-            FailedExecution::needing_persistence(
-                DeploymentFailureCode::ExposurePreparation,
-                source,
-                *resources,
-            )
-        }
-        PublicActivationError::TestGate { source, resources } => {
-            FailedExecution::needing_persistence(
-                DeploymentFailureCode::TestGate,
-                source,
-                *resources,
-            )
-        }
-        PublicActivationError::CaddyMaterialization { source, resources } => {
-            FailedExecution::needing_persistence(
-                DeploymentFailureCode::CaddyMaterialization,
-                source,
-                *resources,
-            )
-        }
-        PublicActivationError::ExternalHealth { source, resources } => {
-            FailedExecution::needing_persistence(
-                DeploymentFailureCode::ExternalHealthCheck,
-                source,
-                *resources,
-            )
-        }
-        PublicActivationError::PublicPromotion { source, resources } => {
-            FailedExecution::needing_persistence(
-                DeploymentFailureCode::CandidatePromotion,
-                source,
-                *resources,
-            )
-        }
-    };
-    failed.with_started_unit(unit_name)
-}
-
 // Distinguishes an unhealthy candidate, whose rejection promotion already persisted as
 // `Failed`, from other promotion errors; either way the started unit and port join the
 // compensation set.
@@ -370,13 +309,11 @@ mod tests {
     use super::super::transition::TransitionDeploymentError;
     use super::{
         DeployReleaseError, DeploymentFailureCode, FailedExecution, ProgressReporter,
-        internal_promotion_failure, persist_failure_if_needed, public_activation_failure,
-        resolve_failure_recovery,
+        internal_promotion_failure, persist_failure_if_needed, resolve_failure_recovery,
     };
     use crate::adapters::health_check_internal::{HealthCheckFailure, HealthCheckResult};
     use crate::domain::identity::{DeploymentId, RuntimeInstanceId};
     use crate::domain::runtime::ContainerId;
-    use crate::use_cases::deployment::activation::PublicActivationError;
     use crate::use_cases::deployment::promotion::PromoteInternalCandidateError;
 
     #[derive(Debug)]
@@ -402,80 +339,9 @@ mod tests {
         DeploymentId::from("deployment-1")
     }
 
-    fn started_resources() -> CandidateResources {
-        CandidateResources::with_container_and_runtime(&container_id(), &runtime_id())
-    }
-
     fn transition_error() -> TransitionDeploymentError {
         TransitionDeploymentError::DeploymentNotFound {
             deployment_id: "deployment-1".to_owned(),
-        }
-    }
-
-    #[test]
-    fn public_activation_failures_keep_their_stage_codes_and_add_the_started_unit_and_port() {
-        let cases: Vec<(PublicActivationError, DeploymentFailureCode)> = vec![
-            (
-                PublicActivationError::InternalHealth {
-                    source: Box::new(TestFailure),
-                    resources: Box::new(started_resources()),
-                },
-                DeploymentFailureCode::HealthCheck,
-            ),
-            (
-                PublicActivationError::DeploymentTransition {
-                    source: transition_error(),
-                    resources: Box::new(started_resources()),
-                },
-                DeploymentFailureCode::DeploymentTransition,
-            ),
-            (
-                PublicActivationError::ExposurePreparation {
-                    source: Box::new(TestFailure),
-                    resources: Box::new(started_resources()),
-                },
-                DeploymentFailureCode::ExposurePreparation,
-            ),
-            (
-                PublicActivationError::TestGate {
-                    source: Box::new(TestFailure),
-                    resources: Box::new(started_resources()),
-                },
-                DeploymentFailureCode::TestGate,
-            ),
-            (
-                PublicActivationError::CaddyMaterialization {
-                    source: Box::new(TestFailure),
-                    resources: Box::new(started_resources()),
-                },
-                DeploymentFailureCode::CaddyMaterialization,
-            ),
-            (
-                PublicActivationError::ExternalHealth {
-                    source: Box::new(TestFailure),
-                    resources: Box::new(started_resources()),
-                },
-                DeploymentFailureCode::ExternalHealthCheck,
-            ),
-            (
-                PublicActivationError::PublicPromotion {
-                    source: Box::new(TestFailure),
-                    resources: Box::new(started_resources()),
-                },
-                DeploymentFailureCode::CandidatePromotion,
-            ),
-        ];
-
-        for (error, expected_code) in cases {
-            let failed = public_activation_failure(error, "unit-1");
-            assert_eq!(failed.code, expected_code);
-            assert!(!failed.failure_persisted);
-            // Activation starts from a registered candidate, so its container and runtime
-            // are already tracked and the started unit and port must be added.
-            assert!(failed.resources.container_id.is_some());
-            assert!(failed.resources.runtime_id.is_some());
-            assert_eq!(failed.resources.unit_name.as_deref(), Some("unit-1"));
-            assert!(failed.resources.port_reserved);
         }
     }
 

@@ -8,7 +8,7 @@ use super::cleanup::{load_previous_runtime, retire_previous_runtime};
 use super::create::create_deployment_with_source_revision_and_ownership;
 use super::failure::{
     DeployReleaseError, FailedExecution, failure_needing_persistence, finish_failed_deployment,
-    internal_promotion_failure, public_activation_failure,
+    internal_promotion_failure,
 };
 use super::progress::{DeploymentStep, ProgressReporter};
 use super::promotion::promote_internal_candidate;
@@ -291,9 +291,9 @@ fn finish_public_deployment(
         health_check: specification.runtime.health_check(),
         managed_caddy_directory: &public_configuration.managed_caddy_directory,
         caddyfile_path: &public_configuration.caddyfile_path,
+        unit_name: &candidate.unit_name,
     };
-    let activated = activate_public_candidate(input, progress)
-        .map_err(|error| public_activation_failure(error, &candidate.unit_name))?;
+    let activated = activate_public_candidate(input, progress)?;
 
     Ok(CompletedDeploymentExecution {
         runtime_id: candidate.runtime.id.clone(),
