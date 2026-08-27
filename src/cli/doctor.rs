@@ -27,7 +27,7 @@ pub(crate) fn open_doctor_connection(database_path: &Path) -> Result<Connection,
 
 // Copies the live database to the requested backup path.
 pub(crate) fn run_database_backup(database_path: &Path, path: &Path) -> Result<(), CliError> {
-    database::backup(database_path, path).map_err(|source| CliError::DatabaseBackup { source })?;
+    database::backup(database_path, path).map_err(|source| CliError::Database { source })?;
     println!("Database backup: {}", path.display());
     Ok(())
 }
@@ -35,7 +35,7 @@ pub(crate) fn run_database_backup(database_path: &Path, path: &Path) -> Result<(
 // Restores the database from the requested path after verifying it.
 pub(crate) fn run_database_restore(database_path: &Path, path: &Path) -> Result<(), CliError> {
     let pre_restore = database::restore_and_verify(database_path, path)
-        .map_err(|source: DatabaseError| CliError::DatabaseRestore { source })?;
+        .map_err(|source: DatabaseError| CliError::Database { source })?;
     println!("Database restored from {}", path.display());
     println!("Pre-restore backup: {}", pre_restore.display());
     Ok(())

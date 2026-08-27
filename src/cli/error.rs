@@ -69,10 +69,6 @@ pub(crate) enum CliError {
     #[error(transparent)]
     VisibilitySet { source: ExposureChangeError },
     #[error(transparent)]
-    DatabaseBackup { source: DatabaseError },
-    #[error(transparent)]
-    DatabaseRestore { source: DatabaseError },
-    #[error(transparent)]
     SystemCreate {
         source: pneuma::use_cases::system::CreateError,
     },
@@ -117,8 +113,6 @@ impl CliError {
             | Self::List { .. }
             | Self::ApplicationLookup { .. }
             | Self::ListDeployments { .. }
-            | Self::DatabaseBackup { .. }
-            | Self::DatabaseRestore { .. }
             | Self::SystemCreate { .. }
             | Self::SystemList { .. }
             | Self::Doctor => CliErrorClass::Failure,
@@ -213,9 +207,423 @@ mod tests {
     use std::io;
 
     use super::*;
+    use pneuma::adapters::database::DatabaseError;
+    use pneuma::adapters::git_source::{CloneRepositoryError, ResolveBranchError};
+    use pneuma::adapters::health_check_external::ExternalHealthCheckError;
+    use pneuma::adapters::local_runtime::PodmanError;
+    use pneuma::adapters::oci_image::PullImageError;
+    use pneuma::adapters::stores::application_store::ApplicationStoreError;
+    use pneuma::adapters::stores::deployment_store::DeploymentStoreError;
+    use pneuma::use_cases::ci::CiDispatchError;
+    use pneuma::use_cases::system::{CreateError, ShowError};
 
-    fn assert_class(error: CliError, expected: CliErrorClass) {
-        assert_eq!(error.class(), expected);
+    fn sqlite_error() -> rusqlite::Error {
+        rusqlite::Error::InvalidParameterName("test".to_owned())
+    }
+
+    fn clone_error() -> CloneRepositoryError {
+        CloneRepositoryError::Execute {
+            operation: "clone",
+            source: io::Error::other("no network"),
+        }
+    }
+
+    fn pull_image_error() -> PullImageError {
+        PullImageError::Pull {
+            reference: "registry.example/app@sha256:0000000000000000000000000000000000000000000000000000000000000000".to_owned(),
+            stdout: String::new(),
+            stderr: "denied".to_owned(),
+        }
+    }
+
+    fn podman_error() -> PodmanError {
+        PodmanError::Execute {
+            operation: "observing",
+            source: io::Error::other("no podman"),
+        }
+    }
+
+    fn store_error() -> ApplicationStoreError {
+        ApplicationStoreError::Persistence {
+            source: sqlite_error(),
+        }
+    }
+
+    // Table-driven classification coverage: one representative error per major
+    // command family, with every exit class exercised. Nested operation layering
+    // (branch deploy -> OCI deploy) is classified through the shared helper.
+    #[test]
+    fn representative_errors_classify_per_command_family() {
+        let cases: Vec<(&str, CliError, CliErrorClass)> = vec![
+            // Import family.
+            (
+                "import: rejected repository input",
+                CliError::Import {
+                    source: RemoteImportError::InvalidRepository,
+                },
+                CliErrorClass::Usage,
+            ),
+            (
+                "import: missing system requirement",
+                CliError::Import {
+                    source: RemoteImportError::Import {
+                        source: ImportError::SystemRequired,
+                    },
+                },
+                CliErrorClass::Failure,
+            ),
+            (
+                "import: git clone failure",
+                CliError::Import {
+                    source: RemoteImportError::Clone {
+                        source: clone_error(),
+                    },
+                },
+                CliErrorClass::External,
+            ),
+            (
+                "import: workspace preparation failure",
+                CliError::Import {
+                    source: RemoteImportError::Workspace {
+                        source: io::Error::other("disk full"),
+                    },
+                },
+                CliErrorClass::Failure,
+            ),
+            (
+                "import: merged persistence failure",
+                CliError::Import {
+                    source: RemoteImportError::Import {
+                        source: ImportError::Persistence {
+                            source: Box::new(store_error()),
+                        },
+                    },
+                },
+                CliErrorClass::Failure,
+            ),
+            // Application runtime lifecycle family.
+            (
+                "app runtime: not deployed",
+                CliError::ApplicationRuntime {
+                    source: Box::new(RuntimeLifecycleError::NotDeployed {
+                        application_name: "portal".to_owned(),
+                    }),
+                },
+                CliErrorClass::NotFound,
+            ),
+            (
+                "app runtime: concurrent change",
+                CliError::ApplicationRuntime {
+                    source: Box::new(RuntimeLifecycleError::RuntimeChanged {
+                        runtime_id: "runtime-1".to_owned(),
+                    }),
+                },
+                CliErrorClass::Conflict,
+            ),
+            (
+                "app runtime: podman control failure",
+                CliError::ApplicationRuntime {
+                    source: Box::new(RuntimeLifecycleError::Observe {
+                        runtime_id: "runtime-1".to_owned(),
+                        source: podman_error(),
+                    }),
+                },
+                CliErrorClass::External,
+            ),
+            (
+                "app runtime: persistence failure",
+                CliError::ApplicationRuntime {
+                    source: Box::new(RuntimeLifecycleError::ApplicationStore {
+                        source: store_error(),
+                    }),
+                },
+                CliErrorClass::Failure,
+            ),
+            // OCI deployment family.
+            (
+                "deploy image: repository policy mismatch",
+                CliError::DeployOci {
+                    source: Box::new(DeployOciError::RepositoryMismatch {
+                        application_id: "app-1".to_owned(),
+                        allowed: "registry.example".to_owned(),
+                        actual: "other.example".to_owned(),
+                    }),
+                },
+                CliErrorClass::Usage,
+            ),
+            (
+                "deploy image: pull failure",
+                CliError::DeployOci {
+                    source: Box::new(DeployOciError::PullImage {
+                        source: pull_image_error(),
+                    }),
+                },
+                CliErrorClass::External,
+            ),
+            (
+                "deploy image: persistence failure",
+                CliError::DeployOci {
+                    source: Box::new(DeployOciError::DeliveryConfiguration {
+                        source: store_error(),
+                    }),
+                },
+                CliErrorClass::Failure,
+            ),
+            // Branch deployment family, including nested OCI layering.
+            (
+                "deploy branch: branch resolution failure",
+                CliError::DeployBranch {
+                    source: Box::new(DeployBranchError::ResolveBranch {
+                        source: ResolveBranchError::BranchNotFound {
+                            url: "https://git.example/app.git".to_owned(),
+                            branch: "main".to_owned(),
+                        },
+                    }),
+                },
+                CliErrorClass::External,
+            ),
+            (
+                "deploy branch: nested pull failure",
+                CliError::DeployBranch {
+                    source: Box::new(DeployBranchError::DeployOci {
+                        source: DeployOciError::PullImage {
+                            source: pull_image_error(),
+                        },
+                    }),
+                },
+                CliErrorClass::External,
+            ),
+            (
+                "deploy branch: nested input rejection",
+                CliError::DeployBranch {
+                    source: Box::new(DeployBranchError::DeployOci {
+                        source: DeployOciError::RepositoryMismatch {
+                            application_id: "app-1".to_owned(),
+                            allowed: "registry.example".to_owned(),
+                            actual: "other.example".to_owned(),
+                        },
+                    }),
+                },
+                CliErrorClass::Usage,
+            ),
+            (
+                "deploy branch: persistence failure",
+                CliError::DeployBranch {
+                    source: Box::new(DeployBranchError::SourceConfiguration {
+                        source: store_error(),
+                    }),
+                },
+                CliErrorClass::Failure,
+            ),
+            // Rollback family.
+            (
+                "rollback: application not found",
+                CliError::Rollback {
+                    source: RollbackError::ApplicationNotFound {
+                        application_id: "app-1".to_owned(),
+                    },
+                },
+                CliErrorClass::NotFound,
+            ),
+            (
+                "rollback: no previous deployment",
+                CliError::Rollback {
+                    source: RollbackError::NoPreviousDeployment {
+                        application_id: "app-1".to_owned(),
+                    },
+                },
+                CliErrorClass::Conflict,
+            ),
+            (
+                "rollback: image pull failure",
+                CliError::Rollback {
+                    source: RollbackError::PullImage {
+                        source: pull_image_error(),
+                    },
+                },
+                CliErrorClass::External,
+            ),
+            (
+                "rollback: merged load-target failure",
+                CliError::Rollback {
+                    source: RollbackError::LoadTarget {
+                        source: Box::new(io::Error::other("disk full")),
+                    },
+                },
+                CliErrorClass::Failure,
+            ),
+            // Visibility change family.
+            (
+                "visibility: application not found",
+                CliError::VisibilitySet {
+                    source: ExposureChangeError::ApplicationNotFound {
+                        application_id: "app-1".to_owned(),
+                    },
+                },
+                CliErrorClass::NotFound,
+            ),
+            (
+                "visibility: rejected visibility input",
+                CliError::VisibilitySet {
+                    source: ExposureChangeError::InvalidVisibility {
+                        visibility: "maybe".to_owned(),
+                    },
+                },
+                CliErrorClass::Usage,
+            ),
+            (
+                "visibility: concurrent exposure change",
+                CliError::VisibilitySet {
+                    source: ExposureChangeError::ExposureChanged {
+                        application_id: "app-1".to_owned(),
+                    },
+                },
+                CliErrorClass::Conflict,
+            ),
+            (
+                "visibility: external health failure",
+                CliError::VisibilitySet {
+                    source: ExposureChangeError::ExternalHealthFailed {
+                        source: ExternalHealthCheckError::RequestFailed {
+                            stderr: "connection refused".to_owned(),
+                        },
+                    },
+                },
+                CliErrorClass::External,
+            ),
+            // System family.
+            (
+                "system show: not found",
+                CliError::SystemShow {
+                    source: ShowError::NotFound {
+                        system_name: "billing".to_owned(),
+                    },
+                },
+                CliErrorClass::NotFound,
+            ),
+            (
+                "system show: persistence failure",
+                CliError::SystemShow {
+                    source: ShowError::Persistence {
+                        source: sqlite_error(),
+                    },
+                },
+                CliErrorClass::Failure,
+            ),
+            (
+                "system create: persistence failure",
+                CliError::SystemCreate {
+                    source: CreateError::Persistence {
+                        source: sqlite_error(),
+                    },
+                },
+                CliErrorClass::Failure,
+            ),
+            // CI dispatch family.
+            (
+                "ci dispatch: rejected command input",
+                CliError::CiDispatch {
+                    source: CiDispatchError::EmptyCommand,
+                },
+                CliErrorClass::Usage,
+            ),
+            // Reconciliation family.
+            (
+                "reconcile: application not found",
+                CliError::Reconcile {
+                    source: ReconciliationReadError::ApplicationNotFound {
+                        application_name: "portal".to_owned(),
+                    },
+                },
+                CliErrorClass::NotFound,
+            ),
+            (
+                "reconcile: operation lock failure",
+                CliError::Reconcile {
+                    source: ReconciliationReadError::OperationLock {
+                        source: pneuma::adapters::application_lock::ApplicationLockError::Open {
+                            path: "/tmp/lock".into(),
+                            source: io::Error::other("locked"),
+                        },
+                    },
+                },
+                CliErrorClass::Conflict,
+            ),
+            (
+                "reconcile: container observation failure",
+                CliError::Reconcile {
+                    source: ReconciliationReadError::ObserveContainer {
+                        source: podman_error(),
+                    },
+                },
+                CliErrorClass::External,
+            ),
+            // Database family (open, backup, and restore share one variant).
+            (
+                "database: open failure",
+                CliError::Database {
+                    source: DatabaseError::Open {
+                        path: "/tmp/pneuma.sqlite3".into(),
+                        source: sqlite_error(),
+                    },
+                },
+                CliErrorClass::Failure,
+            ),
+            // Read-only query family.
+            (
+                "deployment list: persistence failure",
+                CliError::ListDeployments {
+                    source: ListDeploymentsError::Store(DeploymentStoreError::Stale {
+                        deployment_id: "deployment-1".to_owned(),
+                    }),
+                },
+                CliErrorClass::Failure,
+            ),
+            // Top-level command input and diagnostics.
+            (
+                "app lookup by name: not found",
+                CliError::ApplicationNotFound {
+                    application_name: "portal".to_owned(),
+                },
+                CliErrorClass::NotFound,
+            ),
+            (
+                "import: invalid system name input",
+                CliError::InvalidSystemName {
+                    source: pneuma::domain::system::InvalidSystemName {
+                        value: "bad name".to_owned(),
+                    },
+                },
+                CliErrorClass::Usage,
+            ),
+            (
+                "deploy: missing image and branch",
+                CliError::MissingDeployOption,
+                CliErrorClass::Usage,
+            ),
+            (
+                "deploy: invalid artifact reference",
+                CliError::InvalidOciArtifact {
+                    source: pneuma::domain::release::OciArtifact::parse("not-a-digest")
+                        .expect_err("invalid reference must be rejected"),
+                },
+                CliErrorClass::Usage,
+            ),
+            (
+                "doctor: failed diagnostic checks",
+                CliError::Doctor,
+                CliErrorClass::Failure,
+            ),
+        ];
+
+        for (description, error, expected) in cases {
+            assert_eq!(error.class(), expected, "{description}");
+            assert_eq!(
+                error.class().exit_code(),
+                expected.exit_code(),
+                "{description}"
+            );
+        }
     }
 
     #[test]
@@ -225,165 +633,6 @@ mod tests {
         assert_eq!(CliErrorClass::NotFound.exit_code(), 3);
         assert_eq!(CliErrorClass::Conflict.exit_code(), 4);
         assert_eq!(CliErrorClass::External.exit_code(), 5);
-    }
-
-    #[test]
-    fn classifies_rejected_command_input_as_usage() {
-        let artifact = pneuma::domain::release::OciArtifact::parse("not-a-digest")
-            .expect_err("invalid reference must be rejected");
-        assert_class(
-            CliError::InvalidOciArtifact { source: artifact },
-            CliErrorClass::Usage,
-        );
-        assert_class(CliError::MissingDeployOption, CliErrorClass::Usage);
-        assert_class(
-            CliError::CiDispatch {
-                source: pneuma::use_cases::ci::CiDispatchError::EmptyCommand,
-            },
-            CliErrorClass::Usage,
-        );
-    }
-
-    #[test]
-    fn classifies_absent_named_resources_as_not_found() {
-        assert_class(
-            CliError::ApplicationNotFound {
-                application_name: "portal".to_owned(),
-            },
-            CliErrorClass::NotFound,
-        );
-        assert_class(
-            CliError::Reconcile {
-                source: ReconciliationReadError::ApplicationNotFound {
-                    application_name: "portal".to_owned(),
-                },
-            },
-            CliErrorClass::NotFound,
-        );
-        assert_class(
-            CliError::ApplicationRuntime {
-                source: Box::new(RuntimeLifecycleError::NotDeployed {
-                    application_name: "portal".to_owned(),
-                }),
-            },
-            CliErrorClass::NotFound,
-        );
-        assert_class(
-            CliError::SystemShow {
-                source: pneuma::use_cases::system::ShowError::NotFound {
-                    system_name: "billing".to_owned(),
-                },
-            },
-            CliErrorClass::NotFound,
-        );
-    }
-
-    #[test]
-    fn classifies_unsatisfied_or_concurrent_state_as_conflict() {
-        assert_class(
-            CliError::ApplicationRuntime {
-                source: Box::new(RuntimeLifecycleError::RuntimeChanged {
-                    runtime_id: "runtime-1".to_owned(),
-                }),
-            },
-            CliErrorClass::Conflict,
-        );
-        assert_class(
-            CliError::VisibilitySet {
-                source: ExposureChangeError::ExposureChanged {
-                    application_id: "app-1".to_owned(),
-                },
-            },
-            CliErrorClass::Conflict,
-        );
-        assert_class(
-            CliError::Rollback {
-                source: RollbackError::NoPreviousDeployment {
-                    application_id: "app-1".to_owned(),
-                },
-            },
-            CliErrorClass::Conflict,
-        );
-        assert_class(
-            CliError::Reconcile {
-                source: ReconciliationReadError::OperationLock {
-                    source: pneuma::adapters::application_lock::ApplicationLockError::Open {
-                        path: "/tmp/lock".into(),
-                        source: io::Error::other("locked"),
-                    },
-                },
-            },
-            CliErrorClass::Conflict,
-        );
-    }
-
-    #[test]
-    fn classifies_external_integration_failures_as_external() {
-        assert_class(
-            CliError::DeployOci {
-                source: Box::new(DeployOciError::PullImage {
-                    source: pneuma::adapters::oci_image::PullImageError::Pull {
-                        reference: "registry.example/app@sha256:0000000000000000000000000000000000000000000000000000000000000000".to_owned(),
-                        stdout: String::new(),
-                        stderr: "denied".to_owned(),
-                    },
-                }),
-            },
-            CliErrorClass::External,
-        );
-        assert_class(
-            CliError::DeployBranch {
-                source: Box::new(DeployBranchError::ResolveBranch {
-                    source: pneuma::adapters::git_source::ResolveBranchError::BranchNotFound {
-                        url: "https://git.example/app.git".to_owned(),
-                        branch: "main".to_owned(),
-                    },
-                }),
-            },
-            CliErrorClass::External,
-        );
-        assert_class(
-            CliError::Import {
-                source: RemoteImportError::Clone {
-                    source: clone_error_for_test(),
-                },
-            },
-            CliErrorClass::External,
-        );
-    }
-
-    fn clone_error_for_test() -> pneuma::adapters::git_source::CloneRepositoryError {
-        pneuma::adapters::git_source::CloneRepositoryError::Execute {
-            operation: "clone",
-            source: io::Error::other("no network"),
-        }
-    }
-
-    #[test]
-    fn classifies_persistence_and_internal_failures_as_failure() {
-        assert_class(CliError::Doctor, CliErrorClass::Failure);
-        assert_class(
-            CliError::SystemCreate {
-                source: pneuma::use_cases::system::CreateError::Persistence {
-                    source: rusqlite::Error::InvalidParameterName("test".to_owned()),
-                },
-            },
-            CliErrorClass::Failure,
-        );
-        assert_class(
-            CliError::Import {
-                source: RemoteImportError::Workspace {
-                    source: io::Error::other("disk full"),
-                },
-            },
-            CliErrorClass::Failure,
-        );
-        assert_class(
-            CliError::Import {
-                source: RemoteImportError::InvalidRepository,
-            },
-            CliErrorClass::Usage,
-        );
     }
 
     #[test]
