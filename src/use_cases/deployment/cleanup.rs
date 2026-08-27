@@ -29,14 +29,6 @@ impl CandidateResources {
         }
     }
 
-    // Records a resolved container when no persisted runtime exists yet.
-    pub(crate) fn with_container(container_id: &ContainerId) -> Self {
-        Self {
-            container_id: Some(container_id.clone()),
-            ..Self::empty()
-        }
-    }
-
     // Records a resolved container and its registered runtime for later cleanup.
     pub(crate) fn with_container_and_runtime(
         container_id: &ContainerId,
@@ -218,7 +210,6 @@ mod tests {
                 .with_unit("unit")
                 .needs_cleanup()
         );
-        assert!(CandidateResources::with_container(&container_id()).needs_cleanup());
         assert!(
             CandidateResources::with_container_and_runtime(&container_id(), &runtime_id())
                 .needs_cleanup()

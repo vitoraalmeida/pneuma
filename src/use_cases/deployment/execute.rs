@@ -4,11 +4,10 @@ use rusqlite::Connection;
 
 use super::activation::{PublicActivationInput, activate_public_candidate};
 use super::candidate::{CandidateStartInput, StartedCandidate, start_candidate};
-use super::cleanup::{load_previous_runtime, retire_previous_runtime};
+use super::cleanup::{CandidateResources, load_previous_runtime, retire_previous_runtime};
 use super::create::create_deployment_with_source_revision_and_ownership;
 use super::failure::{
-    DeployReleaseError, FailedExecution, failure_needing_persistence, finish_failed_deployment,
-    internal_promotion_failure,
+    DeployReleaseError, FailedExecution, finish_failed_deployment, internal_promotion_failure,
 };
 use super::progress::{DeploymentStep, ProgressReporter};
 use super::promotion::promote_internal_candidate;
@@ -185,7 +184,11 @@ fn execute_deployment(
     progress: &mut ProgressReporter<'_>,
 ) -> Result<CompletedDeploymentExecution, FailedExecution> {
     wait_for_test_gate("deployment.pending").map_err(|source| {
-        failure_needing_persistence(DeploymentFailureCode::TestGate, source, None, None)
+        FailedExecution::needing_persistence(
+            DeploymentFailureCode::TestGate,
+            source,
+            CandidateResources::empty(),
+        )
     })?;
     progress.state_changed(deployment_id.as_str(), DeploymentStatus::Starting);
     progress.started(
@@ -274,13 +277,11 @@ fn finish_public_deployment(
     progress: &mut ProgressReporter<'_>,
 ) -> Result<CompletedDeploymentExecution, FailedExecution> {
     let Some(public_configuration) = public_configuration else {
-        return Err(failure_needing_persistence(
+        return Err(candidate.failed_execution(
             DeploymentFailureCode::PublicConfigurationMissing,
             DeployReleaseError::PublicApplication {
                 application_id: specification.application_id.to_string(),
             },
-            Some(&candidate.runtime.external_runtime_id),
-            Some(&candidate.runtime.id),
         ));
     };
 

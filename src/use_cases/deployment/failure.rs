@@ -244,33 +244,6 @@ fn resolve_failure_recovery(
     }
 }
 
-// Git, build, runtime, and ordinary promotion errors do not update the deployment
-// themselves. Tag them as needing persistence so the common finalizer records the
-// correct failure stage before performing any candidate cleanup.
-pub(crate) fn failure_needing_persistence(
-    code: DeploymentFailureCode,
-    source: impl Error + 'static,
-    container_id: Option<&ContainerId>,
-    runtime_id: Option<&RuntimeInstanceId>,
-) -> FailedExecution {
-    FailedExecution::needing_persistence(
-        code,
-        source,
-        candidate_resources(container_id, runtime_id),
-    )
-}
-
-fn candidate_resources(
-    container_id: Option<&ContainerId>,
-    runtime_id: Option<&RuntimeInstanceId>,
-) -> CandidateResources {
-    match (container_id, runtime_id) {
-        (Some(cid), Some(rid)) => CandidateResources::with_container_and_runtime(cid, rid),
-        (Some(cid), None) => CandidateResources::with_container(cid),
-        _ => CandidateResources::empty(),
-    }
-}
-
 // Distinguishes an unhealthy candidate, whose rejection promotion already persisted as
 // `Failed`, from other promotion errors; either way the started unit and port join the
 // compensation set.
