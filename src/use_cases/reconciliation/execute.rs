@@ -13,12 +13,7 @@ use super::{ReconciliationReadError, ReconciliationResult};
 
 // Translates a pure decision refusal into the read error surface without changing its message.
 pub(crate) fn reconciliation_decision_reason(error: ReconciliationDecisionError) -> String {
-    match error {
-        ReconciliationDecisionError::UnhandledDrift => {
-            "drift has no automatic repair; manual intervention is required".to_owned()
-        }
-        ReconciliationDecisionError::InvalidRouteFragment(source) => source.to_string(),
-    }
+    error.to_string()
 }
 
 // Executes one decided action; every effect corresponds to exactly one decision variant.

@@ -1,4 +1,3 @@
-use std::fmt;
 use std::io;
 use std::net::SocketAddr;
 use std::process::Command;
@@ -21,22 +20,23 @@ pub(crate) struct ContainerCommandOutput {
 // One failure vocabulary for the whole Podman process boundary: lifecycle
 // control, resolution, and observation report the same four infrastructure
 // shapes so callers wrap stages without re-matching adapter variants.
-//
-// `InvalidOutput` branches on output presence in `Display`, so the derive only
-// supplies the source chain.
 #[derive(Debug, Error)]
 pub enum PodmanError {
     // An input was rejected before any command ran.
-    InvalidInput {
-        reason: &'static str,
-    },
+    #[error("{reason}")]
+    InvalidInput { reason: &'static str },
     // The podman executable could not be spawned.
+    #[error("failed to execute Podman while {operation}: {source}")]
     Execute {
         operation: &'static str,
         #[source]
         source: io::Error,
     },
     // Podman ran against a container but reported failure.
+    #[error(
+        "Podman failed while {operation} container `{target}`: {diagnostic}",
+        diagnostic = diagnostic(stdout, stderr)
+    )]
     CommandFailed {
         operation: &'static str,
         target: String,
@@ -44,49 +44,15 @@ pub enum PodmanError {
         stderr: String,
     },
     // Podman exited successfully but returned output this boundary rejects.
+    #[error(
+        "Podman returned {description} for container `{target}`{output_suffix}",
+        output_suffix = podman_output_suffix(output)
+    )]
     InvalidOutput {
         target: String,
         description: &'static str,
         output: Option<String>,
     },
-}
-
-impl fmt::Display for PodmanError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidInput { reason } => formatter.write_str(reason),
-            Self::Execute { operation, source } => {
-                write!(
-                    formatter,
-                    "failed to execute Podman while {operation}: {source}"
-                )
-            }
-            Self::CommandFailed {
-                operation,
-                target,
-                stdout,
-                stderr,
-            } => write!(
-                formatter,
-                "Podman failed while {operation} container `{target}`: {}",
-                diagnostic(stdout, stderr)
-            ),
-            Self::InvalidOutput {
-                target,
-                description,
-                output,
-            } => match output {
-                Some(output) => write!(
-                    formatter,
-                    "Podman returned {description} for container `{target}`: {output}"
-                ),
-                None => write!(
-                    formatter,
-                    "Podman returned {description} for container `{target}`"
-                ),
-            },
-        }
-    }
 }
 
 // Starts a validated container through the shared Podman lifecycle command path.
@@ -399,6 +365,14 @@ fn diagnostic<'a>(stdout: &'a str, stderr: &'a str) -> &'a str {
         stdout.trim()
     } else {
         stderr.trim()
+    }
+}
+
+// Formats the rejected output details as ``: output`` so their absence renders cleanly omitted.
+fn podman_output_suffix(output: &Option<String>) -> String {
+    match output {
+        Some(output) => format!(": {output}"),
+        None => String::new(),
     }
 }
 

@@ -7,6 +7,8 @@
 //! fallbacks. Nothing here touches SQLite, Podman, systemd, Caddy, the
 //! filesystem, clocks, or randomness.
 
+use thiserror::Error;
+
 use crate::domain::application::DesiredRuntimeState;
 use crate::domain::exposure::{
     Exposure, ExposureConfigurationVersion, ExposureMaterializationState,
@@ -87,11 +89,13 @@ impl PublicExposureFailureKind {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 // Drift detected after every safe rule was evaluated; reconciliation stops
 // instead of guessing.
 pub(crate) enum ReconciliationDecisionError {
+    #[error("drift has no automatic repair; manual intervention is required")]
     UnhandledDrift,
+    #[error(transparent)]
     InvalidRouteFragment(InvalidExposureConfigurationVersion),
 }
 

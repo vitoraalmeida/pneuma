@@ -45,25 +45,31 @@ pub enum CaddyCommandError {
     Rejected { stdout: String, stderr: String },
 }
 
-// `ValidateConfiguration` appends a recovery suffix only when recovery was
-// attempted, so `Display` stays hand-written while the derive supplies the
-// source chain.
+// `ValidateConfiguration` appends its recovery detail conditionally through a
+// format argument, keeping every message declarative on the derived Display.
 #[derive(Debug, Error)]
 pub enum CaddyRecoveryError {
+    #[error("failed to restore Caddy fragment at {}: {source}", path.display())]
     RestoreFragment {
         path: PathBuf,
         #[source]
         source: io::Error,
     },
+    #[error("failed to reload the restored configuration: {failure}")]
     Reload {
         #[source]
         failure: CaddyCommandError,
     },
+    #[error(
+        "failed to validate Caddy after removal: {failure}{recovered}",
+        recovered = recovery_suffix(recovery.as_deref())
+    )]
     ValidateConfiguration {
         #[source]
         failure: CaddyCommandError,
         recovery: Option<Box<CaddyRecoveryError>>,
     },
+    #[error("failed to reload Caddy after removal: {failure}; recovery also failed: {recovery}")]
     ReloadRecovery {
         #[source]
         failure: CaddyCommandError,
@@ -94,29 +100,40 @@ pub enum ObserveCaddyFragmentError {
     },
 }
 
-// `ValidateConfiguration` and `Reload` share the recovery suffix helper in
-// `Display`, so the derive only supplies the source chain.
+// `ValidateConfiguration` and `Reload` append their shared recovery detail
+// conditionally through a format argument, keeping every message declarative
+// on the derived Display.
 #[derive(Debug, Error)]
 pub enum MaterializeCaddyFragmentError {
+    #[error("application ID must be a 32-character hexadecimal value")]
     InvalidApplicationId,
-    InvalidCaddyfile {
-        path: PathBuf,
-    },
+    #[error("main Caddyfile at {} must be a file", path.display())]
+    InvalidCaddyfile { path: PathBuf },
+    #[error("failed to {action} {}: {source}", path.display())]
     Filesystem {
         action: CaddyFilesystemAction,
         path: PathBuf,
         #[source]
         source: io::Error,
     },
+    #[error("failed to validate the generated fragment: {failure}")]
     ValidateFragment {
         #[source]
         failure: CaddyCommandError,
     },
+    #[error(
+        "failed to validate the complete configuration: {failure}{recovered}",
+        recovered = recovery_suffix(recovery.as_deref())
+    )]
     ValidateConfiguration {
         #[source]
         failure: CaddyCommandError,
         recovery: Option<Box<CaddyRecoveryError>>,
     },
+    #[error(
+        "failed to reload Caddy: {failure}{recovered}",
+        recovered = recovery_suffix(recovery.as_deref())
+    )]
     Reload {
         #[source]
         failure: CaddyCommandError,
@@ -133,75 +150,6 @@ impl fmt::Display for CaddyFilesystemAction {
             Self::WriteTemporaryFragment => "write the temporary Caddy fragment at",
             Self::ActivateFragment => "activate the Caddy fragment at",
         })
-    }
-}
-
-impl fmt::Display for CaddyRecoveryError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::RestoreFragment { path, source } => write!(
-                formatter,
-                "failed to restore Caddy fragment at {}: {source}",
-                path.display()
-            ),
-            Self::Reload { failure } => {
-                write!(
-                    formatter,
-                    "failed to reload the restored configuration: {failure}"
-                )
-            }
-            Self::ValidateConfiguration { failure, recovery } => {
-                write!(
-                    formatter,
-                    "failed to validate Caddy after removal: {failure}"
-                )?;
-                if let Some(recovery) = recovery {
-                    write!(formatter, "; recovery also failed: {recovery}")?;
-                }
-                Ok(())
-            }
-            Self::ReloadRecovery { failure, recovery } => write!(
-                formatter,
-                "failed to reload Caddy after removal: {failure}; recovery also failed: {recovery}"
-            ),
-        }
-    }
-}
-
-impl fmt::Display for MaterializeCaddyFragmentError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidApplicationId => {
-                formatter.write_str("application ID must be a 32-character hexadecimal value")
-            }
-            Self::InvalidCaddyfile { path } => write!(
-                formatter,
-                "main Caddyfile at {} must be a file",
-                path.display()
-            ),
-            Self::Filesystem {
-                action,
-                path,
-                source,
-            } => write!(formatter, "failed to {action} {}: {source}", path.display()),
-            Self::ValidateFragment { failure } => {
-                write!(
-                    formatter,
-                    "failed to validate the generated fragment: {failure}"
-                )
-            }
-            Self::ValidateConfiguration { failure, recovery } => {
-                write!(
-                    formatter,
-                    "failed to validate the complete configuration: {failure}"
-                )?;
-                write_recovery(formatter, recovery.as_deref())
-            }
-            Self::Reload { failure, recovery } => {
-                write!(formatter, "failed to reload Caddy: {failure}")?;
-                write_recovery(formatter, recovery.as_deref())
-            }
-        }
     }
 }
 
@@ -554,12 +502,9 @@ fn diagnostic<'a>(stdout: &'a str, stderr: &'a str) -> &'a str {
 }
 
 // Appends recovery details without obscuring the primary materialization failure.
-fn write_recovery(
-    formatter: &mut fmt::Formatter<'_>,
-    recovery: Option<&CaddyRecoveryError>,
-) -> fmt::Result {
-    if let Some(recovery) = recovery {
-        write!(formatter, "; recovery also failed: {recovery}")?;
+fn recovery_suffix(recovery: Option<&CaddyRecoveryError>) -> String {
+    match recovery {
+        Some(recovery) => format!("; recovery also failed: {recovery}"),
+        None => String::new(),
     }
-    Ok(())
 }
