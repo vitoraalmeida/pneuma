@@ -64,6 +64,6 @@ product direction (`roadmap.md`).
 | [`architecture/data-model.md`](architecture/data-model.md) | Living | Implemented SQLite model and persistence invariants |
 | [`architecture/security-model.md`](architecture/security-model.md) | Living | Assets, actors, trust boundaries, threats with their controls and residual risks, attack chains, and security posture |
 | [`decisions/`](decisions/) | Historical records | Retrospective architectural decision records |
-| [`iterations/current-iteration.md`](iterations/current-iteration.md) | Active planning | Completed v0.4.2 domain type closure tracker |
+| [`iterations/current-iteration.md`](iterations/current-iteration.md) | Active planning | v0.4.3 disposable regression automation tracker |
 | [`iterations/next-iteration.md`](iterations/next-iteration.md) | Queued planning | v0.5 observed state planning reminder |
 | [`roadmap.md`](roadmap.md) | Living | v0.1 → v1.0 evolution and direction |
