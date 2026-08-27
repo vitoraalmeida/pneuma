@@ -113,8 +113,8 @@ destroy_clone() {
 
 cleanup() {
 	local rc=$?
-	if (( CLONE_ACTIVE )); then
-		if (( rc == 0 )) || ! $KEEP_ON_FAIL; then
+	if ((CLONE_ACTIVE)); then
+		if ((rc == 0)) || ! $KEEP_ON_FAIL; then
 			destroy_clone
 		else
 			printf '\nKeeping %s (%s) for debugging (--keep-on-fail).\n' \
