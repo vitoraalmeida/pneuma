@@ -1,6 +1,6 @@
 # Current Iteration
 
-**Status:** in progress
+**Status:** completed and closed
 
 **Base:** `5f270ed` (`docs(operations): keep dev-vm tutorial pointed only at repository files`)
 
@@ -106,3 +106,9 @@ semantics intact.
   database backup path absent on pristine VMs.
 - Iteration duration evidence: full `all` run completes in roughly 35 minutes
   end to end on this host, single command, unattended.
+- Closure verification: the four CI gates were rerun green at the final code
+  state (`8748285`) on 2026-08-27 — `cargo fmt --check`,
+  `cargo clippy --all-targets --all-features -- -D warnings`,
+  `cargo test --all-features` (full suite passed; the only ignored tests are
+  the three documented rootless-Podman ones), and
+  `cargo build --workspace --release`.
