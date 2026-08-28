@@ -169,6 +169,15 @@ lock + ownership → recover branch → load → observe → decide (pure) → e
 - Public surface is minimal: capability `mod.rs` files curate what is exported;
   internal steps are private or `pub(crate)`. If an item is `pub`, an external
   consumer exists.
+- Error boundaries: technical errors originate in the adapter or operation that
+  produced them and keep that vocabulary. Deployment failure classification
+  happens once, at the deployment use-case boundary: `FailedExecution` (internal
+  to `use_cases/deployment`) combines the semantic `DeploymentFailureCode` with
+  the source error, compensation resources, and persistence state. Failure
+  finalization is centralized in `finish_failed_deployment`, whose recovery
+  precedence is cleanup divergence, then failure-recording divergence, then the
+  original failure. The CLI owns presentation and exit classification and never
+  recovers semantics by parsing error text.
 - Zero-row CAS updates mean stale/conflict (`PersistenceOutcome::Stale`),
   never success (INV-DB-004).
 - No SQLite transaction is held across Git/OCI/Podman/systemd/Caddy/HTTP work;
