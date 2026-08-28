@@ -680,7 +680,7 @@ REMOTE
 		fi
 		sleep 0.1
 	done
-remote_file "$GATE_ROOT/${CASE_DIR##*/}/reconciliation.application-lock-acquired.ready"
+	remote_file "$GATE_ROOT/${CASE_DIR##*/}/reconciliation.application-lock-acquired.ready"
 	local output
 	output=$(run_reconcile reconcile-b)
 	assert_result deferred "$output"
