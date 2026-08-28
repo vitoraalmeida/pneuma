@@ -37,17 +37,17 @@ fn loads_the_active_reconciliation_snapshot_without_writing_sqlite() {
     let external_id = "b".repeat(64);
     connection
         .execute_batch(&format!(
-            "INSERT INTO systems (id, name, created_at) VALUES ('{system_id}', 'team', '2026-01-01');
-             INSERT INTO applications (id, system_id, name, desired_runtime_state, created_at, updated_at)
-             VALUES ('{application_id}', '{system_id}', 'another', 'running', '2026-01-01', '2026-01-01');
-             INSERT INTO exposures (application_id, desired_visibility, domain, materialization_state, created_at, updated_at)
-             VALUES ('{application_id}', 'internal', NULL, 'not_materialized', '2026-01-01', '2026-01-01');
-             INSERT INTO releases (id, application_id, image_reference, image_repository, image_digest, created_at)
-             VALUES ('{release_id}', '{application_id}', 'registry.example/team/another@{digest}', 'registry.example/team/another', '{digest}', '2026-01-01');
+            "INSERT INTO systems (id, name) VALUES ('{system_id}', 'team');
+             INSERT INTO applications (id, system_id, name, repository_url, manifest_path, image_repository, container_port, health_check_path, health_check_expected_status, desired_runtime_state)
+             VALUES ('{application_id}', '{system_id}', 'another', 'https://example.test/another.git', 'pneuma.toml', 'registry.example/team/another', 8080, '/healthz', 200, 'running');
+             INSERT INTO exposures (application_id, desired_visibility, domain, materialization_state)
+             VALUES ('{application_id}', 'internal', NULL, 'not_materialized');
+             INSERT INTO releases (id, application_id, image_reference, created_at)
+             VALUES ('{release_id}', '{application_id}', 'registry.example/team/another@{digest}', '2026-01-01');
              INSERT INTO deployments (id, application_id, release_id, type, status, requested_at, started_at, finished_at)
              VALUES ('{deployment_id}', '{application_id}', '{release_id}', 'deploy', 'succeeded', '2026-01-01', '2026-01-01', '2026-01-01');
-             INSERT INTO runtime_instances (id, application_id, deployment_id, external_runtime_id, state, host_address, host_port, container_port, last_observed_state, last_observed_at)
-             VALUES ('{runtime_id}', '{application_id}', '{deployment_id}', '{external_id}', 'running', '127.0.0.1', 30000, 8080, 'running', '2026-01-01');
+             INSERT INTO runtime_instances (id, application_id, deployment_id, external_runtime_id, state, host_port, container_port, last_observed_state, last_observed_at)
+             VALUES ('{runtime_id}', '{application_id}', '{deployment_id}', '{external_id}', 'running', 30000, 8080, 'running', '2026-01-01');
              UPDATE applications SET active_deployment_id = '{deployment_id}' WHERE id = '{application_id}';"
         ))
         .unwrap();
@@ -293,17 +293,17 @@ fn reconcile_preserves_a_proven_prior_route_when_an_activation_was_interrupted()
     let prior_route = "prior canonical route\n";
     connection
         .execute_batch(&format!(
-            "INSERT INTO systems (id, name, created_at) VALUES ('{system_id}', 'team', '2026-01-01');
-             INSERT INTO applications (id, system_id, name, desired_runtime_state, created_at, updated_at)
-             VALUES ('{application_id}', '{system_id}', 'another', 'running', '2026-01-01', '2026-01-01');
-             INSERT INTO releases (id, application_id, image_reference, image_repository, image_digest, created_at)
-             VALUES ('{release_id}', '{application_id}', 'registry.example/team/another@{digest}', 'registry.example/team/another', '{digest}', '2026-01-01');
+            "INSERT INTO systems (id, name) VALUES ('{system_id}', 'team');
+             INSERT INTO applications (id, system_id, name, repository_url, manifest_path, image_repository, container_port, health_check_path, health_check_expected_status, desired_runtime_state)
+             VALUES ('{application_id}', '{system_id}', 'another', 'https://example.test/another.git', 'pneuma.toml', 'registry.example/team/another', 8080, '/healthz', 200, 'running');
+             INSERT INTO releases (id, application_id, image_reference, created_at)
+             VALUES ('{release_id}', '{application_id}', 'registry.example/team/another@{digest}', '2026-01-01');
              INSERT INTO deployments (id, application_id, release_id, type, status, requested_at, started_at, finished_at)
              VALUES ('{active_deployment_id}', '{application_id}', '{release_id}', 'deploy', 'succeeded', '2026-01-01', '2026-01-01', '2026-01-01');
-             INSERT INTO runtime_instances (id, application_id, deployment_id, external_runtime_id, state, host_address, host_port, container_port, last_observed_state, last_observed_at)
-             VALUES ('{active_runtime_id}', '{application_id}', '{active_deployment_id}', '{}', 'running', '127.0.0.1', 30000, 8080, 'running', '2026-01-01');
-             INSERT INTO exposures (application_id, desired_visibility, domain, materialization_state, active_runtime_id, configuration_version, last_materialized_at, created_at, updated_at)
-             VALUES ('{application_id}', 'public', 'another.example', 'applying', '{active_runtime_id}', '{prior_route}', '2026-01-01', '2026-01-01', '2026-01-01');
+             INSERT INTO runtime_instances (id, application_id, deployment_id, external_runtime_id, state, host_port, container_port, last_observed_state, last_observed_at)
+             VALUES ('{active_runtime_id}', '{application_id}', '{active_deployment_id}', '{}', 'running', 30000, 8080, 'running', '2026-01-01');
+             INSERT INTO exposures (application_id, desired_visibility, domain, materialization_state, active_runtime_id, configuration_version, last_materialized_at)
+             VALUES ('{application_id}', 'public', 'another.example', 'applying', '{active_runtime_id}', '{prior_route}', '2026-01-01');
              INSERT INTO deployments (id, application_id, release_id, type, status, requested_at, started_at)
              VALUES ('{interrupted_deployment_id}', '{application_id}', '{release_id}', 'deploy', 'activating', '2026-01-02', '2026-01-02');
              UPDATE applications SET active_deployment_id = '{active_deployment_id}' WHERE id = '{application_id}';",
@@ -375,13 +375,23 @@ fn only_nonterminal_deployments_block_reconciliation_dispatch() {
         let digest = format!("sha256:{}", "a".repeat(64));
         connection
             .execute_batch(&format!(
-                "INSERT INTO systems (id, name, created_at) VALUES ('{system_id}', 'team', '2026-01-01');
-                 INSERT INTO applications (id, system_id, name, desired_runtime_state, created_at, updated_at)
-                 VALUES ('{application_id}', '{system_id}', 'another', 'running', '2026-01-01', '2026-01-01');
-                 INSERT INTO releases (id, application_id, image_reference, image_repository, image_digest, created_at)
-                 VALUES ('{release_id}', '{application_id}', 'registry.example/team/another@{digest}', 'registry.example/team/another', '{digest}', '2026-01-01');
-                 INSERT INTO deployments (id, application_id, release_id, type, status, requested_at, started_at)
-                 VALUES ('{deployment_id}', '{application_id}', '{release_id}', 'deploy', '{status}', '2026-01-01', '2026-01-01');"
+                "INSERT INTO systems (id, name) VALUES ('{system_id}', 'team');
+                 INSERT INTO applications (id, system_id, name, repository_url, manifest_path, image_repository, container_port, health_check_path, health_check_expected_status, desired_runtime_state)
+                 VALUES ('{application_id}', '{system_id}', 'another', 'https://example.test/another.git', 'pneuma.toml', 'registry.example/team/another', 8080, '/healthz', 200, 'running');
+                 INSERT INTO releases (id, application_id, image_reference, created_at)
+                 VALUES ('{release_id}', '{application_id}', 'registry.example/team/another@{digest}', '2026-01-01');
+                 INSERT INTO deployments (
+                     id, application_id, release_id, type, status, requested_at, started_at,
+                     finished_at, failure_code, failure_stage, failure_message
+                 )
+                 VALUES (
+                     '{deployment_id}', '{application_id}', '{release_id}', 'deploy', '{status}',
+                     '2026-01-01', '2026-01-01',
+                     CASE WHEN '{status}' IN ('succeeded', 'failed') THEN '2026-01-01' END,
+                     CASE WHEN '{status}' = 'failed' THEN 'operation_interrupted' END,
+                     CASE WHEN '{status}' = 'failed' THEN 'starting' END,
+                     CASE WHEN '{status}' = 'failed' THEN 'seed' END
+                 );"
             ))
             .unwrap();
 
@@ -403,9 +413,9 @@ fn only_nonterminal_deployments_block_reconciliation_dispatch() {
     let mut connection = database::open(&database_path).unwrap();
     connection
         .execute_batch(
-            "INSERT INTO systems (id, name, created_at) VALUES ('55555555555555555555555555555555', 'team', '2026-01-01');
-             INSERT INTO applications (id, system_id, name, desired_runtime_state, created_at, updated_at)
-             VALUES ('11111111111111111111111111111111', '55555555555555555555555555555555', 'another', 'running', '2026-01-01', '2026-01-01');",
+            "INSERT INTO systems (id, name) VALUES ('55555555555555555555555555555555', 'team');
+             INSERT INTO applications (id, system_id, name, repository_url, manifest_path, image_repository, container_port, health_check_path, health_check_expected_status, desired_runtime_state)
+             VALUES ('11111111111111111111111111111111', '55555555555555555555555555555555', 'another', 'https://example.test/another.git', 'pneuma.toml', 'registry.example/team/another', 8080, '/healthz', 200, 'running');",
         )
         .unwrap();
 
@@ -445,13 +455,13 @@ fn seed_interrupted_deployment(connection: &rusqlite::Connection, status: &str, 
     let digest = format!("sha256:{}", "a".repeat(64));
     connection
         .execute_batch(&format!(
-            "INSERT INTO systems (id, name, created_at) VALUES ('{system_id}', 'team', '2026-01-01');
-             INSERT INTO applications (id, system_id, name, desired_runtime_state, created_at, updated_at)
-             VALUES ('{application_id}', '{system_id}', 'another', 'running', '2026-01-01', '2026-01-01');
-             INSERT INTO exposures (application_id, desired_visibility, domain, materialization_state, created_at, updated_at)
-             VALUES ('{application_id}', 'public', 'another.example', 'applying', '2026-01-01', '2026-01-01');
-             INSERT INTO releases (id, application_id, image_reference, image_repository, image_digest, created_at)
-             VALUES ('{release_id}', '{application_id}', 'registry.example/team/another@{digest}', 'registry.example/team/another', '{digest}', '2026-01-01');
+            "INSERT INTO systems (id, name) VALUES ('{system_id}', 'team');
+             INSERT INTO applications (id, system_id, name, repository_url, manifest_path, image_repository, container_port, health_check_path, health_check_expected_status, desired_runtime_state)
+             VALUES ('{application_id}', '{system_id}', 'another', 'https://example.test/another.git', 'pneuma.toml', 'registry.example/team/another', 8080, '/healthz', 200, 'running');
+             INSERT INTO exposures (application_id, desired_visibility, domain, materialization_state)
+             VALUES ('{application_id}', 'public', 'another.example', 'applying');
+             INSERT INTO releases (id, application_id, image_reference, created_at)
+             VALUES ('{release_id}', '{application_id}', 'registry.example/team/another@{digest}', '2026-01-01');
              INSERT INTO deployments (id, application_id, release_id, type, status, requested_at, started_at)
              VALUES ('{deployment_id}', '{application_id}', '{release_id}', 'deploy', '{status}', '2026-01-01', '2026-01-01');"
         ))
@@ -459,8 +469,8 @@ fn seed_interrupted_deployment(connection: &rusqlite::Connection, status: &str, 
     if runtime {
         connection
             .execute_batch(&format!(
-                "INSERT INTO runtime_instances (id, application_id, deployment_id, external_runtime_id, state, host_address, host_port, container_port, last_observed_state, last_observed_at)
-                 VALUES ('{}', '{application_id}', '{deployment_id}', '{}', 'starting', '127.0.0.1', 30000, 8080, 'running', '2026-01-01');",
+                "INSERT INTO runtime_instances (id, application_id, deployment_id, external_runtime_id, state, host_port, container_port, last_observed_state, last_observed_at)
+                 VALUES ('{}', '{application_id}', '{deployment_id}', '{}', 'starting', 30000, 8080, 'running', '2026-01-01');",
                 "4".repeat(32),
                 "b".repeat(64),
             ))

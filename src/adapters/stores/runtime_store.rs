@@ -26,11 +26,10 @@ pub(crate) fn port_is_reserved(
     connection: &Connection,
     endpoint: &ExpectedRuntimeEndpoint,
 ) -> Result<bool, rusqlite::Error> {
-    let socket_addr = endpoint.socket_addr();
     connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM runtime_instances
-             WHERE host_address = ?1 AND host_port = ?2 AND removed_at IS NULL)",
-        params![socket_addr.ip().to_string(), socket_addr.port()],
+             WHERE host_port = ?1 AND removed_at IS NULL)",
+        [endpoint.socket_addr().port()],
         |row| row.get(0),
     )
 }
@@ -40,24 +39,22 @@ pub(crate) fn insert_runtime(
     transaction: &Transaction<'_>,
     registration: &RuntimeRegistration,
 ) -> Result<(), rusqlite::Error> {
-    transaction
-        .execute(
-            "INSERT INTO runtime_instances (
+    transaction.execute(
+        "INSERT INTO runtime_instances (
                 id, application_id, deployment_id, external_runtime_id,
-                state, host_address, host_port, container_port,
-                last_observed_state, last_observed_at, created_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'running', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-            params![
-                registration.id.as_str(),
-                registration.application_id.as_str(),
-                registration.deployment_id.as_str(),
-                registration.external_runtime_id.as_str(),
-                runtime_state_value(RuntimeState::Starting),
-                registration.expected_endpoint.socket_addr().ip().to_string(),
-                registration.expected_endpoint.socket_addr().port(),
-                registration.container_port.get()
-            ],
-        )?;
+                state, host_port, container_port,
+                last_observed_state, last_observed_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'running', CURRENT_TIMESTAMP)",
+        params![
+            registration.id.as_str(),
+            registration.application_id.as_str(),
+            registration.deployment_id.as_str(),
+            registration.external_runtime_id.as_str(),
+            runtime_state_value(RuntimeState::Starting),
+            registration.expected_endpoint.socket_addr().port(),
+            registration.container_port.get()
+        ],
+    )?;
     Ok(())
 }
 
@@ -74,7 +71,6 @@ pub(crate) fn load_active_successful_runtime(
                 runtime_instances.deployment_id,
                 runtime_instances.external_runtime_id,
                 runtime_instances.state,
-                runtime_instances.host_address,
                 runtime_instances.host_port,
                 runtime_instances.container_port,
                 runtime_instances.last_observed_state,
@@ -107,8 +103,7 @@ pub(crate) fn reconcile_external_runtime_id(
         "UPDATE runtime_instances
               SET external_runtime_id = ?1,
                   last_observed_state = 'running',
-                  last_observed_at = CURRENT_TIMESTAMP,
-                  updated_at = CURRENT_TIMESTAMP
+                  last_observed_at = CURRENT_TIMESTAMP
               WHERE id = ?2
                 AND external_runtime_id = ?3
                 AND removed_at IS NULL",
@@ -132,9 +127,8 @@ pub(crate) fn persist_observation(
     connection.execute(
         "UPDATE runtime_instances
          SET last_observed_state = ?2,
-              last_observed_at = CURRENT_TIMESTAMP,
-              updated_at = CURRENT_TIMESTAMP
-         WHERE id = ?1 AND removed_at IS NULL",
+              last_observed_at = CURRENT_TIMESTAMP
+          WHERE id = ?1 AND removed_at IS NULL",
         params![runtime_id.as_str(), state],
     )?;
     Ok(())
@@ -147,8 +141,8 @@ pub(crate) fn start_runtime(
 ) -> Result<PersistenceOutcome, rusqlite::Error> {
     let updated = transaction.execute(
         "UPDATE runtime_instances
-             SET state = 'running', updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?1 AND state = 'starting' AND removed_at IS NULL",
+              SET state = 'running'
+              WHERE id = ?1 AND state = 'starting' AND removed_at IS NULL",
         [runtime_id.as_str()],
     )?;
     Ok(outcome(updated))
@@ -162,8 +156,8 @@ pub(crate) fn stop_other_running_runtimes(
 ) -> Result<(), rusqlite::Error> {
     transaction.execute(
         "UPDATE runtime_instances
-             SET state = 'stopped', updated_at = CURRENT_TIMESTAMP
-             WHERE application_id = ?1
+              SET state = 'stopped'
+              WHERE application_id = ?1
                AND state = 'running'
                AND removed_at IS NULL
                AND id != ?2",
@@ -224,7 +218,7 @@ pub fn load_runtime_by_external_id(
     connection
         .query_row(
             "SELECT id, application_id, deployment_id, external_runtime_id,
-                    state, host_address, host_port, container_port,
+                    state, host_port, container_port,
                     last_observed_state, last_observed_at, exit_code,
                     observation_reason, removed_at
              FROM runtime_instances WHERE external_runtime_id = ?1",
@@ -242,7 +236,7 @@ pub(crate) fn load_runtime_by_deployment(
     connection
         .query_row(
             "SELECT id, application_id, deployment_id, external_runtime_id,
-                    state, host_address, host_port, container_port,
+                    state, host_port, container_port,
                     last_observed_state, last_observed_at, exit_code,
                     observation_reason, removed_at
              FROM runtime_instances WHERE deployment_id = ?1 AND removed_at IS NULL",
@@ -253,16 +247,15 @@ pub(crate) fn load_runtime_by_deployment(
 }
 
 // Tombstones only a stopped runtime, preserving lifecycle transition ordering.
-// The persisted tombstone is `state = 'removed'` plus `removed_at`, exactly the
-// combination hydration accepts as retirement (INV-RUN-004).
+// Retirement is the stopped lifecycle state plus explicit `removed_at` evidence.
 pub(crate) fn mark_runtime_removed(
     connection: &Connection,
     runtime_id: &RuntimeInstanceId,
 ) -> Result<PersistenceOutcome, rusqlite::Error> {
     let updated = connection.execute(
         "UPDATE runtime_instances
-              SET state = 'removed', removed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?1 AND state = 'stopped' AND removed_at IS NULL",
+              SET removed_at = CURRENT_TIMESTAMP
+              WHERE id = ?1 AND state = 'stopped' AND removed_at IS NULL",
         [runtime_id.as_str()],
     )?;
     Ok(outcome(updated))
@@ -275,12 +268,10 @@ pub(crate) fn mark_starting_runtime_missing(
 ) -> Result<PersistenceOutcome, rusqlite::Error> {
     let updated = connection.execute(
         "UPDATE runtime_instances
-              SET state = 'removed',
-                  last_observed_state = 'missing',
-                 last_observed_at = CURRENT_TIMESTAMP,
-                 removed_at = CURRENT_TIMESTAMP,
-                 updated_at = CURRENT_TIMESTAMP
-              WHERE id = ?1 AND state = 'starting' AND removed_at IS NULL",
+              SET last_observed_state = 'missing',
+                  last_observed_at = CURRENT_TIMESTAMP,
+                  removed_at = CURRENT_TIMESTAMP
+               WHERE id = ?1 AND state = 'starting' AND removed_at IS NULL",
         [runtime_id.as_str()],
     )?;
     Ok(outcome(updated))
@@ -289,37 +280,22 @@ pub(crate) fn mark_starting_runtime_missing(
 // Maps persisted runtime identity and enforces the loopback-only endpoint invariant.
 fn map_runtime_instance(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeInstance> {
     let state_text = row.get::<_, String>(4)?;
-    let removed_at = row.get::<_, Option<String>>(12)?;
-    let (state, retirement) = match (state_text.as_str(), removed_at) {
-        ("removed", Some(removed_at)) => (
-            RuntimeState::Stopped,
-            Some(RuntimeRetirement { removed_at }),
-        ),
-        ("removed", None) => {
+    let removed_at = row.get::<_, Option<String>>(11)?;
+    let state = runtime_state_from_value(&state_text)
+        .ok_or_else(|| invalid_text_value(4, "runtime state", &state_text))?;
+    // Retirement is explicit removal evidence; it can never coexist with a live
+    // running state, matching the schema CHECK.
+    let retirement = match (state, removed_at) {
+        (RuntimeState::Running, Some(_)) => {
             return Err(invalid_text_value(
-                4,
-                "retired runtime without removed_at",
+                11,
+                "running runtime with removed_at",
                 &state_text,
             ));
         }
-        (state_text, Some(removed_at)) => {
-            return Err(invalid_text_value(
-                12,
-                "active runtime with removed_at",
-                &format!("{state_text} ({removed_at})"),
-            ));
-        }
-        (state_text, None) => (
-            runtime_state_from_value(state_text)
-                .ok_or_else(|| invalid_text_value(4, "runtime state", state_text))?,
-            None,
-        ),
+        (_, removed_at) => removed_at.map(|removed_at| RuntimeRetirement { removed_at }),
     };
-    let host_address = row.get::<_, String>(5)?;
-    if host_address != Ipv4Addr::LOCALHOST.to_string() {
-        return Err(invalid_text_value(5, "runtime host address", &host_address));
-    }
-    let observed_state_text = row.get::<_, String>(8)?;
+    let observed_state_text = row.get::<_, String>(7)?;
 
     Ok(RuntimeInstance {
         id: entity_id(0, &row.get::<_, String>(0)?)?,
@@ -329,15 +305,15 @@ fn map_runtime_instance(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeInst
         state,
         expected_endpoint: ExpectedRuntimeEndpoint::new(SocketAddr::from((
             Ipv4Addr::LOCALHOST,
-            row.get::<_, u16>(6)?,
+            row.get::<_, u16>(5)?,
         )))
-        .map_err(|error| invalid_text_value(6, "runtime endpoint", &error.to_string()))?,
-        container_port: ContainerPort::new(row.get::<_, u16>(7)?)
-            .map_err(|error| invalid_text_value(7, "runtime container port", &error.to_string()))?,
+        .map_err(|error| invalid_text_value(5, "runtime endpoint", &error.to_string()))?,
+        container_port: ContainerPort::new(row.get::<_, u16>(6)?)
+            .map_err(|error| invalid_text_value(6, "runtime container port", &error.to_string()))?,
         observed_state: observed_runtime_state_from_value(&observed_state_text),
-        observed_at: row.get(9)?,
-        exit_code: row.get(10)?,
-        observation_reason: row.get(11)?,
+        observed_at: row.get(8)?,
+        exit_code: row.get(9)?,
+        observation_reason: row.get(10)?,
         retirement,
     })
 }
@@ -352,7 +328,6 @@ fn hydrate_container_id(column: usize, value: &str) -> rusqlite::Result<Containe
 
 #[cfg(test)]
 mod tests {
-    use std::net::Ipv4Addr;
     use std::path::Path;
 
     use rusqlite::params;
@@ -376,17 +351,20 @@ mod tests {
     fn seed_deployment_chain(connection: &rusqlite::Connection) {
         connection
             .execute_batch(&format!(
-                "INSERT INTO systems (id, name, created_at) VALUES ('{SYSTEM_ID}', 'team', 'now');
-                 INSERT INTO applications (id, system_id, name, desired_runtime_state, created_at, updated_at)
-                 VALUES ('{APP_ID}', '{SYSTEM_ID}', 'app', 'stopped', 'now', 'now');
-                 INSERT INTO releases (
-                    id, application_id, image_repository, image_digest, image_reference, created_at
-                 ) VALUES ('{RELEASE_ID}', '{APP_ID}', 'registry.example/app',
-                           'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-                           'registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-                           'now');
+                "INSERT INTO systems (id, name) VALUES ('{SYSTEM_ID}', 'team');
+                 INSERT INTO applications (
+                     id, system_id, name, repository_url, manifest_path, image_repository,
+                     container_port, health_check_path, health_check_expected_status,
+                     desired_runtime_state
+                 ) VALUES (
+                     '{APP_ID}', '{SYSTEM_ID}', 'app', 'https://example.test/app.git', 'pneuma.toml',
+                     'registry.example/app', 8080, '/healthz', 200, 'stopped');
+                 INSERT INTO releases (id, application_id, image_reference, created_at)
+                 VALUES ('{RELEASE_ID}', '{APP_ID}',
+                         'registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                         'now');
                  INSERT INTO deployments (
-                    id, application_id, release_id, type, status, requested_at
+                     id, application_id, release_id, type, status, requested_at
                  ) VALUES ('{DEPLOYMENT_ID}', '{APP_ID}', '{RELEASE_ID}', 'deploy', 'starting', 'now');"
             ))
             .unwrap();
@@ -432,27 +410,26 @@ mod tests {
         connection
             .execute_batch(
                 "CREATE TABLE runtime_instances (
-                    id TEXT PRIMARY KEY,
-                    application_id TEXT NOT NULL,
-                    deployment_id TEXT NOT NULL,
-                    external_runtime_id TEXT NOT NULL,
-                    state TEXT NOT NULL,
-                    host_address TEXT NOT NULL,
-                    host_port INTEGER NOT NULL,
-                    container_port INTEGER NOT NULL,
-                    last_observed_state TEXT NOT NULL,
-                    last_observed_at TEXT NOT NULL,
-                    exit_code INTEGER,
-                    observation_reason TEXT,
-                    removed_at TEXT
-                );",
+                     id TEXT PRIMARY KEY,
+                     application_id TEXT NOT NULL,
+                     deployment_id TEXT NOT NULL,
+                     external_runtime_id TEXT NOT NULL,
+                     state TEXT NOT NULL,
+                     host_port INTEGER NOT NULL,
+                     container_port INTEGER NOT NULL,
+                     last_observed_state TEXT NOT NULL,
+                     last_observed_at TEXT NOT NULL,
+                     exit_code INTEGER,
+                     observation_reason TEXT,
+                     removed_at TEXT
+                 );",
             )
             .unwrap();
         connection
             .execute(
                 "INSERT INTO runtime_instances VALUES
                  (?1, ?2, ?3, 'not a container id',
-                  'running', '127.0.0.1', 30000, 8080, 'running', 'now', NULL, NULL, NULL)",
+                  'running', 30000, 8080, 'running', 'now', NULL, NULL, NULL)",
                 params![RUNTIME_ID, APP_ID, DEPLOYMENT_ID],
             )
             .unwrap();
@@ -528,58 +505,36 @@ mod tests {
     }
 
     #[test]
-    fn loopback_check_rejects_foreign_addresses_and_hydration_refuses_them() {
+    fn retirement_hydration_follows_the_lifecycle_state() {
         let connection = database::open(Path::new(":memory:")).unwrap();
         seed_deployment_chain(&connection);
-
-        // The SQLite CHECK constraint is the database-level defense for INV-RUN-001.
-        let error = connection
-            .execute(
-                "INSERT INTO runtime_instances (
-                    id, application_id, deployment_id, external_runtime_id,
-                    state, host_address, host_port, container_port,
-                    last_observed_state, last_observed_at, created_at, updated_at
-                 ) VALUES (?1, ?2, ?3,
-                           'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-                           'running', '10.0.0.2', 30001, 8080, 'running', 'now', 'now', 'now')",
-                params![RUNTIME_ID, APP_ID, DEPLOYMENT_ID],
-            )
-            .unwrap_err();
-        assert!(matches!(
-            error,
-            rusqlite::Error::SqliteFailure(ref failure, _)
-                if failure.code == rusqlite::ErrorCode::ConstraintViolation
-        ));
-
-        // Hydration must also refuse such a row if it ever existed (defense at mapping).
-        connection
-            .execute_batch("PRAGMA ignore_check_constraints = ON;")
-            .unwrap();
         connection
             .execute(
                 "INSERT INTO runtime_instances (
-                    id, application_id, deployment_id, external_runtime_id,
-                    state, host_address, host_port, container_port,
-                    last_observed_state, last_observed_at, created_at, updated_at
+                     id, application_id, deployment_id, external_runtime_id, state,
+                     host_port, container_port, last_observed_state, last_observed_at
                  ) VALUES (?1, ?2, ?3,
                            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-                           'running', '10.0.0.2', 30001, 8080, 'running', 'now', 'now', 'now')",
+                           'stopped', 30001, 8080, 'stopped', 'now')",
                 params![RUNTIME_ID, APP_ID, DEPLOYMENT_ID],
             )
             .unwrap();
 
-        let error = load_runtime_by_external_id(
+        // A stopped runtime without removal evidence is not retired.
+        let runtime = load_runtime_by_external_id(
             &connection,
             &ContainerId::from("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
         )
-        .unwrap_err();
-        assert!(error.to_string().contains("runtime host address"));
+        .unwrap()
+        .unwrap();
+        assert_eq!(runtime.state, RuntimeState::Stopped);
+        assert_eq!(runtime.retirement, None);
 
-        // Sanity: the same identity on the loopback address hydrates cleanly.
+        // Retirement is `removed_at` evidence on the stopped lifecycle state.
         connection
             .execute(
-                "UPDATE runtime_instances SET host_address = ?1 WHERE id = ?2",
-                params![Ipv4Addr::LOCALHOST.to_string(), RUNTIME_ID],
+                "UPDATE runtime_instances SET removed_at = '2026-01-01' WHERE id = ?1",
+                params![RUNTIME_ID],
             )
             .unwrap();
         let runtime = load_runtime_by_external_id(
@@ -588,9 +543,34 @@ mod tests {
         )
         .unwrap()
         .unwrap();
+        assert_eq!(runtime.state, RuntimeState::Stopped);
         assert_eq!(
-            runtime.expected_endpoint.socket_addr().ip().to_string(),
-            "127.0.0.1"
+            runtime.retirement.map(|retirement| retirement.removed_at),
+            Some("2026-01-01".to_owned())
         );
+
+        // A running runtime can never carry retirement evidence; the CHECK
+        // constraint is bypassed so hydration must refuse the contradiction.
+        connection
+            .execute_batch("PRAGMA ignore_check_constraints = ON;")
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO runtime_instances (
+                     id, application_id, deployment_id, external_runtime_id, state,
+                     host_port, container_port, last_observed_state, last_observed_at,
+                     removed_at
+                 ) VALUES (?1, ?2, ?3,
+                           'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                           'running', 30002, 8080, 'running', 'now', '2026-01-01')",
+                params![OTHER_RUNTIME_ID, APP_ID, DEPLOYMENT_ID],
+            )
+            .unwrap();
+        let error = load_runtime_by_external_id(
+            &connection,
+            &ContainerId::from("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("removed_at"));
     }
 }

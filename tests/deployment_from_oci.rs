@@ -22,8 +22,14 @@ use pneuma::use_cases::deployment::{
 fn deploys_a_verified_oci_image_and_persists_its_exact_reference() {
     let database_path = temporary_database_path();
     let mut connection = database::open(&database_path).unwrap();
-    let application =
-        import_application(&mut connection, &fixture_path("another"), None, None, None).unwrap();
+    let application = import_application(
+        &mut connection,
+        &fixture_path("another"),
+        None,
+        "https://example.test/app.git",
+        None,
+    )
+    .unwrap();
     let digest = format!("sha256:{}", "a".repeat(64));
     let reference = format!("registry.example/team/service@{digest}");
     let artifact = OciArtifact::parse(&reference).unwrap();
@@ -38,7 +44,7 @@ fn deploys_a_verified_oci_image_and_persists_its_exact_reference() {
 
     let release = connection
         .query_row(
-            "SELECT r.id, r.image_reference, r.image_repository, r.image_digest, d.source_revision
+            "SELECT r.id, r.image_reference, d.source_revision
              FROM releases r
              JOIN deployments d ON d.release_id = r.id",
             [],
@@ -46,26 +52,25 @@ fn deploys_a_verified_oci_image_and_persists_its_exact_reference() {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(2)?,
                 ))
             },
         )
         .unwrap();
     let deployed = deployed.unwrap();
 
+    // The canonical reference is the one persisted artifact identity; the
+    // repository and digest are derived from it by parsing.
     assert_eq!(release.1, reference);
-    assert_eq!(release.2, "registry.example/team/service");
-    assert_eq!(release.3, digest);
-    assert_eq!(release.4, None);
+    assert_eq!(release.1, format!("registry.example/team/service@{digest}"));
+    assert_eq!(release.2, None);
     assert_eq!(deployed.artifact.reference(), release.1);
     assert_eq!(
         deployed
             .source_revision
             .as_ref()
             .map(|commit| commit.as_str().to_owned()),
-        release.4.clone()
+        release.2.clone()
     );
     assert!(environment.log().contains(&reference));
     assert!(
@@ -86,8 +91,14 @@ fn rejects_an_unpinned_oci_reference_at_the_validation_boundary() {
 fn deploys_with_progress_events_in_the_same_semantic_order_and_the_same_result() {
     let database_path = temporary_database_path();
     let mut connection = database::open(&database_path).unwrap();
-    let application =
-        import_application(&mut connection, &fixture_path("another"), None, None, None).unwrap();
+    let application = import_application(
+        &mut connection,
+        &fixture_path("another"),
+        None,
+        "https://example.test/app.git",
+        None,
+    )
+    .unwrap();
     let digest = format!("sha256:{}", "a".repeat(64));
     let reference = format!("registry.example/team/service@{digest}");
     let artifact = OciArtifact::parse(&reference).unwrap();
@@ -135,8 +146,14 @@ fn deploys_with_progress_events_in_the_same_semantic_order_and_the_same_result()
 #[test]
 fn rejects_a_mismatched_repository_identically_while_reporting_nothing() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
-    let application =
-        import_application(&mut connection, &fixture_path("another"), None, None, None).unwrap();
+    let application = import_application(
+        &mut connection,
+        &fixture_path("another"),
+        None,
+        "https://example.test/app.git",
+        None,
+    )
+    .unwrap();
     let digest = format!("sha256:{}", "a".repeat(64));
     let reference = format!("registry.example/other/service@{digest}");
     let artifact = OciArtifact::parse(&reference).unwrap();
@@ -167,8 +184,14 @@ fn rejects_a_mismatched_repository_identically_while_reporting_nothing() {
 #[test]
 fn rejects_a_repository_not_allowed_by_the_delivery_spec_before_pull() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
-    let application =
-        import_application(&mut connection, &fixture_path("another"), None, None, None).unwrap();
+    let application = import_application(
+        &mut connection,
+        &fixture_path("another"),
+        None,
+        "https://example.test/app.git",
+        None,
+    )
+    .unwrap();
     let digest = format!("sha256:{}", "a".repeat(64));
     let reference = format!("registry.example/other/service@{digest}");
     let artifact = OciArtifact::parse(&reference).unwrap();

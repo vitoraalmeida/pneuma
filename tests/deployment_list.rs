@@ -11,8 +11,14 @@ use pneuma::use_cases::release::create_release;
 #[test]
 fn returns_an_empty_list_for_an_application_without_deployments() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
-    let application =
-        import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
+    let application = import_application(
+        &mut connection,
+        &fixture_path("valid"),
+        None,
+        "https://example.test/app.git",
+        None,
+    )
+    .unwrap();
 
     let deployments = list_deployments(&connection, &application.id).unwrap();
 
@@ -22,8 +28,14 @@ fn returns_an_empty_list_for_an_application_without_deployments() {
 #[test]
 fn returns_deployments_ordered_newest_first() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
-    let application =
-        import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
+    let application = import_application(
+        &mut connection,
+        &fixture_path("valid"),
+        None,
+        "https://example.test/app.git",
+        None,
+    )
+    .unwrap();
     let first_release = create_release(&mut connection, &application.id, &artifact('a')).unwrap();
     let second_release = create_release(&mut connection, &application.id, &artifact('b')).unwrap();
     let first_deployment = create_deployment(
@@ -41,8 +53,7 @@ fn returns_deployments_ordered_newest_first() {
                  finished_at = '2026-08-07 10:01:00',
                  failure_code = 'health_check_failed',
                  failure_stage = 'verifying',
-                 failure_message = 'candidate unhealthy',
-                 updated_at = CURRENT_TIMESTAMP
+                 failure_message = 'candidate unhealthy'
              WHERE id = ?1",
             [first_deployment.id.as_str()],
         )
@@ -59,8 +70,7 @@ fn returns_deployments_ordered_newest_first() {
             "UPDATE deployments
              SET status = 'succeeded',
                  requested_at = '2026-08-07 11:00:00',
-                 finished_at = '2026-08-07 11:01:00',
-                 updated_at = CURRENT_TIMESTAMP
+                 finished_at = '2026-08-07 11:01:00'
              WHERE id = ?1",
             [second_deployment.id.as_str()],
         )
@@ -92,10 +102,22 @@ fn returns_deployments_ordered_newest_first() {
 #[test]
 fn returns_only_deployments_for_the_given_application() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
-    let first =
-        import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
-    let second =
-        import_application(&mut connection, &fixture_path("another"), None, None, None).unwrap();
+    let first = import_application(
+        &mut connection,
+        &fixture_path("valid"),
+        None,
+        "https://example.test/app.git",
+        None,
+    )
+    .unwrap();
+    let second = import_application(
+        &mut connection,
+        &fixture_path("another"),
+        None,
+        "https://example.test/app.git",
+        None,
+    )
+    .unwrap();
     let first_release = create_release(&mut connection, &first.id, &artifact('a')).unwrap();
     let second_release = create_release(&mut connection, &second.id, &artifact('b')).unwrap();
     create_deployment(

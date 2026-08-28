@@ -10,8 +10,6 @@ use crate::adapters::stores::exposure_store::{self, ExposureStoreError};
 use crate::adapters::stores::system_store;
 use crate::domain::application::ApplicationSummary;
 use crate::domain::git::{ApplicationSource, RelativeManifestPath};
-use crate::domain::identity::ApplicationId;
-use crate::domain::manifest::ImportSpecification;
 use crate::domain::system::SystemName;
 
 const DEFAULT_MANIFEST_PATH: &str = "pneuma.toml";
@@ -64,7 +62,7 @@ pub fn import_application(
     connection: &mut Connection,
     repository_path: &Path,
     system_name: Option<&SystemName>,
-    repository_url: Option<&str>,
+    repository_url: &str,
     manifest_path: Option<&str>,
 ) -> Result<ApplicationSummary, ImportError> {
     let manifest_path = manifest_path.unwrap_or(DEFAULT_MANIFEST_PATH);
@@ -95,21 +93,33 @@ pub fn import_application(
     let system = system_store::create_or_load(&transaction, &resolved_system_name, None)?;
 
     let application_id = application_store::generate_id(&transaction).map_err(ImportError::from)?;
-    let inserted = application_store::insert_application(
-        &transaction,
-        &application_id,
-        &system.id,
-        &application_name,
-    )?;
+    let source = ApplicationSource::new(
+        repository_url,
+        None,
+        RelativeManifestPath::new(manifest_path).map_err(|_| ImportError::Manifest {
+            source: ManifestError::InvalidField {
+                field: "manifest_path",
+                reason: "must be a relative path within the checkout",
+            },
+        })?,
+    )
+    .map_err(|_| ImportError::Manifest {
+        source: ManifestError::InvalidField {
+            field: "repository",
+            reason: "must be a remote Git URL without surrounding whitespace",
+        },
+    })?;
+    let imported = application_store::ImportedApplicationSpecification {
+        system_id: &system.id,
+        name: &application_name,
+        source: &source,
+        image_repository: specification.delivery.image_repository(),
+        runtime: &specification.runtime,
+    };
+    let inserted = application_store::insert_application(&transaction, &application_id, &imported)?;
 
     if inserted {
-        persist_specification(
-            &transaction,
-            &application_id,
-            &specification,
-            repository_url,
-            manifest_path,
-        )?;
+        exposure_store::insert_exposure(&transaction, &application_id, &specification.exposure)?;
     }
 
     let application =
@@ -121,57 +131,6 @@ pub fn import_application(
     transaction.commit()?;
 
     Ok(application)
-}
-
-// Persists every manifest-derived specification within the caller's transaction so no
-// partially imported application can become visible.
-fn persist_specification(
-    transaction: &rusqlite::Transaction<'_>,
-    application_id: &ApplicationId,
-    specification: &ImportSpecification,
-    repository_url: Option<&str>,
-    manifest_path: &str,
-) -> Result<(), ImportError> {
-    application_store::insert_delivery_spec(
-        transaction,
-        application_id,
-        specification.delivery.image_repository(),
-    )?;
-
-    if let Some(repository_url) = repository_url {
-        let source = ApplicationSource::new(
-            repository_url,
-            None,
-            RelativeManifestPath::new(manifest_path).map_err(|_| ImportError::Manifest {
-                source: ManifestError::InvalidField {
-                    field: "manifest_path",
-                    reason: "must be a relative path within the checkout",
-                },
-            })?,
-        )
-        .map_err(|_| ImportError::Manifest {
-            source: ManifestError::InvalidField {
-                field: "repository",
-                reason: "must be a remote Git URL without surrounding whitespace",
-            },
-        })?;
-        application_store::insert_source_spec(transaction, application_id, &source)?;
-    }
-
-    application_store::insert_runtime_spec(
-        transaction,
-        application_id,
-        specification.runtime.container_port(),
-    )?;
-    application_store::insert_health_check_spec(
-        transaction,
-        application_id,
-        specification.runtime.health_check().path(),
-        specification.runtime.health_check().expected_status(),
-    )?;
-    exposure_store::insert_exposure(transaction, application_id, &specification.exposure)?;
-
-    Ok(())
 }
 
 #[cfg(test)]

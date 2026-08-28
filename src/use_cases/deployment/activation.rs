@@ -496,15 +496,17 @@ mod tests {
     fn seed_deployment(connection: &Connection, status: &str) {
         connection
             .execute_batch(
-                "INSERT INTO systems (id, name, created_at) VALUES ('44444444444444444444444444444444', 'team', 'now');
+                "INSERT INTO systems (id, name) VALUES ('44444444444444444444444444444444', 'team');
                  INSERT INTO applications (
-                     id, system_id, name, desired_runtime_state, created_at, updated_at
-                 ) VALUES ('11111111111111111111111111111111', '44444444444444444444444444444444', 'app', 'stopped', 'now', 'now');
-                 INSERT INTO releases (
-                     id, application_id, image_repository, image_digest, image_reference, created_at
+                     id, system_id, name, repository_url, manifest_path, image_repository,
+                     container_port, health_check_path, health_check_expected_status, desired_runtime_state
                  ) VALUES (
-                     '55555555555555555555555555555555', '11111111111111111111111111111111', 'registry.example/app',
-                     'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                     '11111111111111111111111111111111', '44444444444444444444444444444444', 'app',
+                     'https://example.test/app.git', 'pneuma.toml', 'registry.example/app',
+                     8080, '/healthz', 200, 'stopped');
+                 INSERT INTO releases (id, application_id, image_reference, created_at)
+                 VALUES (
+                     '55555555555555555555555555555555', '11111111111111111111111111111111',
                      'registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
                      'now'
                  );",

@@ -192,13 +192,15 @@ pub(crate) fn start_candidate(
     })?;
     resources = resources.with_runtime_mut(&runtime.id);
 
-    consume_port_reservation(connection, deployment_id).map_err(|source| {
-        FailedExecution::needing_persistence(
-            DeploymentFailureCode::RuntimePortPersistence,
-            source,
-            resources.clone(),
-        )
-    })?;
+    consume_port_reservation(connection, application_id, deployment_id, host_port).map_err(
+        |source| {
+            FailedExecution::needing_persistence(
+                DeploymentFailureCode::RuntimePortPersistence,
+                source,
+                resources.clone(),
+            )
+        },
+    )?;
 
     advance_deployment(connection, deployment_id, DeploymentEvent::RuntimeRunning).map_err(
         |source| {
@@ -481,15 +483,17 @@ exit 0
     fn seed_deployment(connection: &Connection, status: &str) {
         connection
             .execute_batch(
-                "INSERT INTO systems (id, name, created_at) VALUES ('44444444444444444444444444444444', 'team', 'now');
+                "INSERT INTO systems (id, name) VALUES ('44444444444444444444444444444444', 'team');
                  INSERT INTO applications (
-                     id, system_id, name, desired_runtime_state, created_at, updated_at
-                 ) VALUES ('11111111111111111111111111111111', '44444444444444444444444444444444', 'app', 'stopped', 'now', 'now');
-                 INSERT INTO releases (
-                     id, application_id, image_repository, image_digest, image_reference, created_at
+                     id, system_id, name, repository_url, manifest_path, image_repository,
+                     container_port, health_check_path, health_check_expected_status, desired_runtime_state
                  ) VALUES (
-                     '55555555555555555555555555555555', '11111111111111111111111111111111', 'registry.example/app',
-                     'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                     '11111111111111111111111111111111', '44444444444444444444444444444444', 'app',
+                     'https://example.test/app.git', 'pneuma.toml', 'registry.example/app',
+                     8080, '/healthz', 200, 'stopped');
+                 INSERT INTO releases (id, application_id, image_reference, created_at)
+                 VALUES (
+                     '55555555555555555555555555555555', '11111111111111111111111111111111',
                      'registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
                      'now'
                  );",
@@ -683,11 +687,11 @@ exit 0
             .execute(
                 "INSERT INTO runtime_instances (
                      id, application_id, deployment_id, external_runtime_id, state,
-                     host_address, host_port, container_port, last_observed_state,
-                     last_observed_at, created_at, updated_at, removed_at
+                     host_port, container_port, last_observed_state,
+                     last_observed_at
                  ) VALUES ('66666666666666666666666666666666', '11111111111111111111111111111111', '22222222222222222222222222222222', ?1, 'starting',
-                           '127.0.0.1', 39999, 8080, 'running',
-                           'now', 'now', 'now', NULL)",
+                           39999, 8080, 'running',
+                           'now')",
                 ["a".repeat(64)],
             )
             .unwrap();

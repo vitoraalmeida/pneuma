@@ -49,7 +49,7 @@ fn persists_a_running_candidate_linked_to_its_deployment() {
 }
 
 #[test]
-fn maps_historical_removed_rows_to_explicit_retirement() {
+fn maps_retired_rows_to_explicit_retirement() {
     let (mut connection, _, deployment_id) = starting_deployment("valid");
     let runtime = register_candidate_runtime(
         &mut connection,
@@ -62,7 +62,7 @@ fn maps_historical_removed_rows_to_explicit_retirement() {
     connection
         .execute(
             "UPDATE runtime_instances
-             SET state = 'removed', removed_at = '2026-08-20 12:00:00'
+             SET state = 'stopped', removed_at = '2026-08-20 12:00:00'
              WHERE id = ?1",
             [runtime.id.as_str()],
         )
@@ -80,7 +80,7 @@ fn maps_historical_removed_rows_to_explicit_retirement() {
 }
 
 #[test]
-fn rejects_persisted_retirement_without_a_removed_timestamp() {
+fn rejects_a_running_runtime_row_that_carries_a_removed_timestamp() {
     let (mut connection, _, deployment_id) = starting_deployment("valid");
     let runtime = register_candidate_runtime(
         &mut connection,
@@ -90,58 +90,32 @@ fn rejects_persisted_retirement_without_a_removed_timestamp() {
         port(8080),
     )
     .unwrap();
-    connection
+
+    // Retirement can never contradict a live running state; the schema makes
+    // the contradiction unrepresentable.
+    let error = connection
         .execute(
-            "UPDATE runtime_instances SET state = 'removed' WHERE id = ?1",
+            "UPDATE runtime_instances
+             SET state = 'running', removed_at = '2026-08-20 12:00:00'
+             WHERE id = ?1",
             [runtime.id.as_str()],
         )
-        .unwrap();
+        .unwrap_err();
 
-    let error = pneuma::adapters::stores::runtime_store::load_runtime_by_external_id(
-        &connection,
-        &runtime.external_runtime_id,
-    )
-    .unwrap_err();
-
-    assert!(
-        error
-            .to_string()
-            .contains("retired runtime without removed_at")
-    );
-}
-
-#[test]
-fn rejects_an_active_runtime_row_that_carries_a_removed_timestamp() {
-    let (mut connection, _, deployment_id) = starting_deployment("valid");
-    let runtime = register_candidate_runtime(
-        &mut connection,
-        &deployment_id,
-        &container_id('a'),
-        endpoint("127.0.0.1:30001"),
-        port(8080),
-    )
-    .unwrap();
-    connection
-        .execute(
-            "UPDATE runtime_instances SET removed_at = '2026-08-20 12:00:00' WHERE id = ?1",
-            [runtime.id.as_str()],
-        )
-        .unwrap();
-
-    let error = pneuma::adapters::stores::runtime_store::load_runtime_by_external_id(
-        &connection,
-        &runtime.external_runtime_id,
-    )
-    .unwrap_err();
-
-    assert!(error.to_string().contains("active runtime with removed_at"));
+    assert!(matches!(error, rusqlite::Error::SqliteFailure(_, _)));
 }
 
 #[test]
 fn requires_a_starting_deployment() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
-    let application =
-        import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
+    let application = import_application(
+        &mut connection,
+        &fixture_path("valid"),
+        None,
+        "https://example.test/app.git",
+        None,
+    )
+    .unwrap();
     let release = create_release(&mut connection, &application.id, &artifact('a')).unwrap();
     let deployment = create_deployment(
         &mut connection,
@@ -278,11 +252,11 @@ fn database_rejects_a_duplicate_active_endpoint() {
         .execute(
             "INSERT INTO runtime_instances (
                 id, application_id, deployment_id, external_runtime_id,
-                state, host_address, host_port, container_port,
+                state, host_port, container_port,
                 last_observed_state, last_observed_at
              ) VALUES (
                 'other', ?1, ?2, ?3,
-                'starting', '127.0.0.1', ?4, 8080,
+                'starting', ?4, 8080,
                 'running', CURRENT_TIMESTAMP
              )",
             rusqlite::params![
@@ -308,8 +282,14 @@ fn database_rejects_a_runtime_identity_from_another_application() {
         port(8080),
     )
     .unwrap();
-    let second =
-        import_application(&mut connection, &fixture_path("another"), None, None, None).unwrap();
+    let second = import_application(
+        &mut connection,
+        &fixture_path("another"),
+        None,
+        "https://example.test/app.git",
+        None,
+    )
+    .unwrap();
 
     let error = connection
         .execute(
@@ -331,8 +311,14 @@ fn add_starting_deployment(
     connection: &mut rusqlite::Connection,
     fixture: &str,
 ) -> (ApplicationId, DeploymentId) {
-    let application =
-        import_application(connection, &fixture_path(fixture), None, None, None).unwrap();
+    let application = import_application(
+        connection,
+        &fixture_path(fixture),
+        None,
+        "https://example.test/app.git",
+        None,
+    )
+    .unwrap();
     let artifact = if fixture == "valid" {
         artifact('a')
     } else {

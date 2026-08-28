@@ -28,7 +28,7 @@ fn deploys_a_branch_and_persists_source_revision() {
         &mut connection,
         &repository.path,
         None,
-        Some(&repository.url()),
+        &repository.url(),
         None,
     )
     .unwrap();
@@ -85,13 +85,13 @@ fn uses_the_default_branch_when_branch_is_omitted() {
         &mut connection,
         &repository.path,
         None,
-        Some(&repository.url()),
+        &repository.url(),
         None,
     )
     .unwrap();
     connection
         .execute(
-            "UPDATE application_sources SET default_branch = 'main' WHERE application_id = ?1",
+            "UPDATE applications SET default_branch = 'main' WHERE id = ?1",
             [application.id.as_str()],
         )
         .unwrap();
@@ -121,7 +121,7 @@ fn fails_for_a_missing_branch() {
         &mut connection,
         &repository.path,
         None,
-        Some(&repository.url()),
+        &repository.url(),
         None,
     )
     .unwrap();
@@ -149,7 +149,7 @@ fn deploys_a_branch_with_the_same_semantic_progress_order_and_result() {
         &mut connection,
         &repository.path,
         None,
-        Some(&repository.url()),
+        &repository.url(),
         None,
     )
     .unwrap();
@@ -203,7 +203,7 @@ fn fails_identically_while_reporting_nothing_when_the_branch_is_missing() {
         &mut connection,
         &repository.path,
         None,
-        Some(&repository.url()),
+        &repository.url(),
         None,
     )
     .unwrap();
@@ -231,38 +231,6 @@ fn fails_identically_while_reporting_nothing_when_the_branch_is_missing() {
 }
 
 #[test]
-fn still_requires_a_delivery_configuration_after_resolving_the_source() {
-    let mut connection = database::open(Path::new(":memory:")).unwrap();
-    let repository = GitRepository::new();
-    let application = import_application(
-        &mut connection,
-        &repository.path,
-        None,
-        Some(&repository.url()),
-        None,
-    )
-    .unwrap();
-    connection
-        .execute(
-            "DELETE FROM application_delivery_specs WHERE application_id = ?1",
-            [application.id.as_str()],
-        )
-        .unwrap();
-
-    let error = deploy_branch(&mut connection, &application.id, Some("main"), None).unwrap_err();
-
-    // Reusing the loaded delivery context must not weaken its validation semantics.
-    assert!(matches!(
-        error,
-        DeployBranchError::NoDeliveryConfiguration { .. }
-    ));
-    let release_count: i64 = connection
-        .query_row("SELECT COUNT(*) FROM releases", [], |row| row.get(0))
-        .unwrap();
-    assert_eq!(release_count, 0);
-}
-
-#[test]
 fn fails_for_an_unreachable_registry() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
     let repository = GitRepository::new();
@@ -270,7 +238,7 @@ fn fails_for_an_unreachable_registry() {
         &mut connection,
         &repository.path,
         None,
-        Some(&repository.url()),
+        &repository.url(),
         None,
     )
     .unwrap();
@@ -292,20 +260,6 @@ fn fails_for_an_unreachable_registry() {
         .query_row("SELECT COUNT(*) FROM releases", [], |row| row.get(0))
         .unwrap();
     assert_eq!(release_count, 0);
-}
-
-#[test]
-fn fails_when_the_application_has_no_source_configuration() {
-    let mut connection = database::open(Path::new(":memory:")).unwrap();
-    let application =
-        import_application(&mut connection, &fixture_path("another"), None, None, None).unwrap();
-
-    let error = deploy_branch(&mut connection, &application.id, Some("main"), None).unwrap_err();
-
-    assert!(matches!(
-        error,
-        DeployBranchError::NoSourceConfiguration { .. }
-    ));
 }
 
 struct FakePodman {

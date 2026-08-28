@@ -14,15 +14,15 @@ fn imports_and_persists_the_application_specification() {
         &mut connection,
         &fixture_path("valid"),
         None,
-        Some("https://github.com/vitoraalmeida/vitoralmeida.tech"),
+        "https://github.com/vitoraalmeida/vitoralmeida.tech",
         Some("deploy/staging/pneuma.toml"),
     )
     .unwrap();
 
     assert_eq!(application.name.as_str(), "personal-site");
     assert_eq!(
-        application.repository.as_deref(),
-        Some("https://github.com/vitoraalmeida/vitoralmeida.tech")
+        application.repository.as_str(),
+        "https://github.com/vitoraalmeida/vitoralmeida.tech"
     );
     assert_eq!(application.default_branch.as_deref(), None);
     assert_eq!(
@@ -32,40 +32,27 @@ fn imports_and_persists_the_application_specification() {
     let specification = connection
         .query_row(
             "SELECT
-                applications.desired_runtime_state,
-                application_sources.repository_kind,
-                application_sources.manifest_path,
-                application_runtime_specs.container_port,
-                health_check_specs.path,
-                health_check_specs.expected_status,
+                applications.repository_url,
+                applications.manifest_path,
+                applications.container_port,
+                applications.health_check_path,
+                applications.health_check_expected_status,
+                applications.image_repository,
                 exposures.desired_visibility,
-                exposures.domain,
-                application_delivery_specs.delivery_type,
-                application_delivery_specs.image_repository
+                exposures.domain
              FROM applications
-             JOIN application_sources
-                ON application_sources.application_id = applications.id
-             JOIN application_runtime_specs
-                ON application_runtime_specs.application_id = applications.id
-             JOIN health_check_specs
-                ON health_check_specs.application_id = applications.id
-             JOIN exposures
-                ON exposures.application_id = applications.id
-             JOIN application_delivery_specs
-                ON application_delivery_specs.application_id = applications.id",
+             JOIN exposures ON exposures.application_id = applications.id",
             [],
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, i64>(5)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, String>(5)?,
                     row.get::<_, String>(6)?,
                     row.get::<_, Option<String>>(7)?,
-                    row.get::<_, String>(8)?,
-                    row.get::<_, String>(9)?,
                 ))
             },
         )
@@ -74,16 +61,14 @@ fn imports_and_persists_the_application_specification() {
     assert_eq!(
         specification,
         (
-            "stopped".to_owned(),
-            "remote".to_owned(),
+            "https://github.com/vitoraalmeida/vitoralmeida.tech".to_owned(),
             "deploy/staging/pneuma.toml".to_owned(),
             8080,
             "/healthz".to_owned(),
             200,
+            "ghcr.io/vitoraalmeida/vitoralmeida.tech".to_owned(),
             "public".to_owned(),
             Some("vitoralmeida.tech".to_owned()),
-            "oci".to_owned(),
-            "ghcr.io/vitoraalmeida/vitoralmeida.tech".to_owned(),
         )
     );
 }
@@ -98,7 +83,7 @@ fn importing_the_same_application_is_idempotent() {
         &mut connection,
         &repository,
         None,
-        Some(repository_url),
+        repository_url,
         Some("deploy/staging/pneuma.toml"),
     )
     .unwrap();
@@ -106,7 +91,7 @@ fn importing_the_same_application_is_idempotent() {
         &mut connection,
         &repository,
         None,
-        Some(repository_url),
+        repository_url,
         Some("deploy/staging/pneuma.toml"),
     )
     .unwrap();
@@ -115,35 +100,35 @@ fn importing_the_same_application_is_idempotent() {
         .query_row(
             "SELECT
                 (SELECT COUNT(*) FROM applications),
-                (SELECT COUNT(*) FROM application_sources),
-                (SELECT COUNT(*) FROM application_runtime_specs),
-                (SELECT COUNT(*) FROM health_check_specs),
                 (SELECT COUNT(*) FROM exposures),
-                (SELECT COUNT(*) FROM application_delivery_specs)",
+                (SELECT COUNT(*) FROM systems)",
             [],
             |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
                     row.get::<_, i64>(1)?,
                     row.get::<_, i64>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, i64>(4)?,
-                    row.get::<_, i64>(5)?,
                 ))
             },
         )
         .unwrap();
 
     assert_eq!(first, second);
-    assert_eq!(row_counts, (1, 1, 1, 1, 1, 1));
+    assert_eq!(row_counts, (1, 1, 1));
 }
 
 #[test]
 fn reports_manifest_failures_without_changing_the_catalog() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
 
-    let error = import_application(&mut connection, &fixture_path("missing"), None, None, None)
-        .unwrap_err();
+    let error = import_application(
+        &mut connection,
+        &fixture_path("missing"),
+        None,
+        "https://example.test/app.git",
+        None,
+    )
+    .unwrap_err();
     let applications = list_applications(&connection).unwrap();
 
     assert!(matches!(error, ImportError::Manifest { .. }));
@@ -159,7 +144,7 @@ fn rejects_local_repository_paths() {
         &mut connection,
         &fixture_path("another"),
         None,
-        Some("."),
+        ".",
         Some("pneuma.toml"),
     )
     .unwrap_err();
@@ -180,52 +165,34 @@ fn classifies_ssh_git_urls_as_remote() {
         &mut connection,
         &fixture_path("valid"),
         None,
-        Some("git@github.com:vitoraalmeida/vitoralmeida.tech.git"),
+        "git@github.com:vitoraalmeida/vitoralmeida.tech.git",
         Some("pneuma.toml"),
     )
     .unwrap();
 
-    let repository_kind: String = connection
-        .query_row(
-            "SELECT repository_kind FROM application_sources",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(repository_kind, "remote");
-}
-
-#[test]
-fn persists_delivery_without_source_or_build_specs() {
-    let mut connection = database::open(Path::new(":memory:")).unwrap();
-
-    import_application(&mut connection, &fixture_path("oci-only"), None, None, None).unwrap();
-
-    let delivery: (String, String) = connection
-        .query_row(
-            "SELECT delivery_type, image_repository FROM application_delivery_specs",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .unwrap();
-    assert_eq!(
-        delivery,
-        ("oci".to_owned(), "registry.example/team/service".to_owned())
-    );
-    let source_count: i64 = connection
-        .query_row("SELECT COUNT(*) FROM application_sources", [], |row| {
+    let repository_url: String = connection
+        .query_row("SELECT repository_url FROM applications", [], |row| {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(source_count, 0);
+    assert_eq!(
+        repository_url,
+        "git@github.com:vitoraalmeida/vitoralmeida.tech.git"
+    );
 }
 
 #[test]
 fn requires_system_from_manifest_or_cli() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
 
-    let application =
-        import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
+    let application = import_application(
+        &mut connection,
+        &fixture_path("valid"),
+        None,
+        "https://example.test/app.git",
+        None,
+    )
+    .unwrap();
     // Every imported Application carries exactly one required System identity.
     assert_eq!(application.system_id.to_string().len(), 32);
 }
@@ -239,7 +206,7 @@ fn cli_system_overrides_manifest() {
         &mut connection,
         &fixture_path("valid"),
         Some(&system_name),
-        None,
+        "https://example.test/app.git",
         None,
     )
     .unwrap();
@@ -262,40 +229,21 @@ fn reimporting_a_remote_oci_import_keeps_a_single_spec_row() {
     let repository = fixture_path("oci-only");
     let repository_url = "https://git.example.com/team/service";
 
-    let first = import_application(
-        &mut connection,
-        &repository,
-        None,
-        Some(repository_url),
-        None,
-    )
-    .unwrap();
-    let second = import_application(
-        &mut connection,
-        &repository,
-        None,
-        Some(repository_url),
-        None,
-    )
-    .unwrap();
+    let first =
+        import_application(&mut connection, &repository, None, repository_url, None).unwrap();
+    let second =
+        import_application(&mut connection, &repository, None, repository_url, None).unwrap();
 
     let row_counts = connection
         .query_row(
             "SELECT
                 (SELECT COUNT(*) FROM applications),
-                (SELECT COUNT(*) FROM application_delivery_specs),
-                (SELECT COUNT(*) FROM application_sources)",
+                (SELECT COUNT(*) FROM exposures)",
             [],
-            |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, i64>(2)?,
-                ))
-            },
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
         )
         .unwrap();
-    assert_eq!(row_counts, (1, 1, 1));
+    assert_eq!(row_counts, (1, 1));
     assert_eq!(first, second);
 }
 
@@ -305,32 +253,26 @@ fn reimport_preserves_the_active_deployment_of_a_deployed_application() {
     let repository = fixture_path("valid");
     let repository_url = "https://github.com/vitoraalmeida/vitoralmeida.tech";
 
-    import_application(
-        &mut connection,
-        &repository,
-        None,
-        Some(repository_url),
-        None,
-    )
-    .unwrap();
+    import_application(&mut connection, &repository, None, repository_url, None).unwrap();
 
     let application_id: String = connection
         .query_row("SELECT id FROM applications", [], |row| row.get(0))
         .unwrap();
     connection
         .execute(
-            "INSERT INTO releases (id, application_id, image_repository, image_digest, created_at)
-             VALUES ('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', ?1, 'ghcr.io/vitoraalmeida/vitoralmeida.tech',
-                     'sha256:deadbeef', CURRENT_TIMESTAMP)",
+            "INSERT INTO releases (id, application_id, image_reference, created_at)
+             VALUES ('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', ?1,
+                     'ghcr.io/vitoraalmeida/vitoralmeida.tech@sha256:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+                     CURRENT_TIMESTAMP)",
             [&application_id],
         )
         .unwrap();
     connection
         .execute(
             "INSERT INTO deployments (id, application_id, release_id, type, status,
-                                      created_at, updated_at)
-             VALUES ('cccccccccccccccccccccccccccccccc', ?1, 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'deploy', 'succeeded',
-                     CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+                                      requested_at, finished_at)
+             VALUES ('cccccccccccccccccccccccccccccccc', ?1, 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                     'deploy', 'succeeded', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
             [&application_id],
         )
         .unwrap();
@@ -343,14 +285,8 @@ fn reimport_preserves_the_active_deployment_of_a_deployed_application() {
         )
         .unwrap();
 
-    let reimported = import_application(
-        &mut connection,
-        &repository,
-        None,
-        Some(repository_url),
-        None,
-    )
-    .unwrap();
+    let reimported =
+        import_application(&mut connection, &repository, None, repository_url, None).unwrap();
 
     assert_eq!(reimported.id.as_str(), application_id);
     assert_eq!(
@@ -364,17 +300,17 @@ fn reimport_preserves_the_active_deployment_of_a_deployed_application() {
         reimported.desired_runtime_state,
         DesiredRuntimeState::Running
     );
-    let (source_url, source_count): (Option<String>, i64) = connection
+    let (persisted_url, application_count): (String, i64) = connection
         .query_row(
             "SELECT
-                (SELECT repository_url FROM application_sources),
-                (SELECT COUNT(*) FROM application_sources)",
+                (SELECT repository_url FROM applications),
+                (SELECT COUNT(*) FROM applications)",
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
-    assert_eq!(source_url.as_deref(), Some(repository_url));
-    assert_eq!(source_count, 1);
+    assert_eq!(persisted_url, repository_url);
+    assert_eq!(application_count, 1);
 }
 
 #[test]
@@ -382,8 +318,8 @@ fn a_mid_aggregate_persistence_failure_rolls_back_everything() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
     connection
         .execute_batch(
-            "CREATE TRIGGER fail_runtime_spec_insert
-             BEFORE INSERT ON application_runtime_specs
+            "CREATE TRIGGER fail_exposure_insert
+             BEFORE INSERT ON exposures
              BEGIN
                  SELECT RAISE(ABORT, 'intentional failure');
              END",
@@ -394,7 +330,7 @@ fn a_mid_aggregate_persistence_failure_rolls_back_everything() {
         &mut connection,
         &fixture_path("valid"),
         None,
-        Some("https://github.com/vitoraalmeida/vitoralmeida.tech"),
+        "https://github.com/vitoraalmeida/vitoralmeida.tech",
         None,
     )
     .unwrap_err();
@@ -405,10 +341,6 @@ fn a_mid_aggregate_persistence_failure_rolls_back_everything() {
             "SELECT
                 (SELECT COUNT(*) FROM systems),
                 (SELECT COUNT(*) FROM applications),
-                (SELECT COUNT(*) FROM application_delivery_specs),
-                (SELECT COUNT(*) FROM application_sources),
-                (SELECT COUNT(*) FROM application_runtime_specs),
-                (SELECT COUNT(*) FROM health_check_specs),
                 (SELECT COUNT(*) FROM exposures)",
             [],
             |row| {
@@ -416,15 +348,11 @@ fn a_mid_aggregate_persistence_failure_rolls_back_everything() {
                     row.get::<_, i64>(0)?,
                     row.get::<_, i64>(1)?,
                     row.get::<_, i64>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, i64>(4)?,
-                    row.get::<_, i64>(5)?,
-                    row.get::<_, i64>(6)?,
                 ))
             },
         )
         .unwrap();
-    assert_eq!(row_counts, (0, 0, 0, 0, 0, 0, 0));
+    assert_eq!(row_counts, (0, 0, 0));
 }
 
 #[test]
@@ -439,7 +367,7 @@ fn reimport_is_create_only_when_arguments_diverge() {
         &mut connection,
         &repository,
         Some(&original_system),
-        Some(original_url),
+        original_url,
         None,
     )
     .unwrap();
@@ -448,14 +376,14 @@ fn reimport_is_create_only_when_arguments_diverge() {
         &mut connection,
         &repository,
         Some(&divergent_system),
-        Some("https://git.example.com/different/repository"),
+        "https://git.example.com/different/repository",
         None,
     )
     .unwrap();
 
     assert_eq!(divergent.id, original.id);
     assert_eq!(divergent.system_id, original.system_id);
-    assert_eq!(divergent.repository.as_deref(), Some(original_url));
+    assert_eq!(divergent.repository.as_str(), original_url);
 
     let (system_count, system_name): (i64, String) = connection
         .query_row(
@@ -468,12 +396,17 @@ fn reimport_is_create_only_when_arguments_diverge() {
         .unwrap();
     assert_eq!(system_count, 1);
     assert_eq!(system_name, "system-a");
-    let source_count: i64 = connection
-        .query_row("SELECT COUNT(*) FROM application_sources", [], |row| {
-            row.get(0)
-        })
+    let (persisted_url, application_count): (String, i64) = connection
+        .query_row(
+            "SELECT
+                (SELECT repository_url FROM applications),
+                (SELECT COUNT(*) FROM applications)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
         .unwrap();
-    assert_eq!(source_count, 1);
+    assert_eq!(persisted_url, original_url);
+    assert_eq!(application_count, 1);
 }
 
 fn fixture_path(name: &str) -> PathBuf {

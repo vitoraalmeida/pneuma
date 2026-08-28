@@ -23,7 +23,7 @@ pub enum ReleaseStoreError {
     },
 }
 
-// Allocates a Release ID beside its digest-uniqueness check in the same transaction.
+// Allocates a Release ID beside its artifact-uniqueness check in the same transaction.
 pub(crate) fn generate_id(connection: &Connection) -> Result<ReleaseId, ReleaseStoreError> {
     let value = connection
         .query_row("SELECT lower(hex(randomblob(16)))", [], |row| {
@@ -50,7 +50,7 @@ pub(crate) fn active_application_image_references(
         .collect::<Result<Vec<_>, _>>()
 }
 
-// Inserts an immutable artifact Release and preserves the existing row for the same digest.
+// Inserts an immutable artifact Release and preserves the existing row for the same artifact.
 pub(crate) fn insert_release(
     transaction: &Transaction<'_>,
     id: &ReleaseId,
@@ -59,28 +59,16 @@ pub(crate) fn insert_release(
 ) -> Result<(), ReleaseStoreError> {
     transaction
         .execute(
-            "INSERT INTO releases (
-                id,
-                application_id,
-                image_reference,
-                image_repository,
-                image_digest,
-                created_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP)
-            ON CONFLICT(application_id, image_digest) DO NOTHING",
-            params![
-                id.as_str(),
-                application_id.as_str(),
-                artifact.reference(),
-                artifact.repository(),
-                artifact.digest()
-            ],
+            "INSERT INTO releases (id, application_id, image_reference, created_at)
+             VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP)
+             ON CONFLICT(application_id, image_reference) DO NOTHING",
+            params![id.as_str(), application_id.as_str(), artifact.reference()],
         )
         .map_err(|source| ReleaseStoreError::Persistence { source })?;
     Ok(())
 }
 
-// Loads a Release by immutable digest and validates its redundant persisted artifact fields.
+// Loads a Release by immutable digest and validates its canonical persisted artifact.
 pub(crate) fn load_release_by_digest(
     connection: &Connection,
     application_id: &ApplicationId,
@@ -88,29 +76,16 @@ pub(crate) fn load_release_by_digest(
 ) -> Result<Release, ReleaseStoreError> {
     connection
         .query_row(
-            "SELECT id, application_id, image_reference, image_repository,
-                    image_digest, created_at
+            "SELECT id, application_id, image_reference, created_at
              FROM releases
-             WHERE application_id = ?1 AND image_digest = ?2",
+             WHERE application_id = ?1 AND image_reference LIKE '%' || ?2",
             params![application_id.as_str(), image_digest],
             |row| {
-                let image_reference = row.get::<_, String>(2)?;
-                let image_repository = row.get::<_, String>(3)?;
-                let image_digest = row.get::<_, String>(4)?;
-                let artifact =
-                    artifact_from_values(&image_reference, &image_repository, &image_digest)
-                        .map_err(|source| {
-                            rusqlite::Error::FromSqlConversionFailure(
-                                2,
-                                rusqlite::types::Type::Text,
-                                Box::new(io::Error::new(io::ErrorKind::InvalidData, source)),
-                            )
-                        })?;
                 Ok(Release {
                     id: entity_id(0, &row.get::<_, String>(0)?)?,
                     application_id: entity_id(1, &row.get::<_, String>(1)?)?,
-                    artifact,
-                    created_at: row.get(5)?,
+                    artifact: artifact_from_reference(2, &row.get::<_, String>(2)?)?,
+                    created_at: row.get(3)?,
                 })
             },
         )
@@ -122,45 +97,47 @@ pub(crate) fn load_release_by_digest(
         })
 }
 
-// Loads a Release by durable identity and validates its redundant persisted artifact fields.
+// Loads a Release by durable identity and validates its canonical persisted artifact.
 pub(crate) fn load_release_by_id(
     connection: &Connection,
     release_id: &ReleaseId,
 ) -> Result<Release, ReleaseStoreError> {
     connection
         .query_row(
-            "SELECT id, application_id, image_reference, image_repository, image_digest, created_at FROM releases WHERE id = ?1",
+            "SELECT id, application_id, image_reference, created_at
+             FROM releases WHERE id = ?1",
             [release_id.as_str()],
             |row| {
-                let reference = row.get::<_, String>(2)?;
-                let repository = row.get::<_, String>(3)?;
-                let digest = row.get::<_, String>(4)?;
-                let artifact = artifact_from_values(&reference, &repository, &digest).map_err(|source| rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(io::Error::new(io::ErrorKind::InvalidData, source))))?;
                 Ok(Release {
                     id: entity_id(0, &row.get::<_, String>(0)?)?,
                     application_id: entity_id(1, &row.get::<_, String>(1)?)?,
-                    artifact,
-                    created_at: row.get(5)?,
+                    artifact: artifact_from_reference(2, &row.get::<_, String>(2)?)?,
+                    created_at: row.get(3)?,
                 })
             },
         )
         .optional()
         .map_err(|source| ReleaseStoreError::Persistence { source })?
-        .ok_or_else(|| ReleaseStoreError::NotFound { release_id: release_id.to_string() })
+        .ok_or_else(|| ReleaseStoreError::NotFound {
+            release_id: release_id.to_string(),
+        })
 }
 
-pub(crate) fn artifact_from_values(
+// Hydrates the one canonical artifact column; repository and digest are derived by parsing.
+pub(crate) fn artifact_from_reference(
+    column: usize,
     reference: &str,
-    repository: &str,
-    digest: &str,
-) -> Result<OciArtifact, crate::domain::release::InvalidOciArtifact> {
-    let artifact = OciArtifact::parse(reference)?;
-    if artifact.repository() != repository || artifact.digest() != digest {
-        return Err(crate::domain::release::InvalidOciArtifact {
-            reference: reference.to_owned(),
-        });
-    }
-    Ok(artifact)
+) -> rusqlite::Result<OciArtifact> {
+    OciArtifact::parse(reference).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            column,
+            rusqlite::types::Type::Text,
+            Box::new(io::Error::new(
+                io::ErrorKind::InvalidData,
+                error.to_string(),
+            )),
+        )
+    })
 }
 
 #[cfg(test)]
@@ -168,9 +145,9 @@ mod tests {
     use std::path::Path;
 
     use crate::adapters::database;
-    use crate::domain::identity::ApplicationId;
+    use crate::domain::identity::{ApplicationId, ReleaseId};
 
-    use super::{ReleaseStoreError, load_release_by_digest};
+    use super::{ReleaseStoreError, load_release_by_digest, load_release_by_id};
 
     #[test]
     fn missing_digest_lookup_preserves_its_application_and_artifact_context() {
@@ -189,5 +166,34 @@ mod tests {
                 image_digest,
             } if application_id == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" && image_digest == "sha256:missing"
         ));
+    }
+
+    #[test]
+    fn a_corrupt_persisted_artifact_reference_fails_hydration() {
+        let connection = database::open(Path::new(":memory:")).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO systems (id, name) VALUES ('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'team');
+                 INSERT INTO applications (
+                     id, system_id, name, repository_url, manifest_path, image_repository,
+                     container_port, health_check_path, health_check_expected_status,
+                     desired_runtime_state
+                 ) VALUES (
+                     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'app',
+                     'https://example.test/app.git', 'pneuma.toml', 'registry.example/app',
+                     8080, '/healthz', 200, 'stopped');
+                 INSERT INTO releases (id, application_id, image_reference, created_at)
+                 VALUES ('cccccccccccccccccccccccccccccccc', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                         'not a valid reference', 'now');",
+            )
+            .unwrap();
+
+        let error = load_release_by_id(
+            &connection,
+            &ReleaseId::new("cccccccccccccccccccccccccccccccc").unwrap(),
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, ReleaseStoreError::Persistence { .. }));
     }
 }

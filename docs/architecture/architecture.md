@@ -237,10 +237,13 @@ persistence; dashed arrows represent observations or returned authoritative
 results. Blue is persisted state, orange is a remote authority, green is a
 host-local materialization authority, and purple is the short-lived orchestrator.
 
-SQLite is bundled through rusqlite. Immutable migrations in `migrations/` are
-registered in `src/adapters/database.rs` and are applied when a connection opens
-with foreign keys enabled. See [`data-model.md`](data-model.md) for entities,
-relationships, state values, and database invariants.
+SQLite is bundled through rusqlite. The current schema lives in one baseline
+migration (`migrations/0001_current_schema.sql`) with a textual ledger identity
+in `schema_migrations`. An empty database initializes atomically when a
+connection opens with foreign keys enabled; a database carrying the current
+ledger reopens normally, and every other non-empty schema is rejected as
+incompatible. See [`data-model.md`](data-model.md) for entities, relationships,
+state values, and database invariants.
 
 Multiple authorities are intentional: persisted intent and observed external
 reality are different categories of state. SQLite does not prove that an
@@ -617,15 +620,15 @@ restore <path>
 ```
 
 Restore never reports success for an unusable database: the reopened connection
-applies pending migrations exactly like any other open. The pre-restore snapshot
-path is printed so an operator can roll back a bad restoration.
+verifies the current schema exactly like any other open. The pre-restore
+snapshot path is printed so an operator can roll back a bad restoration.
 
 ### Doctor
 
 ```text
 doctor
-  -> open the configured database (applying pending migrations)
-  -> ordered direct host checks: database connectivity, applied migration count,
+  -> open the configured database (verifying the current schema)
+  -> ordered direct host checks: database connectivity, current schema ledger,
      workspace directory, Caddy managed directory, Caddyfile presence plus
      `caddy validate`, Git availability, Podman availability, active OCI image
      pullability, free space for database and checkouts, rootless Podman mode,
@@ -720,8 +723,8 @@ for its observed state.
   destination. `pneuma database restore <path>` checks source integrity, takes a
   create-only `<database>.restore.lock` file, makes a pre-restore backup, and
   replaces the database atomically.
-- `pneuma doctor` checks the database and migrations, configured paths, Caddy
-  configuration, Git/Podman/Caddy availability, rootless Podman, the Quadlet user
-  generator, disk capacity, and that active OCI images remain pullable. It does
-  not establish that an individual Application is healthy.
+- `pneuma doctor` checks the database and its schema ledger, configured paths,
+  Caddy configuration, Git/Podman/Caddy availability, rootless Podman, the
+  Quadlet user generator, disk capacity, and that active OCI images remain
+  pullable. It does not establish that an individual Application is healthy.
 - `pneuma version` prints the package version without opening the database.

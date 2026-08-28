@@ -9,14 +9,14 @@ use crate::domain::application::{
     Application, ApplicationDeploymentSpecification, ApplicationName, ApplicationSummary,
     DesiredRuntimeState,
 };
-use crate::domain::git::{ApplicationSource, RelativeManifestPath};
+use crate::domain::git::ApplicationSource;
 use crate::domain::identity::{ApplicationId, DeploymentId, SystemId};
-use crate::domain::release::DeliverySpecification;
-use crate::domain::release::OciRepository;
+use crate::domain::release::{DeliverySpecification, OciRepository};
 use crate::domain::runtime::{
     ContainerPort, HealthCheckPath, HealthCheckSpecification, HealthCheckStatus,
     RuntimeSpecification,
 };
+
 // Every lookup in this store is an optional query: absence is `Ok(None)`, never
 // a dedicated error variant. Callers that require a row translate `None` into
 // their own domain error.
@@ -46,43 +46,59 @@ pub(crate) fn generate_id(connection: &Connection) -> Result<ApplicationId, Appl
     })
 }
 
+// The complete immutable import specification persisted on one Application row.
+pub(crate) struct ImportedApplicationSpecification<'a> {
+    pub(crate) system_id: &'a SystemId,
+    pub(crate) name: &'a ApplicationName,
+    pub(crate) source: &'a ApplicationSource,
+    pub(crate) image_repository: &'a OciRepository,
+    pub(crate) runtime: &'a RuntimeSpecification,
+}
+
 // Persists an imported Application once, preserving the original specification on name conflicts.
 pub(crate) fn insert_application(
     transaction: &Transaction<'_>,
     application_id: &ApplicationId,
-    system_id: &SystemId,
-    name: &ApplicationName,
+    specification: &ImportedApplicationSpecification<'_>,
 ) -> Result<bool, ApplicationStoreError> {
+    let health_check = specification.runtime.health_check();
     let inserted = transaction
         .execute(
-            "INSERT INTO applications (id, system_id, name, desired_runtime_state, created_at, updated_at)
-             VALUES (?1, ?2, ?3, 'stopped', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-             ON CONFLICT(name) DO NOTHING",
-            params![application_id.as_str(), system_id.as_str(), name.as_str()],
+            "INSERT INTO applications (
+                id, system_id, name,
+                repository_url, default_branch, manifest_path,
+                image_repository, container_port,
+                health_check_path, health_check_expected_status,
+                desired_runtime_state
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'stopped')
+            ON CONFLICT(name) DO NOTHING",
+            params![
+                application_id.as_str(),
+                specification.system_id.as_str(),
+                specification.name.as_str(),
+                specification.source.repository_url(),
+                specification.source.default_branch(),
+                specification.source.manifest_path().as_str(),
+                specification.image_repository.as_str(),
+                i64::from(specification.runtime.container_port().get()),
+                health_check.path().as_str(),
+                i64::from(health_check.expected_status().get()),
+            ],
         )
         .map_err(|source| ApplicationStoreError::Persistence { source })?;
     Ok(inserted == 1)
 }
 
-// Loads the import-facing Application summary with optional source metadata.
+// Loads the import-facing Application summary with its immutable source metadata.
 pub(crate) fn load_application_for_import(
     transaction: &Transaction<'_>,
     name: &ApplicationName,
 ) -> Result<Option<ApplicationSummary>, ApplicationStoreError> {
     transaction
         .query_row(
-            "SELECT
-                a.id,
-                a.system_id,
-                a.name,
-                a.desired_runtime_state,
-                a.active_deployment_id,
-                s.repository_url,
-                s.default_branch
-             FROM applications AS a
-             LEFT JOIN application_sources AS s
-                ON s.application_id = a.id
-             WHERE a.name = ?1",
+            "SELECT id, system_id, name, desired_runtime_state, active_deployment_id,
+                    repository_url, default_branch
+             FROM applications WHERE name = ?1",
             [name.as_str()],
             map_application_summary_row,
         )
@@ -95,15 +111,10 @@ pub(crate) fn map_application_row(row: &Row<'_>) -> rusqlite::Result<Application
     let desired_runtime_state = row.get::<_, String>(3)?;
     let desired_runtime_state = desired_runtime_state_from_value(&desired_runtime_state)
         .ok_or_else(|| invalid_text_value(3, "desired runtime state", &desired_runtime_state))?;
-    // The column is still nullable until the baseline-schema checkpoint, but a
-    // current Application always carries exactly one System.
-    let system_id = row
-        .get::<_, Option<String>>(1)?
-        .ok_or_else(|| invalid_text_value(1, "system id", "NULL"))?;
 
     Ok(Application {
         id: entity_id(0, &row.get::<_, String>(0)?)?,
-        system_id: entity_id(1, &system_id)?,
+        system_id: entity_id(1, &row.get::<_, String>(1)?)?,
         name: ApplicationName::new(&row.get::<_, String>(2)?)
             .map_err(|error| invalid_text_value(2, "application name", &error.value))?,
         desired_runtime_state,
@@ -148,7 +159,7 @@ pub fn load_application_by_name(
 pub(crate) fn list_application_summaries(
     connection: &Connection,
 ) -> Result<Vec<ApplicationSummary>, ApplicationStoreError> {
-    let mut statement = connection.prepare("SELECT a.id, a.system_id, a.name, a.desired_runtime_state, a.active_deployment_id, s.repository_url, s.default_branch FROM applications a LEFT JOIN application_sources s ON s.application_id = a.id ORDER BY a.name").map_err(|source| ApplicationStoreError::Persistence { source })?;
+    let mut statement = connection.prepare("SELECT id, system_id, name, desired_runtime_state, active_deployment_id, repository_url, default_branch FROM applications ORDER BY name").map_err(|source| ApplicationStoreError::Persistence { source })?;
     statement
         .query_map([], map_application_summary_row)
         .map_err(|source| ApplicationStoreError::Persistence { source })?
@@ -161,7 +172,7 @@ pub(crate) fn list_application_summaries_for_system(
     connection: &Connection,
     system_id: &SystemId,
 ) -> Result<Vec<ApplicationSummary>, ApplicationStoreError> {
-    let mut statement = connection.prepare("SELECT a.id, a.system_id, a.name, a.desired_runtime_state, a.active_deployment_id, s.repository_url, s.default_branch FROM applications a LEFT JOIN application_sources s ON s.application_id = a.id WHERE a.system_id = ?1 ORDER BY a.name").map_err(|source| ApplicationStoreError::Persistence { source })?;
+    let mut statement = connection.prepare("SELECT id, system_id, name, desired_runtime_state, active_deployment_id, repository_url, default_branch FROM applications WHERE system_id = ?1 ORDER BY name").map_err(|source| ApplicationStoreError::Persistence { source })?;
     statement
         .query_map([system_id.as_str()], map_application_summary_row)
         .map_err(|source| ApplicationStoreError::Persistence { source })?
@@ -204,96 +215,10 @@ pub(crate) fn set_desired_runtime_state(
 ) -> Result<(), ApplicationStoreError> {
     connection
         .execute(
-            "UPDATE applications
-             SET desired_runtime_state = ?1, updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?2",
+            "UPDATE applications SET desired_runtime_state = ?1 WHERE id = ?2",
             params![
                 desired_runtime_state_value(desired),
                 application_id.as_str()
-            ],
-        )
-        .map_err(|source| ApplicationStoreError::Persistence { source })?;
-    Ok(())
-}
-
-// Persists the immutable delivery configuration associated with an imported Application.
-// The `delivery_type` column only survives until the baseline-schema checkpoint; OCI is
-// the one supported delivery, so the store writes its literal directly.
-pub(crate) fn insert_delivery_spec(
-    transaction: &Transaction<'_>,
-    application_id: &ApplicationId,
-    image_repository: &OciRepository,
-) -> Result<(), ApplicationStoreError> {
-    transaction
-        .execute(
-            "INSERT INTO application_delivery_specs (
-                application_id, delivery_type, image_repository,
-                created_at, updated_at
-            ) VALUES (?1, 'oci', ?2, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-            params![application_id.as_str(), image_repository.as_str()],
-        )
-        .map_err(|source| ApplicationStoreError::Persistence { source })?;
-    Ok(())
-}
-
-// Persists source provenance and checkout defaults for an imported Application.
-// The `repository_kind` column only survives until the baseline-schema checkpoint;
-// remote Git is the one supported source, so the store writes its literal directly.
-pub(crate) fn insert_source_spec(
-    transaction: &Transaction<'_>,
-    application_id: &ApplicationId,
-    source: &ApplicationSource,
-) -> Result<(), ApplicationStoreError> {
-    transaction
-        .execute(
-            "INSERT INTO application_sources (
-                application_id, repository_url, repository_kind,
-                default_branch, manifest_path, created_at, updated_at
-            ) VALUES (?1, ?2, 'remote', ?3, ?4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-            params![
-                application_id.as_str(),
-                source.repository_url(),
-                source.default_branch(),
-                source.manifest_path().as_str()
-            ],
-        )
-        .map_err(|source| ApplicationStoreError::Persistence { source })?;
-    Ok(())
-}
-
-// Persists the container port that defines the Application's runtime endpoint.
-pub(crate) fn insert_runtime_spec(
-    transaction: &Transaction<'_>,
-    application_id: &ApplicationId,
-    container_port: ContainerPort,
-) -> Result<(), ApplicationStoreError> {
-    transaction
-        .execute(
-            "INSERT INTO application_runtime_specs (
-                application_id, container_port, created_at, updated_at
-            ) VALUES (?1, ?2, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-            params![application_id.as_str(), i64::from(container_port.get())],
-        )
-        .map_err(|source| ApplicationStoreError::Persistence { source })?;
-    Ok(())
-}
-
-// Persists the internal health-check contract used for candidate verification.
-pub(crate) fn insert_health_check_spec(
-    transaction: &Transaction<'_>,
-    application_id: &ApplicationId,
-    path: &HealthCheckPath,
-    expected_status: HealthCheckStatus,
-) -> Result<(), ApplicationStoreError> {
-    transaction
-        .execute(
-            "INSERT INTO health_check_specs (
-                application_id, path, expected_status, created_at, updated_at
-            ) VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-            params![
-                application_id.as_str(),
-                path.as_str(),
-                i64::from(expected_status.get())
             ],
         )
         .map_err(|source| ApplicationStoreError::Persistence { source })?;
@@ -326,8 +251,7 @@ pub fn activate_deployment(
         .execute(
             "UPDATE applications
              SET active_deployment_id = ?1,
-                 desired_runtime_state = 'running',
-                 updated_at = CURRENT_TIMESTAMP
+                 desired_runtime_state = 'running'
              WHERE id = ?2
                AND EXISTS (
                    SELECT 1 FROM deployments
@@ -341,15 +265,14 @@ pub fn activate_deployment(
     Ok(outcome(updated))
 }
 
-// Loads delivery configuration for an imported Application.
+// Loads the immutable delivery configuration persisted on the Application row.
 pub fn load_delivery_specification(
     connection: &Connection,
     application_id: &ApplicationId,
 ) -> Result<Option<DeliverySpecification>, ApplicationStoreError> {
     let image_repository = connection
         .query_row(
-            "SELECT image_repository
-             FROM application_delivery_specs WHERE application_id = ?1",
+            "SELECT image_repository FROM applications WHERE id = ?1",
             [application_id.as_str()],
             |row| row.get::<_, String>(0),
         )
@@ -366,7 +289,8 @@ pub fn load_delivery_specification(
     Ok(Some(DeliverySpecification::new(image_repository)))
 }
 
-// Loads source configuration and rejects locations outside the remote Git form.
+// Loads the immutable remote Git source persisted on the Application row and
+// rejects locations outside the remote Git form.
 pub fn load_source(
     connection: &Connection,
     application_id: &ApplicationId,
@@ -374,7 +298,7 @@ pub fn load_source(
     let source = connection
         .query_row(
             "SELECT repository_url, default_branch, manifest_path
-             FROM application_sources WHERE application_id = ?1",
+             FROM applications WHERE id = ?1",
             [application_id.as_str()],
             |row| {
                 Ok((
@@ -389,11 +313,12 @@ pub fn load_source(
     let Some((repository_url, default_branch, manifest_path)) = source else {
         return Ok(None);
     };
-    let manifest_path = RelativeManifestPath::new(&manifest_path).map_err(|error| {
-        ApplicationStoreError::Persistence {
-            source: invalid_text_value(2, "manifest path", &error.path),
-        }
-    })?;
+    let manifest_path =
+        crate::domain::git::RelativeManifestPath::new(&manifest_path).map_err(|error| {
+            ApplicationStoreError::Persistence {
+                source: invalid_text_value(2, "manifest path", &error.path),
+            }
+        })?;
     ApplicationSource::new(&repository_url, default_branch, manifest_path)
         .map(Some)
         .map_err(|_| ApplicationStoreError::Persistence {
@@ -411,15 +336,11 @@ pub fn load_deployment_specification(
             "SELECT
                 applications.id,
                 applications.name,
-                application_runtime_specs.container_port,
-                health_check_specs.path,
-                health_check_specs.expected_status,
+                applications.container_port,
+                applications.health_check_path,
+                applications.health_check_expected_status,
                 exposures.desired_visibility
              FROM applications
-             JOIN application_runtime_specs
-                ON application_runtime_specs.application_id = applications.id
-             JOIN health_check_specs
-                ON health_check_specs.application_id = applications.id
              JOIN exposures ON exposures.application_id = applications.id
              WHERE applications.id = ?1",
             [application_id.as_str()],
@@ -502,11 +423,17 @@ mod tests {
 
     use crate::adapters::database;
     use crate::domain::application::ApplicationName;
+    use crate::domain::git::{ApplicationSource, RelativeManifestPath};
     use crate::domain::identity::{ApplicationId, SystemId};
+    use crate::domain::release::OciRepository;
+    use crate::domain::runtime::{
+        ContainerPort, HealthCheckPath, HealthCheckSpecification, HealthCheckStatus,
+        RuntimeSpecification,
+    };
 
     use super::{
-        ApplicationStoreError, DesiredRuntimeState, insert_application, insert_delivery_spec,
-        insert_runtime_spec, load_application_by_name, load_application_for_import,
+        ApplicationStoreError, DesiredRuntimeState, ImportedApplicationSpecification,
+        insert_application, load_application_by_name, load_application_for_import,
         load_delivery_specification, load_deployment_specification, load_desired_runtime_state,
         load_source,
     };
@@ -544,14 +471,37 @@ mod tests {
         );
     }
 
-    fn seed_application(connection: &Connection, id: &str) {
-        connection
-            .execute_batch(&format!(
-                "INSERT INTO systems (id, name, created_at) VALUES ('{SYSTEM_ID}', 'team', 'now');
-                 INSERT INTO applications (id, system_id, name, desired_runtime_state, created_at, updated_at)
-                 VALUES ('{id}', '{SYSTEM_ID}', '{id}', 'stopped', 'now', 'now')"
-            ))
-            .unwrap();
+    fn specification(name: &ApplicationName) -> ImportedApplicationSpecification<'static> {
+        specification_leaked(name)
+    }
+
+    // Builds a specification with `'static` borrowed fields for test convenience.
+    fn specification_leaked(name: &ApplicationName) -> ImportedApplicationSpecification<'static> {
+        let system_id = Box::leak(SystemId::new(SYSTEM_ID).unwrap().into());
+        let source = Box::leak(Box::new(
+            ApplicationSource::new(
+                "https://example.test/app.git",
+                Some("main".to_owned()),
+                RelativeManifestPath::new("pneuma.toml").unwrap(),
+            )
+            .unwrap(),
+        ));
+        let image_repository =
+            Box::leak(OciRepository::new("registry.example/app").unwrap().into());
+        let runtime = Box::leak(Box::new(RuntimeSpecification::new(
+            ContainerPort::new(8080).unwrap(),
+            HealthCheckSpecification::new(
+                HealthCheckPath::new("/healthz").unwrap(),
+                HealthCheckStatus::new(200).unwrap(),
+            ),
+        )));
+        ImportedApplicationSpecification {
+            system_id,
+            name: Box::leak(name.clone().into()),
+            source,
+            image_repository,
+            runtime,
+        }
     }
 
     #[test]
@@ -597,8 +547,7 @@ mod tests {
     #[test]
     fn rolling_back_the_import_transaction_persists_nothing() {
         let mut connection = database::open(Path::new(":memory:")).unwrap();
-        let repository =
-            crate::domain::release::OciRepository::new("registry.example/app").unwrap();
+        let name = ApplicationName::new("app").unwrap();
 
         {
             let transaction = connection
@@ -606,133 +555,104 @@ mod tests {
                 .unwrap();
             transaction
                 .execute(
-                    "INSERT INTO systems (id, name, created_at) VALUES (?1, 'team', 'now')",
+                    "INSERT INTO systems (id, name) VALUES (?1, 'team')",
                     params![SYSTEM_ID],
                 )
                 .unwrap();
-            insert_application(
-                &transaction,
-                &application_id(),
-                &SystemId::new(SYSTEM_ID).unwrap(),
-                &ApplicationName::new("app").unwrap(),
-            )
-            .unwrap();
-            insert_delivery_spec(&transaction, &application_id(), &repository).unwrap();
-            insert_runtime_spec(
-                &transaction,
-                &application_id(),
-                crate::domain::runtime::ContainerPort::new(8080).unwrap(),
-            )
-            .unwrap();
+            insert_application(&transaction, &application_id(), &specification(&name)).unwrap();
             drop(transaction);
         }
 
-        for table in [
-            "applications",
-            "application_delivery_specs",
-            "application_runtime_specs",
-        ] {
-            let count: i64 = connection
-                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
-                    row.get(0)
-                })
-                .unwrap();
-            assert_eq!(count, 0, "{table} must stay empty after a rollback");
-        }
+        let count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM applications", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0, "applications must stay empty after a rollback");
     }
 
     #[test]
-    fn obsolete_delivery_type_text_is_ignored_when_loading_the_delivery_specification() {
-        let connection = database::open(Path::new(":memory:")).unwrap();
-        seed_application(&connection, APP_ID);
-
-        // The delivery type CHECK is bypassed so a corrupt historical row can exist.
-        connection
-            .execute_batch("PRAGMA ignore_check_constraints = ON;")
-            .unwrap();
-        connection
-            .execute(
-                "INSERT INTO application_delivery_specs (
-                    application_id, delivery_type, image_repository, created_at, updated_at
-                 ) VALUES (?1, 'docker', 'registry.example/app', 'now', 'now')",
-                params![APP_ID],
-            )
-            .unwrap();
-
-        // The one supported delivery no longer reads the persisted type; the
-        // repository still hydrates and the obsolete column is ignored.
-        let specification = load_delivery_specification(&connection, &application_id()).unwrap();
-        assert_eq!(
-            specification.unwrap().image_repository().as_str(),
-            "registry.example/app"
-        );
-    }
-
-    #[test]
-    fn unknown_repository_kind_is_ignored_when_loading_the_source() {
-        let connection = database::open(Path::new(":memory:")).unwrap();
-        seed_application(&connection, APP_ID);
-
-        // The repository kind CHECK is bypassed so a corrupt historical row can exist.
-        connection
-            .execute_batch("PRAGMA ignore_check_constraints = ON;")
-            .unwrap();
-        connection
-            .execute(
-                "INSERT INTO application_sources (
-                    application_id, repository_url, repository_kind,
-                    default_branch, manifest_path, created_at, updated_at
-                 ) VALUES (?1, 'https://github.com/example/app', 'svn',
-                           'main', 'pneuma.toml', 'now', 'now')",
-                params![APP_ID],
-            )
-            .unwrap();
-
-        // The one supported source no longer reads the persisted kind; the
-        // remote location still hydrates and the obsolete column is ignored.
-        let source = load_source(&connection, &application_id()).unwrap();
-        assert_eq!(
-            source.unwrap().repository_url(),
-            "https://github.com/example/app"
-        );
-    }
-
-    #[test]
-    fn local_source_locations_fail_hydration_instead_of_loading() {
-        let connection = database::open(Path::new(":memory:")).unwrap();
-        seed_application(&connection, APP_ID);
-        connection
-            .execute(
-                "INSERT INTO application_sources (
-                    application_id, repository_url, repository_kind,
-                    default_branch, manifest_path, created_at, updated_at
-                 ) VALUES (?1, '/srv/checkouts/app', 'local',
-                           NULL, 'pneuma.toml', 'now', 'now')",
-                params![APP_ID],
-            )
-            .unwrap();
-
-        let error = load_source(&connection, &application_id()).unwrap_err();
-        assert!(matches!(error, ApplicationStoreError::Persistence { .. }));
-    }
-
-    #[test]
-    fn applications_without_a_system_fail_hydration() {
-        let connection = database::open(Path::new(":memory:")).unwrap();
-        // The system_id column is still nullable until the baseline-schema
-        // checkpoint; a row without a System is obsolete and must be rejected.
-        connection
-            .execute(
-                "INSERT INTO applications (id, name, desired_runtime_state, created_at, updated_at)
-                 VALUES (?1, 'app', 'stopped', 'now', 'now')",
-                params![APP_ID],
-            )
-            .unwrap();
+    fn import_persists_the_whole_specification_on_one_row() {
+        let mut connection = database::open(Path::new(":memory:")).unwrap();
         let name = ApplicationName::new("app").unwrap();
+        connection
+            .execute(
+                "INSERT INTO systems (id, name) VALUES (?1, 'team')",
+                params![SYSTEM_ID],
+            )
+            .unwrap();
 
-        let error = load_application_by_name(&connection, &name).unwrap_err();
+        {
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .unwrap();
+            assert!(
+                insert_application(&transaction, &application_id(), &specification(&name)).unwrap()
+            );
+            super::super::exposure_store::insert_exposure(
+                &transaction,
+                &application_id(),
+                &crate::domain::exposure::ExposureIntent::new(
+                    crate::domain::exposure::Visibility::Internal,
+                    None,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            transaction.commit().unwrap();
+        }
 
-        assert!(matches!(error, ApplicationStoreError::Persistence { .. }));
+        let source = load_source(&connection, &application_id())
+            .unwrap()
+            .expect("the imported source must load");
+        assert_eq!(source.repository_url(), "https://example.test/app.git");
+        assert_eq!(source.default_branch(), Some("main"));
+        assert_eq!(source.manifest_path().as_str(), "pneuma.toml");
+
+        let delivery = load_delivery_specification(&connection, &application_id())
+            .unwrap()
+            .expect("the imported delivery must load");
+        assert_eq!(delivery.image_repository().as_str(), "registry.example/app");
+
+        let deployment_specification =
+            load_deployment_specification(&connection, &application_id())
+                .unwrap()
+                .expect("the deployment specification must load");
+        assert_eq!(
+            deployment_specification.runtime.container_port().get(),
+            8080
+        );
+        assert_eq!(
+            deployment_specification
+                .runtime
+                .health_check()
+                .path()
+                .as_str(),
+            "/healthz"
+        );
+    }
+
+    #[test]
+    fn applications_without_a_system_cannot_exist() {
+        let connection = database::open(Path::new(":memory:")).unwrap();
+
+        // The schema makes a System required; an obsolete row without one is
+        // unrepresentable instead of being tolerated at hydration.
+        let error = connection
+            .execute(
+                "INSERT INTO applications (
+                     id, system_id, name, repository_url, manifest_path, image_repository,
+                     container_port, health_check_path, health_check_expected_status,
+                     desired_runtime_state
+                 ) VALUES (?1, NULL, 'app', 'https://example.test/app.git', 'pneuma.toml',
+                           'registry.example/app', 8080, '/healthz', 200, 'stopped')",
+                params![APP_ID],
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            rusqlite::Error::SqliteFailure(ref failure, _)
+                if failure.code == rusqlite::ErrorCode::ConstraintViolation
+        ));
     }
 
     #[test]
@@ -744,16 +664,9 @@ mod tests {
             .unwrap();
         connection
             .execute_batch(&format!(
-                "PRAGMA ignore_check_constraints = ON;
-                 INSERT INTO application_runtime_specs (
-                    application_id, container_port, created_at, updated_at
-                 ) VALUES ('{APP_ID}', 8080, 'now', 'now');
-                 INSERT INTO health_check_specs (
-                    application_id, path, expected_status, created_at, updated_at
-                 ) VALUES ('{APP_ID}', '/healthz', 200, 'now', 'now');
-                 INSERT INTO exposures (
-                    application_id, desired_visibility, domain, created_at, updated_at
-                 ) VALUES ('{APP_ID}', 'private', NULL, 'now', 'now');"
+                "INSERT INTO exposures (
+                     application_id, desired_visibility, domain, materialization_state
+                 ) VALUES ('{APP_ID}', 'private', NULL, 'not_materialized');"
             ))
             .unwrap();
 
@@ -763,5 +676,20 @@ mod tests {
             error,
             Err(ApplicationStoreError::Persistence { .. })
         ));
+    }
+
+    fn seed_application(connection: &Connection, id: &str) {
+        connection
+            .execute_batch(&format!(
+                "INSERT INTO systems (id, name) VALUES ('{SYSTEM_ID}', 'team');
+                 INSERT INTO applications (
+                     id, system_id, name, repository_url, default_branch, manifest_path,
+                     image_repository, container_port, health_check_path,
+                     health_check_expected_status, desired_runtime_state
+                 ) VALUES (
+                     '{id}', '{SYSTEM_ID}', '{id}', 'https://example.test/app.git', 'main',
+                     'pneuma.toml', 'registry.example/app', 8080, '/healthz', 200, 'stopped')"
+            ))
+            .unwrap();
     }
 }

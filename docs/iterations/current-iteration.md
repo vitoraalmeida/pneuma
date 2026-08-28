@@ -36,9 +36,18 @@ incompatible; no existing database or backup is upgraded.
      lowercase-hex format at generation and hydration; `DeliveryType`,
      `RepositoryKind`, local sources, and all legacy tolerances are removed,
      with obsolete rows failing hydration explicitly.
-3. [ ] Exact baseline schema and stores
+3. [x] Exact baseline schema and stores
    - Replace the historical chain with the one exact eight-table baseline,
      current ledger identity, constraints, and current SQL mappings.
+   - Result: `migrations/0001_current_schema.sql` replaces migrations 0001-0014
+     with the eight-table baseline (flattened Application specification,
+     canonical Release `image_reference`, no runtime `host_address` or `removed`
+     state, composite ownership foreign keys, evidence CHECKs, one-in-progress
+     Deployment index, case-insensitive public-domain uniqueness, and
+     one-reservation-per-Deployment). The runner initializes empty databases
+     atomically, reopens the exact current textual ledger, and rejects every
+     other schema as incompatible; reservation allocation is idempotent per
+     Deployment and registration consumes the exact reservation.
 4. [ ] Boundary and workflow proof
    - Prove checkout, Caddy, and runtime identity at external boundaries and make
      lifecycle success depend on observed target state.
@@ -78,3 +87,9 @@ incompatible; no existing database or backup is upgraded.
 - Checkpoint 2: `cargo fmt --check`, Clippy with warnings denied, all-feature
   tests (25 suites green; the same three ignored OCI tests remain
   environment-dependent), and release build passed.
+- Checkpoint 3: `cargo fmt --check`, Clippy with warnings denied, all-feature
+  tests (25 suites green; the same three ignored OCI tests remain
+  environment-dependent), and release build passed. Fresh initialization,
+  idempotent reopen, incompatible-schema rejection (including the retired
+  integer ledger), baseline transaction rollback, and representative constraint
+  tests are green in `src/adapters/database.rs`.

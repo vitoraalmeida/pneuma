@@ -9,8 +9,14 @@ use pneuma::use_cases::release::{CreateReleaseError, create_release};
 #[test]
 fn creates_and_reuses_a_release_from_one_validated_artifact() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
-    let application =
-        import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
+    let application = import_application(
+        &mut connection,
+        &fixture_path("valid"),
+        None,
+        "https://example.test/app.git",
+        None,
+    )
+    .unwrap();
     let artifact = OciArtifact::new(
         "ghcr.io/vitoraalmeida/vitoralmeida.tech",
         &format!("sha256:{}", "a".repeat(64)),
@@ -50,26 +56,34 @@ fn reports_the_actual_missing_application_identifier() {
 }
 
 #[test]
-fn rejects_inconsistent_persisted_artifact_parts() {
+fn persists_only_the_canonical_artifact_reference() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
-    let application =
-        import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
+    let application = import_application(
+        &mut connection,
+        &fixture_path("valid"),
+        None,
+        "https://example.test/app.git",
+        None,
+    )
+    .unwrap();
     let artifact = OciArtifact::new(
         "ghcr.io/vitoraalmeida/vitoralmeida.tech",
         &format!("sha256:{}", "c".repeat(64)),
     )
     .unwrap();
     create_release(&mut connection, &application.id, &artifact).unwrap();
-    connection
-        .execute(
-            "UPDATE releases SET image_repository = 'registry.example/wrong'",
+
+    // Repository and digest are derived by parsing the one canonical column;
+    // redundant artifact columns are unrepresentable in the current schema.
+    let redundant_columns: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('releases')
+             WHERE name IN ('image_repository', 'image_digest', 'source_revision')",
             [],
+            |row| row.get(0),
         )
         .unwrap();
-
-    let error = create_release(&mut connection, &application.id, &artifact).unwrap_err();
-
-    assert!(matches!(error, CreateReleaseError::Persistence { .. }));
+    assert_eq!(redundant_columns, 0);
 }
 
 fn fixture_path(name: &str) -> PathBuf {

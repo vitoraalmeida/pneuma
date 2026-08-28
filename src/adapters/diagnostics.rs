@@ -30,11 +30,11 @@ pub fn run(connection: &Connection, verbose: bool) -> bool {
         }
     }
 
-    log_verbose(verbose, "checking database migrations");
-    match database::migration_count(connection) {
-        Ok(count) => println!("✓ Database migrations: {count} applied"),
+    log_verbose(verbose, "checking database schema");
+    match database::migration_identity(connection) {
+        Ok(identity) => println!("✓ Database schema: current ({identity})"),
         Err(source) => {
-            println!("✗ Database migrations: FAILED ({source})");
+            println!("✗ Database schema: FAILED ({source})");
             all_ok = false;
         }
     }

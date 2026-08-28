@@ -17,7 +17,7 @@ fn loads_named_source_delivery_runtime_and_health_configuration() {
         &mut connection,
         &fixture_path("valid"),
         None,
-        Some("https://github.com/vitoraalmeida/vitoralmeida.tech"),
+        "https://github.com/vitoraalmeida/vitoralmeida.tech",
         Some("deploy/staging/pneuma.toml"),
     )
     .unwrap();
@@ -77,24 +77,37 @@ fn loads_named_source_delivery_runtime_and_health_configuration() {
 #[test]
 fn rejects_invalid_persisted_specification_values_with_store_context() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
-    let application =
-        import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
+    let application = import_application(
+        &mut connection,
+        &fixture_path("valid"),
+        None,
+        "https://example.test/app.git",
+        None,
+    )
+    .unwrap();
 
-    connection.execute("UPDATE application_delivery_specs SET image_repository = 'registry.example/app:latest'", []).unwrap();
+    connection
+        .execute(
+            "UPDATE applications SET image_repository = 'registry.example/app:latest'",
+            [],
+        )
+        .unwrap();
     assert!(matches!(
         application_store::load_delivery_specification(&connection, &application.id),
         Err(ApplicationStoreError::Persistence { .. })
     ));
 
-    connection.execute("UPDATE application_delivery_specs SET image_repository = 'ghcr.io/vitoraalmeida/vitoralmeida.tech'", []).unwrap();
+    connection
+        .execute(
+            "UPDATE applications SET image_repository = 'ghcr.io/vitoraalmeida/vitoralmeida.tech'",
+            [],
+        )
+        .unwrap();
     connection
         .execute_batch("PRAGMA ignore_check_constraints = ON;")
         .unwrap();
     connection
-        .execute(
-            "UPDATE application_runtime_specs SET container_port = 0",
-            [],
-        )
+        .execute("UPDATE applications SET container_port = 0", [])
         .unwrap();
     assert!(matches!(
         application_store::load_deployment_specification(&connection, &application.id),
@@ -105,8 +118,14 @@ fn rejects_invalid_persisted_specification_values_with_store_context() {
 #[test]
 fn rejects_invalid_persisted_exposure_evidence_with_context() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
-    let application =
-        import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
+    let application = import_application(
+        &mut connection,
+        &fixture_path("valid"),
+        None,
+        "https://example.test/app.git",
+        None,
+    )
+    .unwrap();
     let application_id = &application.id;
     connection
         .execute_batch("PRAGMA foreign_keys = OFF; PRAGMA ignore_check_constraints = ON;")
@@ -193,36 +212,16 @@ fn rejects_invalid_persisted_exposure_evidence_with_context() {
 }
 
 #[test]
-fn loads_historical_internal_removal_timestamp_without_a_confirmed_route() {
-    let mut connection = database::open(Path::new(":memory:")).unwrap();
-    let application =
-        import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
-    connection
-        .execute(
-            "UPDATE exposures
-             SET desired_visibility = 'internal',
-                 materialization_state = 'not_materialized',
-                 active_runtime_id = NULL,
-                 configuration_version = NULL,
-                 last_materialized_at = '2026-08-20 00:00:00'",
-            [],
-        )
-        .unwrap();
-
-    let exposure = exposure_store::load_exposure(&connection, &application.id)
-        .unwrap()
-        .unwrap();
-    assert!(matches!(
-        exposure.materialization(),
-        ExposureMaterialization::NotMaterialized
-    ));
-}
-
-#[test]
 fn activates_a_succeeded_deployment_of_the_application_with_running_intent() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
-    let application =
-        import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
+    let application = import_application(
+        &mut connection,
+        &fixture_path("valid"),
+        None,
+        "https://example.test/app.git",
+        None,
+    )
+    .unwrap();
     seed_deployment(
         &connection,
         &application.id,
@@ -254,8 +253,14 @@ fn activates_a_succeeded_deployment_of_the_application_with_running_intent() {
 #[test]
 fn rejects_foreign_or_unsucceeded_activation_without_changing_application_state() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
-    let application =
-        import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
+    let application = import_application(
+        &mut connection,
+        &fixture_path("valid"),
+        None,
+        "https://example.test/app.git",
+        None,
+    )
+    .unwrap();
     seed_deployment(
         &connection,
         &application.id,
@@ -265,9 +270,15 @@ fn rejects_foreign_or_unsucceeded_activation_without_changing_application_state(
     connection
         .execute(
             "INSERT INTO applications (
-                id, name, desired_runtime_state, created_at, updated_at
-             ) VALUES ('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'other-application', 'stopped', 'now', 'now')",
-            [],
+                id, system_id, name, repository_url, manifest_path, image_repository,
+                container_port, health_check_path, health_check_expected_status,
+                desired_runtime_state
+             )
+             SELECT 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', system_id, 'other-application',
+                    'https://example.test/other.git', 'pneuma.toml', 'registry.example/other',
+                    8080, '/healthz', 200, 'stopped'
+             FROM applications WHERE id = ?1",
+            [application.id.as_str()],
         )
         .unwrap();
     seed_deployment(
@@ -313,26 +324,34 @@ fn seed_deployment(
     deployment_id: &str,
     status: &str,
 ) {
+    // Derives a distinct valid 32-hex release identity from the deployment id.
+    let release_id = format!(
+        "{:032x}",
+        u128::from_str_radix(deployment_id, 16).unwrap() ^ (1u128 << 64)
+    );
     connection
         .execute(
-            "INSERT INTO releases (
-                id, application_id, image_repository, image_digest, image_reference, created_at
-             ) VALUES (?1, ?2, 'registry.example/app',
-                       'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-                       'registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-                       'now')",
-            rusqlite::params![format!("release-{deployment_id}"), application_id.as_str()],
+            "INSERT INTO releases (id, application_id, image_reference, created_at)
+             VALUES (?1, ?2, 'registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                     'now')",
+            rusqlite::params![release_id, application_id.as_str()],
         )
         .unwrap();
+    let finished_at: Option<&str> = if status == "succeeded" || status == "failed" {
+        Some("now")
+    } else {
+        None
+    };
     connection
         .execute(
-            "INSERT INTO deployments (id, application_id, release_id, type, status)
-             VALUES (?1, ?2, ?3, 'deploy', ?4)",
+            "INSERT INTO deployments (id, application_id, release_id, type, status, requested_at, finished_at)
+             VALUES (?1, ?2, ?3, 'deploy', ?4, 'now', ?5)",
             rusqlite::params![
                 deployment_id,
                 application_id.as_str(),
-                format!("release-{deployment_id}"),
-                status
+                release_id,
+                status,
+                finished_at
             ],
         )
         .unwrap();

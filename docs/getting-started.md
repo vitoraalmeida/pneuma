@@ -180,15 +180,13 @@ ssh root@<host> 'bash /tmp/update-pneuma.sh --ref v0.4.2'
 The updater requires a tag or full commit SHA, rejects branches and abbreviated
 SHAs, creates a database backup in `/var/backups/pneuma/`, fetches and checks out
 the target commit, builds and installs the binary, then verifies its version and
-runs `pneuma doctor`. The first command that opens the database applies pending
-forward-only migrations. Existing deployed applications continue to run while
+runs `pneuma doctor`. Existing deployed applications continue to run while
 the binary is replaced because Quadlet supervises their containers.
 
-Before upgrading across a version with a migration, validate the target version
-on a disposable VM and keep the backup until verification succeeds. v0.3 rejects
-new local-path `pneuma app import` calls; existing imported applications remain
-registered. Downgrading after a migration is unsupported: restore the pre-update
-database backup before running an earlier Pneuma binary.
+The database schema is versioned by a single current baseline; Pneuma does not
+upgrade existing databases across incompatible schema changes. A database
+created by an older incompatible schema is rejected at open time with an
+explicit error; restore the matching backup or start from a fresh database.
 
 When an update changes the bootstrap-managed Caddy baseline, rerun bootstrap
 after the binary updater completes to apply the candidate configuration
@@ -459,7 +457,7 @@ domain = "my-app.example.com"
 
 `app import` accepts Git URLs; local paths are rejected and `file://` is reserved
 for local test repositories. Import is create-only, so changing a registered
-manifest requires the applicable supported migration or reconfiguration process.
+manifest requires re-registering under a new name or manual reconfiguration.
 
 ### Configuration
 

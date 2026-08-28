@@ -35,7 +35,8 @@ pub struct ApplicationSummary {
     pub id: ApplicationId,
     pub system_id: SystemId,
     pub name: ApplicationName,
-    pub repository: Option<String>,
+    // The validated remote Git source every imported Application carries.
+    pub repository: String,
     pub default_branch: Option<String>,
     pub desired_runtime_state: DesiredRuntimeState,
     pub active_deployment_id: Option<DeploymentId>,

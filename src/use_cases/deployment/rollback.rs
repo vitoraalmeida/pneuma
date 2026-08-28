@@ -109,15 +109,16 @@ mod tests {
         let commit = "a".repeat(40);
         connection
             .execute_batch(&format!(
-                "INSERT INTO systems (id, name, created_at) VALUES ('{SYSTEM_ID}', 'team', 'now');
+                "INSERT INTO systems (id, name) VALUES ('{SYSTEM_ID}', 'team');
                  INSERT INTO applications (
-                    id, system_id, name, desired_runtime_state, created_at, updated_at
-                 ) VALUES ('{APP_ID}', '{SYSTEM_ID}', 'app', 'stopped', 'now', 'now');
-                 INSERT INTO releases (
-                    id, application_id, image_repository, image_digest, image_reference, created_at
+                    id, system_id, name, repository_url, manifest_path, image_repository,
+                    container_port, health_check_path, health_check_expected_status, desired_runtime_state
                  ) VALUES (
-                    '{RELEASE_ID}', '{APP_ID}', 'registry.example/app',
-                    'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                    '{APP_ID}', '{SYSTEM_ID}', 'app', 'https://example.test/app.git', 'pneuma.toml',
+                    'registry.example/app', 8080, '/healthz', 200, 'stopped');
+                 INSERT INTO releases (id, application_id, image_reference, created_at)
+                 VALUES (
+                    '{RELEASE_ID}', '{APP_ID}',
                     'registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
                     'now'
                  );

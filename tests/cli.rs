@@ -155,15 +155,14 @@ fn imports_from_a_remote_git_url_with_a_manifest_path() {
         "Imported personal-site\nStatus: Registered\nDeployment: Not deployed\n"
     );
     let connection = database::open(&database_path).unwrap();
-    let (repository_url, repository_kind, manifest_path): (String, String, String) = connection
+    let (repository_url, manifest_path): (String, String) = connection
         .query_row(
-            "SELECT repository_url, repository_kind, manifest_path FROM application_sources",
+            "SELECT repository_url, manifest_path FROM applications",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
     assert_eq!(repository_url, url);
-    assert_eq!(repository_kind, "remote");
     assert_eq!(manifest_path, "deploy/staging/pneuma.toml");
     let _ = fs::remove_dir_all(&workspace);
     let _ = fs::remove_file(&database_path);
@@ -194,12 +193,10 @@ fn remote_import_is_idempotent() {
         .query_row("SELECT COUNT(*) FROM applications", [], |row| row.get(0))
         .unwrap();
     assert_eq!(count, 1);
-    let source_count: i64 = connection
-        .query_row("SELECT COUNT(*) FROM application_sources", [], |row| {
-            row.get(0)
-        })
+    let exposure_count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM exposures", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(source_count, 1);
+    assert_eq!(exposure_count, 1);
     let _ = fs::remove_dir_all(&workspace);
     let _ = fs::remove_file(&database_path);
 }
@@ -426,24 +423,18 @@ fn deploys_a_verified_oci_image_and_persists_its_release() {
     assert!(stdout.contains(&format!("Image: {reference}\n")));
     assert!(!stdout.contains("Commit:"));
     let connection = database::open(&environment.database_path).unwrap();
-    let release: (String, String, String, Option<String>) = connection
+    let release: (String, Option<String>) = connection
         .query_row(
-            "SELECT r.image_reference, r.image_repository, r.image_digest, d.source_revision
+            "SELECT r.image_reference, d.source_revision
              FROM releases r
              JOIN deployments d ON d.release_id = r.id",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
-    assert_eq!(
-        release,
-        (
-            reference.clone(),
-            "registry.example/team/service".to_owned(),
-            digest,
-            None,
-        )
-    );
+    // The canonical reference is the one persisted artifact identity; the
+    // repository and digest are derived from it by parsing.
+    assert_eq!(release, (reference.clone(), None));
     let commands: Vec<String> = fs::read_to_string(environment.root.join("podman.log"))
         .unwrap()
         .lines()
@@ -779,7 +770,12 @@ fn lifecycle_ignores_a_runtime_from_a_non_succeeded_deployment() {
 
     let connection = database::open(&environment.database_path).unwrap();
     connection
-        .execute("UPDATE deployments SET status = 'failed'", [])
+        .execute(
+            "UPDATE deployments SET status = 'failed', finished_at = CURRENT_TIMESTAMP,
+                failure_code = 'runtime_start_failed', failure_stage = 'starting',
+                failure_message = 'test'",
+            [],
+        )
         .unwrap();
     drop(connection);
 

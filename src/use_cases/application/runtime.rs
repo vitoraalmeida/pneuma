@@ -695,15 +695,15 @@ exit \"${PNEUMA_FAKE_SYSTEMCTL_EXIT:-0}\"
         let digest = format!("sha256:{}", "a".repeat(64));
         connection
             .execute_batch(&format!(
-                "INSERT INTO systems (id, name, created_at) VALUES ('33333333333333333333333333333333', 'team', '2026-01-01');
-                 INSERT INTO applications (id, system_id, name, desired_runtime_state, created_at, updated_at)
-                 VALUES ('{APPLICATION_ID}', '33333333333333333333333333333333', 'orchard', '{desired_state}', '2026-01-01', '2026-01-01');
-                 INSERT INTO releases (id, application_id, image_reference, image_repository, image_digest, created_at)
-                 VALUES ('22222222222222222222222222222222', '{APPLICATION_ID}', 'registry.example/team/orchard@{digest}', 'registry.example/team/orchard', '{digest}', '2026-01-01');
+                "INSERT INTO systems (id, name) VALUES ('33333333333333333333333333333333', 'team');
+                 INSERT INTO applications (id, system_id, name, repository_url, manifest_path, image_repository, container_port, health_check_path, health_check_expected_status, desired_runtime_state)
+                 VALUES ('{APPLICATION_ID}', '33333333333333333333333333333333', 'orchard', 'https://example.test/app.git', 'pneuma.toml', 'registry.example/team/orchard', 8080, '/healthz', 200, '{desired_state}');
+                 INSERT INTO releases (id, application_id, image_reference, created_at)
+                 VALUES ('22222222222222222222222222222222', '{APPLICATION_ID}', 'registry.example/team/orchard@{digest}', '2026-01-01');
                  INSERT INTO deployments (id, application_id, release_id, type, status, requested_at, started_at, finished_at)
                  VALUES ('{DEPLOYMENT_ID}', '{APPLICATION_ID}', '22222222222222222222222222222222', 'deploy', 'succeeded', '2026-01-01', '2026-01-01', '2026-01-01');
-                 INSERT INTO runtime_instances (id, application_id, deployment_id, external_runtime_id, state, host_address, host_port, container_port, last_observed_state, last_observed_at)
-                 VALUES ('{RUNTIME_ID}', '{APPLICATION_ID}', '{DEPLOYMENT_ID}', '{RECORDED_CONTAINER_ID}', 'running', '127.0.0.1', 30000, 8080, 'running', '2026-01-01');
+                 INSERT INTO runtime_instances (id, application_id, deployment_id, external_runtime_id, state, host_port, container_port, last_observed_state, last_observed_at)
+                 VALUES ('{RUNTIME_ID}', '{APPLICATION_ID}', '{DEPLOYMENT_ID}', '{RECORDED_CONTAINER_ID}', 'running', 30000, 8080, 'running', '2026-01-01');
                  UPDATE applications SET active_deployment_id = '{DEPLOYMENT_ID}' WHERE id = '{APPLICATION_ID}';"
             ))
             .unwrap();
@@ -823,7 +823,9 @@ exit \"${PNEUMA_FAKE_SYSTEMCTL_EXIT:-0}\"
                 "CREATE TRIGGER simulate_concurrent_retirement
                  AFTER UPDATE OF desired_runtime_state ON applications
                  BEGIN
-                   UPDATE runtime_instances SET removed_at = '2026-01-02' WHERE application_id = NEW.id;
+                   UPDATE runtime_instances
+                     SET state = 'stopped', removed_at = '2026-01-02'
+                     WHERE application_id = NEW.id;
                  END;",
             )
             .unwrap();

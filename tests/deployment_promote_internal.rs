@@ -169,8 +169,14 @@ fn add_verifying_candidate(
     runtime_character: char,
     endpoint: SocketAddr,
 ) -> RuntimeInstanceId {
-    let application =
-        import_application(connection, &fixture_path(fixture), None, None, None).unwrap();
+    let application = import_application(
+        connection,
+        &fixture_path(fixture),
+        None,
+        "https://example.test/app.git",
+        None,
+    )
+    .unwrap();
     let digest = format!("sha256:{}", commit_character.to_string().repeat(64));
     let artifact = OciArtifact::new("localhost/test", &digest).unwrap();
     let release = create_release(connection, &application.id, &artifact).unwrap();

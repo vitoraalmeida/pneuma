@@ -56,7 +56,7 @@ pub fn import_remote_application(
         connection,
         &checkout,
         system_name.as_ref(),
-        Some(repository),
+        repository,
         manifest_path,
     )
     .map_err(|source| RemoteImportError::Import { source });

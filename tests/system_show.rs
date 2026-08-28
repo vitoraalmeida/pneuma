@@ -13,7 +13,7 @@ fn returns_the_application_runtime_intent() {
         &mut connection,
         &fixture_path("valid"),
         None,
-        Some("https://github.com/vitoraalmeida/vitoralmeida.tech"),
+        "https://github.com/vitoraalmeida/vitoralmeida.tech",
         None,
     )
     .unwrap();

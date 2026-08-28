@@ -46,9 +46,8 @@ pub(crate) fn insert_exposure(
     transaction
         .execute(
             "INSERT INTO exposures (
-                application_id, desired_visibility, domain,
-                created_at, updated_at
-            ) VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+                application_id, desired_visibility, domain, materialization_state
+            ) VALUES (?1, ?2, ?3, 'not_materialized')",
             params![
                 application_id.as_str(),
                 visibility_value(intent.visibility()),
@@ -128,8 +127,7 @@ pub fn load_exposure(
         configuration_version,
         last_materialized_at,
     ) {
-        // Earlier internal-route removal recorded its completion timestamp after clearing the runtime and configuration.
-        (None, None, None | Some(_)) => None,
+        (None, None, None) => None,
         (Some(runtime_id), Some(configuration_version), Some(materialized_at)) => {
             let configuration_version = ExposureConfigurationVersion::new(&configuration_version)
                 .map_err(|error| ExposureStoreError::InvalidExposure {
@@ -197,7 +195,7 @@ pub(crate) fn begin_exposure_change(
         Visibility::Public => ExposureMaterializationState::Applying,
         Visibility::Internal => ExposureMaterializationState::Removing,
     };
-    let updated = transaction.execute("UPDATE exposures SET desired_visibility = ?1, materialization_state = ?2, last_error_code = NULL, last_error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?3 AND desired_visibility = ?4", params![visibility_value(desired_visibility), exposure_materialization_state_value(materialization_state), application_id.as_str(), visibility_value(expected_visibility)]).map_err(|source| ExposureStoreError::Persistence { source })?;
+    let updated = transaction.execute("UPDATE exposures SET desired_visibility = ?1, materialization_state = ?2, last_error_code = NULL, last_error_message = NULL WHERE application_id = ?3 AND desired_visibility = ?4", params![visibility_value(desired_visibility), exposure_materialization_state_value(materialization_state), application_id.as_str(), visibility_value(expected_visibility)]).map_err(|source| ExposureStoreError::Persistence { source })?;
     Ok(outcome(updated))
 }
 
@@ -208,7 +206,7 @@ pub(crate) fn complete_public_exposure_change(
     runtime_id: &RuntimeInstanceId,
     configuration_version: &ExposureConfigurationVersion,
 ) -> Result<PersistenceOutcome, ExposureStoreError> {
-    let updated = transaction.execute("UPDATE exposures SET active_runtime_id = ?1, materialization_state = 'active', configuration_version = ?2, last_materialized_at = CURRENT_TIMESTAMP, last_error_code = NULL, last_error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?3 AND desired_visibility = 'public' AND materialization_state = 'applying'", params![runtime_id.as_str(), configuration_version.as_str(), application_id.as_str()]).map_err(|source| ExposureStoreError::Persistence { source })?;
+    let updated = transaction.execute("UPDATE exposures SET active_runtime_id = ?1, materialization_state = 'active', configuration_version = ?2, last_materialized_at = CURRENT_TIMESTAMP, last_error_code = NULL, last_error_message = NULL WHERE application_id = ?3 AND desired_visibility = 'public' AND materialization_state = 'applying'", params![runtime_id.as_str(), configuration_version.as_str(), application_id.as_str()]).map_err(|source| ExposureStoreError::Persistence { source })?;
     Ok(outcome(updated))
 }
 
@@ -217,7 +215,7 @@ pub(crate) fn complete_internal_exposure_change(
     transaction: &Transaction<'_>,
     application_id: &ApplicationId,
 ) -> Result<PersistenceOutcome, ExposureStoreError> {
-    let updated = transaction.execute("UPDATE exposures SET active_runtime_id = NULL, materialization_state = 'not_materialized', configuration_version = NULL, last_materialized_at = NULL, last_error_code = NULL, last_error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?1 AND desired_visibility = 'internal' AND materialization_state = 'removing'", [application_id.as_str()]).map_err(|source| ExposureStoreError::Persistence { source })?;
+    let updated = transaction.execute("UPDATE exposures SET active_runtime_id = NULL, materialization_state = 'not_materialized', configuration_version = NULL, last_materialized_at = NULL, last_error_code = NULL, last_error_message = NULL WHERE application_id = ?1 AND desired_visibility = 'internal' AND materialization_state = 'removing'", [application_id.as_str()]).map_err(|source| ExposureStoreError::Persistence { source })?;
     Ok(outcome(updated))
 }
 
@@ -229,7 +227,7 @@ pub(crate) fn record_exposure_change_failure(
     state: ExposureMaterializationState,
     diagnostic: &ExposureDiagnostic,
 ) -> Result<PersistenceOutcome, ExposureStoreError> {
-    let updated = transaction.execute("UPDATE exposures SET materialization_state = ?1, last_error_code = ?2, last_error_message = ?3, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?4 AND desired_visibility = ?5", params![exposure_materialization_state_value(state), diagnostic.code(), diagnostic.message(), application_id.as_str(), visibility_value(visibility)]).map_err(|source| ExposureStoreError::Persistence { source })?;
+    let updated = transaction.execute("UPDATE exposures SET materialization_state = ?1, last_error_code = ?2, last_error_message = ?3 WHERE application_id = ?4 AND desired_visibility = ?5", params![exposure_materialization_state_value(state), diagnostic.code(), diagnostic.message(), application_id.as_str(), visibility_value(visibility)]).map_err(|source| ExposureStoreError::Persistence { source })?;
     Ok(outcome(updated))
 }
 
@@ -238,7 +236,7 @@ pub(crate) fn begin_public_exposure(
     connection: &Connection,
     application_id: &ApplicationId,
 ) -> Result<PersistenceOutcome, ExposureStoreError> {
-    let updated = connection.execute("UPDATE exposures SET materialization_state = 'applying', last_error_code = NULL, last_error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?1 AND desired_visibility = 'public'", [application_id.as_str()]).map_err(|source| ExposureStoreError::Persistence { source })?;
+    let updated = connection.execute("UPDATE exposures SET materialization_state = 'applying', last_error_code = NULL, last_error_message = NULL WHERE application_id = ?1 AND desired_visibility = 'public'", [application_id.as_str()]).map_err(|source| ExposureStoreError::Persistence { source })?;
     Ok(outcome(updated))
 }
 
@@ -248,7 +246,7 @@ pub(crate) fn begin_public_exposure_reconciliation(
     application_id: &ApplicationId,
     expected_state: ExposureMaterializationState,
 ) -> Result<PersistenceOutcome, ExposureStoreError> {
-    let updated = connection.execute("UPDATE exposures SET materialization_state = 'applying', last_error_code = NULL, last_error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?1 AND desired_visibility = 'public' AND materialization_state = ?2", params![application_id.as_str(), exposure_materialization_state_value(expected_state)]).map_err(|source| ExposureStoreError::Persistence { source })?;
+    let updated = connection.execute("UPDATE exposures SET materialization_state = 'applying', last_error_code = NULL, last_error_message = NULL WHERE application_id = ?1 AND desired_visibility = 'public' AND materialization_state = ?2", params![application_id.as_str(), exposure_materialization_state_value(expected_state)]).map_err(|source| ExposureStoreError::Persistence { source })?;
     Ok(outcome(updated))
 }
 
@@ -258,7 +256,7 @@ pub(crate) fn begin_internal_exposure_reconciliation(
     application_id: &ApplicationId,
     expected_state: ExposureMaterializationState,
 ) -> Result<PersistenceOutcome, ExposureStoreError> {
-    let updated = connection.execute("UPDATE exposures SET materialization_state = 'removing', last_error_code = NULL, last_error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?1 AND desired_visibility = 'internal' AND materialization_state = ?2", params![application_id.as_str(), exposure_materialization_state_value(expected_state)]).map_err(|source| ExposureStoreError::Persistence { source })?;
+    let updated = connection.execute("UPDATE exposures SET materialization_state = 'removing', last_error_code = NULL, last_error_message = NULL WHERE application_id = ?1 AND desired_visibility = 'internal' AND materialization_state = ?2", params![application_id.as_str(), exposure_materialization_state_value(expected_state)]).map_err(|source| ExposureStoreError::Persistence { source })?;
     Ok(outcome(updated))
 }
 
@@ -271,7 +269,7 @@ pub(crate) fn record_reconciliation_exposure_failure(
     state: ExposureMaterializationState,
     diagnostic: &ExposureDiagnostic,
 ) -> Result<PersistenceOutcome, ExposureStoreError> {
-    let updated = connection.execute("UPDATE exposures SET materialization_state = ?1, last_error_code = ?2, last_error_message = ?3, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?4 AND desired_visibility = ?5 AND materialization_state = ?6", params![exposure_materialization_state_value(state), diagnostic.code(), diagnostic.message(), application_id.as_str(), visibility_value(visibility), exposure_materialization_state_value(expected_state)]).map_err(|source| ExposureStoreError::Persistence { source })?;
+    let updated = connection.execute("UPDATE exposures SET materialization_state = ?1, last_error_code = ?2, last_error_message = ?3 WHERE application_id = ?4 AND desired_visibility = ?5 AND materialization_state = ?6", params![exposure_materialization_state_value(state), diagnostic.code(), diagnostic.message(), application_id.as_str(), visibility_value(visibility), exposure_materialization_state_value(expected_state)]).map_err(|source| ExposureStoreError::Persistence { source })?;
     Ok(outcome(updated))
 }
 
@@ -282,7 +280,7 @@ pub(crate) fn record_public_exposure_failure(
     diagnostic: &ExposureDiagnostic,
     state: ExposureMaterializationState,
 ) -> Result<PersistenceOutcome, ExposureStoreError> {
-    let updated = connection.execute("UPDATE exposures SET materialization_state = ?1, last_error_code = ?2, last_error_message = ?3, updated_at = CURRENT_TIMESTAMP WHERE application_id = ?4 AND desired_visibility = 'public'", params![exposure_materialization_state_value(state), diagnostic.code(), diagnostic.message(), application_id.as_str()]).map_err(|source| ExposureStoreError::Persistence { source })?;
+    let updated = connection.execute("UPDATE exposures SET materialization_state = ?1, last_error_code = ?2, last_error_message = ?3 WHERE application_id = ?4 AND desired_visibility = 'public'", params![exposure_materialization_state_value(state), diagnostic.code(), diagnostic.message(), application_id.as_str()]).map_err(|source| ExposureStoreError::Persistence { source })?;
     Ok(outcome(updated))
 }
 
@@ -328,8 +326,6 @@ mod tests {
                     application_id TEXT PRIMARY KEY,
                     desired_visibility TEXT NOT NULL,
                     domain TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
                     active_runtime_id TEXT,
                     materialization_state TEXT NOT NULL,
                     configuration_version TEXT,
@@ -341,8 +337,8 @@ mod tests {
         connection
             .execute(
                 &format!(
-                    "INSERT INTO exposures (application_id, desired_visibility, domain, created_at, updated_at, materialization_state)
-                     VALUES ('{APP_ID}', '{visibility}', NULL, '2026-01-01', '2026-01-01', '{state}')"
+                    "INSERT INTO exposures (application_id, desired_visibility, domain, materialization_state)
+                     VALUES ('{APP_ID}', '{visibility}', NULL, '{state}')"
                 ),
                 [],
             )

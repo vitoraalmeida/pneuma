@@ -12,10 +12,6 @@ for whether a container is currently running.
 ```mermaid
 erDiagram
     System ||--o{ Application : groups
-    Application ||--|| ApplicationSource : has
-    Application ||--|| DeliverySpec : has
-    Application ||--|| RuntimeSpec : has
-    Application ||--|| HealthCheckSpec : has
     Application ||--|| Exposure : has
     Application ||--o{ Release : owns
     Application ||--o{ Deployment : records
@@ -25,15 +21,21 @@ erDiagram
     Deployment ||--o{ PortReservation : reserves
 ```
 
+The database contains exactly eight tables: `schema_migrations`, `systems`,
+`applications`, `releases`, `deployments`, `runtime_instances`, `exposures`,
+and `runtime_port_reservations`.
+
 Every Application carries exactly one required System, resolved or created at
-import from `--system` or `[system].name`; rows without a System are obsolete
-and fail hydration. An Application owns its persisted specification, Releases,
-and Deployment history. A Release is an immutable OCI artifact. A Deployment is
-one attempt to activate a Release. A RuntimeInstance is the persisted record of
-the concrete runtime created by that attempt.
+import from `--system` or `[system].name`; the schema makes a System required.
+An Application owns its persisted specification, Releases, and Deployment
+history. A Release is an immutable OCI artifact. A Deployment is one attempt to
+activate a Release. A RuntimeInstance is the persisted record of the concrete
+runtime created by that attempt.
 
 `applications.active_deployment_id` identifies the active successful Deployment.
-It is logical identity, not a Podman container ID.
+It is logical identity, not a Podman container ID. A composite foreign key
+requires the active Deployment to belong to the same Application, and the
+guarded activation write additionally requires it to be `succeeded`.
 
 ## Core Entities
 
@@ -49,21 +51,27 @@ It is logical identity, not a Podman container ID.
 
 ### Application
 
-`applications` stores the durable identity and desired runtime intent.
+`applications` stores the durable identity, the immutable imported
+specification, and desired runtime intent on one row.
 
 | Field | Meaning |
 |---|---|
 | `id` | Stable application identifier. |
 | `system_id` | Required System relationship; every imported Application resolves or creates exactly one System. |
 | `name` | Unique command-facing name. |
+| `repository_url` | Validated remote Git source used for branch resolution. |
+| `default_branch` | Optional checkout default used when `--branch` is omitted. |
+| `manifest_path` | Relative manifest location inside the checkout. |
+| `image_repository` | The one OCI repository permitted for this Application's artifacts. |
+| `container_port` | Port the container listens on. |
+| `health_check_path`, `health_check_expected_status` | Internal health-check contract. |
 | `desired_runtime_state` | Operator intent: `running` or `stopped`. |
 | `active_deployment_id` | Active successful Deployment, when one exists. |
 
 The core domain `Application` represents durable identity and intent. Catalog
 queries return an `ApplicationSummary` that additionally exposes the imported
-repository URL and default branch when `application_sources` exists. Deployment
-flows use named source, delivery, runtime, and health-check projections rather
-than positional tuples.
+repository URL and default branch. Deployment flows use named source, delivery,
+runtime, and health-check projections rather than positional tuples.
 
 ### Release
 
@@ -73,15 +81,14 @@ than positional tuples.
 |---|---|
 | `id` | Stable Release identifier. |
 | `application_id` | Owning Application. |
-| `image_repository` | Allowed OCI repository. |
-| `image_digest` | Immutable artifact digest. |
-| `image_reference` | Digest-pinned OCI reference used by Podman. |
+| `image_reference` | Canonical digest-pinned OCI reference used by Podman. |
+| `created_at` | Creation timestamp. |
 
-The unique pair `(application_id, image_digest)` prevents duplicate Releases for
-the same artifact. Source revision belongs to Deployment because the same
-artifact can be activated by different requests or branches.
-The domain `Release` carries one validated `OciArtifact`; its canonical
-digest-pinned reference, repository, and digest cannot be supplied independently.
+The unique pair `(application_id, image_reference)` prevents duplicate Releases
+for the same artifact. Repository and digest are derived by parsing the
+canonical reference; they are never stored or supplied independently. Source
+revision belongs to Deployment because the same artifact can be activated by
+different requests or branches.
 
 ### Deployment
 
@@ -111,8 +118,8 @@ creates a new Deployment with type `rollback`; it does not rewrite prior history
 | `application_id` | Owning Application. |
 | `deployment_id` | Deployment that created the runtime. |
 | `external_runtime_id` | Observed Podman container ID. |
-| `state` | Logical runtime state: `starting`, `running`, `stopped`, `failed`, or `removed`. |
-| `host_address`, `host_port` | Reserved loopback endpoint. |
+| `state` | Logical runtime state: `starting`, `running`, `stopped`, or `failed`. |
+| `host_port` | Reserved loopback port; the address is always `127.0.0.1` and is not persisted. |
 | `container_port` | Port exposed inside the container. |
 | observation fields | Last Podman observation and diagnostic context. |
 | `removed_at` | Intentional retirement timestamp. |
@@ -120,26 +127,22 @@ creates a new Deployment with type `rollback`; it does not rewrite prior history
 The runtime is externally controlled through a deterministic Quadlet/container
 name, `pneuma-<application>-<deployment-id>.container`. The Podman container ID
 may change when Quadlet recreates the container; it is not the logical identity.
-The domain `RuntimeInstance` carries this logical identity, endpoint, lifecycle
-state, last typed external observation, diagnostics, and retirement evidence;
-Podman observation remains authoritative for current external state.
+Retirement is the lifecycle state plus explicit `removed_at` evidence; there is
+no persisted `removed` pseudo-state. The domain `RuntimeInstance` carries this
+logical identity, endpoint, lifecycle state, last typed external observation,
+diagnostics, and retirement evidence; Podman observation remains authoritative
+for current external state.
 
 ## Application Specification
 
-Import persists the validated `pneuma.toml` specification as one row per
-Application in each applicable table.
-
-| Table | Source | Purpose |
-|---|---|---|
-| `application_sources` | Import command | Git repository URL, repository kind, default branch, and manifest path. |
-| `application_delivery_specs` | `[delivery]` | Allowed OCI repository and delivery type. |
-| `application_runtime_specs` | `[runtime]` | Container port. |
-| `health_check_specs` | `[runtime]` | Internal health-check path and expected status. |
-| `exposures` | `[exposure]` | Desired visibility, optional public domain, and route materialization state. |
-
-The repository URL and manifest path come from `pneuma app import`; they are not
-manifest fields. Import clones the repository temporarily, reads the manifest,
-persists this specification, and removes the checkout.
+Import persists the validated `pneuma.toml` specification directly on the
+Application row: the remote Git source (`repository_url`, `default_branch`,
+`manifest_path`), the permitted OCI repository (`image_repository`), and the
+runtime contract (`container_port`, `health_check_path`,
+`health_check_expected_status`). The repository URL and manifest path come from
+`pneuma app import`; they are not manifest fields. Import clones the repository
+temporarily, reads the manifest, persists this specification with the exposure
+intent, and removes the checkout.
 
 ## Exposure State
 
@@ -172,24 +175,28 @@ operator-managed.
 
 `runtime_port_reservations` temporarily reserves a loopback port for a
 candidate. It links the port to its Application and Deployment before the
-RuntimeInstance is registered. Registration consumes the reservation; candidate
-cleanup releases it. The primary key on `port` prevents concurrent candidates
-from receiving the same endpoint.
+RuntimeInstance is registered; a Deployment holds at most one reservation, and
+repeating allocation for the same Deployment returns its existing reservation.
+Registration consumes the exact Application/Deployment/port reservation in the
+same transaction as RuntimeInstance insertion; candidate cleanup releases it
+idempotently. The primary key on `port` prevents concurrent candidates from
+receiving the same endpoint.
 
 ## Persistence Invariants
 
-- Every Release belongs to exactly one Application.
-- A database trigger rejects a Deployment whose Release belongs to a different
-  Application.
-- A database trigger rejects a RuntimeInstance whose Deployment belongs to a
-  different Application.
-- `(application_id, image_digest)` is unique for Releases.
-- Only one non-terminal Deployment may exist per Application.
-- A live loopback endpoint is unique while `removed_at` is null.
-- An Exposure is one-to-one with an Application; public intent requires a domain.
-- Historical migrations are immutable and are applied forward only when a
-  connection opens. Downgrading across a migration requires restoring a
-  pre-upgrade database backup.
+- Every Release, Deployment, RuntimeInstance, Exposure, and port reservation
+  agrees with its Application identity through composite foreign keys.
+- Only one non-terminal Deployment may exist per Application (partial unique
+  index), and terminal rows carry a complete evidence matrix enforced by CHECK
+  constraints.
+- A live running runtime is unique per Application, and a live loopback
+  endpoint is unique while `removed_at` is null.
+- An Exposure is one-to-one with an Application; public intent requires a
+  domain, one public domain has one owner case-insensitively, and route and
+  diagnostic evidence is all-present or all-absent.
+- Empty databases initialize atomically with the current baseline schema; a
+  database carrying the current `schema_migrations` ledger row reopens
+  normally; every other non-empty schema is rejected as incompatible.
 
 ## Lifecycle
 

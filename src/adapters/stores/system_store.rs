@@ -14,7 +14,7 @@ pub(crate) fn create_or_load(
         row.get::<_, String>(0)
     })?;
     let id: SystemId = entity_id(0, &value)?;
-    transaction.execute("INSERT INTO systems (id, name, description, created_at) VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP) ON CONFLICT(name) DO NOTHING", params![id.as_str(), name.as_str(), description])?;
+    transaction.execute("INSERT INTO systems (id, name, description) VALUES (?1, ?2, ?3) ON CONFLICT(name) DO NOTHING", params![id.as_str(), name.as_str(), description])?;
     transaction.query_row(
         "SELECT id, name, description FROM systems WHERE name = ?1",
         [name.as_str()],
@@ -112,10 +112,14 @@ mod tests {
     #[test]
     fn rejects_a_corrupt_persisted_system_name_instead_of_hydrating_it() {
         let connection = database::open(Path::new(":memory:")).unwrap();
+        // The id CHECK is bypassed so a corrupt row can exist for hydration testing.
+        connection
+            .execute_batch("PRAGMA ignore_check_constraints = ON;")
+            .unwrap();
         connection
             .execute(
-                "INSERT INTO systems (id, name, description, created_at)
-                 VALUES ('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'Not A Valid Name', NULL, 'now')",
+                "INSERT INTO systems (id, name, description)
+                 VALUES ('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'Not A Valid Name', NULL)",
                 params![],
             )
             .unwrap();
@@ -130,10 +134,14 @@ mod tests {
     #[test]
     fn rejects_a_persisted_system_id_outside_the_current_format() {
         let connection = database::open(Path::new(":memory:")).unwrap();
+        // The id CHECK is bypassed so a corrupt row can exist for hydration testing.
+        connection
+            .execute_batch("PRAGMA ignore_check_constraints = ON;")
+            .unwrap();
         connection
             .execute(
-                "INSERT INTO systems (id, name, description, created_at)
-                 VALUES ('legacy system id', 'team', NULL, 'now')",
+                "INSERT INTO systems (id, name, description)
+                 VALUES ('legacy system id', 'team', NULL)",
                 params![],
             )
             .unwrap();

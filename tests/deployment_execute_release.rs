@@ -97,7 +97,7 @@ fn deploy_fails_when_systemctl_start_fails() {
 
     let deployment_status: String = connection
         .query_row(
-            "SELECT status FROM deployments ORDER BY created_at DESC LIMIT 1",
+            "SELECT status FROM deployments ORDER BY requested_at DESC LIMIT 1",
             [],
             |row| row.get(0),
         )
@@ -106,7 +106,7 @@ fn deploy_fails_when_systemctl_start_fails() {
 
     let failure_code: String = connection
         .query_row(
-            "SELECT failure_code FROM deployments ORDER BY created_at DESC LIMIT 1",
+            "SELECT failure_code FROM deployments ORDER BY requested_at DESC LIMIT 1",
             [],
             |row| row.get(0),
         )
@@ -115,7 +115,7 @@ fn deploy_fails_when_systemctl_start_fails() {
 
     let runtime_count: i64 = connection
         .query_row(
-            "SELECT COUNT(*) FROM runtime_instances WHERE deployment_id IN (SELECT id FROM deployments ORDER BY created_at DESC LIMIT 1)",
+            "SELECT COUNT(*) FROM runtime_instances WHERE deployment_id IN (SELECT id FROM deployments ORDER BY requested_at DESC LIMIT 1)",
             [],
             |row| row.get(0),
         )
@@ -166,7 +166,7 @@ fn deploy_fails_when_internal_health_check_fails() {
 
     let deployment_status: String = connection
         .query_row(
-            "SELECT status FROM deployments ORDER BY created_at DESC LIMIT 1",
+            "SELECT status FROM deployments ORDER BY requested_at DESC LIMIT 1",
             [],
             |row| row.get(0),
         )
@@ -175,7 +175,7 @@ fn deploy_fails_when_internal_health_check_fails() {
 
     let runtime_state: Option<String> = connection
         .query_row(
-            "SELECT last_observed_state FROM runtime_instances ORDER BY created_at DESC LIMIT 1",
+            "SELECT last_observed_state FROM runtime_instances ORDER BY last_observed_at DESC LIMIT 1",
             [],
             |row| row.get(0),
         )
@@ -199,7 +199,7 @@ fn deploy_fails_when_internal_health_check_fails() {
 
     let deployment_id: String = connection
         .query_row(
-            "SELECT id FROM deployments ORDER BY created_at DESC LIMIT 1",
+            "SELECT id FROM deployments ORDER BY requested_at DESC LIMIT 1",
             [],
             |row| row.get(0),
         )
@@ -382,7 +382,7 @@ fn public_deploy_succeeds_with_caddy_and_external_health() {
 
     let deployment_status: String = connection
         .query_row(
-            "SELECT status FROM deployments ORDER BY created_at DESC LIMIT 1",
+            "SELECT status FROM deployments ORDER BY requested_at DESC LIMIT 1",
             [],
             |row| row.get(0),
         )
@@ -468,7 +468,7 @@ fn public_deploy_rolls_back_caddy_when_external_health_fails() {
 
     let deployment_status: String = connection
         .query_row(
-            "SELECT status FROM deployments ORDER BY created_at DESC LIMIT 1",
+            "SELECT status FROM deployments ORDER BY requested_at DESC LIMIT 1",
             [],
             |row| row.get(0),
         )
@@ -519,7 +519,7 @@ fn public_deploy_fails_when_internal_health_check_fails() {
 
     let (status, failure_code): (String, String) = connection
         .query_row(
-            "SELECT status, failure_code FROM deployments ORDER BY created_at DESC LIMIT 1",
+            "SELECT status, failure_code FROM deployments ORDER BY requested_at DESC LIMIT 1",
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
@@ -572,7 +572,7 @@ fn public_deploy_fails_when_caddy_rejects_route_reload() {
 
     let (status, failure_code): (String, String) = connection
         .query_row(
-            "SELECT status, failure_code FROM deployments ORDER BY created_at DESC LIMIT 1",
+            "SELECT status, failure_code FROM deployments ORDER BY requested_at DESC LIMIT 1",
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
@@ -651,7 +651,7 @@ fn public_deploy_rolls_back_route_when_promotion_is_rejected() {
 
     let (status_text, failure_code): (String, String) = connection
         .query_row(
-            "SELECT status, failure_code FROM deployments ORDER BY created_at DESC LIMIT 1",
+            "SELECT status, failure_code FROM deployments ORDER BY requested_at DESC LIMIT 1",
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
@@ -1397,7 +1397,7 @@ fn assert_candidate_resources_released(
 ) {
     let deployment_id: String = connection
         .query_row(
-            "SELECT id FROM deployments ORDER BY created_at DESC LIMIT 1",
+            "SELECT id FROM deployments ORDER BY requested_at DESC LIMIT 1",
             [],
             |row| row.get(0),
         )
@@ -1425,7 +1425,7 @@ fn assert_candidate_resources_released(
 
     let runtime_state: String = connection
         .query_row(
-            "SELECT last_observed_state FROM runtime_instances ORDER BY created_at DESC LIMIT 1",
+            "SELECT last_observed_state FROM runtime_instances ORDER BY last_observed_at DESC LIMIT 1",
             [],
             |row| row.get(0),
         )

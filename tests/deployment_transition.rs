@@ -239,8 +239,14 @@ fn rejects_incomplete_failure_details_without_changing_state() {
 
 fn pending_deployment() -> (rusqlite::Connection, DeploymentId, ApplicationId) {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
-    let application =
-        import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
+    let application = import_application(
+        &mut connection,
+        &fixture_path("valid"),
+        None,
+        "https://example.test/app.git",
+        None,
+    )
+    .unwrap();
     let release = create_release(&mut connection, &application.id, &artifact('a')).unwrap();
     let deployment = create_deployment(
         &mut connection,

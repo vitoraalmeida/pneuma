@@ -6,7 +6,7 @@ use crate::adapters::stores::persistence::{
     entity_id, invalid_text_value, observed_runtime_state_from_value, outcome,
     runtime_state_from_value, visibility_from_value,
 };
-use crate::adapters::stores::release_store::artifact_from_values;
+use crate::adapters::stores::release_store::artifact_from_reference;
 use crate::domain::deployment::{
     Deployment, DeploymentFailure, DeploymentFailureCode, DeploymentHistory, DeploymentLifecycle,
     DeploymentStatus, DeploymentType, PromotionTarget, RollbackTarget,
@@ -143,7 +143,7 @@ pub(crate) fn list_deployment_history(
     let mut statement = connection.prepare(
         "SELECT d.id, d.application_id, d.release_id, d.type, d.status, d.source_revision, d.requested_at, d.started_at,
                 d.finished_at, d.failure_code, d.failure_stage, d.failure_message,
-                r.application_id, r.image_reference, r.image_repository, r.image_digest, r.created_at,
+                r.application_id, r.image_reference, r.created_at,
                 COALESCE(d.id = a.active_deployment_id, 0)
          FROM deployments d JOIN releases r ON r.id = d.release_id
          LEFT JOIN applications a ON a.id = d.application_id
@@ -153,19 +153,21 @@ pub(crate) fn list_deployment_history(
         .query_map([application_id.as_str()], |row| {
             let deployment = deployment_from_row(row)?;
             let image_reference: String = row.get(13)?;
-            let repository: String = row.get(14)?;
-            let digest: String = row.get(15)?;
-            let artifact = artifact_from_values(&image_reference, &repository, &digest)
-                .map_err(|error| conversion_error(13, error))?;
+            let artifact = artifact_from_reference(13, &image_reference).map_err(|error| {
+                conversion_error(
+                    13,
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, error),
+                )
+            })?;
             Ok(DeploymentHistory {
                 release: Release {
                     id: deployment.release_id.clone(),
                     application_id: entity_id(12, &row.get::<_, String>(12)?)?,
                     artifact,
-                    created_at: row.get(16)?,
+                    created_at: row.get(14)?,
                 },
                 deployment,
-                is_active: row.get(17)?,
+                is_active: row.get(15)?,
             })
         })
         .map_err(persistence)?;
@@ -202,8 +204,8 @@ pub(crate) fn advance_status(
     next: DeploymentStatus,
 ) -> Result<PersistenceOutcome, DeploymentStoreError> {
     let updated = connection.execute(
-        "UPDATE deployments SET status = ?1, started_at = CASE WHEN status = 'pending' THEN CURRENT_TIMESTAMP ELSE started_at END,
-         updated_at = CURRENT_TIMESTAMP WHERE id = ?2 AND status = ?3",
+        "UPDATE deployments SET status = ?1, started_at = CASE WHEN status = 'pending' THEN CURRENT_TIMESTAMP ELSE started_at END
+         WHERE id = ?2 AND status = ?3",
         params![deployment_status_value(next), deployment_id.as_str(), deployment_status_value(expected)],
     ).map_err(persistence)?;
     Ok(outcome(updated))
@@ -219,7 +221,7 @@ pub(crate) fn mark_failed(
 ) -> Result<DeploymentFailure, DeploymentStoreError> {
     let updated = transaction.execute(
         "UPDATE deployments SET status = 'failed', finished_at = CURRENT_TIMESTAMP, failure_code = ?1,
-         failure_stage = ?2, failure_message = ?3, updated_at = CURRENT_TIMESTAMP WHERE id = ?4 AND status = ?2",
+         failure_stage = ?2, failure_message = ?3 WHERE id = ?4 AND status = ?2",
         params![code.as_str(), deployment_status_value(stage), message, deployment_id.as_str()],
     ).map_err(persistence)?;
     if outcome(updated) == PersistenceOutcome::Stale {
@@ -248,10 +250,16 @@ pub(crate) fn mark_succeeded(
     deployment_id: &DeploymentId,
     expected_status: DeploymentStatus,
 ) -> Result<PersistenceOutcome, DeploymentStoreError> {
-    let updated = transaction.execute(
-        "UPDATE deployments SET status = 'succeeded', finished_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-          WHERE id = ?1 AND status = ?2", params![deployment_id.as_str(), deployment_status_value(expected_status)],
-    ).map_err(persistence)?;
+    let updated = transaction
+        .execute(
+            "UPDATE deployments SET status = 'succeeded', finished_at = CURRENT_TIMESTAMP
+          WHERE id = ?1 AND status = ?2",
+            params![
+                deployment_id.as_str(),
+                deployment_status_value(expected_status)
+            ],
+        )
+        .map_err(persistence)?;
     Ok(outcome(updated))
 }
 
@@ -325,17 +333,15 @@ pub(crate) fn load_rollback_target(
     application_id: &ApplicationId,
 ) -> Result<Option<RollbackTarget>, DeploymentStoreError> {
     connection.query_row(
-        "SELECT r.id, r.application_id, r.image_reference, r.image_repository, r.image_digest, d.source_revision, r.created_at
+        "SELECT r.id, r.application_id, r.image_reference, d.source_revision, r.created_at
          FROM deployments d JOIN releases r ON r.id = d.release_id LEFT JOIN applications a ON a.active_deployment_id = d.id
          WHERE d.application_id = ?1 AND d.status = 'succeeded' AND a.id IS NULL ORDER BY d.finished_at DESC LIMIT 1",
         [application_id.as_str()],
         |row| {
             let reference: String = row.get(2)?;
-            let repository: String = row.get(3)?;
-            let digest: String = row.get(4)?;
-            let artifact = artifact_from_values(&reference, &repository, &digest).map_err(|error| conversion_error(2, std::io::Error::new(std::io::ErrorKind::InvalidData, error)))?;
-            let source_revision = row.get::<_, Option<String>>(5)?.map(|value| CommitSha::new(&value).map_err(|error| conversion_error(5, error))).transpose()?;
-            Ok(RollbackTarget { release: Release { id: entity_id(0, &row.get::<_, String>(0)?)?, application_id: entity_id(1, &row.get::<_, String>(1)?)?, artifact, created_at: row.get(6)? }, source_revision })
+            let artifact = artifact_from_reference(2, &reference).map_err(|error| conversion_error(2, std::io::Error::new(std::io::ErrorKind::InvalidData, error)))?;
+            let source_revision = row.get::<_, Option<String>>(3)?.map(|value| CommitSha::new(&value).map_err(|error| conversion_error(3, error))).transpose()?;
+            Ok(RollbackTarget { release: Release { id: entity_id(0, &row.get::<_, String>(0)?)?, application_id: entity_id(1, &row.get::<_, String>(1)?)?, artifact, created_at: row.get(4)? }, source_revision })
         },
     ).optional().map_err(persistence)
 }
@@ -739,10 +745,16 @@ mod tests {
         let commit = "a".repeat(40);
         connection
             .execute_batch(&format!(
-                "INSERT INTO systems (id, name, created_at) VALUES ('{SYSTEM_ID}', 'team', 'now');
-                 INSERT INTO applications (id, system_id, name, desired_runtime_state, created_at, updated_at)
-                 VALUES ('{APP_ID}', '{SYSTEM_ID}', 'app', 'stopped', 'now', 'now');
-                 INSERT INTO releases (id, application_id, image_repository, image_digest, image_reference, created_at) VALUES ('{RELEASE_ID}', '{APP_ID}', 'registry.example/app', 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'now');
+                "INSERT INTO systems (id, name) VALUES ('{SYSTEM_ID}', 'team');
+                 INSERT INTO applications (
+                     id, system_id, name, repository_url, manifest_path, image_repository,
+                     container_port, health_check_path, health_check_expected_status,
+                     desired_runtime_state
+                 ) VALUES (
+                     '{APP_ID}', '{SYSTEM_ID}', 'app', 'https://example.test/app.git', 'pneuma.toml',
+                     'registry.example/app', 8080, '/healthz', 200, 'stopped');
+                 INSERT INTO releases (id, application_id, image_reference, created_at)
+                 VALUES ('{RELEASE_ID}', '{APP_ID}', 'registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'now');
                  INSERT INTO deployments (id, application_id, release_id, type, status, source_revision, requested_at)
                  VALUES ('{DEPLOYMENT_ID}', '{APP_ID}', '{RELEASE_ID}', 'deploy', 'pending', '{commit}', 'requested');"
             ))
@@ -761,6 +773,11 @@ mod tests {
             );
         }
 
+        // The source-revision CHECK is bypassed so a legacy revision can exist
+        // for hydration testing.
+        connection
+            .execute_batch("PRAGMA ignore_check_constraints = ON;")
+            .unwrap();
         connection
             .execute(
                 "UPDATE deployments SET source_revision = 'legacy-tag' WHERE id = ?1",
@@ -788,7 +805,11 @@ mod tests {
         stage: Option<&str>,
         message: Option<&str>,
     ) {
-        connection.execute_batch(&format!("INSERT INTO systems (id, name, created_at) VALUES ('{SYSTEM_ID}', 'team', 'now'); INSERT INTO applications (id, system_id, name, desired_runtime_state, created_at, updated_at) VALUES ('{APP_ID}', '{SYSTEM_ID}', 'app', 'stopped', 'now', 'now'); INSERT INTO releases (id, application_id, image_repository, image_digest, image_reference, created_at) VALUES ('{RELEASE_ID}', '{APP_ID}', 'registry.example/app', 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'now');")).unwrap();
+        // The evidence CHECK is bypassed so corrupt rows can exist for hydration testing.
+        connection
+            .execute_batch("PRAGMA ignore_check_constraints = ON;")
+            .unwrap();
+        connection.execute_batch(&format!("INSERT INTO systems (id, name) VALUES ('{SYSTEM_ID}', 'team'); INSERT INTO applications (id, system_id, name, repository_url, manifest_path, image_repository, container_port, health_check_path, health_check_expected_status, desired_runtime_state) VALUES ('{APP_ID}', '{SYSTEM_ID}', 'app', 'https://example.test/app.git', 'pneuma.toml', 'registry.example/app', 8080, '/healthz', 200, 'stopped'); INSERT INTO releases (id, application_id, image_reference, created_at) VALUES ('{RELEASE_ID}', '{APP_ID}', 'registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'now');")).unwrap();
         connection.execute("INSERT INTO deployments (id, application_id, release_id, type, status, requested_at, started_at, finished_at, failure_code, failure_stage, failure_message) VALUES (?1, ?2, ?3, 'deploy', ?4, 'requested', ?5, ?6, ?7, ?8, ?9)", params![DEPLOYMENT_ID, APP_ID, RELEASE_ID, status, started_at, finished_at, code, stage, message]).unwrap();
     }
 }
