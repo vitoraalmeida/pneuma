@@ -1,6 +1,6 @@
 # Current Iteration
 
-**Status:** em andamento
+**Status:** concluída
 
 **Base:** `3671d53` (`docs: synchronize living documents with the v0.4.3 release`)
 
@@ -85,7 +85,7 @@ incompatible; no existing database or backup is upgraded.
      `docs/README.md`, and the dead struct-role anchor in `architecture.md`
      points at the inventory. No other living document required changes: they
      were synchronized by their implementing checkpoints.
-7. [ ] Operational regression and closure
+7. [x] Operational regression and closure
    - Run final CI, applicable rootless-Podman and disposable-host evidence, then
      close only with every acceptance criterion proved.
 
@@ -139,3 +139,12 @@ incompatible; no existing database or backup is upgraded.
 - Checkpoint 6: markdown-link validation, `cargo fmt --check`, Clippy with
   warnings denied, all-feature tests (25 suites green; the same three ignored
   OCI tests remain environment-dependent), and release build passed.
+- Checkpoint 7 (closure): all four CI gates green on the final code commit
+  `1fa5cae` (25 suites; the three ignored OCI tests remain skipped because
+  this host has no configured rootless Podman). Disposable-VM regression via
+  `scripts/dev-vm/test-regression.sh` passed: the shared clone battery (e2e
+  fixture cycle, branch-based Git flow, verified reset, and reconciliation
+  drift catalog R1-R6) and the pristine-clone bootstrap acceptance both
+  passed; the first `all` run failed only because the bootstrap ref was not
+  yet on the remote and was rerun green after the push. Every clone was
+  destroyed afterwards and `pneuma-dev-base` was never altered.
