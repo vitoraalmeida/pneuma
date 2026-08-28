@@ -8,6 +8,7 @@ Each category answers a different question.
 |---|---|---|
 | Current system truth | How does Pneuma work today? | [`architecture/`](architecture/), [`getting-started.md`](getting-started.md), [`operations/`](operations/) |
 | Architectural rationale | Why was this choice made? | [`decisions/`](decisions/) |
+| Approved design | What architecture correction is being implemented? | [`designs/greenfield-architecture-simplification.md`](designs/greenfield-architecture-simplification.md) |
 | Active planning | What is being implemented now? | [`iterations/current-iteration.md`](iterations/current-iteration.md) |
 | Product evolution | Where is Pneuma going? | [`roadmap.md`](roadmap.md) |
 | Released history | What changed in releases? | [`../CHANGELOG.md`](../CHANGELOG.md) |
@@ -64,6 +65,7 @@ product direction (`roadmap.md`).
 | [`architecture/data-model.md`](architecture/data-model.md) | Living | Implemented SQLite model and persistence invariants |
 | [`architecture/security-model.md`](architecture/security-model.md) | Living | Assets, actors, trust boundaries, threats with their controls and residual risks, attack chains, and security posture |
 | [`decisions/`](decisions/) | Historical records | Retrospective architectural decision records |
-| [`iterations/current-iteration.md`](iterations/current-iteration.md) | Active planning | Closed v0.4.3 disposable regression automation tracker |
+| [`designs/greenfield-architecture-simplification.md`](designs/greenfield-architecture-simplification.md) | Approved | Greenfield architecture reset scope, fixed decisions, and checkpoint order |
+| [`iterations/current-iteration.md`](iterations/current-iteration.md) | Active planning | Greenfield architecture simplification execution tracker |
 | [`iterations/next-iteration.md`](iterations/next-iteration.md) | Queued planning | v0.5 observed state planning reminder |
 | [`roadmap.md`](roadmap.md) | Living | v0.1 → v1.0 evolution and direction |
