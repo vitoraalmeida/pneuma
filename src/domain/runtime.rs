@@ -385,8 +385,8 @@ mod tests {
         fn observe_container(_container_id: ContainerId) {}
 
         deployment_for(
-            ApplicationId::from("application"),
-            DeploymentId::from("deployment"),
+            ApplicationId::new("11111111111111111111111111111111").unwrap(),
+            DeploymentId::new("22222222222222222222222222222222").unwrap(),
         );
         observe_container(ContainerId::from("container"));
     }
@@ -419,10 +419,14 @@ mod tests {
     fn stable_names_couple_the_application_and_deployment_identities() {
         assert_eq!(
             stable_runtime_name(
-                ApplicationId::from("personal-site").as_str(),
-                DeploymentId::from("dep-7").as_str()
+                ApplicationId::new("11111111111111111111111111111111")
+                    .unwrap()
+                    .as_str(),
+                DeploymentId::new("22222222222222222222222222222222")
+                    .unwrap()
+                    .as_str()
             ),
-            "pneuma-personal-site-dep-7"
+            "pneuma-11111111111111111111111111111111-22222222222222222222222222222222"
         );
     }
 }

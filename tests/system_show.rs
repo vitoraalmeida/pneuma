@@ -7,7 +7,7 @@ use pneuma::use_cases::application::import_application;
 use pneuma::use_cases::system::show_system;
 
 #[test]
-fn returns_application_runtime_intent_and_manifest_schema_version() {
+fn returns_the_application_runtime_intent() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
     import_application(
         &mut connection,
@@ -32,7 +32,6 @@ fn returns_application_runtime_intent_and_manifest_schema_version() {
         details.applications[0].desired_runtime_state,
         DesiredRuntimeState::Running
     );
-    assert_eq!(details.applications[0].manifest_schema_version, 3);
 }
 
 fn fixture_path(name: &str) -> PathBuf {

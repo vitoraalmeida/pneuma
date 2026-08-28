@@ -1,17 +1,9 @@
-use serde::Deserialize;
 use thiserror::Error;
 
 use crate::domain::identity::{ApplicationId, ReleaseId};
 
 const DIGEST_ALGORITHM: &str = "sha256:";
 const SHA256_HEX_LENGTH: usize = 64;
-
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-// Names the delivery mechanism a Release artifact is supplied through.
-pub enum DeliveryType {
-    Oci,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 // Represents a validated immutable repository-and-digest OCI artifact identity.
@@ -93,22 +85,15 @@ impl OciRepository {
 #[derive(Debug, Clone, PartialEq, Eq)]
 // Defines the immutable repository boundary allowed for application artifacts.
 pub struct DeliverySpecification {
-    delivery_type: DeliveryType,
     image_repository: OciRepository,
 }
 
 impl DeliverySpecification {
     // Restricted construction: only the manifest/import boundary mints one,
-    // after both fields were validated, so no code path can pair an unchecked
-    // repository with a delivery type.
-    pub(crate) fn new(delivery_type: DeliveryType, image_repository: OciRepository) -> Self {
-        Self {
-            delivery_type,
-            image_repository,
-        }
-    }
-    pub fn delivery_type(&self) -> DeliveryType {
-        self.delivery_type
+    // after the repository was validated, so no code path can carry an
+    // unchecked repository.
+    pub(crate) fn new(image_repository: OciRepository) -> Self {
+        Self { image_repository }
     }
     pub fn image_repository(&self) -> &OciRepository {
         &self.image_repository
@@ -202,7 +187,7 @@ fn is_lowercase_hex(byte: u8) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{DeliverySpecification, DeliveryType, OciArtifact, OciRepository};
+    use super::{DeliverySpecification, OciArtifact, OciRepository};
 
     fn artifact(repository: &str) -> OciArtifact {
         OciArtifact::new(
@@ -214,7 +199,6 @@ mod tests {
 
     fn delivery(repository: &str) -> DeliverySpecification {
         DeliverySpecification::new(
-            DeliveryType::Oci,
             OciRepository::new(repository).expect("test repository is valid"),
         )
     }

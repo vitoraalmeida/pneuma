@@ -161,7 +161,7 @@ fn requires_a_starting_deployment() {
     .unwrap_err();
     let missing = register_candidate_runtime(
         &mut connection,
-        &DeploymentId::from("missing"),
+        &DeploymentId::new("44444444444444444444444444444444").unwrap(),
         &container_id('c'),
         endpoint("127.0.0.1:30002"),
         port(8080),
@@ -176,7 +176,7 @@ fn requires_a_starting_deployment() {
     assert!(matches!(
         missing,
         RegisterCandidateRuntimeError::DeploymentNotFound { deployment_id }
-            if deployment_id == "missing"
+            if deployment_id == "44444444444444444444444444444444"
     ));
 }
 

@@ -9,7 +9,7 @@ use pneuma::adapters::git_source::{
     cleanup_checkout, clone_repository, create_checkout, ensure_checkout, resolve_branch,
     resolve_commit,
 };
-use pneuma::domain::git::{CommitSha, RepositoryKind};
+use pneuma::domain::git::{CommitSha, is_remote_git_location};
 
 #[test]
 fn resolves_branches_tags_and_abbreviated_shas_without_changing_the_repository() {
@@ -152,19 +152,14 @@ fn replaces_a_checkout_at_a_different_commit() {
 
 #[test]
 fn classifies_remote_and_local_repositories() {
-    assert_eq!(
-        RepositoryKind::from_location("https://github.com/vitoraalmeida/vitoralmeida.tech.git"),
-        RepositoryKind::Remote
-    );
-    assert_eq!(
-        RepositoryKind::from_location("git@github.com:vitoraalmeida/vitoralmeida.tech.git"),
-        RepositoryKind::Remote
-    );
-    assert_eq!(
-        RepositoryKind::from_location("/srv/checkouts/vitoralmeida.tech"),
-        RepositoryKind::Local
-    );
-    assert_eq!(RepositoryKind::from_location("."), RepositoryKind::Local);
+    assert!(is_remote_git_location(
+        "https://github.com/vitoraalmeida/vitoralmeida.tech.git"
+    ));
+    assert!(is_remote_git_location(
+        "git@github.com:vitoraalmeida/vitoralmeida.tech.git"
+    ));
+    assert!(!is_remote_git_location("/srv/checkouts/vitoralmeida.tech"));
+    assert!(!is_remote_git_location("."));
 }
 
 #[test]

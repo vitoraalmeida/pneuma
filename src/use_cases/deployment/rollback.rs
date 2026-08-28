@@ -94,23 +94,29 @@ mod tests {
     use std::path::Path;
 
     use crate::adapters::database;
-    use crate::domain::deployment::SourceRevision;
     use crate::domain::identity::ApplicationId;
 
     use super::previous_release;
 
+    const APP_ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const RELEASE_ID: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const DEPLOYMENT_ID: &str = "cccccccccccccccccccccccccccccccc";
+    const SYSTEM_ID: &str = "dddddddddddddddddddddddddddddddd";
+
     #[test]
     fn selects_provenance_from_the_historical_deployment() {
         let connection = database::open(Path::new(":memory:")).unwrap();
+        let commit = "a".repeat(40);
         connection
-            .execute_batch(
-                "INSERT INTO applications (
-                    id, name, desired_runtime_state, spec_version, created_at, updated_at
-                 ) VALUES ('app-id', 'app', 'stopped', 1, 'now', 'now');
+            .execute_batch(&format!(
+                "INSERT INTO systems (id, name, created_at) VALUES ('{SYSTEM_ID}', 'team', 'now');
+                 INSERT INTO applications (
+                    id, system_id, name, desired_runtime_state, created_at, updated_at
+                 ) VALUES ('{APP_ID}', '{SYSTEM_ID}', 'app', 'stopped', 'now', 'now');
                  INSERT INTO releases (
                     id, application_id, image_repository, image_digest, image_reference, created_at
                  ) VALUES (
-                    'release-id', 'app-id', 'registry.example/app',
+                    '{RELEASE_ID}', '{APP_ID}', 'registry.example/app',
                     'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
                     'registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
                     'now'
@@ -119,19 +125,22 @@ mod tests {
                     id, application_id, release_id, type, status, source_revision,
                     requested_at, finished_at
                  ) VALUES (
-                    'deployment-id', 'app-id', 'release-id', 'deploy', 'succeeded',
-                    'historical-commit', 'now', 'now'
-                 );",
-            )
+                    '{DEPLOYMENT_ID}', '{APP_ID}', '{RELEASE_ID}', 'deploy', 'succeeded',
+                    '{commit}', 'now', 'now'
+                 );"
+            ))
             .unwrap();
 
-        let target = previous_release(&connection, &ApplicationId::from("app-id")).unwrap();
+        let target = previous_release(&connection, &ApplicationId::new(APP_ID).unwrap()).unwrap();
 
-        assert_eq!(target.release.id.as_str(), "release-id");
+        assert_eq!(target.release.id.as_str(), RELEASE_ID);
         assert_eq!(target.release.artifact.repository(), "registry.example/app");
         assert_eq!(
-            target.source_revision.as_ref().map(SourceRevision::as_str),
-            Some("historical-commit")
+            target
+                .source_revision
+                .as_ref()
+                .map(|commit| commit.as_str().to_owned()),
+            Some(commit)
         );
     }
 

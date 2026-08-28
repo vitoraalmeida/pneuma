@@ -3,13 +3,13 @@ use thiserror::Error;
 
 use crate::adapters::stores::PersistenceOutcome;
 use crate::adapters::stores::persistence::{
-    observed_runtime_state_from_value, outcome, runtime_state_from_value, visibility_from_value,
+    entity_id, invalid_text_value, observed_runtime_state_from_value, outcome,
+    runtime_state_from_value, visibility_from_value,
 };
 use crate::adapters::stores::release_store::artifact_from_values;
 use crate::domain::deployment::{
-    Deployment, DeploymentFailure, DeploymentFailureEvidence, DeploymentHistory,
-    DeploymentLifecycle, DeploymentStatus, DeploymentType, PromotionTarget, RollbackTarget,
-    SourceRevision,
+    Deployment, DeploymentFailure, DeploymentFailureCode, DeploymentHistory, DeploymentLifecycle,
+    DeploymentStatus, DeploymentType, PromotionTarget, RollbackTarget,
 };
 use crate::domain::exposure::DomainName;
 use crate::domain::git::CommitSha;
@@ -48,12 +48,13 @@ pub enum DeploymentStoreError {
 
 // Allocates a deployment ID inside the transaction that reserves the Application for activation.
 pub(crate) fn generate_id(connection: &Connection) -> Result<DeploymentId, DeploymentStoreError> {
-    connection
+    let value = connection
         .query_row("SELECT lower(hex(randomblob(16)))", [], |row| {
             row.get::<_, String>(0)
         })
-        .map(DeploymentId::from)
-        .map_err(persistence)
+        .map_err(persistence)?;
+    DeploymentId::new(&value)
+        .map_err(|_| persistence(invalid_text_value(0, "deployment id", &value)))
 }
 
 // Loads the in-progress Deployment that currently reserves an Application, if any.
@@ -82,7 +83,11 @@ pub(crate) fn load_active_runtime_release_id(
              SELECT 1 FROM runtime_instances ri WHERE ri.deployment_id = d.id
                AND ri.state IN ('running', 'stopped') AND ri.removed_at IS NULL
           )", [application_id.as_str()], |row| row.get::<_, String>(0),
-    ).optional().map(|release_id| release_id.map(ReleaseId::from)).map_err(persistence)
+    )
+    .optional()
+    .map_err(persistence)?
+    .map(|value| entity_id(0, &value).map_err(persistence))
+    .transpose()
 }
 
 // Confirms that the Release belongs to the Application before creating a Deployment.
@@ -107,12 +112,12 @@ pub(crate) fn insert_pending_deployment(
     application_id: &ApplicationId,
     release_id: &ReleaseId,
     deployment_type: DeploymentType,
-    source_revision: Option<&SourceRevision>,
+    source_revision: Option<&CommitSha>,
 ) -> Result<(), DeploymentStoreError> {
     transaction.execute(
         "INSERT INTO deployments (id, application_id, release_id, type, status, source_revision)
          VALUES (?1, ?2, ?3, ?4, 'pending', ?5)",
-        params![deployment_id.as_str(), application_id.as_str(), release_id.as_str(), deployment_type_value(deployment_type), source_revision.map(SourceRevision::as_str)],
+        params![deployment_id.as_str(), application_id.as_str(), release_id.as_str(), deployment_type_value(deployment_type), source_revision.map(CommitSha::as_str)],
     ).map_err(persistence)?;
     Ok(())
 }
@@ -155,7 +160,7 @@ pub(crate) fn list_deployment_history(
             Ok(DeploymentHistory {
                 release: Release {
                     id: deployment.release_id.clone(),
-                    application_id: ApplicationId::from(row.get::<_, String>(12)?),
+                    application_id: entity_id(12, &row.get::<_, String>(12)?)?,
                     artifact,
                     created_at: row.get(16)?,
                 },
@@ -209,13 +214,13 @@ pub(crate) fn mark_failed(
     transaction: &Transaction<'_>,
     deployment_id: &DeploymentId,
     stage: DeploymentStatus,
-    code: &str,
+    code: DeploymentFailureCode,
     message: &str,
 ) -> Result<DeploymentFailure, DeploymentStoreError> {
     let updated = transaction.execute(
         "UPDATE deployments SET status = 'failed', finished_at = CURRENT_TIMESTAMP, failure_code = ?1,
          failure_stage = ?2, failure_message = ?3, updated_at = CURRENT_TIMESTAMP WHERE id = ?4 AND status = ?2",
-        params![code, deployment_status_value(stage), message, deployment_id.as_str()],
+        params![code.as_str(), deployment_status_value(stage), message, deployment_id.as_str()],
     ).map_err(persistence)?;
     if outcome(updated) == PersistenceOutcome::Stale {
         return Err(DeploymentStoreError::Stale {
@@ -299,8 +304,8 @@ pub(crate) fn load_promotion_target(
             })?;
             Ok(PromotionTarget {
                 runtime_id: runtime_id.clone(),
-                application_id: ApplicationId::from(row.get::<_, String>(0)?),
-                deployment_id: DeploymentId::from(row.get::<_, String>(1)?),
+                application_id: entity_id(0, &row.get::<_, String>(0)?)?,
+                deployment_id: entity_id(1, &row.get::<_, String>(1)?)?,
                 endpoint,
                 state: runtime_state_from_value(&state_text).ok_or_else(|| conversion_error(3, std::io::Error::new(std::io::ErrorKind::InvalidData, format!("invalid runtime state: {state_text}"))))?,
                 observed_state: observed_runtime_state_from_value(&row.get::<_, String>(4)?),
@@ -329,8 +334,8 @@ pub(crate) fn load_rollback_target(
             let repository: String = row.get(3)?;
             let digest: String = row.get(4)?;
             let artifact = artifact_from_values(&reference, &repository, &digest).map_err(|error| conversion_error(2, std::io::Error::new(std::io::ErrorKind::InvalidData, error)))?;
-            let source_revision = row.get::<_, Option<String>>(5)?.map(|value| source_revision_from_value(&value).map_err(|error| conversion_error(5, error))).transpose()?;
-            Ok(RollbackTarget { release: Release { id: ReleaseId::from(row.get::<_, String>(0)?), application_id: ApplicationId::from(row.get::<_, String>(1)?), artifact, created_at: row.get(6)? }, source_revision })
+            let source_revision = row.get::<_, Option<String>>(5)?.map(|value| CommitSha::new(&value).map_err(|error| conversion_error(5, error))).transpose()?;
+            Ok(RollbackTarget { release: Release { id: entity_id(0, &row.get::<_, String>(0)?)?, application_id: entity_id(1, &row.get::<_, String>(1)?)?, artifact, created_at: row.get(6)? }, source_revision })
         },
     ).optional().map_err(persistence)
 }
@@ -393,7 +398,7 @@ impl RawDeployment {
         let source_revision = self
             .source_revision
             .map(|value| {
-                source_revision_from_value(&value).map_err(|error| {
+                CommitSha::new(&value).map_err(|error| {
                     invalid_evidence(&self.id, &format!("invalid source revision: {error}"))
                 })
             })
@@ -407,9 +412,11 @@ impl RawDeployment {
             self.failure_message,
         )?;
         Ok(Deployment {
-            id: DeploymentId::from(self.id),
-            application_id: ApplicationId::from(self.application_id),
-            release_id: ReleaseId::from(self.release_id),
+            id: entity_id(0, &self.id).map_err(|error| persistence(conversion_error(0, error)))?,
+            application_id: entity_id(1, &self.application_id)
+                .map_err(|error| persistence(conversion_error(1, error)))?,
+            release_id: entity_id(2, &self.release_id)
+                .map_err(|error| persistence(conversion_error(2, error)))?,
             deployment_type,
             lifecycle,
             source_revision,
@@ -455,19 +462,22 @@ fn lifecycle_from_values(
                 finished_at: finished_at.unwrap(),
             })
         }
+        // A failed Deployment carries complete typed evidence; anything less is
+        // obsolete or corrupt and fails hydration instead of being tolerated.
         DeploymentStatus::Failed => match (finished_at, code, stage, message) {
             (Some(finished_at), Some(code), Some(stage), Some(message)) => {
+                let code = deployment_failure_code_from_value(&code)
+                    .ok_or_else(|| invalid_evidence(id, "failure code is invalid"))?;
                 let stage = deployment_status_from_value(&stage)
                     .ok_or_else(|| invalid_evidence(id, "failure stage is invalid"))?;
-                let failure = DeploymentFailure::new(&code, stage, &message, finished_at)
+                let failure = DeploymentFailure::new(code, stage, &message, finished_at)
                     .map_err(|error| invalid_evidence(id, &error.to_string()))?;
-                Ok(DeploymentLifecycle::Failed {
-                    evidence: DeploymentFailureEvidence::Complete(failure),
-                })
+                Ok(DeploymentLifecycle::Failed { failure })
             }
-            _ => Ok(DeploymentLifecycle::Failed {
-                evidence: DeploymentFailureEvidence::Incomplete,
-            }),
+            _ => Err(invalid_evidence(
+                id,
+                "failed status requires complete failure evidence",
+            )),
         },
         DeploymentStatus::Pending
         | DeploymentStatus::Starting
@@ -519,19 +529,29 @@ fn deployment_status_from_value(value: &str) -> Option<DeploymentStatus> {
         _ => None,
     }
 }
-fn source_revision_from_value(
-    value: &str,
-) -> Result<SourceRevision, crate::domain::git::InvalidCommitSha> {
-    match CommitSha::new(value) {
-        Ok(commit) => Ok(SourceRevision::from_commit(commit)),
-        Err(_)
-            if !value.is_empty()
-                && value.trim() == value
-                && !value.chars().any(char::is_control) =>
-        {
-            Ok(SourceRevision::Legacy(value.to_owned()))
-        }
-        Err(error) => Err(error),
+// The one persistence conversion between the stable persisted failure-code
+// string and its typed domain value; hydration rejects unknown text.
+fn deployment_failure_code_from_value(value: &str) -> Option<DeploymentFailureCode> {
+    match value {
+        "test_gate_failed" => Some(DeploymentFailureCode::TestGate),
+        "runtime_reconciliation_failed" => Some(DeploymentFailureCode::RuntimeReconciliation),
+        "public_configuration_missing" => Some(DeploymentFailureCode::PublicConfigurationMissing),
+        "runtime_port_allocation_failed" => Some(DeploymentFailureCode::RuntimePortAllocation),
+        "runtime_unit_creation_failed" => Some(DeploymentFailureCode::RuntimeUnitCreation),
+        "runtime_unit_reload_failed" => Some(DeploymentFailureCode::RuntimeUnitReload),
+        "runtime_start_failed" => Some(DeploymentFailureCode::RuntimeStart),
+        "runtime_resolution_failed" => Some(DeploymentFailureCode::RuntimeResolution),
+        "runtime_observation_failed" => Some(DeploymentFailureCode::RuntimeObservation),
+        "runtime_registration_failed" => Some(DeploymentFailureCode::RuntimeRegistration),
+        "runtime_port_persistence_failed" => Some(DeploymentFailureCode::RuntimePortPersistence),
+        "deployment_transition_failed" => Some(DeploymentFailureCode::DeploymentTransition),
+        "health_check_failed" => Some(DeploymentFailureCode::HealthCheck),
+        "exposure_preparation_failed" => Some(DeploymentFailureCode::ExposurePreparation),
+        "caddy_materialization_failed" => Some(DeploymentFailureCode::CaddyMaterialization),
+        "external_health_check_failed" => Some(DeploymentFailureCode::ExternalHealthCheck),
+        "candidate_promotion_failed" => Some(DeploymentFailureCode::CandidatePromotion),
+        "operation_interrupted" => Some(DeploymentFailureCode::OperationInterrupted),
+        _ => None,
     }
 }
 fn conversion_error(
@@ -549,13 +569,19 @@ mod tests {
 
     use crate::adapters::database;
     use crate::adapters::stores::PersistenceOutcome;
-    use crate::domain::deployment::{
-        DeploymentFailureEvidence, DeploymentLifecycle, DeploymentStatus,
-    };
+    use crate::domain::deployment::{DeploymentFailureCode, DeploymentLifecycle, DeploymentStatus};
 
     use crate::domain::identity::DeploymentId;
 
     use super::{DeploymentStoreError, advance_status, load_deployment};
+
+    const APP_ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const RELEASE_ID: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const DEPLOYMENT_ID: &str = "cccccccccccccccccccccccccccccccc";
+
+    fn deployment_id() -> DeploymentId {
+        DeploymentId::new(DEPLOYMENT_ID).unwrap()
+    }
 
     #[test]
     fn hydrates_complete_failed_evidence() {
@@ -565,7 +591,7 @@ mod tests {
             "failed",
             Some("started"),
             Some("finished"),
-            Some("code"),
+            Some("health_check_failed"),
             Some("starting"),
             Some("message"),
         );
@@ -573,23 +599,23 @@ mod tests {
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .unwrap();
 
-        let deployment = load_deployment(&transaction, &DeploymentId::from("deployment")).unwrap();
+        let deployment = load_deployment(&transaction, &deployment_id()).unwrap();
 
         assert_eq!(deployment.started_at.as_deref(), Some("started"));
         assert!(
-            matches!(deployment.lifecycle, DeploymentLifecycle::Failed { evidence: DeploymentFailureEvidence::Complete(ref failure) } if failure.code == "code" && failure.finished_at == "finished")
+            matches!(deployment.lifecycle, DeploymentLifecycle::Failed { ref failure } if failure.code == DeploymentFailureCode::HealthCheck && failure.finished_at == "finished")
         );
     }
 
     #[test]
-    fn preserves_incomplete_historical_failed_evidence() {
+    fn rejects_incomplete_historical_failed_evidence() {
         let mut connection = database::open(Path::new(":memory:")).unwrap();
         seed(
             &connection,
             "failed",
             None,
             Some("finished"),
-            Some("code"),
+            Some("health_check_failed"),
             None,
             None,
         );
@@ -597,14 +623,34 @@ mod tests {
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .unwrap();
 
-        let deployment = load_deployment(&transaction, &DeploymentId::from("deployment")).unwrap();
+        let error = load_deployment(&transaction, &deployment_id()).unwrap_err();
 
-        assert!(matches!(
-            deployment.lifecycle,
-            DeploymentLifecycle::Failed {
-                evidence: DeploymentFailureEvidence::Incomplete
-            }
-        ));
+        assert!(
+            matches!(error, DeploymentStoreError::InvalidEvidence { deployment_id, .. } if deployment_id == DEPLOYMENT_ID)
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_failure_code_text() {
+        let mut connection = database::open(Path::new(":memory:")).unwrap();
+        seed(
+            &connection,
+            "failed",
+            None,
+            Some("finished"),
+            Some("mystery_failure"),
+            Some("starting"),
+            Some("message"),
+        );
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .unwrap();
+
+        let error = load_deployment(&transaction, &deployment_id()).unwrap_err();
+
+        assert!(
+            matches!(error, DeploymentStoreError::InvalidEvidence { deployment_id, .. } if deployment_id == DEPLOYMENT_ID)
+        );
     }
 
     #[test]
@@ -623,10 +669,10 @@ mod tests {
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .unwrap();
 
-        let error = load_deployment(&transaction, &DeploymentId::from("deployment")).unwrap_err();
+        let error = load_deployment(&transaction, &deployment_id()).unwrap_err();
 
         assert!(
-            matches!(error, DeploymentStoreError::InvalidEvidence { deployment_id, .. } if deployment_id == "deployment")
+            matches!(error, DeploymentStoreError::InvalidEvidence { deployment_id, .. } if deployment_id == DEPLOYMENT_ID)
         );
     }
 
@@ -638,7 +684,7 @@ mod tests {
         assert_eq!(
             advance_status(
                 &connection,
-                &DeploymentId::from("deployment"),
+                &deployment_id(),
                 DeploymentStatus::Pending,
                 DeploymentStatus::Starting,
             )
@@ -648,7 +694,7 @@ mod tests {
         assert_eq!(
             advance_status(
                 &connection,
-                &DeploymentId::from("deployment"),
+                &deployment_id(),
                 DeploymentStatus::Pending,
                 DeploymentStatus::Starting,
             )
@@ -667,8 +713,8 @@ mod tests {
         let error = connection
             .execute(
                 "INSERT INTO deployments (id, application_id, release_id, type, status, requested_at)
-                 VALUES ('second', 'app', 'release', 'deploy', 'starting', 'requested')",
-                [],
+                 VALUES ('dddddddddddddddddddddddddddddddd', ?1, ?2, 'deploy', 'starting', 'requested')",
+                params![APP_ID, RELEASE_ID],
             )
             .unwrap_err();
         assert!(matches!(
@@ -681,34 +727,57 @@ mod tests {
         connection
             .execute(
                 "INSERT INTO deployments (id, application_id, release_id, type, status, requested_at)
-                 VALUES ('terminal', 'app', 'release', 'deploy', 'failed', 'requested')",
-                [],
+                 VALUES ('eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', ?1, ?2, 'deploy', 'failed', 'requested')",
+                params![APP_ID, RELEASE_ID],
             )
             .unwrap();
     }
 
     #[test]
-    fn source_revision_tolerates_only_clean_legacy_text() {
-        use crate::domain::deployment::SourceRevision;
-        use crate::domain::git::CommitSha;
+    fn source_revision_hydration_requires_a_full_commit_sha() {
+        let mut connection = database::open(Path::new(":memory:")).unwrap();
+        let commit = "a".repeat(40);
+        connection
+            .execute_batch(&format!(
+                "INSERT INTO systems (id, name, created_at) VALUES ('{SYSTEM_ID}', 'team', 'now');
+                 INSERT INTO applications (id, system_id, name, desired_runtime_state, created_at, updated_at)
+                 VALUES ('{APP_ID}', '{SYSTEM_ID}', 'app', 'stopped', 'now', 'now');
+                 INSERT INTO releases (id, application_id, image_repository, image_digest, image_reference, created_at) VALUES ('{RELEASE_ID}', '{APP_ID}', 'registry.example/app', 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'now');
+                 INSERT INTO deployments (id, application_id, release_id, type, status, source_revision, requested_at)
+                 VALUES ('{DEPLOYMENT_ID}', '{APP_ID}', '{RELEASE_ID}', 'deploy', 'pending', '{commit}', 'requested');"
+            ))
+            .unwrap();
+        {
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Deferred)
+                .unwrap();
 
-        let commit = CommitSha::new(&"a".repeat(40)).unwrap();
-        assert_eq!(
-            super::source_revision_from_value(commit.as_str()).unwrap(),
-            SourceRevision::from_commit(commit)
-        );
-        assert_eq!(
-            super::source_revision_from_value("legacy-tag").unwrap(),
-            SourceRevision::Legacy("legacy-tag".to_owned())
-        );
-
-        for rejected in ["", " padded", "bad\nsha", "\u{7}control"] {
-            assert!(
-                super::source_revision_from_value(rejected).is_err(),
-                "value {rejected:?} must not hydrate as any source revision"
+            let deployment = load_deployment(&transaction, &deployment_id()).unwrap();
+            assert_eq!(
+                deployment
+                    .source_revision
+                    .map(|commit| commit.as_str().to_owned()),
+                Some(commit)
             );
         }
+
+        connection
+            .execute(
+                "UPDATE deployments SET source_revision = 'legacy-tag' WHERE id = ?1",
+                params![DEPLOYMENT_ID],
+            )
+            .unwrap();
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .unwrap();
+        let error = load_deployment(&transaction, &deployment_id()).unwrap_err();
+        assert!(matches!(
+            error,
+            DeploymentStoreError::InvalidEvidence { .. }
+        ));
     }
+
+    const SYSTEM_ID: &str = "ffffffffffffffffffffffffffffffff";
 
     fn seed(
         connection: &rusqlite::Connection,
@@ -719,7 +788,7 @@ mod tests {
         stage: Option<&str>,
         message: Option<&str>,
     ) {
-        connection.execute_batch("INSERT INTO applications (id, name, desired_runtime_state, spec_version, created_at, updated_at) VALUES ('app', 'app', 'stopped', 1, 'now', 'now'); INSERT INTO releases (id, application_id, image_repository, image_digest, image_reference, created_at) VALUES ('release', 'app', 'registry.example/app', 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'now');").unwrap();
-        connection.execute("INSERT INTO deployments (id, application_id, release_id, type, status, requested_at, started_at, finished_at, failure_code, failure_stage, failure_message) VALUES ('deployment', 'app', 'release', 'deploy', ?1, 'requested', ?2, ?3, ?4, ?5, ?6)", params![status, started_at, finished_at, code, stage, message]).unwrap();
+        connection.execute_batch(&format!("INSERT INTO systems (id, name, created_at) VALUES ('{SYSTEM_ID}', 'team', 'now'); INSERT INTO applications (id, system_id, name, desired_runtime_state, created_at, updated_at) VALUES ('{APP_ID}', '{SYSTEM_ID}', 'app', 'stopped', 'now', 'now'); INSERT INTO releases (id, application_id, image_repository, image_digest, image_reference, created_at) VALUES ('{RELEASE_ID}', '{APP_ID}', 'registry.example/app', 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'now');")).unwrap();
+        connection.execute("INSERT INTO deployments (id, application_id, release_id, type, status, requested_at, started_at, finished_at, failure_code, failure_stage, failure_message) VALUES (?1, ?2, ?3, 'deploy', ?4, 'requested', ?5, ?6, ?7, ?8, ?9)", params![DEPLOYMENT_ID, APP_ID, RELEASE_ID, status, started_at, finished_at, code, stage, message]).unwrap();
     }
 }

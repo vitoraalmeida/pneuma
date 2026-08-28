@@ -102,8 +102,8 @@ Resolution: `src/use_cases/deployment/deploy.rs::deploy_branch`
 
 Then the execution spine under **Deploy from OCI**.
 
-Domain rules: `src/domain/git.rs::CommitSha`; `SourceRevision` recorded on the
-deployment (`src/domain/deployment.rs`).
+Domain rules: `src/domain/git.rs::CommitSha` recorded directly as the
+deployment's optional source revision (`src/domain/deployment.rs`).
 
 Failure path: `DeployBranchError` distinguishes missing source configuration,
 no default branch, and no delivery configuration before any external effect.

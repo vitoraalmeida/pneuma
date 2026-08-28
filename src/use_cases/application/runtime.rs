@@ -674,7 +674,7 @@ exit \"${PNEUMA_FAKE_SYSTEMCTL_EXIT:-0}\"
     }
 
     fn application_id() -> ApplicationId {
-        ApplicationId::from(APPLICATION_ID)
+        ApplicationId::new(APPLICATION_ID).unwrap()
     }
 
     fn application_name() -> ApplicationName {
@@ -695,8 +695,9 @@ exit \"${PNEUMA_FAKE_SYSTEMCTL_EXIT:-0}\"
         let digest = format!("sha256:{}", "a".repeat(64));
         connection
             .execute_batch(&format!(
-                "INSERT INTO applications (id, name, desired_runtime_state, spec_version, created_at, updated_at)
-                 VALUES ('{APPLICATION_ID}', 'orchard', '{desired_state}', 3, '2026-01-01', '2026-01-01');
+                "INSERT INTO systems (id, name, created_at) VALUES ('33333333333333333333333333333333', 'team', '2026-01-01');
+                 INSERT INTO applications (id, system_id, name, desired_runtime_state, created_at, updated_at)
+                 VALUES ('{APPLICATION_ID}', '33333333333333333333333333333333', 'orchard', '{desired_state}', '2026-01-01', '2026-01-01');
                  INSERT INTO releases (id, application_id, image_reference, image_repository, image_digest, created_at)
                  VALUES ('22222222222222222222222222222222', '{APPLICATION_ID}', 'registry.example/team/orchard@{digest}', 'registry.example/team/orchard', '{digest}', '2026-01-01');
                  INSERT INTO deployments (id, application_id, release_id, type, status, requested_at, started_at, finished_at)

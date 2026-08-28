@@ -8,7 +8,9 @@ use crate::domain::exposure::{
     ConfirmedRoute, Exposure, ExposureConfigurationVersion, ExposureDiagnostic, ExposureIntent,
     ExposureMaterialization, ExposureMaterializationState, Visibility,
 };
-use crate::domain::identity::{ApplicationId, DeploymentId, ReleaseId, RuntimeInstanceId};
+use crate::domain::identity::{
+    ApplicationId, DeploymentId, ReleaseId, RuntimeInstanceId, SystemId,
+};
 use crate::domain::release::{OciArtifact, Release};
 use crate::domain::runtime::{
     ContainerId, ContainerObservation, ContainerPort, ExpectedRuntimeEndpoint, HealthCheckPath,
@@ -21,6 +23,7 @@ const APPLICATION_ID: &str = "11111111111111111111111111111111";
 const RELEASE_ID: &str = "22222222222222222222222222222222";
 const DEPLOYMENT_ID: &str = "33333333333333333333333333333333";
 const RUNTIME_ID: &str = "44444444444444444444444444444444";
+const SYSTEM_ID: &str = "55555555555555555555555555555555";
 const CONTAINER_ID: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const CANONICAL_UNIT: &str = "canonical-unit";
 const CANONICAL_ROUTE: &str = "app.example { reverse_proxy }";
@@ -39,9 +42,9 @@ fn socket_addr() -> SocketAddr {
 
 fn deployment() -> Deployment {
     Deployment {
-        id: DeploymentId::from(DEPLOYMENT_ID),
-        application_id: ApplicationId::from(APPLICATION_ID),
-        release_id: ReleaseId::from(RELEASE_ID),
+        id: DeploymentId::new(DEPLOYMENT_ID).unwrap(),
+        application_id: ApplicationId::new(APPLICATION_ID).unwrap(),
+        release_id: ReleaseId::new(RELEASE_ID).unwrap(),
         deployment_type: DeploymentType::Deploy,
         lifecycle: DeploymentLifecycle::Succeeded {
             finished_at: "2026-01-01T00:00:00Z".to_owned(),
@@ -54,8 +57,8 @@ fn deployment() -> Deployment {
 
 fn release() -> Release {
     Release {
-        id: ReleaseId::from(RELEASE_ID),
-        application_id: ApplicationId::from(APPLICATION_ID),
+        id: ReleaseId::new(RELEASE_ID).unwrap(),
+        application_id: ApplicationId::new(APPLICATION_ID).unwrap(),
         artifact: OciArtifact::parse(&format!(
             "registry.example/team/app@sha256:{}",
             "a".repeat(64)
@@ -67,9 +70,9 @@ fn release() -> Release {
 
 fn runtime() -> RuntimeInstance {
     RuntimeInstance {
-        id: RuntimeInstanceId::from(RUNTIME_ID),
-        application_id: ApplicationId::from(APPLICATION_ID),
-        deployment_id: DeploymentId::from(DEPLOYMENT_ID),
+        id: RuntimeInstanceId::new(RUNTIME_ID).unwrap(),
+        application_id: ApplicationId::new(APPLICATION_ID).unwrap(),
+        deployment_id: DeploymentId::new(DEPLOYMENT_ID).unwrap(),
         external_runtime_id: ContainerId::from(CONTAINER_ID),
         state: RuntimeState::Running,
         expected_endpoint: endpoint(),
@@ -84,7 +87,7 @@ fn runtime() -> RuntimeInstance {
 
 fn specification() -> ApplicationDeploymentSpecification {
     ApplicationDeploymentSpecification {
-        application_id: ApplicationId::from(APPLICATION_ID),
+        application_id: ApplicationId::new(APPLICATION_ID).unwrap(),
         application_name: application_name(),
         runtime: RuntimeSpecification::new(
             ContainerPort::new(8080).unwrap(),
@@ -101,12 +104,11 @@ fn input(desired_state: DesiredRuntimeState, exposure: Option<Exposure>) -> Reco
     ReconciliationInput {
         desired: DesiredState {
             application: Application {
-                id: ApplicationId::from(APPLICATION_ID),
-                system_id: None,
+                id: ApplicationId::new(APPLICATION_ID).unwrap(),
+                system_id: SystemId::new(SYSTEM_ID).unwrap(),
                 name: application_name(),
                 desired_runtime_state: desired_state,
-                active_deployment_id: Some(DeploymentId::from(DEPLOYMENT_ID)),
-                manifest_schema_version: 3,
+                active_deployment_id: Some(DeploymentId::new(DEPLOYMENT_ID).unwrap()),
             },
             exposure,
         },
@@ -192,7 +194,7 @@ fn quadlet(contents: &str) -> QuadletSourceObservation {
 
 fn internal_exposure(state: ExposureMaterializationState) -> Exposure {
     Exposure::new(
-        ApplicationId::from(APPLICATION_ID),
+        ApplicationId::new(APPLICATION_ID).unwrap(),
         ExposureIntent::new(Visibility::Internal, None).unwrap(),
         ExposureMaterialization::hydrate(state, Option::<ConfirmedRoute>::None, None).unwrap(),
     )
@@ -201,7 +203,7 @@ fn internal_exposure(state: ExposureMaterializationState) -> Exposure {
 fn public_exposure(state: ExposureMaterializationState, confirmed_route: bool) -> Exposure {
     let route = confirmed_route.then(|| {
         ConfirmedRoute::new(
-            crate::domain::identity::RuntimeInstanceId::from(RUNTIME_ID),
+            crate::domain::identity::RuntimeInstanceId::new(RUNTIME_ID).unwrap(),
             ExposureConfigurationVersion::new(CANONICAL_ROUTE).unwrap(),
             "2026-01-01T00:00:00Z".to_owned(),
         )
@@ -213,7 +215,7 @@ fn public_exposure(state: ExposureMaterializationState, confirmed_route: bool) -
     )
     .then(|| ExposureDiagnostic::new("test", "test diagnostic").unwrap());
     Exposure::new(
-        ApplicationId::from(APPLICATION_ID),
+        ApplicationId::new(APPLICATION_ID).unwrap(),
         ExposureIntent::new(
             Visibility::Public,
             Some(crate::domain::exposure::DomainName::new("app.example").unwrap()),
@@ -350,7 +352,7 @@ mod runtime_identity_repair {
         assert_eq!(
             decision,
             ReconciliationDecision::RepairRuntime(RuntimeIdentityRepair {
-                runtime_id: RuntimeInstanceId::from(RUNTIME_ID),
+                runtime_id: RuntimeInstanceId::new(RUNTIME_ID).unwrap(),
                 container_id: ContainerId::from(CONTAINER_ID),
             })
         );

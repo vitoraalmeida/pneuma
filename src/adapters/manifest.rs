@@ -9,7 +9,7 @@ use crate::domain::application::ApplicationName;
 use crate::domain::exposure::{DomainName, ExposureIntent, Visibility};
 use crate::domain::git::RelativeManifestPath;
 use crate::domain::manifest::ImportSpecification;
-use crate::domain::release::{DeliverySpecification, DeliveryType, OciRepository};
+use crate::domain::release::{DeliverySpecification, OciRepository};
 use crate::domain::runtime::{
     ContainerPort, HealthCheckPath, HealthCheckSpecification, HealthCheckStatus,
     RuntimeSpecification,
@@ -48,8 +48,9 @@ struct ApplicationSection {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DeliverySection {
+    // Parsed only so serde rejects unsupported delivery types at the boundary.
     #[serde(rename = "type")]
-    delivery_type: DeliveryField,
+    _delivery_type: DeliveryField,
     image: String,
 }
 
@@ -156,9 +157,6 @@ fn import_specification(document: &ManifestDocument) -> Result<ImportSpecificati
             field: "delivery.image",
             reason: "must be a non-empty OCI repository without surrounding whitespace",
         })?;
-    let delivery_type = match document.delivery.delivery_type {
-        DeliveryField::Oci => DeliveryType::Oci,
-    };
     let container_port = ContainerPort::new(document.runtime.container_port).map_err(|_| {
         ManifestError::InvalidField {
             field: "runtime.container_port",
@@ -198,13 +196,12 @@ fn import_specification(document: &ManifestDocument) -> Result<ImportSpecificati
         })?;
     // Each part was validated above, so constructing the canonical aggregates
     // here is infallible and import carries no second field-by-field copy.
-    let delivery = DeliverySpecification::new(delivery_type, repository);
+    let delivery = DeliverySpecification::new(repository);
     let runtime = RuntimeSpecification::new(
         container_port,
         HealthCheckSpecification::new(healthcheck_path, expected_status),
     );
     Ok(ImportSpecification {
-        schema_version: document.schema_version,
         system_name,
         application_name,
         delivery,

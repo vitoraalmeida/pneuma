@@ -104,8 +104,11 @@ mod tests {
     use super::{ApplicationLock, lock_path};
     use crate::domain::identity::ApplicationId;
 
+    // Derives a stable, valid identifier per test name so distinct names stay
+    // distinct locks while every identifier satisfies the current format.
     fn application_id(value: &str) -> ApplicationId {
-        ApplicationId::from(value)
+        let seed: u64 = value.bytes().map(u64::from).sum();
+        ApplicationId::new(&format!("{seed:032x}")).unwrap()
     }
 
     #[test]
@@ -135,7 +138,10 @@ mod tests {
         );
         assert_eq!(
             lock_path(&database, &application_id("application-a")),
-            root.join("pneuma.sqlite3.application-a.lock")
+            root.join(format!(
+                "pneuma.sqlite3.{}.lock",
+                application_id("application-a")
+            ))
         );
 
         drop(held);

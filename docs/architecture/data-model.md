@@ -25,12 +25,12 @@ erDiagram
     Deployment ||--o{ PortReservation : reserves
 ```
 
-`system_id` remains nullable for Applications imported before Systems were
-introduced. Every newly imported Application resolves or creates exactly one
-System from `--system` or `[system].name`. An Application owns its persisted
-specification, Releases, and Deployment history. A Release is an immutable OCI
-artifact. A Deployment is one attempt to activate a Release. A RuntimeInstance
-is the persisted record of the concrete runtime created by that attempt.
+Every Application carries exactly one required System, resolved or created at
+import from `--system` or `[system].name`; rows without a System are obsolete
+and fail hydration. An Application owns its persisted specification, Releases,
+and Deployment history. A Release is an immutable OCI artifact. A Deployment is
+one attempt to activate a Release. A RuntimeInstance is the persisted record of
+the concrete runtime created by that attempt.
 
 `applications.active_deployment_id` identifies the active successful Deployment.
 It is logical identity, not a Podman container ID.
@@ -54,11 +54,10 @@ It is logical identity, not a Podman container ID.
 | Field | Meaning |
 |---|---|
 | `id` | Stable application identifier. |
-| `system_id` | System relationship for every newly imported Application; nullable only for legacy persisted rows. |
+| `system_id` | Required System relationship; every imported Application resolves or creates exactly one System. |
 | `name` | Unique command-facing name. |
 | `desired_runtime_state` | Operator intent: `running` or `stopped`. |
 | `active_deployment_id` | Active successful Deployment, when one exists. |
-| `spec_version` | Copy of the manifest `schema_version` recorded once at import; immutable, never compared or incremented (INV-APP-004). |
 
 The core domain `Application` represents durable identity and intent. Catalog
 queries return an `ApplicationSummary` that additionally exposes the imported

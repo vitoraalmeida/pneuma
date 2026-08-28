@@ -20,7 +20,7 @@ fn rollback_fails_when_no_previous_deployment_exists() {
 fn rollback_fails_for_unknown_application() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
 
-    let application_id = ApplicationId::from("non-existent-app");
+    let application_id = ApplicationId::new("22222222222222222222222222222222").unwrap();
     let error = rollback_deployment(&mut connection, &application_id, None).unwrap_err();
 
     assert!(matches!(error, RollbackError::ApplicationNotFound { .. }));

@@ -176,7 +176,7 @@ fn record_interrupted_failure(
     fail_deployment(
         connection,
         &deployment.id,
-        DeploymentFailureCode::OperationInterrupted.as_str(),
+        DeploymentFailureCode::OperationInterrupted,
         "operation owner exited before deployment completion",
     )
     .map_err(|source| ReconciliationReadError::NotConverged {

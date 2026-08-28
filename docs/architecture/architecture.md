@@ -301,8 +301,8 @@ Rationale for these boundaries is in [`../decisions/`](../decisions/) and
 - The TOML document is a private adapter detail: parsing, structural validation,
   and conversion into the validated `ImportSpecification` happen in one boundary
   step (`src/adapters/manifest.rs`). The domain never sees serde structs or the
-  file schema; delivery type is owned by Release
-  (`src/domain/release.rs::DeliveryType`).
+  file schema; delivery is OCI-only, so no delivery-type representation exists
+  in the domain.
 - Delivery is OCI-only. Its image value is a repository, not a digest reference,
   and must not contain surrounding whitespace.
 - Runtime configuration requires a nonzero container port, an absolute

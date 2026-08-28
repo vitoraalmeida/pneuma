@@ -481,13 +481,14 @@ exit 0
     fn seed_deployment(connection: &Connection, status: &str) {
         connection
             .execute_batch(
-                "INSERT INTO applications (
-                     id, name, desired_runtime_state, spec_version, created_at, updated_at
-                 ) VALUES ('app', 'app', 'stopped', 1, 'now', 'now');
+                "INSERT INTO systems (id, name, created_at) VALUES ('44444444444444444444444444444444', 'team', 'now');
+                 INSERT INTO applications (
+                     id, system_id, name, desired_runtime_state, created_at, updated_at
+                 ) VALUES ('11111111111111111111111111111111', '44444444444444444444444444444444', 'app', 'stopped', 'now', 'now');
                  INSERT INTO releases (
                      id, application_id, image_repository, image_digest, image_reference, created_at
                  ) VALUES (
-                     'release', 'app', 'registry.example/app',
+                     '55555555555555555555555555555555', '11111111111111111111111111111111', 'registry.example/app',
                      'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
                      'registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
                      'now'
@@ -498,14 +499,14 @@ exit 0
             .execute(
                 "INSERT INTO deployments (
                      id, application_id, release_id, type, status, requested_at
-                 ) VALUES ('deployment', 'app', 'release', 'deploy', ?1, 'now')",
+                 ) VALUES ('22222222222222222222222222222222', '11111111111111111111111111111111', '55555555555555555555555555555555', 'deploy', ?1, 'now')",
                 [status],
             )
             .unwrap();
     }
 
     fn app_id() -> ApplicationId {
-        ApplicationId::from("app")
+        ApplicationId::new("11111111111111111111111111111111").unwrap()
     }
 
     fn artifact() -> OciArtifact {
@@ -529,7 +530,7 @@ exit 0
         scenario: &mut CandidateScenario,
         application_id: &ApplicationId,
     ) -> Result<StartedCandidate, FailedExecution> {
-        let deployment_id = DeploymentId::from("deployment");
+        let deployment_id = DeploymentId::new("22222222222222222222222222222222").unwrap();
         let application_name = ApplicationName::new("app").unwrap();
         let artifact = artifact();
         let runtime = runtime();
@@ -576,8 +577,11 @@ exit 0
         seed_deployment(&scenario.connection, "pending");
 
         // A nonexistent application makes the reservation insert violate its foreign key.
-        let failed = run_start_candidate(&mut scenario, &ApplicationId::from("missing-app"))
-            .expect_err("port reservation must fail for an unknown application");
+        let failed = run_start_candidate(
+            &mut scenario,
+            &ApplicationId::new("33333333333333333333333333333333").unwrap(),
+        )
+        .expect_err("port reservation must fail for an unknown application");
 
         assert_eq!(failed.code(), DeploymentFailureCode::RuntimePortAllocation);
         assert!(!failed.failure_persisted());
@@ -681,7 +685,7 @@ exit 0
                      id, application_id, deployment_id, external_runtime_id, state,
                      host_address, host_port, container_port, last_observed_state,
                      last_observed_at, created_at, updated_at, removed_at
-                 ) VALUES ('runtime', 'app', 'deployment', ?1, 'starting',
+                 ) VALUES ('66666666666666666666666666666666', '11111111111111111111111111111111', '22222222222222222222222222222222', ?1, 'starting',
                            '127.0.0.1', 39999, 8080, 'running',
                            'now', 'now', 'now', NULL)",
                 ["a".repeat(64)],

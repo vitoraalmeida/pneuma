@@ -12,7 +12,7 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use pneuma::adapters::database;
-use pneuma::domain::deployment::{DeploymentStatus, SourceRevision};
+use pneuma::domain::deployment::DeploymentStatus;
 use pneuma::use_cases::application::import_application;
 use pneuma::use_cases::deployment::{
     DeployBranchError, DeploymentProgress, DeploymentStep, deploy_branch,
@@ -42,16 +42,13 @@ fn deploys_a_branch_and_persists_source_revision() {
     server.join().unwrap();
 
     let deployed = deployed.unwrap();
-    assert!(matches!(
-        deployed.source_revision,
-        Some(pneuma::domain::deployment::SourceRevision::Commit(_))
-    ));
+    assert!(deployed.source_revision.is_some());
     assert_eq!(
         deployed
             .source_revision
             .as_ref()
-            .map(pneuma::domain::deployment::SourceRevision::as_str),
-        Some(staging_commit.as_str())
+            .map(|commit| commit.as_str().to_owned()),
+        Some(staging_commit.as_str().to_owned())
     );
     let (source_revision, image_reference): (Option<String>, String) = connection
         .query_row(
@@ -111,8 +108,8 @@ fn uses_the_default_branch_when_branch_is_omitted() {
         deployed
             .source_revision
             .as_ref()
-            .map(pneuma::domain::deployment::SourceRevision::as_str),
-        Some(main_commit.as_str())
+            .map(|commit| commit.as_str().to_owned()),
+        Some(main_commit.as_str().to_owned())
     );
 }
 
@@ -181,8 +178,8 @@ fn deploys_a_branch_with_the_same_semantic_progress_order_and_result() {
         deployed
             .source_revision
             .as_ref()
-            .map(SourceRevision::as_str),
-        Some(staging_commit.as_str())
+            .map(|commit| commit.as_str().to_owned()),
+        Some(staging_commit.as_str().to_owned())
     );
     let (status, source_revision): (String, Option<String>) = connection
         .query_row(

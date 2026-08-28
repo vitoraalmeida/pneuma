@@ -37,7 +37,6 @@ fn finds_a_core_application_by_name_without_loading_the_catalog() {
         application.desired_runtime_state,
         DesiredRuntimeState::Stopped
     );
-    assert_eq!(application.manifest_schema_version, 3);
     assert!(
         find_application_by_name(&connection, &ApplicationName::new("missing").unwrap())
             .unwrap()
@@ -60,7 +59,7 @@ fn returns_registered_applications_ordered_by_name() {
         &mut connection,
         &fixture_path("another"),
         None,
-        Some("."),
+        Some("https://github.com/vitoraalmeida/another-site"),
         Some("pneuma.toml"),
     )
     .unwrap();
@@ -75,7 +74,10 @@ fn returns_registered_applications_ordered_by_name() {
 
     assert_eq!(applications.len(), 2);
     assert_eq!(applications[0].name.as_str(), "another-site");
-    assert_eq!(applications[0].repository.as_deref(), Some("."));
+    assert_eq!(
+        applications[0].repository.as_deref(),
+        Some("https://github.com/vitoraalmeida/another-site")
+    );
     assert_eq!(applications[0].default_branch.as_deref(), None);
     assert_eq!(
         applications[0].desired_runtime_state,
@@ -86,30 +88,27 @@ fn returns_registered_applications_ordered_by_name() {
         applications[1].desired_runtime_state,
         DesiredRuntimeState::Stopped
     );
-    assert_eq!(applications[1].manifest_schema_version, 3);
 }
 
 #[test]
-fn lists_legacy_applications_without_a_system() {
+fn rejects_legacy_applications_without_a_system() {
     let connection = database::open(Path::new(":memory:")).unwrap();
+    // The system_id column is still nullable until the baseline-schema
+    // checkpoint; a row without a System is obsolete and must fail hydration.
     connection
         .execute_batch(
             "INSERT INTO applications (
-                id, name, desired_runtime_state, spec_version, created_at, updated_at
-             ) VALUES ('legacy-id', 'legacy-app', 'stopped', 1, 'now', 'now')",
+                id, name, desired_runtime_state, created_at, updated_at
+             ) VALUES ('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'legacy-app', 'stopped', 'now', 'now')",
         )
         .unwrap();
 
-    let applications = list_applications(&connection).unwrap();
+    let error = list_applications(&connection).unwrap_err();
 
-    assert_eq!(applications.len(), 1);
-    assert_eq!(applications[0].name.as_str(), "legacy-app");
-    assert_eq!(applications[0].system_id, None);
-    assert_eq!(
-        applications[0].desired_runtime_state,
-        DesiredRuntimeState::Stopped
+    assert!(
+        error.to_string().contains("system id"),
+        "legacy rows without a System must be rejected: {error}"
     );
-    assert_eq!(applications[0].manifest_schema_version, 1);
 }
 
 fn fixture_path(name: &str) -> PathBuf {

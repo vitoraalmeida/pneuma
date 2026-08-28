@@ -4,7 +4,7 @@ use pneuma::domain::exposure::{
     ExposureMaterialization, ExposureMaterializationState, Visibility,
 };
 use pneuma::domain::git::CommitSha;
-use pneuma::domain::git::{ApplicationSource, RelativeManifestPath, RepositoryKind};
+use pneuma::domain::git::{ApplicationSource, RelativeManifestPath};
 use pneuma::domain::identity::RuntimeInstanceId;
 use pneuma::domain::release::{OciArtifact, OciRepository};
 use pneuma::domain::runtime::{
@@ -128,7 +128,7 @@ fn exposure_values_require_complete_intent_route_and_diagnostic_evidence() {
     assert!(ExposureDiagnostic::new("failed", " ").is_err());
 
     let route = ConfirmedRoute::new(
-        RuntimeInstanceId::from("runtime-id"),
+        RuntimeInstanceId::new("11111111111111111111111111111111").unwrap(),
         ExposureConfigurationVersion::new("example.test {\n}\n").unwrap(),
         "2026-08-20 00:00:00".to_owned(),
     )
@@ -223,17 +223,11 @@ fn validates_source_and_oci_repository_boundaries() {
     assert!(RelativeManifestPath::new("/etc/pneuma.toml").is_err());
     assert!(RelativeManifestPath::new("../pneuma.toml").is_err());
     assert!(
-        ApplicationSource::new(
-            RepositoryKind::Remote,
-            "https://example.test/application.git",
-            None,
-            manifest_path,
-        )
-        .is_ok()
+        ApplicationSource::new("https://example.test/application.git", None, manifest_path,)
+            .is_ok()
     );
     assert!(
         ApplicationSource::new(
-            RepositoryKind::Remote,
             "/checkout/application",
             None,
             RelativeManifestPath::new("pneuma.toml").unwrap(),

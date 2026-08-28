@@ -20,7 +20,7 @@ pub struct Deployment {
     pub release_id: ReleaseId,
     pub deployment_type: DeploymentType,
     pub lifecycle: DeploymentLifecycle,
-    pub source_revision: Option<SourceRevision>,
+    pub source_revision: Option<CommitSha>,
     pub requested_at: String,
     pub started_at: Option<String>,
 }
@@ -41,7 +41,7 @@ pub enum DeploymentLifecycle {
     Verifying,
     Activating,
     Succeeded { finished_at: String },
-    Failed { evidence: DeploymentFailureEvidence },
+    Failed { failure: DeploymentFailure },
 }
 
 impl DeploymentLifecycle {
@@ -58,16 +58,9 @@ impl DeploymentLifecycle {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-// Preserves historical failed rows that were persisted before complete diagnostics existed.
-pub enum DeploymentFailureEvidence {
-    Complete(DeploymentFailure),
-    Incomplete,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-// Records complete terminal evidence for a newly written failed Deployment.
+// Records complete terminal evidence for a failed Deployment.
 pub struct DeploymentFailure {
-    pub code: String,
+    pub code: DeploymentFailureCode,
     pub stage: DeploymentStatus,
     pub message: String,
     pub finished_at: String,
@@ -75,33 +68,27 @@ pub struct DeploymentFailure {
 
 impl DeploymentFailure {
     pub(crate) fn validate_details(
-        code: &str,
         stage: DeploymentStatus,
         message: &str,
     ) -> Result<(), InvalidDeploymentFailure> {
-        if code.is_empty()
-            || code.trim() != code
-            || message.is_empty()
-            || message.trim() != message
-            || !stage.is_nonterminal()
-        {
+        if message.is_empty() || message.trim() != message || !stage.is_nonterminal() {
             return Err(InvalidDeploymentFailure);
         }
         Ok(())
     }
 
     pub(crate) fn new(
-        code: &str,
+        code: DeploymentFailureCode,
         stage: DeploymentStatus,
         message: &str,
         finished_at: String,
     ) -> Result<Self, InvalidDeploymentFailure> {
-        Self::validate_details(code, stage, message)?;
+        Self::validate_details(stage, message)?;
         if finished_at.is_empty() {
             return Err(InvalidDeploymentFailure);
         }
         Ok(Self {
-            code: code.to_owned(),
+            code,
             stage,
             message: message.to_owned(),
             finished_at,
@@ -110,12 +97,13 @@ impl DeploymentFailure {
 }
 
 #[derive(Debug, PartialEq, Eq, Error)]
-#[error("deployment failure requires trimmed code, message, timestamp, and a non-terminal stage")]
+#[error("deployment failure requires a trimmed message, timestamp, and a non-terminal stage")]
 pub struct InvalidDeploymentFailure;
 
 // The authoritative registry of deployment failure classifications. Each variant is one
-// semantic failure stage; `as_str` yields its stable persisted string, which historical
-// rows and integration tests depend on verbatim. Producers must never pass raw literals.
+// semantic failure stage; `as_str` yields its stable persisted string, which the
+// persistence layer and integration tests depend on verbatim. Producers must never pass
+// raw literals.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeploymentFailureCode {
     TestGate,
@@ -181,32 +169,6 @@ pub struct DeploymentHistory {
     pub is_active: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-// Preserves readable historical revisions while requiring new revisions to be full commit SHAs.
-pub enum SourceRevision {
-    Commit(CommitSha),
-    Legacy(String),
-}
-
-impl SourceRevision {
-    // New deployments always record a validated full commit; the Legacy variant
-    // exists only for rows persisted before SHA validation (INV-DB-006).
-    pub fn from_commit(commit: CommitSha) -> Self {
-        Self::Commit(commit)
-    }
-
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::Commit(value) => value.as_str(),
-            Self::Legacy(value) => value,
-        }
-    }
-}
-impl fmt::Display for SourceRevision {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
 // Whether this activation was a fresh deploy or a rollback to a prior release.
 // Rollbacks create their own Deployment rows so history stays append-only.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -377,7 +339,7 @@ impl PromotionTarget {
 // Selects the most recent succeeded deployment that is no longer active for rollback.
 pub(crate) struct RollbackTarget {
     pub(crate) release: Release,
-    pub(crate) source_revision: Option<SourceRevision>,
+    pub(crate) source_revision: Option<CommitSha>,
 }
 
 #[cfg(test)]
@@ -595,23 +557,20 @@ mod tests {
     fn failures_require_trimmed_details_and_a_nonterminal_stage() {
         assert!(
             super::DeploymentFailure::validate_details(
-                "health_failed",
                 DeploymentStatus::Verifying,
                 "candidate unhealthy"
             )
             .is_ok()
         );
-        for (code, stage, message) in [
-            ("", DeploymentStatus::Starting, "message"),
-            (" health_failed ", DeploymentStatus::Starting, "message"),
-            ("health_failed", DeploymentStatus::Activating, ""),
-            ("health_failed", DeploymentStatus::Activating, " padded "),
-            ("health_failed", DeploymentStatus::Succeeded, "message"),
-            ("health_failed", DeploymentStatus::Failed, "message"),
+        for (stage, message) in [
+            (DeploymentStatus::Starting, ""),
+            (DeploymentStatus::Starting, " padded "),
+            (DeploymentStatus::Succeeded, "message"),
+            (DeploymentStatus::Failed, "message"),
         ] {
             assert!(
-                super::DeploymentFailure::validate_details(code, stage, message).is_err(),
-                "{code:?} at {stage} with {message:?}"
+                super::DeploymentFailure::validate_details(stage, message).is_err(),
+                "{stage} with {message:?}"
             );
         }
     }
@@ -620,7 +579,7 @@ mod tests {
     fn failure_construction_rejects_a_missing_timestamp_and_keeps_valid_evidence() {
         assert!(
             super::DeploymentFailure::new(
-                "health_failed",
+                super::DeploymentFailureCode::HealthCheck,
                 DeploymentStatus::Verifying,
                 "candidate unhealthy",
                 String::new(),
@@ -629,13 +588,13 @@ mod tests {
         );
 
         let failure = super::DeploymentFailure::new(
-            "health_failed",
+            super::DeploymentFailureCode::HealthCheck,
             DeploymentStatus::Verifying,
             "candidate unhealthy",
             "2026-08-23 12:00:00".to_owned(),
         )
         .expect("complete evidence is valid");
-        assert_eq!(failure.code, "health_failed");
+        assert_eq!(failure.code, super::DeploymentFailureCode::HealthCheck);
         assert_eq!(failure.stage, DeploymentStatus::Verifying);
         assert_eq!(failure.message, "candidate unhealthy");
         assert_eq!(failure.finished_at, "2026-08-23 12:00:00");

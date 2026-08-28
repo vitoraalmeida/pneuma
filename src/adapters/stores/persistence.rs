@@ -1,5 +1,6 @@
 use crate::adapters::stores::PersistenceOutcome;
 use crate::domain::exposure::Visibility;
+use crate::domain::identity::EntityId;
 use crate::domain::runtime::{ObservedRuntimeState, RuntimeState};
 use std::io;
 
@@ -22,6 +23,12 @@ pub(crate) fn invalid_text_value(column: usize, field: &str, value: &str) -> rus
             format!("invalid {field}: {value}"),
         )),
     )
+}
+
+// Hydrates one identifier column, rejecting text outside the current
+// store-generated format with column context.
+pub(crate) fn entity_id<E: EntityId>(column: usize, value: &str) -> rusqlite::Result<E> {
+    E::parse(value).map_err(|_| invalid_text_value(column, E::FIELD_NAME, value))
 }
 
 pub(crate) fn visibility_value(value: Visibility) -> &'static str {

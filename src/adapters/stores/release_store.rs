@@ -3,6 +3,7 @@ use std::io;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use thiserror::Error;
 
+use crate::adapters::stores::persistence::{entity_id, invalid_text_value};
 use crate::domain::identity::{ApplicationId, ReleaseId};
 use crate::domain::release::{OciArtifact, Release};
 
@@ -24,12 +25,14 @@ pub enum ReleaseStoreError {
 
 // Allocates a Release ID beside its digest-uniqueness check in the same transaction.
 pub(crate) fn generate_id(connection: &Connection) -> Result<ReleaseId, ReleaseStoreError> {
-    connection
+    let value = connection
         .query_row("SELECT lower(hex(randomblob(16)))", [], |row| {
             row.get::<_, String>(0)
         })
-        .map(ReleaseId::from)
-        .map_err(|source| ReleaseStoreError::Persistence { source })
+        .map_err(|source| ReleaseStoreError::Persistence { source })?;
+    ReleaseId::new(&value).map_err(|_| ReleaseStoreError::Persistence {
+        source: invalid_text_value(0, "release id", &value),
+    })
 }
 
 // Lists image references for the Releases selected by each Application's active Deployment.
@@ -104,8 +107,8 @@ pub(crate) fn load_release_by_digest(
                             )
                         })?;
                 Ok(Release {
-                    id: ReleaseId::from(row.get::<_, String>(0)?),
-                    application_id: ApplicationId::from(row.get::<_, String>(1)?),
+                    id: entity_id(0, &row.get::<_, String>(0)?)?,
+                    application_id: entity_id(1, &row.get::<_, String>(1)?)?,
                     artifact,
                     created_at: row.get(5)?,
                 })
@@ -134,8 +137,8 @@ pub(crate) fn load_release_by_id(
                 let digest = row.get::<_, String>(4)?;
                 let artifact = artifact_from_values(&reference, &repository, &digest).map_err(|source| rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(io::Error::new(io::ErrorKind::InvalidData, source))))?;
                 Ok(Release {
-                    id: ReleaseId::from(row.get::<_, String>(0)?),
-                    application_id: ApplicationId::from(row.get::<_, String>(1)?),
+                    id: entity_id(0, &row.get::<_, String>(0)?)?,
+                    application_id: entity_id(1, &row.get::<_, String>(1)?)?,
                     artifact,
                     created_at: row.get(5)?,
                 })
@@ -174,7 +177,7 @@ mod tests {
         let connection = database::open(Path::new(":memory:")).unwrap();
         let error = load_release_by_digest(
             &connection,
-            &ApplicationId::from("application-id"),
+            &ApplicationId::new("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
             "sha256:missing",
         )
         .unwrap_err();
@@ -184,7 +187,7 @@ mod tests {
             ReleaseStoreError::NotFoundByArtifact {
                 application_id,
                 image_digest,
-            } if application_id == "application-id" && image_digest == "sha256:missing"
+            } if application_id == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" && image_digest == "sha256:missing"
         ));
     }
 }

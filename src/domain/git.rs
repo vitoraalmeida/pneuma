@@ -3,120 +3,66 @@ use std::fmt;
 use std::path::{Component, Path};
 use thiserror::Error;
 
-// Git-domain concepts only: how an application's source repository is
-// classified and addressed, which manifest path inside a checkout is safe to
-// read, and what a full commit identity looks like. No TOML parsing and no
-// application lifecycle rules live here; those belong to the manifest boundary
-// and the owning entities.
-
-// Classifies a Git location by transport prefix so adapters choose between a
-// local filesystem checkout and a remote clone without re-parsing the location.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RepositoryKind {
-    Local,
-    Remote,
-}
-
-impl RepositoryKind {
-    // Classifies the Git forms accepted by import and branch resolution.
-    pub fn from_location(location: &str) -> Self {
-        if location.contains("://") || location.starts_with("git@") {
-            Self::Remote
-        } else {
-            Self::Local
-        }
-    }
-}
+// Git-domain concepts only: how an application's remote source repository is
+// addressed, which manifest path inside a checkout is safe to read, and what a
+// full commit identity looks like. No TOML parsing and no application
+// lifecycle rules live here; those belong to the manifest boundary and the
+// owning entities.
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-// Couples the persisted Git kind with the only location form valid for that kind.
-pub enum ApplicationSource {
-    Local {
-        repository_path: String,
-        default_branch: Option<String>,
-        manifest_path: RelativeManifestPath,
-    },
-    Remote {
-        repository_url: String,
-        default_branch: Option<String>,
-        manifest_path: RelativeManifestPath,
-    },
+// The one supported source shape: a validated remote Git repository with its
+// checkout defaults. Local paths are not a supported import source.
+pub struct ApplicationSource {
+    repository_url: String,
+    default_branch: Option<String>,
+    manifest_path: RelativeManifestPath,
 }
 
 impl ApplicationSource {
     pub fn new(
-        kind: RepositoryKind,
-        location: &str,
+        repository_url: &str,
         default_branch: Option<String>,
         manifest_path: RelativeManifestPath,
     ) -> Result<Self, InvalidApplicationSource> {
-        if location.is_empty()
-            || location.trim() != location
-            || kind != RepositoryKind::from_location(location)
-        {
-            return Err(InvalidApplicationSource);
+        if !is_remote_git_location(repository_url) {
+            return Err(InvalidApplicationSource {
+                repository_url: repository_url.to_owned(),
+            });
         }
-        Ok(match kind {
-            RepositoryKind::Local => Self::Local {
-                repository_path: location.to_owned(),
-                default_branch,
-                manifest_path,
-            },
-            RepositoryKind::Remote => Self::Remote {
-                repository_url: location.to_owned(),
-                default_branch,
-                manifest_path,
-            },
+        Ok(Self {
+            repository_url: repository_url.to_owned(),
+            default_branch,
+            manifest_path,
         })
     }
 
-    pub(crate) fn from_location(
-        location: &str,
-        default_branch: Option<String>,
-        manifest_path: RelativeManifestPath,
-    ) -> Result<Self, InvalidApplicationSource> {
-        Self::new(
-            RepositoryKind::from_location(location),
-            location,
-            default_branch,
-            manifest_path,
-        )
-    }
-
-    pub fn repository_kind(&self) -> RepositoryKind {
-        match self {
-            Self::Local { .. } => RepositoryKind::Local,
-            Self::Remote { .. } => RepositoryKind::Remote,
-        }
-    }
-
-    pub fn repository_location(&self) -> &str {
-        match self {
-            Self::Local {
-                repository_path, ..
-            } => repository_path,
-            Self::Remote { repository_url, .. } => repository_url,
-        }
+    pub fn repository_url(&self) -> &str {
+        &self.repository_url
     }
 
     pub fn default_branch(&self) -> Option<&str> {
-        match self {
-            Self::Local { default_branch, .. } | Self::Remote { default_branch, .. } => {
-                default_branch.as_deref()
-            }
-        }
+        self.default_branch.as_deref()
     }
 
     pub fn manifest_path(&self) -> &RelativeManifestPath {
-        match self {
-            Self::Local { manifest_path, .. } | Self::Remote { manifest_path, .. } => manifest_path,
-        }
+        &self.manifest_path
     }
 }
 
 #[derive(Debug, PartialEq, Eq, Error)]
-#[error("invalid application source")]
-pub struct InvalidApplicationSource;
+#[error("invalid application source `{repository_url}`: expected a remote Git URL")]
+pub struct InvalidApplicationSource {
+    pub repository_url: String,
+}
+
+// Classifies the Git forms accepted by import and branch resolution: transport
+// URLs and scp-like `git@host:path` forms are remote; everything else
+// (including local paths) is not a supported source.
+pub fn is_remote_git_location(location: &str) -> bool {
+    !location.is_empty()
+        && location.trim() == location
+        && (location.contains("://") || location.starts_with("git@"))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelativeManifestPath(String);
@@ -193,7 +139,7 @@ pub struct InvalidCommitSha {
 
 #[cfg(test)]
 mod tests {
-    use super::{ApplicationSource, CommitSha, RelativeManifestPath, RepositoryKind};
+    use super::{ApplicationSource, CommitSha, RelativeManifestPath, is_remote_git_location};
 
     fn manifest_path() -> RelativeManifestPath {
         RelativeManifestPath::new("deploy/pneuma.toml").expect("test path is valid")
@@ -201,69 +147,47 @@ mod tests {
 
     #[test]
     fn classifies_locations_by_transport_prefix() {
-        assert_eq!(
-            RepositoryKind::from_location("https://example.test/application.git"),
-            RepositoryKind::Remote
-        );
-        assert_eq!(
-            RepositoryKind::from_location("git@example.test:team/application.git"),
-            RepositoryKind::Remote
-        );
-        assert_eq!(
-            RepositoryKind::from_location("/srv/checkouts/application"),
-            RepositoryKind::Local
-        );
-        assert_eq!(RepositoryKind::from_location("."), RepositoryKind::Local);
+        assert!(is_remote_git_location(
+            "https://example.test/application.git"
+        ));
+        assert!(is_remote_git_location(
+            "git@example.test:team/application.git"
+        ));
+        assert!(!is_remote_git_location("/srv/checkouts/application"));
+        assert!(!is_remote_git_location("."));
+        assert!(!is_remote_git_location(""));
+        assert!(!is_remote_git_location(
+            " https://example.test/application.git"
+        ));
     }
 
     #[test]
-    fn builds_local_and_remote_sources_preserving_the_supplied_fields() {
-        let remote = ApplicationSource::new(
-            RepositoryKind::Remote,
+    fn builds_a_remote_source_preserving_the_supplied_fields() {
+        let source = ApplicationSource::new(
             "https://example.test/application.git",
             Some("main".to_owned()),
             manifest_path(),
         )
         .expect("remote source is valid");
-        assert_eq!(remote.repository_kind(), RepositoryKind::Remote);
         assert_eq!(
-            remote.repository_location(),
+            source.repository_url(),
             "https://example.test/application.git"
         );
-        assert_eq!(remote.default_branch(), Some("main"));
-        assert_eq!(remote.manifest_path().as_str(), "deploy/pneuma.toml");
-
-        let local = ApplicationSource::new(
-            RepositoryKind::Local,
-            "/srv/checkouts/application",
-            None,
-            manifest_path(),
-        )
-        .expect("local source is valid");
-        assert_eq!(local.repository_kind(), RepositoryKind::Local);
-        assert_eq!(local.repository_location(), "/srv/checkouts/application");
-        assert_eq!(local.default_branch(), None);
+        assert_eq!(source.default_branch(), Some("main"));
+        assert_eq!(source.manifest_path().as_str(), "deploy/pneuma.toml");
     }
 
     #[test]
-    fn rejects_empty_untrimmed_or_kind_mismatched_locations() {
-        for (kind, location) in [
-            (RepositoryKind::Local, ""),
-            (RepositoryKind::Local, "/srv/checkouts/application "),
-            (
-                RepositoryKind::Local,
-                "https://example.test/application.git",
-            ),
-            (RepositoryKind::Remote, "/srv/checkouts/application"),
-            (
-                RepositoryKind::Remote,
-                " https://example.test/application.git",
-            ),
+    fn rejects_local_paths_and_untrimmed_locations() {
+        for location in [
+            "",
+            "/srv/checkouts/application",
+            "/srv/checkouts/application ",
+            ".",
+            "git@example.test:team/application.git ",
         ] {
-            assert!(
-                ApplicationSource::new(kind, location, None, manifest_path()).is_err(),
-                "{kind:?} with {location:?}"
-            );
+            let error = ApplicationSource::new(location, None, manifest_path()).unwrap_err();
+            assert_eq!(error.repository_url, location, "{location:?}");
         }
     }
 

@@ -435,7 +435,7 @@ mod tests {
         let version = ExposureConfigurationVersion::new("v1").unwrap();
         assert!(
             ConfirmedRoute::new(
-                RuntimeInstanceId::from("runtime-1"),
+                RuntimeInstanceId::new("11111111111111111111111111111111").unwrap(),
                 version.clone(),
                 String::new()
             )
@@ -443,19 +443,22 @@ mod tests {
         );
         assert!(
             ConfirmedRoute::new(
-                RuntimeInstanceId::from("runtime-1"),
+                RuntimeInstanceId::new("11111111111111111111111111111111").unwrap(),
                 version.clone(),
                 " 2026-08-20 00:00:00".to_owned()
             )
             .is_err()
         );
         let route = ConfirmedRoute::new(
-            RuntimeInstanceId::from("runtime-1"),
+            RuntimeInstanceId::new("11111111111111111111111111111111").unwrap(),
             version,
             "2026-08-20 00:00:00".to_owned(),
         )
         .expect("route with a trimmed timestamp is valid");
-        assert_eq!(route.runtime_id(), &RuntimeInstanceId::from("runtime-1"));
+        assert_eq!(
+            route.runtime_id(),
+            &RuntimeInstanceId::new("11111111111111111111111111111111").unwrap()
+        );
         assert_eq!(route.materialized_at(), "2026-08-20 00:00:00");
     }
 }

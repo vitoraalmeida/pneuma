@@ -2,10 +2,9 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use pneuma::domain::application::{ApplicationName, ApplicationSummary};
-use pneuma::domain::deployment::{
-    DeploymentFailureEvidence, DeploymentHistory, DeploymentLifecycle,
-};
+use pneuma::domain::deployment::{DeploymentHistory, DeploymentLifecycle};
 use pneuma::domain::exposure::Visibility;
+use pneuma::domain::git::CommitSha;
 use pneuma::domain::system::System;
 use pneuma::use_cases::application::RuntimeObservation;
 use pneuma::use_cases::deployment::DeploymentResult;
@@ -74,20 +73,15 @@ pub(crate) fn deployment_history(
             .deployment
             .source_revision
             .as_ref()
-            .map_or("-", pneuma::domain::deployment::SourceRevision::as_str);
+            .map_or("-", CommitSha::as_str);
         let (finished_at, failure) = match &deployment.deployment.lifecycle {
             DeploymentLifecycle::Succeeded { finished_at } => {
                 (finished_at.as_str(), "-".to_owned())
             }
-            DeploymentLifecycle::Failed {
-                evidence: DeploymentFailureEvidence::Complete(failure),
-            } => (
+            DeploymentLifecycle::Failed { failure } => (
                 failure.finished_at.as_str(),
                 format!("{}:{}:{}", failure.code, failure.stage, failure.message),
             ),
-            DeploymentLifecycle::Failed {
-                evidence: DeploymentFailureEvidence::Incomplete,
-            } => ("-", "incomplete".to_owned()),
             DeploymentLifecycle::Pending
             | DeploymentLifecycle::Starting
             | DeploymentLifecycle::Verifying

@@ -39,13 +39,13 @@ fn reports_the_actual_missing_application_identifier() {
     )
     .unwrap();
 
-    let application_id = ApplicationId::from("missing-app");
+    let application_id = ApplicationId::new("22222222222222222222222222222222").unwrap();
     let error = create_release(&mut connection, &application_id, &artifact).unwrap_err();
 
     assert!(matches!(
         error,
         CreateReleaseError::ApplicationNotFound { application_id }
-            if application_id == "missing-app"
+            if application_id == "22222222222222222222222222222222"
     ));
 }
 

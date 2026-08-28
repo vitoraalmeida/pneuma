@@ -1,5 +1,6 @@
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
+use crate::adapters::stores::persistence::entity_id;
 use crate::domain::identity::SystemId;
 use crate::domain::system::System;
 use crate::domain::system::SystemName;
@@ -9,9 +10,11 @@ pub(crate) fn create_or_load(
     name: &SystemName,
     description: Option<&str>,
 ) -> Result<System, rusqlite::Error> {
-    let id: String =
-        transaction.query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))?;
-    transaction.execute("INSERT INTO systems (id, name, description, created_at) VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP) ON CONFLICT(name) DO NOTHING", params![id, name.as_str(), description])?;
+    let value = transaction.query_row("SELECT lower(hex(randomblob(16)))", [], |row| {
+        row.get::<_, String>(0)
+    })?;
+    let id: SystemId = entity_id(0, &value)?;
+    transaction.execute("INSERT INTO systems (id, name, description, created_at) VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP) ON CONFLICT(name) DO NOTHING", params![id.as_str(), name.as_str(), description])?;
     transaction.query_row(
         "SELECT id, name, description FROM systems WHERE name = ?1",
         [name.as_str()],
@@ -42,7 +45,7 @@ pub(crate) fn load_by_name(
 
 fn map_system(row: &rusqlite::Row<'_>) -> rusqlite::Result<System> {
     Ok(System {
-        id: SystemId::from(row.get::<_, String>(0)?),
+        id: entity_id(0, &row.get::<_, String>(0)?)?,
         name: SystemName::new(&row.get::<_, String>(1)?).map_err(|error| {
             rusqlite::Error::FromSqlConversionFailure(
                 1,
@@ -112,7 +115,25 @@ mod tests {
         connection
             .execute(
                 "INSERT INTO systems (id, name, description, created_at)
-                 VALUES ('system-id', 'Not A Valid Name', NULL, 'now')",
+                 VALUES ('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'Not A Valid Name', NULL, 'now')",
+                params![],
+            )
+            .unwrap();
+
+        let error = list(&connection).unwrap_err();
+        assert!(matches!(
+            error,
+            rusqlite::Error::FromSqlConversionFailure(_, _, _)
+        ));
+    }
+
+    #[test]
+    fn rejects_a_persisted_system_id_outside_the_current_format() {
+        let connection = database::open(Path::new(":memory:")).unwrap();
+        connection
+            .execute(
+                "INSERT INTO systems (id, name, description, created_at)
+                 VALUES ('legacy system id', 'team', NULL, 'now')",
                 params![],
             )
             .unwrap();

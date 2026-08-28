@@ -3,7 +3,7 @@ use thiserror::Error;
 
 use crate::adapters::stores::PersistenceOutcome;
 use crate::adapters::stores::persistence::{
-    invalid_text_value, outcome, visibility_from_value, visibility_value,
+    entity_id, invalid_text_value, outcome, visibility_from_value, visibility_value,
 };
 use crate::domain::exposure::{
     ConfirmedRoute, DomainName, Exposure, ExposureConfigurationVersion, ExposureDiagnostic,
@@ -138,7 +138,8 @@ pub fn load_exposure(
             })?;
             Some(
                 ConfirmedRoute::new(
-                    RuntimeInstanceId::from(runtime_id),
+                    entity_id(2, &runtime_id)
+                        .map_err(|source| ExposureStoreError::Persistence { source })?,
                     configuration_version,
                     materialized_at,
                 )
@@ -312,6 +313,13 @@ fn exposure_materialization_state_from_value(value: &str) -> Option<ExposureMate
 mod tests {
     use super::*;
 
+    const APP_ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const RUNTIME_ID: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    fn application_id() -> ApplicationId {
+        ApplicationId::new(APP_ID).unwrap()
+    }
+
     fn connection_with_exposure(visibility: &str, state: &str) -> Connection {
         let connection = Connection::open_in_memory().unwrap();
         connection
@@ -334,7 +342,7 @@ mod tests {
             .execute(
                 &format!(
                     "INSERT INTO exposures (application_id, desired_visibility, domain, created_at, updated_at, materialization_state)
-                     VALUES ('app', '{visibility}', NULL, '2026-01-01', '2026-01-01', '{state}')"
+                     VALUES ('{APP_ID}', '{visibility}', NULL, '2026-01-01', '2026-01-01', '{state}')"
                 ),
                 [],
             )
@@ -349,7 +357,7 @@ mod tests {
         assert_eq!(
             begin_internal_exposure_reconciliation(
                 &connection,
-                &ApplicationId::from("app"),
+                &application_id(),
                 ExposureMaterializationState::Active,
             )
             .unwrap(),
@@ -358,7 +366,7 @@ mod tests {
         assert_eq!(
             begin_internal_exposure_reconciliation(
                 &connection,
-                &ApplicationId::from("app"),
+                &application_id(),
                 ExposureMaterializationState::NotMaterialized,
             )
             .unwrap(),
@@ -367,7 +375,7 @@ mod tests {
         assert_eq!(
             begin_internal_exposure_reconciliation(
                 &connection,
-                &ApplicationId::from("app"),
+                &application_id(),
                 ExposureMaterializationState::NotMaterialized,
             )
             .unwrap(),
@@ -380,15 +388,17 @@ mod tests {
         let connection = connection_with_exposure("internal", "removing");
         connection
             .execute(
-                "UPDATE exposures SET active_runtime_id = 'runtime',
-                 configuration_version = 'route bytes\n', last_materialized_at = '2026-01-01'",
+                &format!(
+                    "UPDATE exposures SET active_runtime_id = '{RUNTIME_ID}',
+                     configuration_version = 'route bytes\n', last_materialized_at = '2026-01-01'"
+                ),
                 [],
             )
             .unwrap();
 
         let transaction = connection.unchecked_transaction().unwrap();
         assert_eq!(
-            complete_internal_exposure_change(&transaction, &ApplicationId::from("app")).unwrap(),
+            complete_internal_exposure_change(&transaction, &application_id()).unwrap(),
             PersistenceOutcome::Updated
         );
         transaction.commit().unwrap();
@@ -405,7 +415,7 @@ mod tests {
 
         let transaction = connection.unchecked_transaction().unwrap();
         assert_eq!(
-            complete_internal_exposure_change(&transaction, &ApplicationId::from("app")).unwrap(),
+            complete_internal_exposure_change(&transaction, &application_id()).unwrap(),
             PersistenceOutcome::Stale
         );
     }
@@ -418,8 +428,8 @@ mod tests {
         assert_eq!(
             complete_public_exposure_change(
                 &transaction,
-                &ApplicationId::from("app"),
-                &RuntimeInstanceId::from("runtime"),
+                &application_id(),
+                &RuntimeInstanceId::new(RUNTIME_ID).unwrap(),
                 &ExposureConfigurationVersion::new("route bytes\n").unwrap(),
             )
             .unwrap(),
@@ -437,8 +447,8 @@ mod tests {
         assert_eq!(
             complete_public_exposure_change(
                 &transaction,
-                &ApplicationId::from("app"),
-                &RuntimeInstanceId::from("runtime"),
+                &application_id(),
+                &RuntimeInstanceId::new(RUNTIME_ID).unwrap(),
                 &ExposureConfigurationVersion::new("route bytes\n").unwrap(),
             )
             .unwrap(),
@@ -454,7 +464,7 @@ mod tests {
         assert_eq!(
             record_reconciliation_exposure_failure(
                 &connection,
-                &ApplicationId::from("app"),
+                &application_id(),
                 Visibility::Internal,
                 ExposureMaterializationState::Removing,
                 ExposureMaterializationState::Diverged,
@@ -466,14 +476,14 @@ mod tests {
 
         begin_internal_exposure_reconciliation(
             &connection,
-            &ApplicationId::from("app"),
+            &application_id(),
             ExposureMaterializationState::NotMaterialized,
         )
         .unwrap();
         assert_eq!(
             record_reconciliation_exposure_failure(
                 &connection,
-                &ApplicationId::from("app"),
+                &application_id(),
                 Visibility::Internal,
                 ExposureMaterializationState::Removing,
                 ExposureMaterializationState::Diverged,

@@ -39,7 +39,9 @@ fn returns_deployments_ordered_newest_first() {
              SET status = 'failed',
                  requested_at = '2026-08-07 10:00:00',
                  finished_at = '2026-08-07 10:01:00',
-                 failure_code = 'test_failure',
+                 failure_code = 'health_check_failed',
+                 failure_stage = 'verifying',
+                 failure_message = 'candidate unhealthy',
                  updated_at = CURRENT_TIMESTAMP
              WHERE id = ?1",
             [first_deployment.id.as_str()],
@@ -82,9 +84,8 @@ fn returns_deployments_ordered_newest_first() {
     assert_eq!(deployments[1].deployment.status(), DeploymentStatus::Failed);
     assert!(matches!(
         deployments[1].deployment.lifecycle,
-        pneuma::domain::deployment::DeploymentLifecycle::Failed {
-            evidence: pneuma::domain::deployment::DeploymentFailureEvidence::Incomplete
-        }
+        pneuma::domain::deployment::DeploymentLifecycle::Failed { ref failure }
+            if failure.code == pneuma::domain::deployment::DeploymentFailureCode::HealthCheck
     ));
 }
 

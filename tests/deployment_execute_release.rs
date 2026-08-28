@@ -420,7 +420,7 @@ fn public_deploy_succeeds_with_caddy_and_external_health() {
     assert!(matches!(
         pneuma::adapters::stores::exposure_store::load_exposure(
             &connection,
-            &pneuma::domain::identity::ApplicationId::from(app_id.as_str()),
+            &pneuma::domain::identity::ApplicationId::new(app_id.as_str()).unwrap(),
         ),
         Ok(Some(exposure)) if matches!(
             exposure.materialization(),

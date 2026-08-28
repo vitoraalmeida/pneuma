@@ -157,7 +157,7 @@ fn persist_failure_if_needed(
         progress.failure_persisted(deployment_id.as_str(), failed.code.as_str());
         return None;
     }
-    match fail_deployment(connection, deployment_id, failed.code.as_str(), failure) {
+    match fail_deployment(connection, deployment_id, failed.code, failure) {
         Ok(_) => {
             progress.failure_persisted(deployment_id.as_str(), failed.code.as_str());
             None
@@ -292,11 +292,11 @@ mod tests {
     }
 
     fn runtime_id() -> RuntimeInstanceId {
-        RuntimeInstanceId::from("runtime-1")
+        RuntimeInstanceId::new("11111111111111111111111111111111").unwrap()
     }
 
     fn deployment_id() -> DeploymentId {
-        DeploymentId::from("deployment-1")
+        DeploymentId::new("22222222222222222222222222222222").unwrap()
     }
 
     fn transition_error() -> TransitionDeploymentError {
@@ -419,7 +419,7 @@ mod tests {
         // persisted string, and the rendered text remains the stable one.
         assert_eq!(code, DeploymentFailureCode::RuntimeStart);
         assert_eq!(code.as_str(), "runtime_start_failed");
-        assert_eq!(deployment_id, "deployment-1");
+        assert_eq!(deployment_id, "22222222222222222222222222222222");
     }
 
     #[test]
@@ -442,20 +442,21 @@ mod tests {
             crate::adapters::database::open(std::path::Path::new(":memory:")).unwrap();
         connection
             .execute_batch(
-                "INSERT INTO applications (
-                    id, name, desired_runtime_state, spec_version, created_at, updated_at
-                 ) VALUES ('app-1', 'app', 'stopped', 1, 'now', 'now');
+                "INSERT INTO systems (id, name, created_at) VALUES ('44444444444444444444444444444444', 'team', 'now');
+                 INSERT INTO applications (
+                    id, system_id, name, desired_runtime_state, created_at, updated_at
+                 ) VALUES ('11111111111111111111111111111111', '44444444444444444444444444444444', 'app', 'stopped', 'now', 'now');
                  INSERT INTO releases (
                     id, application_id, image_repository, image_digest, image_reference, created_at
                  ) VALUES (
-                    'release-1', 'app-1', 'registry.example/app',
+                    '55555555555555555555555555555555', '11111111111111111111111111111111', 'registry.example/app',
                     'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
                     'registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
                     'now'
                  );
                  INSERT INTO deployments (
                     id, application_id, release_id, type, status, requested_at
-                 ) VALUES ('deployment-1', 'app-1', 'release-1', 'deploy', 'starting', 'now');",
+                 ) VALUES ('22222222222222222222222222222222', '11111111111111111111111111111111', '55555555555555555555555555555555', 'deploy', 'starting', 'now');",
             )
             .unwrap();
 
@@ -478,7 +479,7 @@ mod tests {
         assert!(recorded.is_none(), "no recording divergence is expected");
         let (status, failure_code): (String, Option<String>) = connection
             .query_row(
-                "SELECT status, failure_code FROM deployments WHERE id = 'deployment-1'",
+                "SELECT status, failure_code FROM deployments WHERE id = '22222222222222222222222222222222'",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
@@ -498,7 +499,7 @@ mod tests {
         assert!(recorded.is_none(), "no recording divergence is expected");
         let (status, failure_code): (String, Option<String>) = connection
             .query_row(
-                "SELECT status, failure_code FROM deployments WHERE id = 'deployment-1'",
+                "SELECT status, failure_code FROM deployments WHERE id = '22222222222222222222222222222222'",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )

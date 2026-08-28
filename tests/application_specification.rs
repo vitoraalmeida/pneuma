@@ -7,9 +7,7 @@ use pneuma::adapters::stores::application_store::ApplicationStoreError;
 use pneuma::adapters::stores::exposure_store;
 use pneuma::domain::application::DesiredRuntimeState;
 use pneuma::domain::exposure::{ExposureMaterialization, Visibility};
-use pneuma::domain::git::RepositoryKind;
 use pneuma::domain::identity::{ApplicationId, DeploymentId};
-use pneuma::domain::release::DeliveryType;
 use pneuma::use_cases::application::import_application;
 
 #[test]
@@ -28,10 +26,9 @@ fn loads_named_source_delivery_runtime_and_health_configuration() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        source.repository_location(),
+        source.repository_url(),
         "https://github.com/vitoraalmeida/vitoralmeida.tech"
     );
-    assert_eq!(source.repository_kind(), RepositoryKind::Remote);
     assert_eq!(source.default_branch(), None);
     assert_eq!(
         source.manifest_path().as_str(),
@@ -41,7 +38,6 @@ fn loads_named_source_delivery_runtime_and_health_configuration() {
     let delivery = application_store::load_delivery_specification(&connection, &application.id)
         .unwrap()
         .unwrap();
-    assert_eq!(delivery.delivery_type(), DeliveryType::Oci);
     assert_eq!(
         delivery.image_repository().as_str(),
         "ghcr.io/vitoraalmeida/vitoralmeida.tech"
@@ -132,7 +128,7 @@ fn rejects_invalid_persisted_exposure_evidence_with_context() {
     connection
         .execute(
             "UPDATE exposures
-             SET materialization_state = 'not_materialized', active_runtime_id = 'prior-runtime',
+             SET materialization_state = 'not_materialized', active_runtime_id = '77777777777777777777777777777777',
                  configuration_version = 'route', last_materialized_at = '2026-08-20 00:00:00'",
             [],
         )
@@ -160,7 +156,7 @@ fn rejects_invalid_persisted_exposure_evidence_with_context() {
     connection
         .execute(
             "UPDATE exposures
-             SET last_error_message = 'route failed', active_runtime_id = 'prior-runtime',
+             SET last_error_message = 'route failed', active_runtime_id = '77777777777777777777777777777777',
                  configuration_version = 'legacy route\n', last_materialized_at = '2026-08-20 00:00:00'",
             [],
         )
@@ -173,7 +169,10 @@ fn rejects_invalid_persisted_exposure_evidence_with_context() {
             confirmed_route: Some(route),
             diagnostic,
         } => {
-            assert_eq!(route.runtime_id().as_str(), "prior-runtime");
+            assert_eq!(
+                route.runtime_id().as_str(),
+                "77777777777777777777777777777777"
+            );
             assert_eq!(route.configuration_version().as_str(), "legacy route\n");
             assert_eq!(route.materialized_at(), "2026-08-20 00:00:00");
             assert_eq!(diagnostic.code(), "failed");
@@ -227,7 +226,7 @@ fn activates_a_succeeded_deployment_of_the_application_with_running_intent() {
     seed_deployment(
         &connection,
         &application.id,
-        "succeeded-deployment",
+        SUCCEEDED_DEPLOYMENT_ID,
         "succeeded",
     );
 
@@ -235,7 +234,7 @@ fn activates_a_succeeded_deployment_of_the_application_with_running_intent() {
     let outcome = application_store::activate_deployment(
         &transaction,
         &application.id,
-        &DeploymentId::from("succeeded-deployment"),
+        &DeploymentId::new(SUCCEEDED_DEPLOYMENT_ID).unwrap(),
     )
     .unwrap();
     transaction.commit().unwrap();
@@ -247,7 +246,7 @@ fn activates_a_succeeded_deployment_of_the_application_with_running_intent() {
             .active_deployment_id
             .as_ref()
             .map(DeploymentId::as_str),
-        Some("succeeded-deployment")
+        Some(SUCCEEDED_DEPLOYMENT_ID)
     );
     assert_eq!(stored.desired_runtime_state, DesiredRuntimeState::Running);
 }
@@ -260,34 +259,34 @@ fn rejects_foreign_or_unsucceeded_activation_without_changing_application_state(
     seed_deployment(
         &connection,
         &application.id,
-        "pending-deployment",
+        PENDING_DEPLOYMENT_ID,
         "verifying",
     );
     connection
         .execute(
             "INSERT INTO applications (
-                id, name, desired_runtime_state, spec_version, created_at, updated_at
-             ) VALUES ('other-application', 'other-application', 'stopped', 1, 'now', 'now')",
+                id, name, desired_runtime_state, created_at, updated_at
+             ) VALUES ('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'other-application', 'stopped', 'now', 'now')",
             [],
         )
         .unwrap();
     seed_deployment(
         &connection,
-        &ApplicationId::from("other-application"),
-        "foreign-deployment",
+        &ApplicationId::new("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
+        FOREIGN_DEPLOYMENT_ID,
         "succeeded",
     );
 
-    for deployment in [
-        "pending-deployment",
-        "foreign-deployment",
-        "missing-deployment",
+    for (deployment, deployment_id) in [
+        ("pending", PENDING_DEPLOYMENT_ID),
+        ("foreign", FOREIGN_DEPLOYMENT_ID),
+        ("missing", MISSING_DEPLOYMENT_ID),
     ] {
         let transaction = connection.transaction().unwrap();
         let outcome = application_store::activate_deployment(
             &transaction,
             &application.id,
-            &DeploymentId::from(deployment),
+            &DeploymentId::new(deployment_id).unwrap(),
         )
         .unwrap();
         transaction.commit().unwrap();
@@ -302,6 +301,11 @@ fn rejects_foreign_or_unsucceeded_activation_without_changing_application_state(
     assert_eq!(stored.active_deployment_id, None);
     assert_eq!(stored.desired_runtime_state, DesiredRuntimeState::Stopped);
 }
+
+const SUCCEEDED_DEPLOYMENT_ID: &str = "11111111111111111111111111111111";
+const PENDING_DEPLOYMENT_ID: &str = "22222222222222222222222222222222";
+const FOREIGN_DEPLOYMENT_ID: &str = "33333333333333333333333333333333";
+const MISSING_DEPLOYMENT_ID: &str = "44444444444444444444444444444444";
 
 fn seed_deployment(
     connection: &rusqlite::Connection,

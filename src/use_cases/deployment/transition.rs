@@ -4,8 +4,8 @@ use thiserror::Error;
 use crate::adapters::stores::PersistenceOutcome;
 use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
 use crate::domain::deployment::{
-    DeploymentEvent, DeploymentFailure, DeploymentStatus, InvalidDeploymentFailure,
-    InvalidDeploymentTransition,
+    DeploymentEvent, DeploymentFailure, DeploymentFailureCode, DeploymentStatus,
+    InvalidDeploymentFailure, InvalidDeploymentTransition,
 };
 use crate::domain::identity::DeploymentId;
 
@@ -117,12 +117,9 @@ pub fn advance_deployment(
 pub fn fail_deployment(
     connection: &mut Connection,
     deployment_id: &DeploymentId,
-    code: &str,
+    code: DeploymentFailureCode,
     message: &str,
 ) -> Result<DeploymentFailure, TransitionDeploymentError> {
-    DeploymentFailure::validate_details(code, DeploymentStatus::Pending, message)
-        .map_err(|source| TransitionDeploymentError::InvalidFailure { source })?;
-
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|source| TransitionDeploymentError::Persistence { source })?;
@@ -133,7 +130,7 @@ pub fn fail_deployment(
             actual: stage,
         });
     }
-    DeploymentFailure::validate_details(code, stage, message)
+    DeploymentFailure::validate_details(stage, message)
         .map_err(|source| TransitionDeploymentError::InvalidFailure { source })?;
 
     let failure = deployment_store::mark_failed(&transaction, deployment_id, stage, code, message)?;

@@ -4,8 +4,8 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::adapters::stores::PersistenceOutcome;
 use crate::adapters::stores::persistence::{
-    invalid_text_value, observed_runtime_state_from_value, observed_runtime_state_value, outcome,
-    runtime_state_from_value, runtime_state_value,
+    entity_id, invalid_text_value, observed_runtime_state_from_value, observed_runtime_state_value,
+    outcome, runtime_state_from_value, runtime_state_value,
 };
 use crate::domain::identity::{ApplicationId, DeploymentId, RuntimeInstanceId};
 use crate::domain::runtime::{
@@ -15,11 +15,10 @@ use crate::domain::runtime::{
 
 // Allocates a runtime ID beside endpoint registration in the same SQLite transaction.
 pub(crate) fn generate_id(connection: &Connection) -> Result<RuntimeInstanceId, rusqlite::Error> {
-    connection
-        .query_row("SELECT lower(hex(randomblob(16)))", [], |row| {
-            row.get::<_, String>(0)
-        })
-        .map(RuntimeInstanceId::from)
+    let value = connection.query_row("SELECT lower(hex(randomblob(16)))", [], |row| {
+        row.get::<_, String>(0)
+    })?;
+    entity_id(0, &value)
 }
 
 // Checks whether a non-removed runtime already owns the requested loopback endpoint.
@@ -208,8 +207,8 @@ pub(crate) fn load_previous_runtime(
             [application_id.as_str(), candidate_runtime_id.as_str()],
             |row| {
                 Ok(PreviousRuntime {
-                    runtime_id: RuntimeInstanceId::from(row.get::<_, String>(0)?),
-                    deployment_id: DeploymentId::from(row.get::<_, String>(1)?),
+                    runtime_id: entity_id(0, &row.get::<_, String>(0)?)?,
+                    deployment_id: entity_id(1, &row.get::<_, String>(1)?)?,
                     external_runtime_id: hydrate_container_id(2, &row.get::<_, String>(2)?)?,
                 })
             },
@@ -323,9 +322,9 @@ fn map_runtime_instance(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeInst
     let observed_state_text = row.get::<_, String>(8)?;
 
     Ok(RuntimeInstance {
-        id: RuntimeInstanceId::from(row.get::<_, String>(0)?),
-        application_id: ApplicationId::from(row.get::<_, String>(1)?),
-        deployment_id: DeploymentId::from(row.get::<_, String>(2)?),
+        id: entity_id(0, &row.get::<_, String>(0)?)?,
+        application_id: entity_id(1, &row.get::<_, String>(1)?)?,
+        deployment_id: entity_id(2, &row.get::<_, String>(2)?)?,
         external_runtime_id: hydrate_container_id(3, &row.get::<_, String>(3)?)?,
         state,
         expected_endpoint: ExpectedRuntimeEndpoint::new(SocketAddr::from((
@@ -363,21 +362,33 @@ mod tests {
 
     use super::*;
 
+    const APP_ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const RELEASE_ID: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const DEPLOYMENT_ID: &str = "cccccccccccccccccccccccccccccccc";
+    const RUNTIME_ID: &str = "dddddddddddddddddddddddddddddddd";
+    const OTHER_RUNTIME_ID: &str = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    const SYSTEM_ID: &str = "ffffffffffffffffffffffffffffffff";
+
+    fn runtime_id() -> RuntimeInstanceId {
+        RuntimeInstanceId::new(RUNTIME_ID).unwrap()
+    }
+
     fn seed_deployment_chain(connection: &rusqlite::Connection) {
         connection
-            .execute_batch(
-                "INSERT INTO applications (id, name, desired_runtime_state, spec_version, created_at, updated_at)
-                 VALUES ('app', 'app', 'stopped', 3, 'now', 'now');
+            .execute_batch(&format!(
+                "INSERT INTO systems (id, name, created_at) VALUES ('{SYSTEM_ID}', 'team', 'now');
+                 INSERT INTO applications (id, system_id, name, desired_runtime_state, created_at, updated_at)
+                 VALUES ('{APP_ID}', '{SYSTEM_ID}', 'app', 'stopped', 'now', 'now');
                  INSERT INTO releases (
                     id, application_id, image_repository, image_digest, image_reference, created_at
-                 ) VALUES ('release', 'app', 'registry.example/app',
+                 ) VALUES ('{RELEASE_ID}', '{APP_ID}', 'registry.example/app',
                            'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
                            'registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
                            'now');
                  INSERT INTO deployments (
                     id, application_id, release_id, type, status, requested_at
-                 ) VALUES ('deployment', 'app', 'release', 'deploy', 'starting', 'now');",
-            )
+                 ) VALUES ('{DEPLOYMENT_ID}', '{APP_ID}', '{RELEASE_ID}', 'deploy', 'starting', 'now');"
+            ))
             .unwrap();
     }
 
@@ -391,23 +402,26 @@ mod tests {
             .unwrap();
         connection
             .execute(
-                "INSERT INTO runtime_instances (id, state) VALUES ('starting', 'starting')",
-                [],
+                "INSERT INTO runtime_instances (id, state) VALUES (?1, 'starting')",
+                params![RUNTIME_ID],
             )
             .unwrap();
         connection
             .execute(
-                "INSERT INTO runtime_instances (id, state) VALUES ('invalid', 'invalid')",
-                [],
+                "INSERT INTO runtime_instances (id, state) VALUES (?1, 'invalid')",
+                params![OTHER_RUNTIME_ID],
             )
             .unwrap();
 
         assert_eq!(
-            load_runtime_state(&connection, &RuntimeInstanceId::from("starting")).unwrap(),
+            load_runtime_state(&connection, &runtime_id()).unwrap(),
             Some(RuntimeState::Starting)
         );
         assert!(matches!(
-            load_runtime_state(&connection, &RuntimeInstanceId::from("invalid")),
+            load_runtime_state(
+                &connection,
+                &RuntimeInstanceId::new(OTHER_RUNTIME_ID).unwrap()
+            ),
             Err(rusqlite::Error::FromSqlConversionFailure(_, _, _))
         ));
     }
@@ -437,9 +451,9 @@ mod tests {
         connection
             .execute(
                 "INSERT INTO runtime_instances VALUES
-                 ('runtime', 'application', 'deployment', 'not a container id',
+                 (?1, ?2, ?3, 'not a container id',
                   'running', '127.0.0.1', 30000, 8080, 'running', 'now', NULL, NULL, NULL)",
-                [],
+                params![RUNTIME_ID, APP_ID, DEPLOYMENT_ID],
             )
             .unwrap();
 
@@ -466,14 +480,14 @@ mod tests {
         connection
             .execute(
                 "INSERT INTO runtime_instances (id, external_runtime_id, removed_at)
-                 VALUES ('runtime', 'current', NULL)",
-                [],
+                 VALUES (?1, 'current', NULL)",
+                params![RUNTIME_ID],
             )
             .unwrap();
 
         let outcome = reconcile_external_runtime_id(
             &connection,
-            &RuntimeInstanceId::from("runtime"),
+            &runtime_id(),
             &ContainerId::from("current"),
             &ContainerId::from("replacement"),
         )
@@ -482,7 +496,7 @@ mod tests {
 
         let outcome = reconcile_external_runtime_id(
             &connection,
-            &RuntimeInstanceId::from("runtime"),
+            &runtime_id(),
             &ContainerId::from("current"),
             &ContainerId::from("other"),
         )
@@ -490,8 +504,8 @@ mod tests {
         assert_eq!(outcome, PersistenceOutcome::Stale);
         let recorded: String = connection
             .query_row(
-                "SELECT external_runtime_id FROM runtime_instances WHERE id = 'runtime'",
-                [],
+                "SELECT external_runtime_id FROM runtime_instances WHERE id = ?1",
+                params![RUNTIME_ID],
                 |row| row.get(0),
             )
             .unwrap();
@@ -499,13 +513,13 @@ mod tests {
 
         connection
             .execute(
-                "UPDATE runtime_instances SET removed_at = '2026-01-01' WHERE id = 'runtime'",
-                [],
+                "UPDATE runtime_instances SET removed_at = '2026-01-01' WHERE id = ?1",
+                params![RUNTIME_ID],
             )
             .unwrap();
         let outcome = reconcile_external_runtime_id(
             &connection,
-            &RuntimeInstanceId::from("runtime"),
+            &runtime_id(),
             &ContainerId::from("replacement"),
             &ContainerId::from("next"),
         )
@@ -525,10 +539,10 @@ mod tests {
                     id, application_id, deployment_id, external_runtime_id,
                     state, host_address, host_port, container_port,
                     last_observed_state, last_observed_at, created_at, updated_at
-                 ) VALUES ('runtime', 'app', 'deployment',
+                 ) VALUES (?1, ?2, ?3,
                            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
                            'running', '10.0.0.2', 30001, 8080, 'running', 'now', 'now', 'now')",
-                params![],
+                params![RUNTIME_ID, APP_ID, DEPLOYMENT_ID],
             )
             .unwrap_err();
         assert!(matches!(
@@ -547,10 +561,10 @@ mod tests {
                     id, application_id, deployment_id, external_runtime_id,
                     state, host_address, host_port, container_port,
                     last_observed_state, last_observed_at, created_at, updated_at
-                 ) VALUES ('runtime', 'app', 'deployment',
+                 ) VALUES (?1, ?2, ?3,
                            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
                            'running', '10.0.0.2', 30001, 8080, 'running', 'now', 'now', 'now')",
-                params![],
+                params![RUNTIME_ID, APP_ID, DEPLOYMENT_ID],
             )
             .unwrap();
 
@@ -564,8 +578,8 @@ mod tests {
         // Sanity: the same identity on the loopback address hydrates cleanly.
         connection
             .execute(
-                "UPDATE runtime_instances SET host_address = ?1 WHERE id = 'runtime'",
-                [Ipv4Addr::LOCALHOST.to_string()],
+                "UPDATE runtime_instances SET host_address = ?1 WHERE id = ?2",
+                params![Ipv4Addr::LOCALHOST.to_string(), RUNTIME_ID],
             )
             .unwrap();
         let runtime = load_runtime_by_external_id(

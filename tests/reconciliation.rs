@@ -29,6 +29,7 @@ fn loads_the_active_reconciliation_snapshot_without_writing_sqlite() {
     let database_path = root.join("pneuma.sqlite3");
     let mut connection = database::open(&database_path).unwrap();
     let application_id = "1".repeat(32);
+    let system_id = "5".repeat(32);
     let release_id = "2".repeat(32);
     let deployment_id = "3".repeat(32);
     let runtime_id = "4".repeat(32);
@@ -36,8 +37,9 @@ fn loads_the_active_reconciliation_snapshot_without_writing_sqlite() {
     let external_id = "b".repeat(64);
     connection
         .execute_batch(&format!(
-            "INSERT INTO applications (id, name, desired_runtime_state, spec_version, created_at, updated_at)
-             VALUES ('{application_id}', 'another', 'running', 3, '2026-01-01', '2026-01-01');
+            "INSERT INTO systems (id, name, created_at) VALUES ('{system_id}', 'team', '2026-01-01');
+             INSERT INTO applications (id, system_id, name, desired_runtime_state, created_at, updated_at)
+             VALUES ('{application_id}', '{system_id}', 'another', 'running', '2026-01-01', '2026-01-01');
              INSERT INTO exposures (application_id, desired_visibility, domain, materialization_state, created_at, updated_at)
              VALUES ('{application_id}', 'internal', NULL, 'not_materialized', '2026-01-01', '2026-01-01');
              INSERT INTO releases (id, application_id, image_reference, image_repository, image_digest, created_at)
@@ -75,7 +77,7 @@ fn loads_the_active_reconciliation_snapshot_without_writing_sqlite() {
 #[test]
 fn observes_caddy_fragment_without_creating_it() {
     let root = temporary_directory();
-    let application_id = ApplicationId::from("1".repeat(32));
+    let application_id = ApplicationId::new(&"1".repeat(32)).unwrap();
 
     assert_eq!(
         observe_caddy_fragment(&root, &application_id).unwrap(),
@@ -143,7 +145,7 @@ fn reconcile_cleans_a_verified_candidate_only_after_unit_identity_is_proven() {
         quadlets.join(format!("pneuma-another-{}.container", "3".repeat(32))),
         pneuma::adapters::systemd_quadlet::canonical_unit_contents(
             &pneuma::domain::application::ApplicationName::new("another").unwrap(),
-            &pneuma::domain::identity::DeploymentId::from("3".repeat(32)),
+            &pneuma::domain::identity::DeploymentId::new(&"3".repeat(32)).unwrap(),
             &pneuma::domain::release::OciArtifact::parse(&format!(
                 "registry.example/team/another@{digest}"
             ))
@@ -282,6 +284,7 @@ fn reconcile_preserves_a_proven_prior_route_when_an_activation_was_interrupted()
     let database_path = root.join("pneuma.sqlite3");
     let connection = database::open(&database_path).unwrap();
     let application_id = "1".repeat(32);
+    let system_id = "5".repeat(32);
     let release_id = "2".repeat(32);
     let active_deployment_id = "3".repeat(32);
     let active_runtime_id = "4".repeat(32);
@@ -290,8 +293,9 @@ fn reconcile_preserves_a_proven_prior_route_when_an_activation_was_interrupted()
     let prior_route = "prior canonical route\n";
     connection
         .execute_batch(&format!(
-            "INSERT INTO applications (id, name, desired_runtime_state, spec_version, created_at, updated_at)
-             VALUES ('{application_id}', 'another', 'running', 3, '2026-01-01', '2026-01-01');
+            "INSERT INTO systems (id, name, created_at) VALUES ('{system_id}', 'team', '2026-01-01');
+             INSERT INTO applications (id, system_id, name, desired_runtime_state, created_at, updated_at)
+             VALUES ('{application_id}', '{system_id}', 'another', 'running', '2026-01-01', '2026-01-01');
              INSERT INTO releases (id, application_id, image_reference, image_repository, image_digest, created_at)
              VALUES ('{release_id}', '{application_id}', 'registry.example/team/another@{digest}', 'registry.example/team/another', '{digest}', '2026-01-01');
              INSERT INTO deployments (id, application_id, release_id, type, status, requested_at, started_at, finished_at)
@@ -365,13 +369,15 @@ fn only_nonterminal_deployments_block_reconciliation_dispatch() {
         let database_path = root.join("pneuma.sqlite3");
         let mut connection = database::open(&database_path).unwrap();
         let application_id = "1".repeat(32);
+        let system_id = "5".repeat(32);
         let release_id = "2".repeat(32);
         let deployment_id = "3".repeat(32);
         let digest = format!("sha256:{}", "a".repeat(64));
         connection
             .execute_batch(&format!(
-                "INSERT INTO applications (id, name, desired_runtime_state, spec_version, created_at, updated_at)
-                 VALUES ('{application_id}', 'another', 'running', 3, '2026-01-01', '2026-01-01');
+                "INSERT INTO systems (id, name, created_at) VALUES ('{system_id}', 'team', '2026-01-01');
+                 INSERT INTO applications (id, system_id, name, desired_runtime_state, created_at, updated_at)
+                 VALUES ('{application_id}', '{system_id}', 'another', 'running', '2026-01-01', '2026-01-01');
                  INSERT INTO releases (id, application_id, image_reference, image_repository, image_digest, created_at)
                  VALUES ('{release_id}', '{application_id}', 'registry.example/team/another@{digest}', 'registry.example/team/another', '{digest}', '2026-01-01');
                  INSERT INTO deployments (id, application_id, release_id, type, status, requested_at, started_at)
@@ -397,8 +403,9 @@ fn only_nonterminal_deployments_block_reconciliation_dispatch() {
     let mut connection = database::open(&database_path).unwrap();
     connection
         .execute_batch(
-            "INSERT INTO applications (id, name, desired_runtime_state, spec_version, created_at, updated_at)
-             VALUES ('11111111111111111111111111111111', 'another', 'running', 3, '2026-01-01', '2026-01-01');",
+            "INSERT INTO systems (id, name, created_at) VALUES ('55555555555555555555555555555555', 'team', '2026-01-01');
+             INSERT INTO applications (id, system_id, name, desired_runtime_state, created_at, updated_at)
+             VALUES ('11111111111111111111111111111111', '55555555555555555555555555555555', 'another', 'running', '2026-01-01', '2026-01-01');",
         )
         .unwrap();
 
@@ -432,13 +439,15 @@ fn reconcile_command(root: &std::path::Path, database_path: &std::path::Path) ->
 
 fn seed_interrupted_deployment(connection: &rusqlite::Connection, status: &str, runtime: bool) {
     let application_id = "1".repeat(32);
+    let system_id = "5".repeat(32);
     let release_id = "2".repeat(32);
     let deployment_id = "3".repeat(32);
     let digest = format!("sha256:{}", "a".repeat(64));
     connection
         .execute_batch(&format!(
-            "INSERT INTO applications (id, name, desired_runtime_state, spec_version, created_at, updated_at)
-             VALUES ('{application_id}', 'another', 'running', 3, '2026-01-01', '2026-01-01');
+            "INSERT INTO systems (id, name, created_at) VALUES ('{system_id}', 'team', '2026-01-01');
+             INSERT INTO applications (id, system_id, name, desired_runtime_state, created_at, updated_at)
+             VALUES ('{application_id}', '{system_id}', 'another', 'running', '2026-01-01', '2026-01-01');
              INSERT INTO exposures (application_id, desired_visibility, domain, materialization_state, created_at, updated_at)
              VALUES ('{application_id}', 'public', 'another.example', 'applying', '2026-01-01', '2026-01-01');
              INSERT INTO releases (id, application_id, image_reference, image_repository, image_digest, created_at)

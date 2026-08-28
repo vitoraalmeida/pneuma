@@ -194,7 +194,7 @@ mod tests {
     }
 
     fn runtime_id() -> RuntimeInstanceId {
-        RuntimeInstanceId::from("runtime-1")
+        RuntimeInstanceId::new("11111111111111111111111111111111").unwrap()
     }
 
     #[test]

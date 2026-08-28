@@ -1061,7 +1061,7 @@ fn reconcile_defers_before_external_observation_for_a_nonterminal_deployment() {
     fs::remove_file(&podman_log).unwrap();
     let _lock = ApplicationLock::try_acquire(
         &environment.database_path,
-        &pneuma::domain::identity::ApplicationId::from(application_id.as_str()),
+        &pneuma::domain::identity::ApplicationId::new(application_id.as_str()).unwrap(),
     )
     .unwrap()
     .unwrap();

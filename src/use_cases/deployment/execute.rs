@@ -14,10 +14,9 @@ use super::promotion::promote_internal_candidate;
 use crate::adapters::stores::application_store;
 use crate::adapters::test_gate::wait_for_test_gate;
 use crate::domain::application::ApplicationDeploymentSpecification;
-use crate::domain::deployment::{
-    DeploymentFailureCode, DeploymentStatus, DeploymentType, SourceRevision,
-};
+use crate::domain::deployment::{DeploymentFailureCode, DeploymentStatus, DeploymentType};
 use crate::domain::exposure::Visibility;
+use crate::domain::git::CommitSha;
 use crate::domain::identity::{ApplicationId, DeploymentId, RuntimeInstanceId};
 use crate::domain::release::{OciArtifact, Release};
 
@@ -28,7 +27,7 @@ pub struct DeploymentResult {
     pub runtime_id: RuntimeInstanceId,
     pub container_name: String,
     pub artifact: OciArtifact,
-    pub source_revision: Option<SourceRevision>,
+    pub source_revision: Option<CommitSha>,
     pub finished_at: String,
 }
 
@@ -45,7 +44,7 @@ pub(crate) fn deploy_release(
     application_id: &ApplicationId,
     release: &Release,
     deployment_type: DeploymentType,
-    source_revision: Option<&SourceRevision>,
+    source_revision: Option<&CommitSha>,
     public_configuration: Option<&PublicDeploymentConfiguration>,
 ) -> Result<DeploymentResult, DeployReleaseError> {
     let mut progress = ProgressReporter::disabled();
@@ -68,7 +67,7 @@ pub(crate) fn deploy_release_reporting(
     application_id: &ApplicationId,
     release: &Release,
     deployment_type: DeploymentType,
-    source_revision: Option<&SourceRevision>,
+    source_revision: Option<&CommitSha>,
     public_configuration: Option<&PublicDeploymentConfiguration>,
     progress: &mut ProgressReporter<'_>,
 ) -> Result<DeploymentResult, DeployReleaseError> {

@@ -100,7 +100,6 @@ pub fn import_application(
         &application_id,
         &system.id,
         &application_name,
-        specification.schema_version,
     )?;
 
     if inserted {
@@ -136,12 +135,11 @@ fn persist_specification(
     application_store::insert_delivery_spec(
         transaction,
         application_id,
-        specification.delivery.delivery_type(),
         specification.delivery.image_repository(),
     )?;
 
     if let Some(repository_url) = repository_url {
-        let source = ApplicationSource::from_location(
+        let source = ApplicationSource::new(
             repository_url,
             None,
             RelativeManifestPath::new(manifest_path).map_err(|_| ImportError::Manifest {
@@ -154,7 +152,7 @@ fn persist_specification(
         .map_err(|_| ImportError::Manifest {
             source: ManifestError::InvalidField {
                 field: "repository",
-                reason: "must not be empty or contain surrounding whitespace",
+                reason: "must be a remote Git URL without surrounding whitespace",
             },
         })?;
         application_store::insert_source_spec(transaction, application_id, &source)?;

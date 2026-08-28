@@ -775,7 +775,7 @@ mod tests {
             deployment_id: "deployment-1".to_owned(),
             failure: "container start failed".to_owned(),
             source: Box::new(CandidateCleanupError::RuntimeChanged {
-                runtime_id: RuntimeInstanceId::from("runtime-1"),
+                runtime_id: RuntimeInstanceId::new("11111111111111111111111111111111").unwrap(),
             }),
         });
         assert_eq!(error.class(), CliErrorClass::Failure);

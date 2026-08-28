@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use pneuma::adapters::database;
-use pneuma::domain::deployment::SourceRevision;
 use pneuma::domain::deployment::{DeploymentStatus, DeploymentType};
 use pneuma::domain::git::CommitSha;
 use pneuma::domain::identity::{ApplicationId, ReleaseId};
@@ -26,8 +25,8 @@ fn immediate_transaction_acquires_the_writer_lock_before_reading() {
         .unwrap();
     let error = create_deployment(
         &mut second,
-        &ApplicationId::from("missing"),
-        &ReleaseId::from("missing-release"),
+        &ApplicationId::new("33333333333333333333333333333333").unwrap(),
+        &ReleaseId::new("55555555555555555555555555555555").unwrap(),
         DeploymentType::Deploy,
     )
     .unwrap_err();
@@ -154,9 +153,7 @@ fn preserves_provenance_for_each_attempt_using_the_same_release() {
         &application.id,
         &release.id,
         DeploymentType::Deploy,
-        Some(&SourceRevision::from_commit(
-            CommitSha::new(&"a".repeat(40)).unwrap(),
-        )),
+        Some(&CommitSha::new(&"a".repeat(40)).unwrap()),
     )
     .unwrap();
     connection
@@ -175,8 +172,11 @@ fn preserves_provenance_for_each_attempt_using_the_same_release() {
     .unwrap();
 
     assert_eq!(
-        first.source_revision.as_ref().map(SourceRevision::as_str),
-        Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        first
+            .source_revision
+            .as_ref()
+            .map(|commit| commit.as_str().to_owned()),
+        Some("a".repeat(40))
     );
     assert_eq!(second.source_revision, None);
     let release_source_revision: Option<String> = connection
@@ -191,8 +191,8 @@ fn rejects_a_missing_release_and_missing_application() {
 
     let missing_release = create_deployment(
         &mut connection,
-        &ApplicationId::from("missing"),
-        &ReleaseId::from("missing-release"),
+        &ApplicationId::new("33333333333333333333333333333333").unwrap(),
+        &ReleaseId::new("55555555555555555555555555555555").unwrap(),
         DeploymentType::Deploy,
     )
     .unwrap_err();
@@ -200,7 +200,7 @@ fn rejects_a_missing_release_and_missing_application() {
     assert!(matches!(
         missing_release,
         CreateDeploymentError::ApplicationNotFound { application_id }
-            if application_id == "missing"
+            if application_id == "33333333333333333333333333333333"
     ));
 }
 
@@ -213,7 +213,7 @@ fn rejects_a_missing_release_for_an_existing_application() {
     let error = create_deployment(
         &mut connection,
         &application.id,
-        &ReleaseId::from("missing-release"),
+        &ReleaseId::new("55555555555555555555555555555555").unwrap(),
         DeploymentType::Deploy,
     )
     .unwrap_err();
@@ -221,7 +221,7 @@ fn rejects_a_missing_release_for_an_existing_application() {
     assert!(matches!(
         error,
         CreateDeploymentError::ReleaseNotFound { release_id }
-            if release_id == "missing-release"
+            if release_id == "55555555555555555555555555555555"
     ));
 }
 
@@ -232,8 +232,8 @@ fn a_running_active_runtime_blocks_deploying_the_same_release() {
 
     let error = create_deployment(
         &mut connection,
-        &ApplicationId::from(application_id),
-        &ReleaseId::from(release_id.clone()),
+        &ApplicationId::new(&application_id).unwrap(),
+        &ReleaseId::new(&release_id.clone()).unwrap(),
         DeploymentType::Deploy,
     )
     .unwrap_err();
@@ -251,8 +251,8 @@ fn a_stopped_active_runtime_blocks_deploying_the_same_release() {
 
     let error = create_deployment(
         &mut connection,
-        &ApplicationId::from(application_id),
-        &ReleaseId::from(release_id.clone()),
+        &ApplicationId::new(&application_id).unwrap(),
+        &ReleaseId::new(&release_id.clone()).unwrap(),
         DeploymentType::Deploy,
     )
     .unwrap_err();
@@ -271,8 +271,8 @@ fn a_removed_active_runtime_does_not_block_deployment() {
 
     let deployment = create_deployment(
         &mut connection,
-        &ApplicationId::from(application_id),
-        &ReleaseId::from(release_id),
+        &ApplicationId::new(&application_id).unwrap(),
+        &ReleaseId::new(&release_id).unwrap(),
         DeploymentType::Deploy,
     )
     .unwrap();
@@ -287,8 +287,8 @@ fn rollback_of_the_active_release_is_allowed() {
 
     let deployment = create_deployment(
         &mut connection,
-        &ApplicationId::from(application_id),
-        &ReleaseId::from(release_id),
+        &ApplicationId::new(&application_id).unwrap(),
+        &ReleaseId::new(&release_id).unwrap(),
         DeploymentType::Rollback,
     )
     .unwrap();

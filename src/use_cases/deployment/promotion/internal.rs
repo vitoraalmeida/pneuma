@@ -99,7 +99,7 @@ pub fn promote_internal_candidate(
             fail_deployment(
                 connection,
                 &target.deployment_id,
-                DeploymentFailureCode::HealthCheck.as_str(),
+                DeploymentFailureCode::HealthCheck,
                 &message,
             )
             .map_err(|source| PromoteInternalCandidateError::RecordFailure { source })?;

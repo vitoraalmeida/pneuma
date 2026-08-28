@@ -14,9 +14,9 @@ use crate::domain::identity::{ApplicationId, DeploymentId, SystemId};
 // Captures durable application identity and persisted runtime intent.
 pub struct Application {
     pub id: ApplicationId,
-    // None only for rows persisted before Systems existed (migration 0005);
-    // every import writes exactly one System (`insert_application` takes `&SystemId`).
-    pub system_id: Option<SystemId>,
+    // The System every Application belongs to; imports require one and
+    // hydration rejects rows without it.
+    pub system_id: SystemId,
     pub name: ApplicationName,
     // Operator-requested lifecycle intent (`running`/`stopped`). This is what
     // Pneuma should converge to — deliberately distinct from the observed
@@ -25,11 +25,6 @@ pub struct Application {
     // The deployment currently serving the application; `None` until a first
     // promotion succeeds. Written only by the guarded atomic activation primitive.
     pub active_deployment_id: Option<DeploymentId>,
-    // Immutable copy of the manifest `schema_version` recorded at import time
-    // (`insert_application`); never updated, compared, or incremented afterwards.
-    // Legacy rows imported before the field carried a value may persist older
-    // schema versions (e.g. 1) and are tolerated at hydration.
-    pub manifest_schema_version: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,15 +33,12 @@ pub struct Application {
 // `Application` entity instead of consuming this projection.
 pub struct ApplicationSummary {
     pub id: ApplicationId,
-    // Same legacy-only None semantics as `Application::system_id`.
-    pub system_id: Option<SystemId>,
+    pub system_id: SystemId,
     pub name: ApplicationName,
     pub repository: Option<String>,
     pub default_branch: Option<String>,
     pub desired_runtime_state: DesiredRuntimeState,
     pub active_deployment_id: Option<DeploymentId>,
-    // Same immutable manifest `schema_version` copy as `Application`.
-    pub manifest_schema_version: u32,
 }
 
 // Catalog name for one application. Validated here once; every later boundary

@@ -25,10 +25,17 @@ incompatible; no existing database or backup is upgraded.
    - Result: deploy, rollback, lifecycle, status observation, visibility, and
      reconciliation hold the same lock; the operation store and migration are
      removed, and contention is caller-visible (`Deferred` for reconciliation).
-2. [ ] Strict current domain types
+2. [x] Strict current domain types
    - Remove compatibility-only System, manifest-version, source-revision,
      failure-evidence, delivery, and local-source representations.
    - Validate current entity IDs at generation, boundaries, and hydration.
+   - Result: `Application.system_id` is a required `SystemId`; manifest schema
+     version is an import-boundary check only; source revisions are optional
+     validated `CommitSha`s; failed deployments carry complete typed evidence
+     (`DeploymentFailureCode` end to end); entity IDs validate the 32-character
+     lowercase-hex format at generation and hydration; `DeliveryType`,
+     `RepositoryKind`, local sources, and all legacy tolerances are removed,
+     with obsolete rows failing hydration explicitly.
 3. [ ] Exact baseline schema and stores
    - Replace the historical chain with the one exact eight-table baseline,
      current ledger identity, constraints, and current SQL mappings.
@@ -68,3 +75,6 @@ incompatible; no existing database or backup is upgraded.
   tests, release build, markdown-link validation, and `bash -n` passed. The
   three ignored OCI tests require a configured rootless Podman host. ShellCheck
   was unavailable on this host and was not reported as passed.
+- Checkpoint 2: `cargo fmt --check`, Clippy with warnings denied, all-feature
+  tests (25 suites green; the same three ignored OCI tests remain
+  environment-dependent), and release build passed.

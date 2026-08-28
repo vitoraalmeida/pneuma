@@ -29,13 +29,10 @@ fn imports_and_persists_the_application_specification() {
         application.desired_runtime_state,
         DesiredRuntimeState::Stopped
     );
-    assert_eq!(application.manifest_schema_version, 3);
-
     let specification = connection
         .query_row(
             "SELECT
                 applications.desired_runtime_state,
-                applications.spec_version,
                 application_sources.repository_kind,
                 application_sources.manifest_path,
                 application_runtime_specs.container_port,
@@ -60,16 +57,15 @@ fn imports_and_persists_the_application_specification() {
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
-                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, i64>(4)?,
-                    row.get::<_, String>(5)?,
-                    row.get::<_, i64>(6)?,
-                    row.get::<_, String>(7)?,
-                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, String>(8)?,
                     row.get::<_, String>(9)?,
-                    row.get::<_, String>(10)?,
                 ))
             },
         )
@@ -79,7 +75,6 @@ fn imports_and_persists_the_application_specification() {
         specification,
         (
             "stopped".to_owned(),
-            3,
             "remote".to_owned(),
             "deploy/staging/pneuma.toml".to_owned(),
             8080,
@@ -157,26 +152,24 @@ fn reports_manifest_failures_without_changing_the_catalog() {
 }
 
 #[test]
-fn persists_a_local_repository_kind() {
+fn rejects_local_repository_paths() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
 
-    import_application(
+    let error = import_application(
         &mut connection,
         &fixture_path("another"),
         None,
         Some("."),
         Some("pneuma.toml"),
     )
-    .unwrap();
+    .unwrap_err();
 
-    let repository_kind: String = connection
-        .query_row(
-            "SELECT repository_kind FROM application_sources",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(repository_kind, "local");
+    assert!(
+        error.to_string().contains("remote Git URL"),
+        "local paths are not a supported source: {error}"
+    );
+    let applications = list_applications(&connection).unwrap();
+    assert!(applications.is_empty());
 }
 
 #[test]
@@ -233,7 +226,8 @@ fn requires_system_from_manifest_or_cli() {
 
     let application =
         import_application(&mut connection, &fixture_path("valid"), None, None, None).unwrap();
-    assert!(application.system_id.is_some());
+    // Every imported Application carries exactly one required System identity.
+    assert_eq!(application.system_id.to_string().len(), 32);
 }
 
 #[test]
@@ -326,7 +320,7 @@ fn reimport_preserves_the_active_deployment_of_a_deployed_application() {
     connection
         .execute(
             "INSERT INTO releases (id, application_id, image_repository, image_digest, created_at)
-             VALUES ('release-1', ?1, 'ghcr.io/vitoraalmeida/vitoralmeida.tech',
+             VALUES ('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', ?1, 'ghcr.io/vitoraalmeida/vitoralmeida.tech',
                      'sha256:deadbeef', CURRENT_TIMESTAMP)",
             [&application_id],
         )
@@ -335,7 +329,7 @@ fn reimport_preserves_the_active_deployment_of_a_deployed_application() {
         .execute(
             "INSERT INTO deployments (id, application_id, release_id, type, status,
                                       created_at, updated_at)
-             VALUES ('deployment-1', ?1, 'release-1', 'deploy', 'succeeded',
+             VALUES ('cccccccccccccccccccccccccccccccc', ?1, 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'deploy', 'succeeded',
                      CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
             [&application_id],
         )
@@ -343,7 +337,7 @@ fn reimport_preserves_the_active_deployment_of_a_deployed_application() {
     connection
         .execute(
             "UPDATE applications
-             SET active_deployment_id = 'deployment-1', desired_runtime_state = 'running'
+             SET active_deployment_id = 'cccccccccccccccccccccccccccccccc', desired_runtime_state = 'running'
              WHERE id = ?1",
             [&application_id],
         )
@@ -364,7 +358,7 @@ fn reimport_preserves_the_active_deployment_of_a_deployed_application() {
             .active_deployment_id
             .as_ref()
             .map(|id| id.as_str()),
-        Some("deployment-1")
+        Some("cccccccccccccccccccccccccccccccc")
     );
     assert_eq!(
         reimported.desired_runtime_state,

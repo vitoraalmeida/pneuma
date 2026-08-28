@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use pneuma::adapters::database;
-use pneuma::domain::deployment::{DeploymentEvent, DeploymentStatus, DeploymentType};
+use pneuma::domain::deployment::{
+    DeploymentEvent, DeploymentFailureCode, DeploymentStatus, DeploymentType,
+};
 use pneuma::domain::identity::{ApplicationId, DeploymentId};
 use pneuma::domain::release::OciArtifact;
 use pneuma::use_cases::application::import_application;
@@ -58,7 +60,7 @@ fn advances_in_order_through_internal_verification() {
     let error = fail_deployment(
         &mut connection,
         &deployment_id,
-        "unhealthy",
+        DeploymentFailureCode::HealthCheck,
         "status was 503",
     )
     .unwrap();
@@ -79,7 +81,7 @@ fn advances_through_public_verification_and_can_fail_there() {
     let failure = fail_deployment(
         &mut connection,
         &deployment_id,
-        "external_health_check_failed",
+        DeploymentFailureCode::ExternalHealthCheck,
         "public endpoint returned 503",
     )
     .unwrap();
@@ -119,12 +121,12 @@ fn records_a_structured_failure_and_allows_a_later_attempt() {
     let failure = fail_deployment(
         &mut connection,
         &deployment_id,
-        "runtime_failed",
+        DeploymentFailureCode::RuntimeStart,
         "container exited",
     )
     .unwrap();
 
-    assert_eq!(failure.code, "runtime_failed");
+    assert_eq!(failure.code, DeploymentFailureCode::RuntimeStart);
     assert_eq!(failure.stage, DeploymentStatus::Starting);
     assert_eq!(failure.message, "container exited");
     assert!(!failure.finished_at.is_empty());
@@ -148,7 +150,7 @@ fn records_a_structured_failure_and_allows_a_later_attempt() {
         persisted,
         (
             "failed".to_owned(),
-            "runtime_failed".to_owned(),
+            "runtime_start_failed".to_owned(),
             "starting".to_owned(),
             "container exited".to_owned(),
             failure.finished_at,
@@ -171,7 +173,7 @@ fn terminal_and_missing_deployments_cannot_enter_the_flow() {
     fail_deployment(
         &mut connection,
         &deployment_id,
-        "rejected",
+        DeploymentFailureCode::HealthCheck,
         "operator rejected it",
     )
     .unwrap();
@@ -181,13 +183,13 @@ fn terminal_and_missing_deployments_cannot_enter_the_flow() {
     let repeated_failure = fail_deployment(
         &mut connection,
         &deployment_id,
-        "replacement",
+        DeploymentFailureCode::RuntimeStart,
         "must not replace the original failure",
     )
     .unwrap_err();
     let missing = advance_deployment(
         &connection,
-        &DeploymentId::from("missing"),
+        &DeploymentId::new("44444444444444444444444444444444").unwrap(),
         DeploymentEvent::Start,
     )
     .unwrap_err();
@@ -208,7 +210,7 @@ fn terminal_and_missing_deployments_cannot_enter_the_flow() {
     assert!(matches!(
         missing,
         TransitionDeploymentError::DeploymentNotFound { deployment_id }
-            if deployment_id == "missing"
+            if deployment_id == "44444444444444444444444444444444"
     ));
 }
 
@@ -216,8 +218,14 @@ fn terminal_and_missing_deployments_cannot_enter_the_flow() {
 fn rejects_incomplete_failure_details_without_changing_state() {
     let (mut connection, deployment_id, _) = pending_deployment();
 
-    for (code, message) in [("", "diagnostic"), ("failure", " not trimmed")] {
-        let error = fail_deployment(&mut connection, &deployment_id, code, message).unwrap_err();
+    for message in ["", " not trimmed"] {
+        let error = fail_deployment(
+            &mut connection,
+            &deployment_id,
+            DeploymentFailureCode::HealthCheck,
+            message,
+        )
+        .unwrap_err();
         assert!(matches!(
             error,
             TransitionDeploymentError::InvalidFailure { .. }

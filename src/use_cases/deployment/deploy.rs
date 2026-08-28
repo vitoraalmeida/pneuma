@@ -10,7 +10,7 @@ use crate::adapters::oci_image::{
     PullImageError, ResolveImageDigestError, pull_image, resolve_image_digest,
 };
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
-use crate::domain::deployment::{DeploymentType, SourceRevision};
+use crate::domain::deployment::DeploymentType;
 use crate::domain::git::CommitSha;
 use crate::domain::identity::ApplicationId;
 use crate::domain::release::{DeliverySpecification, OciArtifact};
@@ -118,7 +118,7 @@ fn deploy_branch_reporting(
         })?,
     };
 
-    let commit_sha: CommitSha = resolve_branch(source.repository_location(), &branch)
+    let commit_sha: CommitSha = resolve_branch(source.repository_url(), &branch)
         .map_err(|source| DeployBranchError::ResolveBranch { source })?;
 
     let delivery = application_store::load_delivery_specification(connection, application_id)
@@ -273,7 +273,7 @@ fn deploy_artifact_for_delivery(
     pull_image(artifact).map_err(|source| DeployOciError::PullImage { source })?;
     let release = create_release_while_locked(connection, application_id, artifact)
         .map_err(|source| DeployOciError::CreateRelease { source })?;
-    let source_revision = source_commit.cloned().map(SourceRevision::from_commit);
+    let source_revision = source_commit.cloned();
     deploy_release_reporting(
         connection,
         application_id,

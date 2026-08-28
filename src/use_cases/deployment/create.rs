@@ -6,7 +6,9 @@ use thiserror::Error;
 use crate::adapters::application_lock::{ApplicationLock, ApplicationLockError};
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
-use crate::domain::deployment::{Deployment, DeploymentType, SourceRevision};
+use crate::domain::deployment::Deployment;
+use crate::domain::deployment::DeploymentType;
+use crate::domain::git::CommitSha;
 use crate::domain::identity::{ApplicationId, ReleaseId};
 
 #[derive(Debug, Error)]
@@ -83,7 +85,7 @@ pub(crate) fn create_deployment_with_source_revision_while_locked(
     application_id: &ApplicationId,
     release_id: &ReleaseId,
     deployment_type: DeploymentType,
-    source_revision: Option<&SourceRevision>,
+    source_revision: Option<&CommitSha>,
 ) -> Result<Deployment, CreateDeploymentError> {
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
@@ -105,7 +107,7 @@ pub fn create_deployment_with_source_revision(
     application_id: &ApplicationId,
     release_id: &ReleaseId,
     deployment_type: DeploymentType,
-    source_revision: Option<&SourceRevision>,
+    source_revision: Option<&CommitSha>,
 ) -> Result<Deployment, CreateDeploymentError> {
     let Some(_lock) = ApplicationLock::try_acquire_for_connection(connection, application_id)
         .map_err(|source| CreateDeploymentError::ApplicationLock { source })?
@@ -128,7 +130,7 @@ fn create_deployment_in_transaction(
     application_id: &ApplicationId,
     release_id: &ReleaseId,
     deployment_type: DeploymentType,
-    source_revision: Option<&SourceRevision>,
+    source_revision: Option<&CommitSha>,
 ) -> Result<Deployment, CreateDeploymentError> {
     let application_exists = application_store::application_exists(transaction, application_id)?;
     if !application_exists {

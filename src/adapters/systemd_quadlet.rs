@@ -286,7 +286,7 @@ mod tests {
     fn unit_inputs() -> (ApplicationName, DeploymentId) {
         (
             ApplicationName::new("app").unwrap(),
-            DeploymentId::from("deployment"),
+            DeploymentId::new("22222222222222222222222222222222").unwrap(),
         )
     }
 

@@ -166,7 +166,7 @@ mod tests {
                      id, application_id, deployment_id, external_runtime_id, state,
                      host_address, host_port, container_port, last_observed_state,
                      last_observed_at, created_at, updated_at, removed_at
-                 ) VALUES ('runtime', 'app', 'deployment', 'aabbccdd', 'running',
+                 ) VALUES ('55555555555555555555555555555555', '11111111111111111111111111111111', '22222222222222222222222222222222', 'aabbccdd', 'running',
                            '127.0.0.1', 30000, 8080, 'running',
                            'now', 'now', 'now', NULL)",
                 [],
@@ -178,7 +178,7 @@ mod tests {
 
         connection
             .execute(
-                "UPDATE runtime_instances SET removed_at = 'later' WHERE id = 'runtime'",
+                "UPDATE runtime_instances SET removed_at = 'later' WHERE id = '55555555555555555555555555555555'",
                 [],
             )
             .unwrap();
@@ -194,7 +194,7 @@ mod tests {
         let mut insert = connection
             .prepare(
                 "INSERT INTO runtime_port_reservations (port, application_id, deployment_id)
-                 VALUES (?1, 'app', 'deployment')",
+                 VALUES (?1, '11111111111111111111111111111111', '22222222222222222222222222222222')",
             )
             .unwrap();
         for port in 30000..=39999u16 {
@@ -222,7 +222,7 @@ mod tests {
         let error = connection
             .execute(
                 "INSERT INTO runtime_port_reservations (port, application_id, deployment_id)
-                 VALUES (30000, 'app', 'deployment')",
+                 VALUES (30000, '11111111111111111111111111111111', '22222222222222222222222222222222')",
                 [],
             )
             .unwrap_err();
@@ -235,26 +235,27 @@ mod tests {
     }
 
     fn application() -> ApplicationId {
-        ApplicationId::from("app")
+        ApplicationId::new("11111111111111111111111111111111").unwrap()
     }
 
     fn deployment() -> DeploymentId {
-        DeploymentId::from("deployment")
+        DeploymentId::new("22222222222222222222222222222222").unwrap()
     }
 
     // Seeds the application, release, and deployment rows required by reservation foreign keys.
     fn seed_runtime_inputs(connection: &rusqlite::Connection) {
         connection
             .execute_batch(
-                "INSERT INTO applications (id, name, desired_runtime_state, spec_version, created_at, updated_at)
-                 VALUES ('app', 'app', 'stopped', 1, 'now', 'now');
+                "INSERT INTO systems (id, name, created_at) VALUES ('33333333333333333333333333333333', 'team', 'now');
+                 INSERT INTO applications (id, system_id, name, desired_runtime_state, created_at, updated_at)
+                 VALUES ('11111111111111111111111111111111', '33333333333333333333333333333333', 'app', 'stopped', 'now', 'now');
                  INSERT INTO releases (id, application_id, image_repository, image_digest, image_reference, created_at)
-                 VALUES ('release', 'app', 'registry.example/app',
+                 VALUES ('44444444444444444444444444444444', '11111111111111111111111111111111', 'registry.example/app',
                          'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
                          'registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
                          'now');
                  INSERT INTO deployments (id, application_id, release_id, type, status, requested_at)
-                 VALUES ('deployment', 'app', 'release', 'deploy', 'pending', 'now');",
+                 VALUES ('22222222222222222222222222222222', '11111111111111111111111111111111', '44444444444444444444444444444444', 'deploy', 'pending', 'now');",
             )
             .unwrap();
     }

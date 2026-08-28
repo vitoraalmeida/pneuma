@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 
 use pneuma::adapters::manifest::{ManifestError, load_manifest, load_manifest_at, parse_manifest};
 use pneuma::domain::exposure::Visibility;
-use pneuma::domain::release::DeliveryType;
 
 const VALID_MANIFEST: &str = include_str!("fixtures/valid/pneuma.toml");
 
@@ -12,9 +11,7 @@ fn loads_and_validates_a_repository_manifest() {
 
     let specification = load_manifest(&repository).expect("valid fixture should load");
 
-    assert_eq!(specification.schema_version, 3);
     assert_eq!(specification.application_name.as_str(), "personal-site");
-    assert_eq!(specification.delivery.delivery_type(), DeliveryType::Oci);
     assert_eq!(
         specification.delivery.image_repository().as_str(),
         "ghcr.io/vitoraalmeida/vitoralmeida.tech"

@@ -77,7 +77,7 @@ conflict; reconciliation returns `Deferred`.
 | Use cases | `application/remote_import.rs::import_remote_application` → `application/import.rs::import_application` |
 | Domain rules | `domain/manifest.rs::ImportSpecification` (validated use-case input); value objects built at the boundary (`ApplicationName`, `RelativeManifestPath`, delivery/runtime specifications); re-import returns the existing application unchanged |
 | Boundary adapter | `adapters/manifest.rs` — private TOML structs, `load_manifest_at` = parse + validate + convert in one step (INV-MAN-001); `adapters/git_source.rs::clone_repository` / `cleanup_checkout` (always attempted) |
-| Stores | `application_store` (`generate_id`, `insert_application` — writes immutable `system_id` and `spec_version` once), `system_store::create_or_load`, specification writers invoked by `persist_specification` |
+| Stores | `application_store` (`generate_id`, `insert_application` — writes the required `system_id` once), `system_store::create_or_load`, specification writers invoked by `persist_specification` |
 | External adapters | `git_source` (clone into `workspace/imports/<pid>-<nanos>`) |
 | Tests | `tests/manifest.rs` (parsing/validation), `tests/application_import.rs` (idempotency, mid-aggregate rollback), `tests/application_specification.rs`, `tests/git_source.rs`, E2E import scenarios in `tests/cli.rs` |
 
@@ -104,7 +104,7 @@ Identical to Flow 3 after source resolution; only the front differs.
 |---|---|
 | CLI entry | `cli/deployment.rs::run_deploy_branch` |
 | Use cases | `deployment/deploy.rs::deploy_branch`: load persisted source configuration (`application_store::load_source`, falling back to the manifest default branch) → resolve commit → load delivery configuration → resolve digest → hand the loaded delivery policy to `deploy_artifact_for_delivery` with `source_commit` (the shared validated path behind `deploy_oci`, so the specification is never re-read) |
-| Domain rules | `domain/git.rs::CommitSha` validated hex; resolved commit becomes `SourceRevision::Commit` recorded on the deployment (`domain/deployment.rs`) |
+| Domain rules | `domain/git.rs::CommitSha` validated hex; resolved commit is recorded directly as an optional `CommitSha` on the deployment (`domain/deployment.rs`) |
 | Stores | `application_store::load_source` / `load_delivery_specification`; everything downstream identical to Flow 3 |
 | External adapters | `git_source::resolve_branch` (ls-remote against the repository URL), `oci_image::resolve_image_digest` (`repo:<sha>` pull + inspect) |
 | Tests | `tests/deployment_from_revision.rs`, `tests/git_source.rs` (transport classification, resolution errors) |
@@ -115,7 +115,7 @@ Identical to Flow 3 after source resolution; only the front differs.
 |---|---|
 | CLI entry | `cli/deployment.rs::run_rollback` |
 | Use cases | `deployment/rollback.rs::rollback_deployment`: application existence check → select target → re-pull historical artifact → run the normal release deployment as type `Rollback` |
-| Domain rules | target selection rule "newest succeeded deployment that is not currently active" implemented by `deployment_store::load_rollback_target` and returned as a domain `RollbackTarget` carrying provenance (`SourceRevision`) |
+| Domain rules | target selection rule "newest succeeded deployment that is not currently active" implemented by `deployment_store::load_rollback_target` and returned as a domain `RollbackTarget` carrying provenance (an optional `CommitSha`) |
 | Stores | `deployment_store` (history query), then the full Flow 3 store set with `DeploymentType::Rollback` |
 | External adapters | `oci_image::pull_image` for the historical artifact, then all Flow 3 runtime/exposure adapters |
 | Tests | `tests/deployment_rollback.rs` (target selection), rollback happy-path E2E in `tests/deployment_execute_release.rs` (new rollback deployment, activation, retirement of the replaced runtime) |

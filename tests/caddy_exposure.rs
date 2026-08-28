@@ -22,7 +22,7 @@ const CADDY_LOG: &str = "PNEUMA_CADDY_TEST_LOG";
 const APPLICATION_ID: &str = "0123456789abcdef0123456789abcdef";
 
 fn application_id() -> ApplicationId {
-    ApplicationId::from(APPLICATION_ID)
+    ApplicationId::new(APPLICATION_ID).unwrap()
 }
 
 fn domain_name(value: &str) -> DomainName {
@@ -198,23 +198,13 @@ fn rejects_untrusted_fragment_coordinates_before_external_work() {
         std::process::id(),
         unique_suffix()
     ));
-    let caddyfile_path = root.join("Caddyfile");
-
-    let invalid_application = materialize_caddy_fragment(
-        &root,
-        &caddyfile_path,
-        &ApplicationId::from("../application"),
-        &domain_name("example.com"),
-        loopback_endpoint("127.0.0.1:31000"),
-    )
-    .unwrap_err();
+    // Unsafe fragment stems can no longer be represented as ApplicationIds;
+    // the validated identifier constructor rejects them before any adapter runs.
+    let invalid_application = ApplicationId::new("../application");
     let invalid_domain = DomainName::new("example..com");
     let invalid_endpoint = ExpectedRuntimeEndpoint::new("0.0.0.0:31000".parse().unwrap());
 
-    assert!(matches!(
-        invalid_application,
-        MaterializeCaddyFragmentError::InvalidApplicationId
-    ));
+    assert!(invalid_application.is_err());
     assert!(invalid_domain.is_err());
     assert!(invalid_endpoint.is_err());
     assert!(!root.exists());
