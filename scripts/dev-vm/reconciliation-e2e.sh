@@ -12,12 +12,18 @@
 # Without a case ID the complete approved catalog is run. Case C2 uses the
 # deterministic post-lock test gate (PNEUMA_TEST_GATE_DIRECTORY) to serialize
 # two reconciliations without polling a short-lived process.
+# Transport settings (forwarded port, identity, known-hosts file) come from
+# the PNEUMA_SSH_* environment described in scripts/lib/remote.sh.
 
 set -euo pipefail
 
-SSH_HOST="${1:-pneuma-dev}"
-REQUESTED_CASE="${2:-all}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/remote.sh
+source "$SCRIPT_DIR/../lib/remote.sh"
+
+remote_init "${1:-pneuma-dev}"
+SSH_HOST="$REMOTE_HOST"
+REQUESTED_CASE="${2:-all}"
 LOG_ROOT="${PNEUMA_RECONCILIATION_LOG_ROOT:-${TMPDIR:-/tmp}/pneuma-reconciliation-e2e-$(date +%Y%m%d-%H%M%S)}"
 DATABASE_PATH="/var/lib/pneuma/database/pneuma.sqlite3"
 GATE_ROOT="/var/lib/pneuma/test-gates"
@@ -58,17 +64,17 @@ report() {
 # Run a root-owned script on the VM. Use heredocs with this helper for commands
 # that need several shell statements instead of interpolating into SSH strings.
 root_ssh() {
-	ssh -o BatchMode=yes -o ConnectTimeout=10 "$SSH_HOST" 'bash -s'
+	remote_ssh -o BatchMode=yes -o ConnectTimeout=10 "$SSH_HOST" 'bash -s'
 }
 
 # Run a login shell as the rootless runtime owner, preserving its Podman session.
 pneuma_ssh() {
-	ssh -o BatchMode=yes -o ConnectTimeout=10 "$SSH_HOST" \
+	remote_ssh -o BatchMode=yes -o ConnectTimeout=10 "$SSH_HOST" \
 		'runuser -u pneuma -- bash -l -s'
 }
 
 sql() {
-	printf '%s\n' "$1" | ssh -o BatchMode=yes -o ConnectTimeout=10 "$SSH_HOST" \
+	printf '%s\n' "$1" | remote_ssh -o BatchMode=yes -o ConnectTimeout=10 "$SSH_HOST" \
 		"sqlite3 -tabs '$DATABASE_PATH'"
 }
 

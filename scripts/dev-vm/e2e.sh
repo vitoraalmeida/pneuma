@@ -13,11 +13,17 @@
 #
 # Default ssh-host: pneuma-dev
 # The SSH target must be root for fixture ownership and VM reboot operations.
+# Transport settings (forwarded port, identity, known-hosts file) come from
+# the PNEUMA_SSH_* environment described in scripts/lib/remote.sh.
 
 set -euo pipefail
 
-SSH_HOST="${1:-pneuma-dev}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/remote.sh
+source "$SCRIPT_DIR/../lib/remote.sh"
+
+remote_init "${1:-pneuma-dev}"
+SSH_HOST="$REMOTE_HOST"
 REGISTRY="localhost:5000"
 FIXTURE_SRC="$SCRIPT_DIR/fixtures/healthy-http"
 TMP_V2="$(mktemp -d)"
@@ -45,32 +51,32 @@ echo "==> Step 3: Deploy all fixtures..."
 
 echo
 echo "==> Step 4: Verify baseline status..."
-ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma app status healthy-http"' 2>&1 | grep -v level=warning
-if ! ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma app status redirect-public"' | grep -q "Observed state: Running"; then
+remote_remote_ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma app status healthy-http"' 2>&1 | grep -v level=warning
+if ! remote_ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma app status redirect-public"' | grep -q "Observed state: Running"; then
 	echo "  ERROR: redirect-public is not Running"
 	exit 1
 fi
-if ! ssh "$SSH_HOST" 'grep -rlF "redirect-public.pneuma.test" /etc/caddy/applications/*.caddy | grep -q .'; then
+if ! remote_ssh "$SSH_HOST" 'grep -rlF "redirect-public.pneuma.test" /etc/caddy/applications/*.caddy | grep -q .'; then
 	echo "  ERROR: redirect-public Caddy fragment is missing"
 	exit 1
 fi
-if ! ssh "$SSH_HOST" 'curl -fsS -D - -o /dev/null https://redirect-public.pneuma.test/ | grep -qi "^location: https://example.com/"'; then
+if ! remote_ssh "$SSH_HOST" 'curl -fsS -D - -o /dev/null https://redirect-public.pneuma.test/ | grep -qi "^location: https://example.com/"'; then
 	echo "  ERROR: redirect-public HTTPS redirect is unavailable"
 	exit 1
 fi
-if ! ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma app visibility set redirect-public internal"' | grep -q "Internal"; then
+if ! remote_ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma app visibility set redirect-public internal"' | grep -q "Internal"; then
 	echo "  ERROR: redirect-public could not become internal"
 	exit 1
 fi
-if ssh "$SSH_HOST" 'grep -rlF "redirect-public.pneuma.test" /etc/caddy/applications/*.caddy 2>/dev/null | grep -q .'; then
+if remote_ssh "$SSH_HOST" 'grep -rlF "redirect-public.pneuma.test" /etc/caddy/applications/*.caddy 2>/dev/null | grep -q .'; then
 	echo "  ERROR: redirect-public Caddy fragment remains after internal visibility"
 	exit 1
 fi
-if ! ssh "$SSH_HOST" 'test "$(curl -s -o /dev/null -w "%{http_code}" http://redirect-public.pneuma.test/)" = 404'; then
+if ! remote_ssh "$SSH_HOST" 'test "$(curl -s -o /dev/null -w "%{http_code}" http://redirect-public.pneuma.test/)" = 404'; then
 	echo "  ERROR: redirect-public HTTP request does not receive the generic 404 fallback"
 	exit 1
 fi
-if ! ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && podman ps --format '\''{{.Names}}'\'' --filter '\''name=^pneuma-redirect-public-'\'' | grep -q ."'; then
+if ! remote_ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && podman ps --format '\''{{.Names}}'\'' --filter '\''name=^pneuma-redirect-public-'\'' | grep -q ."'; then
 	echo "  ERROR: redirect-public runtime stopped after becoming internal"
 	exit 1
 fi
@@ -78,24 +84,24 @@ echo "  OK: redirect-public HTTPS, generic HTTP fallback, and internal transitio
 
 echo
 echo "==> Step 5: Failed candidate preserves healthy-http v1..."
-ssh "$SSH_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && podman build -q -t $REGISTRY/healthy-http:unhealthy /var/lib/pneuma/checkouts/fixtures/unhealthy-http >/dev/null && podman push --tls-verify=false $REGISTRY/healthy-http:unhealthy >/dev/null'"
-UNHEALTHY_DIGEST=$(ssh "$SSH_HOST" "curl -fsS -H 'Accept: application/vnd.oci.image.manifest.v1+json' http://$REGISTRY/v2/healthy-http/manifests/unhealthy -D - -o /dev/null | grep -i docker-content-digest | awk '{print \$2}' | tr -d '\r'")
-if DEPLOY_OUT=$(ssh "$SSH_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && pneuma app deploy healthy-http --image $REGISTRY/healthy-http@$UNHEALTHY_DIGEST'" 2>&1); then
+remote_remote_ssh "$SSH_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && podman build -q -t $REGISTRY/healthy-http:unhealthy /var/lib/pneuma/checkouts/fixtures/unhealthy-http >/dev/null && podman push --tls-verify=false $REGISTRY/healthy-http:unhealthy >/dev/null'"
+UNHEALTHY_DIGEST=$(remote_ssh "$SSH_HOST" "curl -fsS -H 'Accept: application/vnd.oci.image.manifest.v1+json' http://$REGISTRY/v2/healthy-http/manifests/unhealthy -D - -o /dev/null | grep -i docker-content-digest | awk '{print \$2}' | tr -d '\r'")
+if DEPLOY_OUT=$(remote_ssh "$SSH_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && pneuma app deploy healthy-http --image $REGISTRY/healthy-http@$UNHEALTHY_DIGEST'" 2>&1); then
 	echo "  ERROR: unhealthy candidate deploy unexpectedly succeeded"
 	echo "$DEPLOY_OUT" | grep -v level=warning || true
 	exit 1
 fi
 echo "$DEPLOY_OUT" | grep -v level=warning || true
-if ! ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma app deployments healthy-http"' | grep -q $'\tDeploy\t.*\tFailed'; then
+if ! remote_ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma app deployments healthy-http"' | grep -q $'\tDeploy\t.*\tFailed'; then
 	echo "  ERROR: unhealthy candidate failure is absent from deployment history"
 	exit 1
 fi
-if ! ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma app status healthy-http"' | grep -q "Observed state: Running"; then
+if ! remote_ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma app status healthy-http"' | grep -q "Observed state: Running"; then
 	echo "  ERROR: healthy-http is not Running after failed candidate"
 	exit 1
 fi
-PORT=$(ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && podman ps --format \"{{.Ports}}\" --filter name=pneuma-healthy-http | cut -d: -f2 | cut -d- -f1"')
-BODY=$(ssh "$SSH_HOST" "curl -fsS http://127.0.0.1:$PORT/")
+PORT=$(remote_ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && podman ps --format \"{{.Ports}}\" --filter name=pneuma-healthy-http | cut -d: -f2 | cut -d- -f1"')
+BODY=$(remote_ssh "$SSH_HOST" "curl -fsS http://127.0.0.1:$PORT/")
 if [[ "$BODY" != "healthy-http v1.0" ]]; then
 	echo "  ERROR: failed candidate changed healthy-http body to: $BODY"
 	exit 1
@@ -105,19 +111,19 @@ echo "  OK: failed candidate preserved $BODY"
 echo
 echo "==> Step 6: Upgrade healthy-http to v2..."
 sed 's/healthy-http v1.0/healthy-http v2.0/' "$FIXTURE_SRC/server.py" >"$TMP_V2/server.py"
-scp -q "$TMP_V2/server.py" "$SSH_HOST":/var/lib/pneuma/checkouts/fixtures/healthy-http/server.py
-ssh "$SSH_HOST" 'chown pneuma:pneuma /var/lib/pneuma/checkouts/fixtures/healthy-http/server.py'
-ssh "$SSH_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && podman build -q -t $REGISTRY/healthy-http:latest /var/lib/pneuma/checkouts/fixtures/healthy-http 2>/dev/null && podman push --tls-verify=false $REGISTRY/healthy-http:latest 2>/dev/null'"
-DIGEST=$(ssh "$SSH_HOST" "curl -fsS -H 'Accept: application/vnd.oci.image.manifest.v1+json' http://$REGISTRY/v2/healthy-http/manifests/latest -D - -o /dev/null | grep -i docker-content-digest | awk '{print \$2}' | tr -d '\r'")
-DEPLOY_OUT=$(ssh "$SSH_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && pneuma app deploy healthy-http --image $REGISTRY/healthy-http@$DIGEST 2>&1'")
+remote_scp_to -q "$TMP_V2/server.py" "$SSH_HOST":/var/lib/pneuma/checkouts/fixtures/healthy-http/server.py
+remote_remote_ssh "$SSH_HOST" 'chown pneuma:pneuma /var/lib/pneuma/checkouts/fixtures/healthy-http/server.py'
+remote_remote_ssh "$SSH_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && podman build -q -t $REGISTRY/healthy-http:latest /var/lib/pneuma/checkouts/fixtures/healthy-http 2>/dev/null && podman push --tls-verify=false $REGISTRY/healthy-http:latest 2>/dev/null'"
+DIGEST=$(remote_ssh "$SSH_HOST" "curl -fsS -H 'Accept: application/vnd.oci.image.manifest.v1+json' http://$REGISTRY/v2/healthy-http/manifests/latest -D - -o /dev/null | grep -i docker-content-digest | awk '{print \$2}' | tr -d '\r'")
+DEPLOY_OUT=$(remote_ssh "$SSH_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && pneuma app deploy healthy-http --image $REGISTRY/healthy-http@$DIGEST 2>&1'")
 echo "$DEPLOY_OUT" | grep -v level=warning || true
 if ! echo "$DEPLOY_OUT" | grep -q "Succeeded"; then
 	echo "  ERROR: upgrade deploy did not succeed"
 	exit 1
 fi
-PORT=$(ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && podman ps --format \"{{.Ports}}\" --filter name=pneuma-healthy-http | cut -d: -f2 | cut -d- -f1"')
+PORT=$(remote_ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && podman ps --format \"{{.Ports}}\" --filter name=pneuma-healthy-http | cut -d: -f2 | cut -d- -f1"')
 echo "  healthy-http on host port: $PORT"
-BODY=$(ssh "$SSH_HOST" "curl -fsS http://127.0.0.1:$PORT/")
+BODY=$(remote_ssh "$SSH_HOST" "curl -fsS http://127.0.0.1:$PORT/")
 if [[ "$BODY" != "healthy-http v2.0" ]]; then
 	echo "  ERROR: expected 'healthy-http v2.0', got: $BODY"
 	exit 1
@@ -126,20 +132,20 @@ echo "  OK: $BODY"
 
 echo
 echo "==> Step 7: Roll back healthy-http to v1..."
-DEPLOY_OUT=$(ssh "$SSH_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && pneuma deployment rollback healthy-http'" 2>&1)
+DEPLOY_OUT=$(remote_ssh "$SSH_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && pneuma deployment rollback healthy-http'" 2>&1)
 echo "$DEPLOY_OUT" | grep -v level=warning || true
 if ! echo "$DEPLOY_OUT" | grep -q "Succeeded"; then
 	echo "  ERROR: rollback did not succeed"
 	exit 1
 fi
-PORT=$(ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && podman ps --format \"{{.Ports}}\" --filter name=pneuma-healthy-http | cut -d: -f2 | cut -d- -f1"')
-BODY=$(ssh "$SSH_HOST" "curl -fsS http://127.0.0.1:$PORT/")
+PORT=$(remote_ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && podman ps --format \"{{.Ports}}\" --filter name=pneuma-healthy-http | cut -d: -f2 | cut -d- -f1"')
+BODY=$(remote_ssh "$SSH_HOST" "curl -fsS http://127.0.0.1:$PORT/")
 if [[ "$BODY" != "healthy-http v1.0" ]]; then
 	echo "  ERROR: expected 'healthy-http v1.0', got: $BODY"
 	exit 1
 fi
 echo "  OK: $BODY"
-if ! ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma app deployments healthy-http"' | grep -q $'\tRollback\t.*\tSucceeded'; then
+if ! remote_ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma app deployments healthy-http"' | grep -q $'\tRollback\t.*\tSucceeded'; then
 	echo "  ERROR: deployment history has no succeeded rollback"
 	exit 1
 fi
@@ -147,13 +153,13 @@ echo "  OK: rollback deployment recorded"
 
 echo
 echo "==> Step 8: Reboot VM..."
-BOOT_ID_BEFORE=$(ssh "$SSH_HOST" 'cat /proc/sys/kernel/random/boot_id')
-ssh "$SSH_HOST" 'reboot' >/dev/null 2>&1 || true
+BOOT_ID_BEFORE=$(remote_ssh "$SSH_HOST" 'cat /proc/sys/kernel/random/boot_id')
+remote_remote_ssh "$SSH_HOST" 'reboot' >/dev/null 2>&1 || true
 
 echo "  Waiting for SSH to disconnect..."
 DISCONNECTED=false
 for _ in $(seq 1 30); do
-	if ! ssh -o ConnectTimeout=3 -o BatchMode=yes "$SSH_HOST" 'true' >/dev/null 2>&1; then
+	if ! remote_ssh -o ConnectTimeout=3 -o BatchMode=yes "$SSH_HOST" 'true' >/dev/null 2>&1; then
 		DISCONNECTED=true
 		break
 	fi
@@ -167,7 +173,7 @@ fi
 echo "  Waiting for SSH recovery..."
 RECOVERED=false
 for _ in $(seq 1 60); do
-	if ssh -o ConnectTimeout=3 -o BatchMode=yes "$SSH_HOST" 'uptime' >/dev/null 2>&1; then
+	if remote_ssh -o ConnectTimeout=3 -o BatchMode=yes "$SSH_HOST" 'uptime' >/dev/null 2>&1; then
 		RECOVERED=true
 		break
 	fi
@@ -178,7 +184,7 @@ if [[ "$RECOVERED" != true ]]; then
 	exit 1
 fi
 
-BOOT_ID_AFTER=$(ssh "$SSH_HOST" 'cat /proc/sys/kernel/random/boot_id')
+BOOT_ID_AFTER=$(remote_ssh "$SSH_HOST" 'cat /proc/sys/kernel/random/boot_id')
 if [[ "$BOOT_ID_AFTER" == "$BOOT_ID_BEFORE" ]]; then
 	echo "  ERROR: boot ID did not change after reboot"
 	exit 1
@@ -187,29 +193,29 @@ echo "  OK: boot ID changed from $BOOT_ID_BEFORE to $BOOT_ID_AFTER"
 
 echo
 echo "==> Step 9: Verify apps after reboot..."
-PNEUMA_UID=$(ssh "$SSH_HOST" 'id -u pneuma')
-if ! ssh "$SSH_HOST" "systemctl is-active --quiet user@$PNEUMA_UID.service"; then
+PNEUMA_UID=$(remote_ssh "$SSH_HOST" 'id -u pneuma')
+if ! remote_ssh "$SSH_HOST" "systemctl is-active --quiet user@$PNEUMA_UID.service"; then
 	echo "  ERROR: pneuma user manager is not active after reboot"
 	exit 1
 fi
-if ! ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && systemctl --user list-units --type=service --state=active '\''pneuma-healthy-http-*.service'\'' --no-legend | grep -q ."'; then
+if ! remote_ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && systemctl --user list-units --type=service --state=active '\''pneuma-healthy-http-*.service'\'' --no-legend | grep -q ."'; then
 	echo "  ERROR: healthy-http Quadlet service is not active after reboot"
 	exit 1
 fi
-if ! ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && podman ps --format '\''{{.Names}}'\'' --filter '\''name=^pneuma-healthy-http-'\'' | grep -q ."'; then
+if ! remote_ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && podman ps --format '\''{{.Names}}'\'' --filter '\''name=^pneuma-healthy-http-'\'' | grep -q ."'; then
 	echo "  ERROR: healthy-http container is not active after reboot"
 	exit 1
 fi
-if ! ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma reconcile healthy-http"' | grep -Eq "Result: (no-op|repaired)"; then
+if ! remote_ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma reconcile healthy-http"' | grep -Eq "Result: (no-op|repaired)"; then
 	echo "  ERROR: healthy-http did not reconcile after reboot"
 	exit 1
 fi
-if ! ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma app status healthy-http"' | grep -q "Observed state: Running"; then
+if ! remote_ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma app status healthy-http"' | grep -q "Observed state: Running"; then
 	echo "  ERROR: healthy-http is not Running after reboot reconciliation"
 	exit 1
 fi
-PORT=$(ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && podman ps --format \"{{.Ports}}\" --filter name=pneuma-healthy-http | cut -d: -f2 | cut -d- -f1"')
-BODY=$(ssh "$SSH_HOST" "curl -fsS http://127.0.0.1:$PORT/")
+PORT=$(remote_ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && podman ps --format \"{{.Ports}}\" --filter name=pneuma-healthy-http | cut -d: -f2 | cut -d- -f1"')
+BODY=$(remote_ssh "$SSH_HOST" "curl -fsS http://127.0.0.1:$PORT/")
 if [[ "$BODY" != "healthy-http v1.0" ]]; then
 	echo "  ERROR: expected healthy-http v1.0 after reboot, got: $BODY"
 	exit 1

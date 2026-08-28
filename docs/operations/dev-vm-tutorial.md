@@ -67,6 +67,26 @@ Also add `192.168.122.50 pneuma-dev` to the host's `/etc/hosts`. Confirm:
 ssh pneuma-dev 'hostname'
 ```
 
+The `scripts/dev-vm/` test scripts do not require this `~/.ssh/config` entry.
+They route every remote call through `scripts/lib/remote.sh`, which keeps plain
+alias behavior by default and can instead target a host reached through a
+forwarded SSH port (for example a raw-QEMU guest) through explicit settings:
+
+```bash
+export PNEUMA_SSH_HOST=127.0.0.1
+export PNEUMA_SSH_PORT=2222
+export PNEUMA_SSH_IDENTITY=/tmp/pneuma-vm/root-key
+export PNEUMA_SSH_KNOWN_HOSTS_FILE=/tmp/pneuma-vm/known_hosts
+export PNEUMA_SSH_STRICT_HOST_KEY_CHECKING=accept-new
+```
+
+With these settings, `scripts/dev-vm/smoke.sh` and the other dev-vm scripts
+connect to the forwarded loopback endpoint with the dedicated identity and
+per-run known-hosts file instead of an alias; nothing is written to the
+developer's `~/.ssh/config` or global `known_hosts`. A positional ssh-host
+argument (such as `root@192.168.122.50`) still overrides `PNEUMA_SSH_HOST`,
+and the restricted CI-dispatch phase keeps using its explicitly supplied key.
+
 ## 3. Provision the Host
 
 With the provisioning key already installed, transfer the script and shared

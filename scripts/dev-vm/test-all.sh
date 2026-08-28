@@ -25,13 +25,20 @@
 #
 # The reboot inside e2e.sh requires root over SSH; run this script from a host
 # with the VM provisioning key configured (~/.ssh/pneuma-dev).
+# Transport settings (forwarded port, identity, known-hosts file) come from
+# the PNEUMA_SSH_* environment described in scripts/lib/remote.sh. The
+# restricted CI-dispatch phase uses the same endpoint with user `pneuma` and
+# the explicitly supplied CI key.
 
 set -euo pipefail
 
-SSH_HOST="${1:-pneuma-dev}"
-CI_SSH_HOST="${SSH_HOST#*@}"
-CI_KEY="${2:-$HOME/.ssh/pneuma-ci-test}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/remote.sh
+source "$SCRIPT_DIR/../lib/remote.sh"
+
+remote_init "${1:-pneuma-dev}"
+SSH_HOST="$REMOTE_HOST"
+CI_KEY="${2:-$HOME/.ssh/pneuma-ci-test}"
 LOG_DIR="${TMPDIR:-/tmp}/pneuma-test-all"
 mkdir -p "$LOG_DIR"
 
@@ -58,7 +65,7 @@ report() {
 }
 
 pneuma_cmd() {
-	ssh "$SSH_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && $1'"
+	remote_remote_ssh "$SSH_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && $1'"
 }
 
 check_remote() {
@@ -93,7 +100,7 @@ ci_assert_ok() {
 	shift 2
 	local output rc
 	set +e
-	output=$(timeout 15 ssh -i "$CI_KEY" -o BatchMode=yes "$@" 2>&1)
+	output=$(timeout 15 remote_ssh_as pneuma "$CI_KEY" -o BatchMode=yes "$@" 2>&1)
 	rc=$?
 	set -e
 	if [[ "$rc" -eq 0 ]] && printf '%s' "$output" | grep -qF -- "$expected"; then
@@ -110,7 +117,7 @@ ci_assert_rejected() {
 	local output rc before after
 	before=$(pneuma_cmd "pneuma app deployments healthy-http" 2>&1 || true)
 	set +e
-	output=$(timeout 15 ssh -i "$CI_KEY" -o BatchMode=yes "$@" 2>&1)
+	output=$(timeout 15 remote_ssh_as pneuma "$CI_KEY" -o BatchMode=yes "$@" 2>&1)
 	rc=$?
 	set -e
 	after=$(pneuma_cmd "pneuma app deployments healthy-http" 2>&1 || true)
@@ -123,7 +130,7 @@ ci_assert_rejected() {
 }
 
 healthy_http_port() {
-	ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc '\''cd $HOME && podman ps --format "{{.Ports}}" --filter name=pneuma-healthy-http'\''' |
+	remote_ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc '\''cd $HOME && podman ps --format "{{.Ports}}" --filter name=pneuma-healthy-http'\''' |
 		grep -v level=warning | cut -d: -f2 | cut -d- -f1 | head -1
 }
 
@@ -135,7 +142,7 @@ check_http_body() {
 		report fail "$description (no healthy-http container)"
 		return
 	fi
-	body=$(ssh "$SSH_HOST" "curl -s http://127.0.0.1:$port/")
+	body=$(remote_ssh "$SSH_HOST" "curl -s http://127.0.0.1:$port/")
 	if [[ "$body" == "$expected" ]]; then
 		report ok "$description"
 	else
@@ -149,7 +156,7 @@ echo "=========================================="
 
 echo
 echo "==> Preflight..."
-if ssh -o ConnectTimeout=5 "$SSH_HOST" 'true' 2>/dev/null; then
+if remote_ssh -o ConnectTimeout=5 "$SSH_HOST" 'true' 2>/dev/null; then
 	report ok "SSH reachable ($SSH_HOST)"
 else
 	report fail "SSH unreachable ($SSH_HOST)"
@@ -158,7 +165,7 @@ else
 	exit 1
 fi
 
-DEPLOY_USAGE=$(ssh "$SSH_HOST" '/usr/local/bin/pneuma app deploy --help 2>&1' 2>/dev/null || true)
+DEPLOY_USAGE=$(remote_ssh "$SSH_HOST" '/usr/local/bin/pneuma app deploy --help 2>&1' 2>/dev/null || true)
 if printf '%s' "$DEPLOY_USAGE" | grep -qF -- '--branch'; then
 	report ok "installed binary supports --branch"
 else
@@ -210,19 +217,19 @@ fi
 echo
 echo "==> Phase 4: restricted-key CI dispatcher..."
 if [[ -f "$CI_KEY" ]]; then
-	ci_assert_ok "pneuma" "ci dispatch: version via restricted SSH key" "pneuma@$CI_SSH_HOST" version
-	ci_assert_ok "Status: Succeeded" "ci dispatch: deploy healthy-http staging via restricted SSH key" "pneuma@$CI_SSH_HOST" "deploy healthy-http staging"
+	ci_assert_ok "pneuma" "ci dispatch: version via restricted SSH key" version
+	ci_assert_ok "Status: Succeeded" "ci dispatch: deploy healthy-http staging via restricted SSH key" "deploy healthy-http staging"
 	check_http_body "healthy-http v2.0" "healthy-http serves v2.0 after CI deploy of staging"
-	ci_assert_rejected "ci dispatch rejects id" "pneuma@$CI_SSH_HOST" id
-	ci_assert_rejected "ci dispatch rejects podman" "pneuma@$CI_SSH_HOST" "podman ps"
-	ci_assert_rejected "ci dispatch rejects file reads" "pneuma@$CI_SSH_HOST" "cat /etc/passwd"
-	ci_assert_rejected "ci dispatch rejects branch injection" "pneuma@$CI_SSH_HOST" "deploy healthy-http 'staging;id'"
-	ci_assert_rejected "ci dispatch rejects an empty command" "pneuma@$CI_SSH_HOST"
-	ci_assert_rejected "ci dispatch rejects PTY allocation" -tt "pneuma@$CI_SSH_HOST" version
-	ci_assert_rejected "ci dispatch rejects local forwarding" -N -L 127.0.0.1:18999:127.0.0.1:22 "pneuma@$CI_SSH_HOST"
-	ci_assert_rejected "ci dispatch rejects remote forwarding" -N -R 18999:127.0.0.1:22 "pneuma@$CI_SSH_HOST"
-	ci_assert_rejected "ci dispatch rejects agent forwarding" -A -N "pneuma@$CI_SSH_HOST"
-	ci_assert_rejected "ci dispatch rejects X11 forwarding" -X -N "pneuma@$CI_SSH_HOST"
+	ci_assert_rejected "ci dispatch rejects id" id
+	ci_assert_rejected "ci dispatch rejects podman" "podman ps"
+	ci_assert_rejected "ci dispatch rejects file reads" "cat /etc/passwd"
+	ci_assert_rejected "ci dispatch rejects branch injection" "deploy healthy-http 'staging;id'"
+	ci_assert_rejected "ci dispatch rejects an empty command"
+	ci_assert_rejected "ci dispatch rejects PTY allocation" -tt version
+	ci_assert_rejected "ci dispatch rejects local forwarding" -N -L 127.0.0.1:18999:127.0.0.1:22
+	ci_assert_rejected "ci dispatch rejects remote forwarding" -N -R 18999:127.0.0.1:22
+	ci_assert_rejected "ci dispatch rejects agent forwarding" -A -N
+	ci_assert_rejected "ci dispatch rejects X11 forwarding" -X -N
 fi
 
 echo

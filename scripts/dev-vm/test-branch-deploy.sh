@@ -16,11 +16,17 @@
 #
 # Default ssh-host: pneuma-dev
 # The SSH target must be root to prepare fixture and repository directories.
+# Transport settings (forwarded port, identity, known-hosts file) come from
+# the PNEUMA_SSH_* environment described in scripts/lib/remote.sh.
 
 set -euo pipefail
 
-SSH_HOST="${1:-pneuma-dev}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/remote.sh
+source "$SCRIPT_DIR/../lib/remote.sh"
+
+remote_init "${1:-pneuma-dev}"
+SSH_HOST="$REMOTE_HOST"
 FIXTURE_SRC="$SCRIPT_DIR/fixtures/healthy-http"
 
 echo "=========================================="
@@ -29,7 +35,7 @@ echo "=========================================="
 
 echo
 echo "==> Verifying installed binary supports --branch..."
-BRANCH_USAGE=$(ssh "$SSH_HOST" '/usr/local/bin/pneuma app deploy --help 2>&1' || true)
+BRANCH_USAGE=$(remote_ssh "$SSH_HOST" '/usr/local/bin/pneuma app deploy --help 2>&1' || true)
 if ! echo "$BRANCH_USAGE" | grep -q -- '--branch'; then
 	echo "  ERROR: installed binary lacks --branch; run scripts/dev-vm/sync-binary.sh first"
 	exit 1
@@ -42,16 +48,16 @@ echo "==> Step 1: Reset fixtures..."
 
 echo
 echo "==> Step 2: Ensure registry is running and copy fixture sources..."
-ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && (podman start pneuma-registry 2>/dev/null || podman run -d --name pneuma-registry -p 5000:5000 docker.io/library/registry:2)"' 2>&1 | grep -v level=warning || true
-ssh "$SSH_HOST" 'mkdir -p /var/lib/pneuma/checkouts/fixtures'
-ssh "$SSH_HOST" 'mkdir -p /var/lib/pneuma/repos && chown pneuma:pneuma /var/lib/pneuma/repos'
-scp -rq "$FIXTURE_SRC" "$SSH_HOST":/var/lib/pneuma/checkouts/fixtures/
-ssh "$SSH_HOST" 'chown -R pneuma:pneuma /var/lib/pneuma/checkouts/fixtures'
+remote_ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && (podman start pneuma-registry 2>/dev/null || podman run -d --name pneuma-registry -p 5000:5000 docker.io/library/registry:2)"' 2>&1 | grep -v level=warning || true
+remote_ssh "$SSH_HOST" 'mkdir -p /var/lib/pneuma/checkouts/fixtures'
+remote_ssh "$SSH_HOST" 'mkdir -p /var/lib/pneuma/repos && chown pneuma:pneuma /var/lib/pneuma/repos'
+remote_scp_to -rq "$FIXTURE_SRC" "$SSH_HOST":/var/lib/pneuma/checkouts/fixtures/
+remote_ssh "$SSH_HOST" 'chown -R pneuma:pneuma /var/lib/pneuma/checkouts/fixtures'
 
 echo
 echo "==> Step 3: Create Git repository and tagged images on the VM..."
 SHA_OUT=$(
-	ssh "$SSH_HOST" 'runuser -u pneuma -- bash -l -s' <<'REMOTE'
+	remote_ssh "$SSH_HOST" 'runuser -u pneuma -- bash -l -s' <<'REMOTE'
 set -euo pipefail
 cd "$HOME"
 REPOS_ROOT="/var/lib/pneuma/repos"
@@ -102,7 +108,7 @@ echo "  staging=$SHA_STAGING"
 
 echo
 echo "==> Step 4: Import, deploy by branch and verify..."
-ssh "$SSH_HOST" "runuser -u pneuma -- bash -l -s '$SHA_MAIN' '$SHA_STAGING'" <<'REMOTE'
+remote_ssh "$SSH_HOST" "runuser -u pneuma -- bash -l -s '$SHA_MAIN' '$SHA_STAGING'" <<'REMOTE'
 set -euo pipefail
 cd "$HOME"
 SHA_MAIN="$1"
