@@ -1,15 +1,13 @@
 use thiserror::Error;
 
 use pneuma::adapters::database::DatabaseError;
+use pneuma::adapters::stores::application_store::ApplicationStoreError;
+use pneuma::adapters::stores::deployment_store::DeploymentStoreError;
 use pneuma::domain::release::InvalidOciArtifact;
 use pneuma::domain::system::InvalidSystemName;
-use pneuma::use_cases::application::{
-    ImportError, ListError, LookupError, RemoteImportError, RuntimeLifecycleError,
-};
+use pneuma::use_cases::application::{ImportError, RemoteImportError, RuntimeLifecycleError};
 use pneuma::use_cases::ci::CiDispatchError;
-use pneuma::use_cases::deployment::{
-    DeployBranchError, DeployOciError, ListDeploymentsError, RollbackError,
-};
+use pneuma::use_cases::deployment::{DeployBranchError, DeployOciError, RollbackError};
 use pneuma::use_cases::exposure::ExposureChangeError;
 use pneuma::use_cases::reconciliation::ReconciliationReadError;
 
@@ -48,12 +46,12 @@ pub(crate) enum CliError {
     Import { source: RemoteImportError },
     #[error(transparent)]
     InvalidSystemName { source: InvalidSystemName },
-    #[error(transparent)]
-    List { source: ListError },
-    #[error(transparent)]
-    ApplicationLookup { source: LookupError },
-    #[error(transparent)]
-    ListDeployments { source: ListDeploymentsError },
+    #[error("failed to list applications: {source}")]
+    List { source: ApplicationStoreError },
+    #[error("failed to load application: {source}")]
+    ApplicationLookup { source: ApplicationStoreError },
+    #[error("failed to list deployments: {source}")]
+    ListDeployments { source: DeploymentStoreError },
     #[error("application `{application_name}` was not found")]
     ApplicationNotFound { application_name: String },
     #[error(transparent)]
@@ -68,14 +66,10 @@ pub(crate) enum CliError {
     Rollback { source: RollbackError },
     #[error(transparent)]
     VisibilitySet { source: ExposureChangeError },
-    #[error(transparent)]
-    SystemCreate {
-        source: pneuma::use_cases::system::CreateError,
-    },
-    #[error(transparent)]
-    SystemList {
-        source: pneuma::use_cases::system::ListSystemsError,
-    },
+    #[error("failed to create system: {source}")]
+    SystemCreate { source: rusqlite::Error },
+    #[error("failed to list systems: {source}")]
+    SystemList { source: rusqlite::Error },
     #[error(transparent)]
     SystemShow {
         source: pneuma::use_cases::system::ShowError,
@@ -213,9 +207,8 @@ mod tests {
     use pneuma::adapters::local_runtime::PodmanError;
     use pneuma::adapters::oci_image::PullImageError;
     use pneuma::adapters::stores::application_store::ApplicationStoreError;
-    use pneuma::adapters::stores::deployment_store::DeploymentStoreError;
     use pneuma::use_cases::ci::CiDispatchError;
-    use pneuma::use_cases::system::{CreateError, ShowError};
+    use pneuma::use_cases::system::ShowError;
 
     fn sqlite_error() -> rusqlite::Error {
         rusqlite::Error::InvalidParameterName("test".to_owned())
@@ -513,9 +506,7 @@ mod tests {
             (
                 "system create: persistence failure",
                 CliError::SystemCreate {
-                    source: CreateError::Persistence {
-                        source: sqlite_error(),
-                    },
+                    source: sqlite_error(),
                 },
                 CliErrorClass::Failure,
             ),
@@ -573,9 +564,9 @@ mod tests {
             (
                 "deployment list: persistence failure",
                 CliError::ListDeployments {
-                    source: ListDeploymentsError::Store(DeploymentStoreError::Stale {
+                    source: DeploymentStoreError::Stale {
                         deployment_id: "deployment-1".to_owned(),
-                    }),
+                    },
                 },
                 CliErrorClass::Failure,
             ),
@@ -657,5 +648,53 @@ mod tests {
         };
         assert_eq!(error.to_string(), "application `app-1` was not found");
         assert!(error.source().is_none());
+    }
+
+    #[test]
+    fn cli_query_errors_name_the_operation_and_keep_their_causes() {
+        // The forwarding-only use-case wrappers were removed; the operation prefix
+        // now lives here, and the store/SQLite cause must remain reachable.
+        let cases = [
+            (
+                CliError::List {
+                    source: store_error(),
+                },
+                "failed to list applications: application store error: Invalid parameter name: test",
+            ),
+            (
+                CliError::ApplicationLookup {
+                    source: store_error(),
+                },
+                "failed to load application: application store error: Invalid parameter name: test",
+            ),
+            (
+                CliError::ListDeployments {
+                    source: DeploymentStoreError::Stale {
+                        deployment_id: "deployment-1".to_owned(),
+                    },
+                },
+                "failed to list deployments: deployment `deployment-1` changed before persistence",
+            ),
+            (
+                CliError::SystemCreate {
+                    source: sqlite_error(),
+                },
+                "failed to create system: Invalid parameter name: test",
+            ),
+            (
+                CliError::SystemList {
+                    source: sqlite_error(),
+                },
+                "failed to list systems: Invalid parameter name: test",
+            ),
+        ];
+
+        for (error, expected) in cases {
+            assert_eq!(error.to_string(), expected);
+            let source = error
+                .source()
+                .expect("the original cause must stay reachable");
+            assert!(!source.to_string().is_empty());
+        }
     }
 }

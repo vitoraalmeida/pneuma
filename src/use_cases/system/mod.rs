@@ -4,6 +4,6 @@ mod create;
 mod list;
 mod show;
 
-pub use self::create::{CreateError, create_system};
-pub use self::list::{ListSystemsError, list_systems};
+pub use self::create::create_system;
+pub use self::list::list_systems;
 pub use self::show::{ShowError, SystemDetails, show_system};

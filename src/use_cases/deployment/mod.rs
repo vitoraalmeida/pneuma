@@ -52,6 +52,6 @@ pub use self::execute::{DeploymentResult, PublicDeploymentConfiguration};
 pub use self::failure::DeployReleaseError;
 pub use self::progress::{DeploymentProgress, DeploymentStep};
 pub use self::promotion::{PromoteInternalCandidateError, promote_internal_candidate};
-pub use self::query::{ListDeploymentsError, list_deployments};
+pub use self::query::list_deployments;
 pub use self::rollback::{RollbackError, rollback_deployment};
 pub use self::transition::{TransitionDeploymentError, advance_deployment, fail_deployment};
