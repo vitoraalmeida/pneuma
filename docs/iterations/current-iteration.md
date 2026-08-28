@@ -73,9 +73,18 @@ incompatible; no existing database or backup is upgraded.
       replace, sidecar cleanup, and reopen-before-success. Lock contention is a
       conflict (exit 4); incompatible or corrupt backups are rejected without
       replacing the database or creating a snapshot.
-6. [ ] Living documentation and invariant consolidation
+6. [x] Living documentation and invariant consolidation
    - Synchronize implemented documentation and replace the invariant inventory
      with the approved compact durable guarantees.
+   - Result: `docs/architecture/invariants.md` is now a compact inventory of
+     50 durable guarantees with stable `INV-*` IDs, one owner layer, and their
+     proofs, replacing the 452-line rule-by-rule table; the recovery-action and
+     retry classifications are condensed into two short contract sections, and
+     retired references (per-file migrations, `delivery_type`, nullable
+     `system_id`, struct-role section) are removed. The inventory is indexed in
+     `docs/README.md`, and the dead struct-role anchor in `architecture.md`
+     points at the inventory. No other living document required changes: they
+     were synchronized by their implementing checkpoints.
 7. [ ] Operational regression and closure
    - Run final CI, applicable rootless-Podman and disposable-host evidence, then
      close only with every acceptance criterion proved.
@@ -127,3 +136,6 @@ incompatible; no existing database or backup is upgraded.
   a conflicting lock, valid restore with reopen, and CLI scenarios for restore
   rejection, restore conflict under a held shared lock, and normal-command
   conflict under a held exclusive lock.
+- Checkpoint 6: markdown-link validation, `cargo fmt --check`, Clippy with
+  warnings denied, all-feature tests (25 suites green; the same three ignored
+  OCI tests remain environment-dependent), and release build passed.
