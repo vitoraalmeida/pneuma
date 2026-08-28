@@ -54,7 +54,10 @@ One coordination mechanism applies to every existing-Application mutation:
 `adapters/application_lock.rs::ApplicationLock::try_acquire_for_connection` is a
 kernel `flock` per Application, held from the first state-dependent read through
 effects, confirmation, and compensation. A failed acquire is an explicit
-conflict; reconciliation returns `Deferred`.
+conflict; reconciliation returns `Deferred`. The database file itself is guarded
+by a second, database-wide kernel lock (`adapters/database.rs::DatabaseLock`):
+normal commands hold it shared for as long as they use their connection, restore
+holds it exclusively, and `version` stays lock-free.
 
 ---
 

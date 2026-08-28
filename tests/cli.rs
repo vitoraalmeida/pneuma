@@ -10,7 +10,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use pneuma::adapters::application_lock::ApplicationLock;
-use pneuma::adapters::database;
+use pneuma::adapters::database::{self, DatabaseLock, LockMode};
 
 use rusqlite::OptionalExtension;
 
@@ -202,7 +202,7 @@ fn remote_import_is_idempotent() {
 }
 
 #[test]
-fn reports_database_open_errors_and_returns_failure() {
+fn reports_an_unusable_database_location_and_returns_failure() {
     let database_path = temporary_database_path()
         .join("missing")
         .join("pneuma.sqlite3");
@@ -211,7 +211,9 @@ fn reports_database_open_errors_and_returns_failure() {
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("failed to open database at"));
+    // The shared database lock is acquired before the database itself is opened,
+    // so an unusable location surfaces at the lock boundary with the path named.
+    assert!(stderr.contains("failed to acquire the database-wide lock"));
     assert!(stderr.contains(database_path.to_string_lossy().as_ref()));
 }
 
@@ -399,6 +401,110 @@ fn database_backup_and_restore_preserve_catalog_state() {
             .to_string_lossy()
             .contains("pre-restore")
     }));
+}
+
+#[test]
+fn restore_rejects_an_incompatible_backup_without_replacing_the_live_database() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    let backup = environment.root.join("old-generation-backup.sqlite3");
+    let connection = rusqlite::Connection::open(&backup).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE schema_migrations (
+                 version INTEGER PRIMARY KEY,
+                 applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+             );
+             INSERT INTO schema_migrations (version) VALUES (14);",
+        )
+        .unwrap();
+    drop(connection);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_pneuma"))
+        .env("PNEUMA_DATABASE_PATH", &environment.database_path)
+        .args(["database", "restore"])
+        .arg(&backup)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("incompatible schema"),
+        "unexpected stderr: {stderr}"
+    );
+    let connection = database::open(&environment.database_path).unwrap();
+    let count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM applications", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 1, "the live catalog must stay untouched");
+    assert!(
+        !fs::read_dir(&environment.root).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains("pre-restore")
+        }),
+        "no pre-restore snapshot may be created for a rejected backup"
+    );
+}
+
+#[test]
+fn restore_conflicts_while_normal_access_holds_the_database_lock() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    let backup = environment.root.join("database-backup.sqlite3");
+    let backup_output = Command::new(env!("CARGO_BIN_EXE_pneuma"))
+        .env("PNEUMA_DATABASE_PATH", &environment.database_path)
+        .args(["database", "backup"])
+        .arg(&backup)
+        .output()
+        .unwrap();
+    assert_command_succeeded(&backup_output);
+    let _shared = DatabaseLock::try_acquire(&environment.database_path, LockMode::Shared)
+        .unwrap()
+        .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_pneuma"))
+        .env("PNEUMA_DATABASE_PATH", &environment.database_path)
+        .args(["database", "restore"])
+        .arg(&backup)
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(4));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("another Pneuma command is using the database"),
+        "unexpected stderr: {stderr}"
+    );
+    let connection = database::open(&environment.database_path).unwrap();
+    let count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM applications", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 1, "a busy restore must not replace the database");
+}
+
+#[test]
+fn normal_commands_conflict_while_restore_holds_the_exclusive_lock() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    let _exclusive = DatabaseLock::try_acquire(&environment.database_path, LockMode::Exclusive)
+        .unwrap()
+        .unwrap();
+
+    let output = run_pneuma(
+        &environment.database_path,
+        &[OsStr::new("app"), OsStr::new("list")],
+    );
+
+    assert_eq!(output.status.code(), Some(4));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("another Pneuma command is using the database"),
+        "unexpected stderr: {stderr}"
+    );
 }
 
 #[test]

@@ -28,6 +28,7 @@ pub(crate) fn run_ci_dispatch(verbose: bool) -> Result<(), CliError> {
         } => {
             let database_path = database::configured_path();
 
+            let _lock = super::shared_database_lock(&database_path)?;
             let mut connection =
                 database::open(&database_path).map_err(|source| CliError::Database { source })?;
 

@@ -10,7 +10,9 @@ mod reconciliation;
 mod shared;
 mod system;
 
-use pneuma::adapters::database;
+use std::path::Path;
+
+use pneuma::adapters::database::{self, DatabaseError, DatabaseLock, LockMode};
 
 use error::CliError;
 use shared::log_verbose;
@@ -34,11 +36,14 @@ pub(crate) fn run(invocation: Invocation) -> Result<(), CliError> {
             run_version();
             return Ok(());
         }
+        if let Command::DatabaseRestore { path } = command {
+            // Restore takes the exclusive database-wide lock itself.
+            return doctor::run_database_restore(&database_path, &path);
+        }
+
+        let _lock = shared_database_lock(&database_path)?;
         if let Command::DatabaseBackup { path } = command {
             return doctor::run_database_backup(&database_path, &path);
-        }
-        if let Command::DatabaseRestore { path } = command {
-            return doctor::run_database_restore(&database_path, &path);
         }
 
         let connection = doctor::open_doctor_connection(&database_path)?;
@@ -51,6 +56,7 @@ pub(crate) fn run(invocation: Invocation) -> Result<(), CliError> {
 
     let database_path = database::configured_path();
     log_verbose(verbose, format!("database: {}", database_path.display()));
+    let _lock = shared_database_lock(&database_path)?;
     let mut connection =
         database::open(&database_path).map_err(|source| CliError::Database { source })?;
 
@@ -116,4 +122,17 @@ pub(crate) fn run(invocation: Invocation) -> Result<(), CliError> {
 // Prints version information without requiring host configuration or database access.
 pub(crate) fn run_version() {
     println!("pneuma {}", env!("CARGO_PKG_VERSION"));
+}
+
+// Acquires the shared database-wide lock held for as long as the command uses the database.
+fn shared_database_lock(database_path: &Path) -> Result<DatabaseLock, CliError> {
+    match DatabaseLock::try_acquire(database_path, LockMode::Shared) {
+        Ok(Some(lock)) => Ok(lock),
+        Ok(None) => Err(CliError::Database {
+            source: DatabaseError::DatabaseBusy {
+                path: database_path.to_path_buf(),
+            },
+        }),
+        Err(source) => Err(CliError::Database { source }),
+    }
 }

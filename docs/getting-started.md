@@ -406,7 +406,7 @@ automatically.
 | `pneuma app deployments <app>` | List Deployment history. |
 | `pneuma deployment rollback <app>` | Deploy the prior successful Release as a new rollback Deployment. |
 | `pneuma database backup <path>` | Create a consistent SQLite backup. |
-| `pneuma database restore <path>` | Validate and restore a SQLite backup. |
+| `pneuma database restore <path>` | Validate a current-schema SQLite backup and restore it atomically; rejects incompatible backups. |
 | `pneuma ci dispatch` | Restricted SSH dispatcher; not for direct interactive use. |
 | `pneuma version` | Print version without opening the database. |
 | `pneuma doctor` | Verify host prerequisites. |

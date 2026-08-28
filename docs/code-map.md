@@ -24,7 +24,11 @@ Every command starts the same way:
 
 Every mutation of an existing Application holds its per-application `flock`
 (`src/adapters/application_lock.rs::ApplicationLock::try_acquire_for_connection`)
-from its first state-dependent read through confirmation and compensation.
+from its first state-dependent read through confirmation and compensation. The
+database itself is guarded by a database-wide `flock`
+(`src/adapters/database.rs::DatabaseLock`): normal commands share it for as long
+as they hold their connection, restore takes it exclusively, and `version` stays
+lock-free.
 
 ## Application import
 

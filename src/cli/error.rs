@@ -103,8 +103,12 @@ impl CliError {
             },
             Self::CiDispatch { .. } => CliErrorClass::Usage,
             Self::Reconcile { source } => classify_reconciliation_read(source),
-            Self::Database { .. }
-            | Self::List { .. }
+            Self::Database { source } => match source {
+                // Database-wide lock contention is a caller-visible conflict.
+                DatabaseError::DatabaseBusy { .. } => CliErrorClass::Conflict,
+                _ => CliErrorClass::Failure,
+            },
+            Self::List { .. }
             | Self::ApplicationLookup { .. }
             | Self::ListDeployments { .. }
             | Self::SystemCreate { .. }
@@ -572,6 +576,15 @@ mod tests {
                     },
                 },
                 CliErrorClass::Failure,
+            ),
+            (
+                "database: busy from another command",
+                CliError::Database {
+                    source: DatabaseError::DatabaseBusy {
+                        path: "/tmp/pneuma.sqlite3".into(),
+                    },
+                },
+                CliErrorClass::Conflict,
             ),
             // Read-only query family.
             (

@@ -606,22 +606,30 @@ becoming invented stopped/running facts.
 
 ```text
 backup <path>
+  -> take the shared database-wide lock
   -> refuse an existing destination
   -> open the live database read-only
   -> SQLite online backup into the destination file
 
 restore <path>
+  -> take the exclusive database-wide lock, so restore cannot race normal access
   -> open the candidate file read-only and require PRAGMA integrity_check = ok
-  -> create a create-only restore.lock to serialize concurrent restores
+  -> verify the candidate carries the exact current schema ledger; any other
+     schema is rejected as incompatible before the live database is touched
   -> back up the live database to a timestamped pre-restore snapshot first
   -> copy the validated file to a temporary path, then atomically rename it
      over the live database and remove stale -wal/-shm/-journal sidecars
   -> reopen the restored database so success also proves usability
 ```
 
-Restore never reports success for an unusable database: the reopened connection
-verifies the current schema exactly like any other open. The pre-restore
-snapshot path is printed so an operator can roll back a bad restoration.
+Every command that opens or mutates the database holds the shared database-wide
+kernel lock (`<database>.lock`) for as long as it uses its connection; `version`
+stays lock-free. Restore holds the exclusive lock, so it cannot race normal
+access, and lock contention is reported as a conflict. Restore never reports
+success for an unusable database: an incompatible or corrupt backup is rejected
+before the live database is touched, and the reopened connection verifies the
+current schema exactly like any other open. The pre-restore snapshot path is
+printed so an operator can roll back a bad restoration.
 
 ### Doctor
 
@@ -719,10 +727,11 @@ for its observed state.
   linger for the `pneuma` user, and maintains the Caddy baseline.
 - The binary updater changes only the binary; bootstrap must be rerun when a
   release changes host-managed files such as the Caddy baseline.
-- `pneuma database backup <path>` makes a SQLite backup, refusing an existing
-  destination. `pneuma database restore <path>` checks source integrity, takes a
-  create-only `<database>.restore.lock` file, makes a pre-restore backup, and
-  replaces the database atomically.
+- `pneuma database backup <path>` makes a SQLite backup under the shared
+  database-wide lock, refusing an existing destination. `pneuma database restore
+  <path>` takes the exclusive database-wide lock, validates source integrity and
+  the exact current schema before touching the live database, makes a pre-restore
+  backup, and replaces the database atomically.
 - `pneuma doctor` checks the database and its schema ledger, configured paths,
   Caddy configuration, Git/Podman/Caddy availability, rootless Podman, the
   Quadlet user generator, disk capacity, and that active OCI images remain

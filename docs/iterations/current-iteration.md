@@ -60,9 +60,19 @@ incompatible; no existing database or backup is upgraded.
       remove only a still-present container, re-observe, and record retirement or
       missing state only after observed absence, with unproven removals reported
       as warnings or `ContainerNotRemoved` divergence instead of silent success.
-5. [ ] Database replacement safety
-   - Serialize normal database access and restore with a database-wide kernel
-     lock and accept only exact-current backups.
+5. [x] Database replacement safety
+    - Serialize normal database access and restore with a database-wide kernel
+      lock and accept only exact-current backups.
+    - Result: `DatabaseLock` in `src/adapters/database.rs` guards the database
+      file with a shared/exclusive `flock` sidecar (`<database>.lock`); every
+      command that opens the database holds it shared (doctor, backup, CI
+      dispatch, and all normal commands), restore holds it exclusively, and
+      `version` stays lock-free. The create-only restore marker is removed;
+      restore validates source integrity and the exact current schema ledger
+      before any live mutation, then keeps the pre-restore snapshot, atomic
+      replace, sidecar cleanup, and reopen-before-success. Lock contention is a
+      conflict (exit 4); incompatible or corrupt backups are rejected without
+      replacing the database or creating a snapshot.
 6. [ ] Living documentation and invariant consolidation
    - Synchronize implemented documentation and replace the invariant inventory
      with the approved compact durable guarantees.
@@ -109,3 +119,11 @@ incompatible; no existing database or backup is upgraded.
   absence (including the Quadlet-ExecStop path without force removal), and
   candidate cleanup divergence when removal cannot be proven; real-git checkout
   tests cover the surviving boundary only.
+- Checkpoint 5: `cargo fmt --check`, Clippy with warnings denied, all-feature
+  tests (25 suites green; the same three ignored OCI tests remain
+  environment-dependent), and release build passed. New proofs: database-lock
+  shared/exclusive serialization and process-death release, restore rejection of
+  incompatible and corrupt backups before any live mutation, busy restore under
+  a conflicting lock, valid restore with reopen, and CLI scenarios for restore
+  rejection, restore conflict under a held shared lock, and normal-command
+  conflict under a held exclusive lock.
