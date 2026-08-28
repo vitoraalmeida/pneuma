@@ -1,6 +1,6 @@
 # Pneuma Architecture
 
-**Status:** living document - describes the system as implemented in v0.4.2.
+**Status:** living document - describes the system as implemented in v0.4.3.
 
 Pneuma is a single-host deployment CLI. It imports application specifications
 from Git repositories, deploys immutable OCI artifacts with rootless Podman and

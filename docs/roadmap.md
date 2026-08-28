@@ -121,6 +121,20 @@ automatic rollback after promotion.
   removed.
 - `HostPort` newtype represents the reserved loopback host port.
 
+### v0.4.3 - Disposable Regression Automation
+
+**Status:** completed on 2026-08-27 (tagged and released).
+
+- `scripts/dev-vm/test-regression.sh` automates the full disposable-VM
+  regression in one command: clone, provision, suite dispatch (`all`, `e2e`,
+  `reconciliation`, `bootstrap`), and guaranteed clone destruction.
+- Rollback and reconciliation battery defects fixed on fresh clones: the
+  rollback happy path persists a hydratable runtime tombstone, and
+  reconciliation classifies unknown external states conservatively.
+- Error and type redundancy cleanup across the deployment pipeline: one
+  canonical `FailedExecution` failure carrier, one durable failure-code
+  vocabulary in the domain, and table-driven CLI classification.
+
 ## v0.5 - Observed State / Host Observation
 
 **Status:** planned; not started. No approved design yet.
@@ -306,6 +320,9 @@ Each version creates the conceptual prerequisite of the next:
 
 ```text
 v0.4.2  basic reconciliation
+   │
+   ▼
+v0.4.3  disposable regression automation
    │
    ▼
 v0.5    Observed State            "what is really happening?"

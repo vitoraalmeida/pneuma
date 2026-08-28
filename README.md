@@ -89,7 +89,7 @@ follow [`docs/getting-started.md`](docs/getting-started.md).
 
 ## Status
 
-v0.4.2 is the latest release. The next stage, v0.5 host observation
+v0.4.3 is the latest release. The next stage, v0.5 host observation
 (observed state), is planned but not started. See
 [`docs/roadmap.md`](docs/roadmap.md) for direction and
 [`CHANGELOG.md`](CHANGELOG.md) for released changes.

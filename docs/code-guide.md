@@ -1,6 +1,6 @@
 # Pneuma Code Guide
 
-**Status:** living document - describes the code layout as implemented in v0.4.2.
+**Status:** living document - describes the code layout as implemented in v0.4.3.
 
 This guide is for a new contributor who needs to follow one user-facing flow
 end to end without global searching. It maps each flow through the layers:

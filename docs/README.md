@@ -37,7 +37,7 @@ overrides current architecture.
 |---|---|---|
 | Production host | Bootstrap, application operation, and non-destructive smoke tests only | [`getting-started.md`](getting-started.md) |
 | Development VM | Disposable Debian 13 provisioning and manual regression | [`operations/dev-vm-tutorial.md`](operations/dev-vm-tutorial.md) |
-| Automated VM regression | Fixture-cycle E2E, full disposable regression, and reconciliation catalog | [`../scripts/dev-vm/e2e.sh`](../scripts/dev-vm/e2e.sh), [`../scripts/dev-vm/test-all.sh`](../scripts/dev-vm/test-all.sh), [`../scripts/dev-vm/reconciliation-e2e.sh`](../scripts/dev-vm/reconciliation-e2e.sh) |
+| Automated VM regression | One-command disposable regression, fixture-cycle E2E, and reconciliation catalog | [`../scripts/dev-vm/test-regression.sh`](../scripts/dev-vm/test-regression.sh) (standard path), [`../scripts/dev-vm/e2e.sh`](../scripts/dev-vm/e2e.sh), [`../scripts/dev-vm/test-all.sh`](../scripts/dev-vm/test-all.sh), [`../scripts/dev-vm/reconciliation-e2e.sh`](../scripts/dev-vm/reconciliation-e2e.sh) |
 
 Do not run reset, restore, bootstrap acceptance, or E2E scripts on production.
 
@@ -64,6 +64,6 @@ product direction (`roadmap.md`).
 | [`architecture/data-model.md`](architecture/data-model.md) | Living | Implemented SQLite model and persistence invariants |
 | [`architecture/security-model.md`](architecture/security-model.md) | Living | Assets, actors, trust boundaries, threats with their controls and residual risks, attack chains, and security posture |
 | [`decisions/`](decisions/) | Historical records | Retrospective architectural decision records |
-| [`iterations/current-iteration.md`](iterations/current-iteration.md) | Active planning | v0.4.3 disposable regression automation tracker |
+| [`iterations/current-iteration.md`](iterations/current-iteration.md) | Active planning | Closed v0.4.3 disposable regression automation tracker |
 | [`iterations/next-iteration.md`](iterations/next-iteration.md) | Queued planning | v0.5 observed state planning reminder |
 | [`roadmap.md`](roadmap.md) | Living | v0.1 → v1.0 evolution and direction |

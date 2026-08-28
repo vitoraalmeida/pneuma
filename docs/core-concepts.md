@@ -1,6 +1,6 @@
 # Pneuma Core Concepts
 
-**Status:** living document - describes the domain vocabulary as implemented in v0.4.2.
+**Status:** living document - describes the domain vocabulary as implemented in v0.4.3.
 
 This guide gives a new contributor the minimum vocabulary needed before reading
 use cases. It explains what each core term means and how the terms relate;
