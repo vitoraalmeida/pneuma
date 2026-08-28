@@ -395,11 +395,15 @@ lost precondition explicit instead of double-applying.
    so `transition_application` controls only when fresh observation differs
    from the target (INV-WF-006) and re-observes through a persisted CAS
    afterwards. Quadlet-supervised paths prefer systemctl for convergence.
-6. **Podman force-remove during compensation** (`remove_container`) —
-   *requires cleanup + proven ownership*. Called only on resources tracked in
-   `CandidateResources` or proven by reconciliation identity checks; an already
-   removed container is observed as `Missing` on retry instead of being
-   blindly targeted again (INV-REC-003).
+6. **Podman force-remove during compensation** (`remove_container`, with
+   `container_exists` proof in `cleanup.rs::prove_container_removed`) —
+   *requires cleanup + proven ownership + observed absence*. Called only on
+   resources tracked in `CandidateResources` or proven by reconciliation
+   identity checks; absence is observed first (Quadlet's ExecStop removes the
+   supervised container itself), a still-present container is force-removed
+   and re-observed, and retirement or missing-marking is confirmed only after
+   observed absence, never after the removal command's exit status alone
+   (INV-REC-003).
 7. **Caddy fragment materialize** (`materialize_caddy_fragment`) —
    *idempotent effect + requires cleanup on failure*. Canonical bytes depend
    only on domain and endpoint, written atomically (temporary file + rename);
@@ -422,20 +426,17 @@ lost precondition explicit instead of double-applying.
     changes the recorded Release explicitly instead of corrupting one.
 11. **Release creation** — *idempotent*: `(application_id, image_digest)`
     uniqueness reuses an existing Release (INV-REL-003).
-12. **Temporary checkout clone/create** (`clone_repository`,
-    `create_checkout`) — deliberately *not idempotent*: an existing
-    destination is rejected instead of replaced, protecting workspace state;
-    a failed detached checkout removes its own partial directory, and
-    abandoned imports are cleaned afterwards (INV-SRC-002).
-13. **Checkout reuse** (`ensure_checkout`) — *idempotent with observation*: a
-    clean checkout at the requested commit is reused; dirty or stale leftovers
-    from failed deployments are discarded and recreated, making a retried
-    branch deployment converge (INV-SRC-002).
-14. **Checkout cleanup** (`cleanup_checkout`) — *idempotent*: an already
+12. **Temporary checkout clone** (`clone_repository`) — deliberately *not
+    idempotent*: an existing destination is rejected instead of replaced,
+    protecting workspace state, and abandoned imports are cleaned afterwards
+    (INV-SRC-002). Deployments never materialize a checkout: a branch deploy
+    resolves its commit remotely, and the release's digest-pinned artifact is
+    the deployed identity.
+13. **Checkout cleanup** (`cleanup_checkout`) — *idempotent*: an already
     removed checkout is tolerated (repeat asserted in
     `tests/git_source.rs::clones_a_repository_by_url_and_cleans_up_the_
     checkout`).
-15. **Port reservation/release** (`port_allocator.rs`) — reservation is
+14. **Port reservation/release** (`port_allocator.rs`) — reservation is
     *unsafe without proven identity* by construction: SQLite PK plus immediate
     transaction reject duplicates (INV-DB-003); release/consume are
     *idempotent* DELETEs keyed by deployment, where zero rows are fine.

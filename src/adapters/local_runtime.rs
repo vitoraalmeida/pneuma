@@ -178,6 +178,29 @@ pub(crate) fn remove_container(container_id: &str) -> Result<ContainerCommandOut
     control_container("removing", &["container", "rm", "--force"], container_id)
 }
 
+// Reports whether Podman still holds this container so destruction can be proven
+// before any caller confirms a removal or retires a runtime.
+pub(crate) fn container_exists(container_id: &ContainerId) -> Result<bool, PodmanError> {
+    let exists = Command::new("podman")
+        .args(["container", "exists", container_id.as_str()])
+        .output()
+        .map_err(|source| PodmanError::Execute {
+            operation: "checking for",
+            source,
+        })?;
+    if exists.status.code() == Some(1) {
+        return Ok(false);
+    }
+    if !exists.status.success() {
+        return Err(observation_failure(
+            "checking for",
+            container_id.as_str(),
+            exists,
+        ));
+    }
+    Ok(true)
+}
+
 // Observes container state and exposes an endpoint only while Podman confirms it is running.
 pub(crate) fn observe_container(
     container_id: &ContainerId,
@@ -520,6 +543,33 @@ exit \"${PNEUMA_FAKE_PODMAN_EXIT:-0}\"
             scoped.invocations(),
             [format!("container exists {}", id.as_str())]
         );
+    }
+
+    #[test]
+    fn container_exists_proves_absence_and_presence_without_further_observation() {
+        let scoped = ScopedPodman::new("container-exists");
+        let id = ContainerId::from(container_id('h'));
+
+        // Podman's exit code 1 is the typed absence answer, never an error.
+        assert!(!container_exists(&id).unwrap());
+        assert_eq!(
+            scoped.invocations(),
+            [format!("container exists {}", id.as_str())]
+        );
+
+        scoped.path.set_var("PNEUMA_FAKE_PODMAN_EXISTS", "0");
+        assert!(container_exists(&id).unwrap());
+        assert_eq!(scoped.invocations().len(), 2);
+
+        // Any other failure is infrastructure noise, not an absence answer.
+        scoped.path.set_var("PNEUMA_FAKE_PODMAN_EXISTS", "125");
+        assert!(matches!(
+            container_exists(&id),
+            Err(PodmanError::CommandFailed {
+                operation: "checking for",
+                ..
+            })
+        ));
     }
 
     #[test]

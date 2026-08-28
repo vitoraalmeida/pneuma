@@ -2896,6 +2896,7 @@ case "$1" in
         fi
         ;;
     container)
+        removed_ids="${PNEUMA_FAKE_PODMAN_REMOVED_IDS:-${PNEUMA_FAKE_PODMAN_LOG:-}.removed}"
         if [ "$2" = "exists" ]; then
             if [ -f "${PNEUMA_FAKE_PODMAN_REMOVED:-}" ]; then
                 exit 1
@@ -2903,6 +2904,11 @@ case "$1" in
             if [ -n "${PNEUMA_FAKE_PODMAN_STALE_ID:-}" ] && [ "$3" = "$PNEUMA_FAKE_PODMAN_STALE_ID" ]; then
                 exit 1
             fi
+            if [ -f "$removed_ids" ] && grep -qxF "$3" "$removed_ids"; then
+                exit 1
+            fi
+        elif [ "$2" = "rm" ]; then
+            printf '%s\n' "$4" >> "$removed_ids"
         fi
         ;;
     create)

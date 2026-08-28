@@ -5,150 +5,9 @@ use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use pneuma::adapters::git_source::{
-    CloneRepositoryError, CreateCheckoutError, ResolveBranchError, ResolveCommitError,
-    cleanup_checkout, clone_repository, create_checkout, ensure_checkout, resolve_branch,
-    resolve_commit,
+    CloneRepositoryError, ResolveBranchError, cleanup_checkout, clone_repository, resolve_branch,
 };
 use pneuma::domain::git::{CommitSha, is_remote_git_location};
-
-#[test]
-fn resolves_branches_tags_and_abbreviated_shas_without_changing_the_repository() {
-    let repository = TestRepository::new();
-    let expected_commit = repository.head_commit();
-    repository.create_annotated_tag("v1");
-    let abbreviated_commit = &expected_commit[..7];
-    let status_before = repository.status();
-
-    for revision in ["main", "v1", abbreviated_commit] {
-        let commit = resolve_commit(&repository.path, revision).unwrap();
-
-        assert_eq!(commit.as_str(), expected_commit);
-    }
-
-    assert_eq!(repository.status(), status_before);
-}
-
-#[test]
-fn rejects_a_missing_revision() {
-    let repository = TestRepository::new();
-
-    let error = resolve_commit(&repository.path, "missing").unwrap_err();
-
-    assert!(matches!(error, ResolveCommitError::Resolve { .. }));
-    assert!(error.to_string().contains("missing"));
-    assert!(
-        error
-            .to_string()
-            .contains(repository.path.to_string_lossy().as_ref())
-    );
-}
-
-#[test]
-fn rejects_an_object_that_is_not_a_commit() {
-    let repository = TestRepository::new();
-    let tree = repository.git(&["rev-parse", "HEAD^{tree}"]);
-
-    let error = resolve_commit(&repository.path, tree.trim()).unwrap_err();
-
-    assert!(matches!(error, ResolveCommitError::Resolve { .. }));
-}
-
-#[test]
-fn creates_independent_checkouts_for_two_commits() {
-    let repository = TestRepository::new();
-    let first_commit = commit(&repository.head_commit());
-    let second_commit = commit(&repository.commit_file("second contents", "second commit"));
-    let first_checkout = repository.temporary_root.join("first-checkout");
-    let second_checkout = repository.temporary_root.join("second-checkout");
-
-    create_checkout(&repository.path, &first_commit, &first_checkout).unwrap();
-    create_checkout(&repository.path, &second_commit, &second_checkout).unwrap();
-
-    assert_eq!(
-        fs::read_to_string(first_checkout.join("site.txt")).unwrap(),
-        "initial contents"
-    );
-    assert_eq!(
-        fs::read_to_string(second_checkout.join("site.txt")).unwrap(),
-        "second contents"
-    );
-
-    fs::write(first_checkout.join("site.txt"), "changed checkout").unwrap();
-    assert_eq!(
-        fs::read_to_string(second_checkout.join("site.txt")).unwrap(),
-        "second contents"
-    );
-    assert_eq!(
-        fs::read_to_string(repository.path.join("site.txt")).unwrap(),
-        "second contents"
-    );
-}
-
-#[test]
-fn rejects_an_existing_checkout_destination() {
-    let repository = TestRepository::new();
-    let destination = repository.temporary_root.join("existing");
-    fs::create_dir(&destination).unwrap();
-
-    let error = create_checkout(
-        &repository.path,
-        &commit(&repository.head_commit()),
-        &destination,
-    )
-    .unwrap_err();
-
-    assert!(matches!(
-        error,
-        CreateCheckoutError::DestinationExists { .. }
-    ));
-}
-
-#[test]
-fn reuses_a_clean_checkout_at_the_same_commit() {
-    let repository = TestRepository::new();
-    let commit = commit(&repository.head_commit());
-    let destination = repository.temporary_root.join("checkout");
-    create_checkout(&repository.path, &commit, &destination).unwrap();
-
-    ensure_checkout(&repository.path, &commit, &destination).unwrap();
-
-    assert_eq!(
-        fs::read_to_string(destination.join("site.txt")).unwrap(),
-        "initial contents"
-    );
-}
-
-#[test]
-fn replaces_a_dirty_checkout_at_the_same_commit() {
-    let repository = TestRepository::new();
-    let commit = commit(&repository.head_commit());
-    let destination = repository.temporary_root.join("checkout");
-    create_checkout(&repository.path, &commit, &destination).unwrap();
-    fs::write(destination.join("site.txt"), "local changes").unwrap();
-
-    ensure_checkout(&repository.path, &commit, &destination).unwrap();
-
-    assert_eq!(
-        fs::read_to_string(destination.join("site.txt")).unwrap(),
-        "initial contents"
-    );
-}
-
-#[test]
-fn replaces_a_checkout_at_a_different_commit() {
-    let repository = TestRepository::new();
-    let first_commit = commit(&repository.head_commit());
-    let second_commit = commit(&repository.commit_file("second contents", "second commit"));
-    let destination = repository.temporary_root.join("checkout");
-    create_checkout(&repository.path, &first_commit, &destination).unwrap();
-
-    ensure_checkout(&repository.path, &second_commit, &destination).unwrap();
-
-    assert_eq!(
-        fs::read_to_string(destination.join("site.txt")).unwrap(),
-        "second contents"
-    );
-}
 
 #[test]
 fn classifies_remote_and_local_repositories() {
@@ -299,10 +158,6 @@ struct TestRepository {
     path: PathBuf,
 }
 
-fn commit(value: &str) -> CommitSha {
-    CommitSha::new(value).unwrap()
-}
-
 impl TestRepository {
     fn new() -> Self {
         let unique_suffix = SystemTime::now()
@@ -382,10 +237,6 @@ impl TestRepository {
             message,
         ]);
         self.head_commit()
-    }
-
-    fn status(&self) -> String {
-        self.git(&["status", "--porcelain"])
     }
 
     fn git(&self, arguments: &[&str]) -> String {

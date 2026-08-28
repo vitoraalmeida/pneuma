@@ -287,6 +287,139 @@ fn new_deploy_removes_previous_runtime() {
 }
 
 #[test]
+fn retirement_records_removal_only_after_the_container_is_observed_gone() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+
+    let first_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let first_port = first_listener.local_addr().unwrap().port();
+    let first_server = thread::spawn(move || respond_until_timeout(&first_listener, 200));
+    let first_output = environment.deploy(first_port, false);
+    first_server.join().unwrap();
+    assert_command_succeeded(&first_output);
+    let first_runtime_id = extract_runtime_id(&first_output);
+
+    // The fake removal is applied by Podman but never observable afterwards, so
+    // destruction cannot be proven and retirement must not be recorded.
+    fs::write(environment.root.join("podman-rm-ignored"), "ignore").unwrap();
+
+    let second_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let second_port = second_listener.local_addr().unwrap().port();
+    let second_server = thread::spawn(move || respond_until_timeout(&second_listener, 200));
+    let second_output = environment.deploy_with_different_digest(second_port, 'b');
+    second_server.join().unwrap();
+    assert_command_succeeded(&second_output);
+    let stderr = String::from_utf8_lossy(&second_output.stderr);
+    assert!(
+        stderr.contains("container removal could not be proven"),
+        "expected an unproven removal warning, got: {stderr}"
+    );
+
+    let connection = database::open(&environment.database_path).unwrap();
+    let first_runtime_removed: Option<String> = connection
+        .query_row(
+            "SELECT removed_at FROM runtime_instances WHERE id = ?1",
+            [&first_runtime_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        first_runtime_removed.is_none(),
+        "retirement must not be recorded without observed container absence"
+    );
+}
+
+#[test]
+fn retirement_proves_a_quadlet_removed_container_without_forcing_it() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+
+    let first_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let first_port = first_listener.local_addr().unwrap().port();
+    let first_server = thread::spawn(move || respond_until_timeout(&first_listener, 200));
+    let first_output = environment.deploy(first_port, false);
+    first_server.join().unwrap();
+    assert_command_succeeded(&first_output);
+    let first_runtime_id = extract_runtime_id(&first_output);
+
+    // Quadlet's ExecStop removes the supervised container itself; pre-record the
+    // previous container identity as already gone so retirement must adopt that
+    // observation instead of force-removing a container that no longer exists.
+    fs::write(
+        environment.root.join("podman-removed-ids"),
+        format!("{}\n", "a".repeat(64)),
+    )
+    .unwrap();
+
+    let second_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let second_port = second_listener.local_addr().unwrap().port();
+    let second_server = thread::spawn(move || respond_until_timeout(&second_listener, 200));
+    let second_output = environment.deploy_with_different_digest(second_port, 'b');
+    second_server.join().unwrap();
+    assert_command_succeeded(&second_output);
+
+    let podman_log = fs::read_to_string(environment.root.join("podman.log")).unwrap();
+    assert!(
+        podman_log.contains(&format!("container exists {}", "a".repeat(64))),
+        "retirement must observe the previous container, log: {podman_log}"
+    );
+    assert!(
+        !podman_log.contains(&format!("container rm --force {}", "a".repeat(64))),
+        "an already removed container must never be force-removed, log: {podman_log}"
+    );
+
+    let connection = database::open(&environment.database_path).unwrap();
+    let first_runtime_removed: Option<String> = connection
+        .query_row(
+            "SELECT removed_at FROM runtime_instances WHERE id = ?1",
+            [&first_runtime_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        first_runtime_removed.is_some(),
+        "observed absence must be recorded as retirement"
+    );
+}
+
+#[test]
+fn failed_candidate_cleanup_requires_observed_container_removal() {
+    let environment = DeploymentEnvironment::public();
+    assert_command_succeeded(&environment.import());
+    environment.set_public_visibility();
+    fs::write(environment.root.join("podman-rm-ignored"), "ignore").unwrap();
+
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || respond_until_timeout(&listener, 200));
+
+    let output = environment.deploy_with_external_status(port, false, 500);
+    server.join().unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("could not be cleaned up"),
+        "expected a cleanup divergence, got: {stderr}"
+    );
+
+    let connection = database::open(&environment.database_path).unwrap();
+    let (candidate_state, candidate_removed_at): (String, Option<String>) = connection
+        .query_row(
+            "SELECT state, removed_at FROM runtime_instances
+             WHERE deployment_id = (SELECT id FROM deployments ORDER BY requested_at DESC LIMIT 1)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(candidate_state, "starting");
+    assert!(
+        candidate_removed_at.is_none(),
+        "an unproven removal must never mark the candidate runtime missing"
+    );
+}
+
+#[test]
 fn failed_internal_verification_does_not_retire_the_healthy_previous_runtime() {
     let environment = DeploymentEnvironment::new();
     assert_command_succeeded(&environment.import());
@@ -989,6 +1122,14 @@ impl DeploymentEnvironment {
             .env("PNEUMA_RUNTIME_PORT_RANGE", format!("{port}-{port}"))
             .env("PNEUMA_FAKE_PODMAN_COUNT", self.root.join("podman-count"))
             .env("PNEUMA_FAKE_PODMAN_LOG", self.root.join("podman.log"))
+            .env(
+                "PNEUMA_FAKE_PODMAN_REMOVED_IDS",
+                self.root.join("podman-removed-ids"),
+            )
+            .env(
+                "PNEUMA_FAKE_PODMAN_RM_IGNORED",
+                self.root.join("podman-rm-ignored"),
+            )
             .env("PNEUMA_FAKE_CURL_LOG", self.root.join("curl.log"))
             .env("PNEUMA_FAKE_CURL_STATUS", external_status.to_string())
             .env(
@@ -1033,6 +1174,14 @@ impl DeploymentEnvironment {
             .env("PNEUMA_RUNTIME_PORT_RANGE", format!("{port}-{port}"))
             .env("PNEUMA_FAKE_PODMAN_COUNT", self.root.join("podman-count"))
             .env("PNEUMA_FAKE_PODMAN_LOG", self.root.join("podman.log"))
+            .env(
+                "PNEUMA_FAKE_PODMAN_REMOVED_IDS",
+                self.root.join("podman-removed-ids"),
+            )
+            .env(
+                "PNEUMA_FAKE_PODMAN_RM_IGNORED",
+                self.root.join("podman-rm-ignored"),
+            )
             .env("PNEUMA_FAKE_CURL_LOG", self.root.join("curl.log"))
             .env("PNEUMA_FAKE_CURL_STATUS", "200")
             .env(
@@ -1066,6 +1215,14 @@ impl DeploymentEnvironment {
             // A distinct container identity for the rollback candidate, since
             // the fake would otherwise reuse the previous deployment's ID.
             .env("PNEUMA_FAKE_PODMAN_ID", "c".repeat(64))
+            .env(
+                "PNEUMA_FAKE_PODMAN_REMOVED_IDS",
+                self.root.join("podman-removed-ids"),
+            )
+            .env(
+                "PNEUMA_FAKE_PODMAN_RM_IGNORED",
+                self.root.join("podman-rm-ignored"),
+            )
             .args(["deployment", "rollback", &self.application_name])
             .output()
             .unwrap()
@@ -1166,6 +1323,13 @@ case "$1" in
             fi
             if [ -n "${PNEUMA_FAKE_PODMAN_STALE_ID:-}" ] && [ "$3" = "$PNEUMA_FAKE_PODMAN_STALE_ID" ]; then
                 exit 1
+            fi
+            if [ -f "${PNEUMA_FAKE_PODMAN_REMOVED_IDS:-}" ] && grep -qxF "$3" "$PNEUMA_FAKE_PODMAN_REMOVED_IDS"; then
+                exit 1
+            fi
+        elif [ "$2" = "rm" ]; then
+            if [ ! -f "${PNEUMA_FAKE_PODMAN_RM_IGNORED:-/nonexistent}" ] && [ -n "${PNEUMA_FAKE_PODMAN_REMOVED_IDS:-}" ]; then
+                printf '%s\n' "$4" >> "$PNEUMA_FAKE_PODMAN_REMOVED_IDS"
             fi
         fi
         ;;

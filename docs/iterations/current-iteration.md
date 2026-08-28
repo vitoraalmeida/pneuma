@@ -48,9 +48,18 @@ incompatible; no existing database or backup is upgraded.
      atomically, reopens the exact current textual ledger, and rejects every
      other schema as incompatible; reservation allocation is idempotent per
      Deployment and registration consumes the exact reservation.
-4. [ ] Boundary and workflow proof
-   - Prove checkout, Caddy, and runtime identity at external boundaries and make
-     lifecycle success depend on observed target state.
+4. [x] Boundary and workflow proof
+    - Prove checkout, Caddy, and runtime identity at external boundaries and make
+      lifecycle success depend on observed target state.
+    - Result: the checkout boundary is exactly the production Git effects
+      (`clone_repository`, `resolve_branch`, `cleanup_checkout`) and the retired
+      local-checkout machinery (`resolve_commit`, `create_checkout`,
+      `ensure_checkout`) is removed with its tests. Container destruction is now
+      proven by observation: retirement and failed-candidate cleanup observe
+      absence first (Quadlet's ExecStop removes the supervised container), force-
+      remove only a still-present container, re-observe, and record retirement or
+      missing state only after observed absence, with unproven removals reported
+      as warnings or `ContainerNotRemoved` divergence instead of silent success.
 5. [ ] Database replacement safety
    - Serialize normal database access and restore with a database-wide kernel
      lock and accept only exact-current backups.
@@ -93,3 +102,10 @@ incompatible; no existing database or backup is upgraded.
   idempotent reopen, incompatible-schema rejection (including the retired
   integer ledger), baseline transaction rollback, and representative constraint
   tests are green in `src/adapters/database.rs`.
+- Checkpoint 4: `cargo fmt --check`, Clippy with warnings denied, all-feature
+  tests (25 suites green; the same three ignored OCI tests remain
+  environment-dependent), and release build passed. New proofs: adapter tests
+  for `container_exists`, retirement recorded only after observed container
+  absence (including the Quadlet-ExecStop path without force removal), and
+  candidate cleanup divergence when removal cannot be proven; real-git checkout
+  tests cover the surviving boundary only.

@@ -1,7 +1,7 @@
 use rusqlite::Connection;
 use thiserror::Error;
 
-use crate::adapters::local_runtime::{PodmanError, remove_container};
+use crate::adapters::local_runtime::{PodmanError, container_exists, remove_container};
 use crate::adapters::port_allocator::{PortAllocationError, release_port};
 use crate::adapters::stores::runtime_store;
 use crate::adapters::systemd_quadlet::{QuadletError, daemon_reload, remove_unit, stop, unit_name};
@@ -81,6 +81,8 @@ pub enum CandidateCleanupError {
     ReleasePort { source: PortAllocationError },
     #[error("runtime `{runtime_id}` changed while its candidate was being removed")]
     RuntimeChanged { runtime_id: RuntimeInstanceId },
+    #[error("container `{container_id}` remained present after its removal")]
+    ContainerNotRemoved { container_id: String },
     #[error("failed to persist candidate removal: {source}")]
     Persistence {
         #[source]
@@ -103,7 +105,31 @@ pub(crate) fn load_previous_runtime(
     runtime_store::load_previous_runtime(connection, application_id, candidate_runtime_id)
 }
 
-// Retires the prior runtime only after promotion; failures remain warnings and do not undo it.
+// Proves a container is gone before any caller confirms its destruction: absence is
+// observed first (Quadlet's ExecStop removes the container itself), a container still
+// present is force-removed, and absence is re-observed so a removal that Podman did
+// not actually apply is never treated as a completed destruction.
+fn prove_container_removed(container_id: &ContainerId) -> Result<(), CandidateCleanupError> {
+    if !container_exists(container_id)
+        .map_err(|source| CandidateCleanupError::RemoveContainer { source })?
+    {
+        return Ok(());
+    }
+    remove_container(container_id.as_str())
+        .map_err(|source| CandidateCleanupError::RemoveContainer { source })?;
+    if container_exists(container_id)
+        .map_err(|source| CandidateCleanupError::RemoveContainer { source })?
+    {
+        return Err(CandidateCleanupError::ContainerNotRemoved {
+            container_id: container_id.to_string(),
+        });
+    }
+    Ok(())
+}
+
+// Retires the prior runtime only after promotion; every external destruction is proven
+// by observation before retirement is recorded, and any failure remains a warning that
+// does not undo the promotion.
 pub(crate) fn retire_previous_runtime(
     connection: &Connection,
     application_name: &ApplicationName,
@@ -128,9 +154,9 @@ pub(crate) fn retire_previous_runtime(
         );
         return;
     }
-    if let Err(source) = remove_container(previous.external_runtime_id.as_str()) {
+    if let Err(source) = prove_container_removed(&previous.external_runtime_id) {
         eprintln!(
-            "warning: previous runtime {} unit was retired but its container could not be removed: {source}",
+            "warning: previous runtime {} unit was retired but its container removal could not be proven: {source}",
             previous.runtime_id
         );
         return;
@@ -169,8 +195,7 @@ pub(crate) fn cleanup_failed_candidate(
         daemon_reload().map_err(|source| CandidateCleanupError::Supervision { source })?;
     }
     if let Some(container_id) = container_id {
-        remove_container(container_id.as_str())
-            .map_err(|source| CandidateCleanupError::RemoveContainer { source })?;
+        prove_container_removed(container_id)?;
     }
     if let Some(runtime_id) = runtime_id {
         let outcome = runtime_store::mark_starting_runtime_missing(connection, runtime_id)?;
