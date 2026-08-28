@@ -218,7 +218,7 @@ active runtime and public route remain intact.
 - [`architecture.md`](architecture.md) describes layer responsibilities and
   operational behavior.
 - [`security-model.md`](security-model.md) describes trust boundaries.
-- [`../decisions/0004-sqlite-intent-vs-runtime-authority.md`](../decisions/0004-sqlite-intent-vs-runtime-authority.md)
+- [`../decisions/0004-state-authority-and-reconciliation.md`](../decisions/0004-state-authority-and-reconciliation.md)
   explains the authority split.
 - [`../getting-started.md`](../getting-started.md) describes manifest authoring,
   import, deployment, and host operation.

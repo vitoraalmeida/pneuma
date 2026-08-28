@@ -105,7 +105,7 @@ automatic rollback after promotion.
 - The Deployment transition table, promotion eligibility, exposure target and
   outcome types, stable runtime naming, and container-id format rules each have
   one domain owner.
-- Caddy, lock, port, OCI, operation-store, and reconciliation boundaries accept
+- Caddy, lock, port, OCI, and reconciliation boundaries accept
   typed identities; `ApplicationName`/`SystemName` share one catalog-name
   validator.
 

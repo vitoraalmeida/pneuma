@@ -133,7 +133,9 @@ fn classify_runtime_lifecycle(source: &RuntimeLifecycleError) -> CliErrorClass {
     match source {
         RuntimeLifecycleError::NotDeployed { .. }
         | RuntimeLifecycleError::ContainerMissing { .. } => CliErrorClass::NotFound,
-        RuntimeLifecycleError::RuntimeChanged { .. } => CliErrorClass::Conflict,
+        RuntimeLifecycleError::RuntimeChanged { .. }
+        | RuntimeLifecycleError::ApplicationLock { .. }
+        | RuntimeLifecycleError::ApplicationBusy { .. } => CliErrorClass::Conflict,
         RuntimeLifecycleError::Observe { .. }
         | RuntimeLifecycleError::Control { .. }
         | RuntimeLifecycleError::Supervision { .. } => CliErrorClass::External,
@@ -145,6 +147,9 @@ fn classify_deploy_oci(source: &DeployOciError) -> CliErrorClass {
     match source {
         DeployOciError::RepositoryMismatch { .. } => CliErrorClass::Usage,
         DeployOciError::PullImage { .. } => CliErrorClass::External,
+        DeployOciError::ApplicationLock { .. } | DeployOciError::ApplicationBusy { .. } => {
+            CliErrorClass::Conflict
+        }
         _ => CliErrorClass::Failure,
     }
 }
@@ -155,6 +160,9 @@ fn classify_deploy_branch(source: &DeployBranchError) -> CliErrorClass {
             CliErrorClass::External
         }
         DeployBranchError::DeployOci { source } => classify_deploy_oci(source),
+        DeployBranchError::ApplicationLock { .. } | DeployBranchError::ApplicationBusy { .. } => {
+            CliErrorClass::Conflict
+        }
         _ => CliErrorClass::Failure,
     }
 }
@@ -164,6 +172,9 @@ fn classify_rollback(source: &RollbackError) -> CliErrorClass {
         RollbackError::ApplicationNotFound { .. } => CliErrorClass::NotFound,
         RollbackError::NoPreviousDeployment { .. } => CliErrorClass::Conflict,
         RollbackError::PullImage { .. } => CliErrorClass::External,
+        RollbackError::ApplicationLock { .. } | RollbackError::ApplicationBusy { .. } => {
+            CliErrorClass::Conflict
+        }
         _ => CliErrorClass::Failure,
     }
 }
@@ -173,7 +184,9 @@ fn classify_exposure_change(source: &ExposureChangeError) -> CliErrorClass {
         ExposureChangeError::ApplicationNotFound { .. }
         | ExposureChangeError::NoActiveRuntime { .. } => CliErrorClass::NotFound,
         ExposureChangeError::ExposureChanged { .. }
-        | ExposureChangeError::RuntimeNotRunning { .. } => CliErrorClass::Conflict,
+        | ExposureChangeError::RuntimeNotRunning { .. }
+        | ExposureChangeError::ApplicationLock { .. }
+        | ExposureChangeError::ApplicationBusy { .. } => CliErrorClass::Conflict,
         ExposureChangeError::InvalidVisibility { .. } => CliErrorClass::Usage,
         ExposureChangeError::ObserveFailed { .. }
         | ExposureChangeError::MaterializeFailed { .. }
@@ -727,11 +740,13 @@ mod tests {
                 .contains("application `portal` was not found")
         );
 
-        // Operation already in progress.
-        let error = deploy_failure(DeployReleaseError::OperationInProgress {
-            application_id: "portal".to_owned(),
-        });
-        assert_eq!(error.class(), CliErrorClass::Failure);
+        // Per-Application lock contention is a caller-visible conflict.
+        let error = CliError::DeployOci {
+            source: Box::new(DeployOciError::ApplicationBusy {
+                application_id: "portal".to_owned(),
+            }),
+        };
+        assert_eq!(error.class(), CliErrorClass::Conflict);
         assert!(
             error
                 .to_string()

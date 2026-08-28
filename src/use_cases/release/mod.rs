@@ -1,6 +1,7 @@
 use rusqlite::Connection;
 use thiserror::Error;
 
+use crate::adapters::application_lock::{ApplicationLock, ApplicationLockError};
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::adapters::stores::release_store::{self, ReleaseStoreError};
 use crate::domain::identity::ApplicationId;
@@ -8,6 +9,13 @@ use crate::domain::release::{OciArtifact, Release};
 
 #[derive(Debug, Error)]
 pub enum CreateReleaseError {
+    #[error("failed to acquire release lock: {source}")]
+    ApplicationLock {
+        #[source]
+        source: ApplicationLockError,
+    },
+    #[error("application `{application_id}` already has an operation in progress")]
+    ApplicationBusy { application_id: String },
     #[error("application `{application_id}` was not found")]
     ApplicationNotFound { application_id: String },
     #[error("failed to create release: {source}")]
@@ -51,6 +59,23 @@ impl From<ReleaseStoreError> for CreateReleaseError {
 
 // Creates or resolves a digest-pinned release within one short persistence transaction.
 pub fn create_release(
+    connection: &mut Connection,
+    application_id: &ApplicationId,
+    artifact: &OciArtifact,
+) -> Result<Release, CreateReleaseError> {
+    let Some(_lock) = ApplicationLock::try_acquire_for_connection(connection, application_id)
+        .map_err(|source| CreateReleaseError::ApplicationLock { source })?
+    else {
+        return Err(CreateReleaseError::ApplicationBusy {
+            application_id: application_id.to_string(),
+        });
+    };
+    create_release_while_locked(connection, application_id, artifact)
+}
+
+// Creates or resolves a digest-pinned release while the caller holds the
+// application's operation lock.
+pub(crate) fn create_release_while_locked(
     connection: &mut Connection,
     application_id: &ApplicationId,
     artifact: &OciArtifact,

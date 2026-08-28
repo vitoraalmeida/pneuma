@@ -3,14 +3,21 @@ use std::error::Error;
 use rusqlite::{Connection, TransactionBehavior};
 use thiserror::Error;
 
+use crate::adapters::application_lock::{ApplicationLock, ApplicationLockError};
 use crate::adapters::stores::application_store::{self, ApplicationStoreError};
 use crate::adapters::stores::deployment_store::{self, DeploymentStoreError};
-use crate::adapters::stores::operation_store;
 use crate::domain::deployment::{Deployment, DeploymentType, SourceRevision};
 use crate::domain::identity::{ApplicationId, ReleaseId};
 
 #[derive(Debug, Error)]
 pub enum CreateDeploymentError {
+    #[error("failed to acquire deployment lock: {source}")]
+    ApplicationLock {
+        #[source]
+        source: ApplicationLockError,
+    },
+    #[error("application `{application_id}` already has an operation in progress")]
+    ApplicationBusy { application_id: String },
     #[error("release `{release_id}` was not found")]
     ReleaseNotFound { release_id: String },
     #[error("application `{application_id}` was not found")]
@@ -69,14 +76,14 @@ pub fn create_deployment(
     )
 }
 
-// Creates the pending deployment and replaces operation ownership in one transaction.
-pub(crate) fn create_deployment_with_source_revision_and_ownership(
+// Creates the pending deployment in one transaction while the caller holds the
+// application's operation lock.
+pub(crate) fn create_deployment_with_source_revision_while_locked(
     connection: &mut Connection,
     application_id: &ApplicationId,
     release_id: &ReleaseId,
     deployment_type: DeploymentType,
     source_revision: Option<&SourceRevision>,
-    owner_token: Option<&str>,
 ) -> Result<Deployment, CreateDeploymentError> {
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
@@ -86,7 +93,6 @@ pub(crate) fn create_deployment_with_source_revision_and_ownership(
         release_id,
         deployment_type,
         source_revision,
-        owner_token,
     )?;
     transaction.commit()?;
     Ok(deployment)
@@ -101,13 +107,19 @@ pub fn create_deployment_with_source_revision(
     deployment_type: DeploymentType,
     source_revision: Option<&SourceRevision>,
 ) -> Result<Deployment, CreateDeploymentError> {
-    create_deployment_with_source_revision_and_ownership(
+    let Some(_lock) = ApplicationLock::try_acquire_for_connection(connection, application_id)
+        .map_err(|source| CreateDeploymentError::ApplicationLock { source })?
+    else {
+        return Err(CreateDeploymentError::ApplicationBusy {
+            application_id: application_id.to_string(),
+        });
+    };
+    create_deployment_with_source_revision_while_locked(
         connection,
         application_id,
         release_id,
         deployment_type,
         source_revision,
-        None,
     )
 }
 
@@ -117,7 +129,6 @@ fn create_deployment_in_transaction(
     release_id: &ReleaseId,
     deployment_type: DeploymentType,
     source_revision: Option<&SourceRevision>,
-    owner_token: Option<&str>,
 ) -> Result<Deployment, CreateDeploymentError> {
     let application_exists = application_store::application_exists(transaction, application_id)?;
     if !application_exists {
@@ -154,9 +165,6 @@ fn create_deployment_in_transaction(
         deployment_type,
         source_revision,
     )?;
-    if let Some(owner_token) = owner_token {
-        operation_store::take_ownership(transaction, application_id, owner_token)?;
-    }
     let deployment = deployment_store::load_deployment(transaction, &deployment_id)?;
 
     Ok(deployment)

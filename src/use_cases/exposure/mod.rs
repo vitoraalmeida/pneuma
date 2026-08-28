@@ -13,6 +13,7 @@ use std::path::Path;
 use rusqlite::{Connection, TransactionBehavior};
 use thiserror::Error;
 
+use crate::adapters::application_lock::{ApplicationLock, ApplicationLockError};
 use crate::adapters::caddy_exposure::{
     CaddyRecoveryError, MaterializeCaddyFragmentError, canonical_fragment_contents,
     materialize_caddy_fragment, remove_caddy_fragment, restore_materialized_caddy_fragment,
@@ -41,6 +42,13 @@ pub struct ExposureChange {
 
 #[derive(Debug, Error)]
 pub enum ExposureChangeError {
+    #[error("failed to acquire application lock: {source}")]
+    ApplicationLock {
+        #[source]
+        source: ApplicationLockError,
+    },
+    #[error("application `{application_id}` already has an operation in progress")]
+    ApplicationBusy { application_id: String },
     #[error("application `{application_id}` was not found")]
     ApplicationNotFound { application_id: String },
     #[error("application `{application_id}` has no active runtime to expose")]
@@ -113,6 +121,13 @@ pub fn change_exposure(
     managed_directory: &Path,
     caddyfile_path: &Path,
 ) -> Result<ExposureChange, ExposureChangeError> {
+    let Some(_lock) = ApplicationLock::try_acquire_for_connection(connection, application_id)
+        .map_err(|source| ExposureChangeError::ApplicationLock { source })?
+    else {
+        return Err(ExposureChangeError::ApplicationBusy {
+            application_id: application_id.to_string(),
+        });
+    };
     let exposure = match exposure_store::load_exposure(connection, application_id) {
         Ok(Some(exposure)) => exposure,
         Ok(None) => {

@@ -21,9 +21,7 @@ use thiserror::Error;
 use crate::adapters::application_lock::{ApplicationLock, ApplicationLockError};
 use crate::adapters::caddy_exposure::ObserveCaddyFragmentError;
 use crate::adapters::local_runtime::PodmanError;
-use crate::adapters::stores::{
-    application_store, deployment_store, exposure_store, operation_store, release_store,
-};
+use crate::adapters::stores::{application_store, deployment_store, exposure_store, release_store};
 use crate::adapters::systemd_quadlet::QuadletError;
 use crate::adapters::test_gate::wait_for_test_gate;
 use crate::domain::application::ApplicationName;
@@ -42,7 +40,6 @@ pub use load::load_reconciliation_input;
 pub(crate) use observe::observe_reconciliation_input;
 
 use execute::{execute_reconciliation_decision, reconciliation_decision_reason};
-use load::persistence_error;
 use observe::reconciliation_expectations;
 use recover::recover_interrupted_deployment;
 
@@ -102,11 +99,6 @@ pub enum ReconciliationReadError {
         #[source]
         source: ApplicationLockError,
     },
-    #[error("failed to acquire reconciliation ownership: {source}")]
-    Operation {
-        #[source]
-        source: rusqlite::Error,
-    },
     #[error("failed to observe recorded runtime: {source}")]
     ObserveContainer {
         #[source]
@@ -138,7 +130,7 @@ pub enum ReconciliationReadError {
 
 // Reconciles only confirmed runtime and route drift, leaving ambiguous materialization untouched.
 //
-// Pipeline: acquire ownership, load persisted facts, observe external facts,
+// Pipeline: acquire the application lock, load persisted facts, observe external facts,
 // decide purely, then execute exactly the decided variant. Each phase owns its
 // own adapter details; this entrypoint coordinates ordering and compensation only.
 pub fn reconcile_application(
@@ -152,25 +144,14 @@ pub fn reconcile_application(
         .ok_or_else(|| ReconciliationReadError::ApplicationNotFound {
             application_name: application_name.as_str().to_owned(),
         })?;
-    let database_path = connection.path().map(std::path::PathBuf::from).ok_or(
-        ReconciliationReadError::OperationLock {
-            source: ApplicationLockError::DatabasePathUnavailable,
-        },
-    )?;
-    let Some(_lock) = ApplicationLock::try_acquire(&database_path, &application.id)
+    let Some(_lock) = ApplicationLock::try_acquire_for_connection(connection, &application.id)
         .map_err(|source| ReconciliationReadError::OperationLock { source })?
     else {
         return Ok(ReconciliationResult::Deferred {
             blocking_deployment: None,
         });
     };
-    let token = operation_store::generate_token(connection)
-        .map_err(|source| ReconciliationReadError::Operation { source })?;
-    let transaction = connection.transaction().map_err(persistence_error)?;
-    operation_store::take_ownership(&transaction, &application.id, &token)
-        .map_err(|source| ReconciliationReadError::Operation { source })?;
-    transaction.commit().map_err(persistence_error)?;
-    wait_for_test_gate("reconciliation.ownership-acquired").map_err(|source| {
+    wait_for_test_gate("reconciliation.application-lock-acquired").map_err(|source| {
         ReconciliationReadError::NotConverged {
             reason: format!("reconciliation test gate failed: {source}"),
         }

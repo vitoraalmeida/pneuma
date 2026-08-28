@@ -156,5 +156,5 @@ operator-managed.
 
 - [`system-context.md`](system-context.md) states scope and non-goals.
 - [`architecture.md`](architecture.md) describes current effects and authorities.
-- [`../decisions/0007-restricted-ssh-ci-interface.md`](../decisions/0007-restricted-ssh-ci-interface.md)
+- [`../decisions/0006-restricted-ci-interface.md`](../decisions/0006-restricted-ci-interface.md)
   explains the CI interface rationale.

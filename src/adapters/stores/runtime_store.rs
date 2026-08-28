@@ -122,14 +122,15 @@ pub(crate) fn reconcile_external_runtime_id(
     Ok(outcome(updated))
 }
 
-// Records an observed runtime state without reviving a runtime that has been retired.
+// Records an observed runtime state while the Application lock serializes the
+// lifecycle/status workflow that loaded this live runtime.
 pub(crate) fn persist_observation(
     connection: &Connection,
     runtime_id: &RuntimeInstanceId,
     observation: &ContainerObservation,
-) -> Result<PersistenceOutcome, rusqlite::Error> {
+) -> Result<(), rusqlite::Error> {
     let state = observed_runtime_state_value(observation.state());
-    let updated = connection.execute(
+    connection.execute(
         "UPDATE runtime_instances
          SET last_observed_state = ?2,
               last_observed_at = CURRENT_TIMESTAMP,
@@ -137,7 +138,7 @@ pub(crate) fn persist_observation(
          WHERE id = ?1 AND removed_at IS NULL",
         params![runtime_id.as_str(), state],
     )?;
-    Ok(outcome(updated))
+    Ok(())
 }
 
 // Advances a non-removed candidate from starting to running exactly once.

@@ -50,14 +50,11 @@ Every normal command follows the same skeleton before reaching its flow:
    assigns stable exit codes (1 failure, 2 usage, 3 not-found, 4 conflict,
    5 external).
 
-Two coordination mechanisms appear in several flows:
-
-- `adapters/application_lock.rs::ApplicationLock::try_acquire` — kernel `flock`
-  per application that serializes long workflows (deploy, reconcile). A failed
-  acquire means another operation owns the application.
-- `adapters/stores/operation_store.rs` — durable ownership token recorded after
-  the lock so stale workers cannot confirm effects of an operation they no
-  longer own (INV-DB-005).
+One coordination mechanism applies to every existing-Application mutation:
+`adapters/application_lock.rs::ApplicationLock::try_acquire_for_connection` is a
+kernel `flock` per Application, held from the first state-dependent read through
+effects, confirmation, and compensation. A failed acquire is an explicit
+conflict; reconciliation returns `Deferred`.
 
 ---
 
@@ -92,9 +89,9 @@ The richest workflow; read top-down through `use_cases/deployment/` whose
 | Layer | Where |
 |---|---|
 | CLI entry | `cli/deployment.rs::run_deploy` selects OCI vs branch; `run_deploy_oci` parses `OciArtifact::parse` **before** any effect and assembles `PublicDeploymentConfiguration` (Caddy paths) |
-| Use cases | `deployment/deploy.rs::deploy_oci` (delivery check → pull → release) → `release/create_release` (digest reuse) → `deployment/execute.rs::deploy_release_reporting` (lock + ownership token → pending deployment → candidate execution → promotion or finalized failure) → `deployment/candidate.rs::start_candidate` (port → unit → start → observe → register) → `promotion/internal.rs::promote_internal_candidate` (internal) or `activation.rs::activate_public_candidate` (public) |
+| Use cases | `deployment/deploy.rs::deploy_oci` (Application lock → delivery check → pull → release) → `release/create_release_while_locked` (digest reuse) → `deployment/execute.rs::deploy_release_reporting` (pending deployment → candidate execution → promotion or finalized failure) → `deployment/candidate.rs::start_candidate` (port → unit → start → observe → register) → `promotion/internal.rs::promote_internal_candidate` (internal) or `activation.rs::activate_public_candidate` (public) |
 | Domain rules | `domain/release.rs`: `OciArtifact` digest grammar, `DeliverySpecification::permits` repository allow-list (INV-REL-002); `domain/deployment.rs`: single transition table `DeploymentStatus::transition(DeploymentEvent)` (INV-DEP-001); `Visibility` decides internal-vs-public activation path |
-| Stores | `application_store` (deployment specification load), `release_store` (digest-pinned reuse), `deployment_store` (pending insert under partial unique index INV-DB-001, CAS status advance, guarded `activate_deployment` INV-APP-002), `runtime_store` (candidate registration, tombstones), `operation_store` (ownership epoch), port reservations via `port_allocator` |
+| Stores | `application_store` (deployment specification load), `release_store` (digest-pinned reuse), `deployment_store` (pending insert under partial unique index INV-DB-001, targeted CAS status advance, guarded `activate_deployment` INV-APP-002), `runtime_store` (candidate registration, tombstones), port reservations via `port_allocator` |
 | External adapters | `oci_image::pull_image` (digest verify), `port_allocator::reserve_port`, `systemd_quadlet` (`write_unit`, `daemon_reload`, `start`), `local_runtime` (`resolve_container_id`, `observe_container`), `health_check_internal` (loopback), `caddy_exposure::materialize_caddy_fragment` + external health (public only) |
 | Failure path | every allocated resource is tracked in `CandidateResources`; one finalizer (`finish_failed_deployment`) records the typed failure via `fail_deployment` then removes container/unit/port in order |
 | Tests | `tests/deployment_from_oci.rs` (repository mismatch before pull, success/failure), `tests/release_create.rs`, `tests/deployment_execute_release.rs` (workflow ordering, compensation), adapter contract tests inside `oci_image.rs` / `local_runtime.rs` / `systemd_quadlet.rs`, E2E deploy scenarios in `tests/cli.rs` (fake binaries also prove no transaction is open during effects) |
@@ -141,7 +138,7 @@ Identical to Flow 3 after source resolution; only the front differs.
 | CLI entry | `cli/application.rs::run_start` / `run_stop` / `run_status` |
 | Use cases | `application/runtime.rs`: `report_application_status` (observe + persist observation, never changes intent), `stop_application` / `start_application` both funnel into the shared `transition_application` controller |
 | Domain rules | `domain/application.rs::DesiredRuntimeState`; `domain/runtime.rs`: `ObservedRuntimeState` (unknown Podman states preserved as `Unknown`), `ContainerId`, loopback-only `ExpectedRuntimeEndpoint`; intent is persisted before any external effect |
-| Stores | `application_store::compare_and_set_desired_runtime_state` (CAS), `runtime_store` (active-runtime load, observation writes, hydratable tombstones `state='removed'`) |
+| Stores | `application_store::set_desired_runtime_state` (under the Application lock), `runtime_store` (active-runtime load, observation writes, hydratable tombstones `state='removed'`) |
 | External adapters | `local_runtime::start_container` / `stop_container` / `observe_container`; `systemd_quadlet::unit_name` on the missing-container recreation path (Quadlet recreates containers under a stable name) |
 | Tests | lifecycle E2E scenarios in `tests/cli.rs` (idempotent stop/start, stop after container removal, start after removal recreating via Quadlet), runtime hydration/tombstone tests inside `runtime_store.rs` and `tests/deployment_register_runtime.rs`, VO boundaries in `tests/domain_values.rs` |
 
@@ -150,7 +147,7 @@ Identical to Flow 3 after source resolution; only the front differs.
 Pipeline shape (see `use_cases/reconciliation/mod.rs` module docs):
 
 ```text
-lock + ownership → recover branch → load → observe → decide (pure) → execute
+application lock → recover branch → load → observe → decide (pure) → execute
 ```
 
 | Layer | Where |

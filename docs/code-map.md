@@ -22,9 +22,9 @@ Every command starts the same way:
    render through `src/cli/output.rs`; errors become classified `CliError`s in
    `src/cli/error.rs`.
 
-Long workflows additionally hold a per-application `flock`
-(`src/adapters/application_lock.rs::ApplicationLock::try_acquire`) plus a
-durable ownership token (`src/adapters/stores/operation_store.rs`).
+Every mutation of an existing Application holds its per-application `flock`
+(`src/adapters/application_lock.rs::ApplicationLock::try_acquire_for_connection`)
+from its first state-dependent read through confirmation and compensation.
 
 ## Application import
 
@@ -119,13 +119,13 @@ Start: `src/cli/deployment.rs::run_deploy_oci` — parses
 Resolution: `src/use_cases/deployment/deploy.rs::deploy_oci` →
 `deploy_artifact_for_delivery`:
 `DeliverySpecification::permits` allow-list → `pull_image` →
-`src/use_cases/release/mod.rs::create_release` (digest-pinned reuse).
+`src/use_cases/release/mod.rs::create_release_while_locked` (digest-pinned reuse).
 
 Execution spine (`src/use_cases/deployment/execute.rs::deploy_release_reporting`):
 
 ```text
-lock + ownership token
-→ pending deployment row (create.rs::create_deployment_with_source_revision_and_ownership)
+application lock
+→ pending deployment row (create.rs::create_deployment_with_source_revision_while_locked)
 → execute_deployment → candidate.rs::start_candidate:
     advance_deployment(Start) → port_allocator::reserve_port
     → systemd_quadlet::{write_unit, daemon_reload, start}
@@ -253,7 +253,7 @@ Command: `pneuma reconcile <app>`
 Start: `src/cli/reconciliation.rs::run_reconcile`
 
 Pipeline (`src/use_cases/reconciliation/mod.rs::reconcile_application`):
-1. lock + ownership token
+1. application lock
 2. blocking deployment present? → `recover.rs::recover_interrupted_deployment`
 3. otherwise: `load.rs::load_reconciliation_input` (persisted facts) →
    `observe.rs::observe_reconciliation_input` (Podman, Quadlet, Caddy) →

@@ -15,7 +15,6 @@ use super::create::CreateDeploymentError;
 use super::progress::{DeploymentStep, ProgressReporter};
 use super::promotion::PromoteInternalCandidateError;
 use super::transition::{TransitionDeploymentError, fail_deployment};
-use crate::adapters::application_lock::ApplicationLockError;
 use crate::adapters::stores::application_store::ApplicationStoreError;
 use crate::domain::deployment::DeploymentFailureCode;
 use crate::domain::identity::{DeploymentId, RuntimeInstanceId};
@@ -59,18 +58,6 @@ pub enum DeployReleaseError {
         #[source]
         source: Box<CandidateCleanupError>,
     },
-    #[error("failed to serialize deployment: {source}")]
-    OperationLock {
-        #[source]
-        source: ApplicationLockError,
-    },
-    #[error("failed to create deployment ownership: {source}")]
-    OperationToken {
-        #[source]
-        source: rusqlite::Error,
-    },
-    #[error("application `{application_id}` already has an operation in progress")]
-    OperationInProgress { application_id: String },
 }
 
 // Preserves failure provenance and every allocated candidate resource for ordered cleanup.

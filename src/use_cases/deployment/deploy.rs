@@ -4,6 +4,7 @@ use thiserror::Error;
 use super::execute::{DeploymentResult, PublicDeploymentConfiguration, deploy_release_reporting};
 use super::failure::DeployReleaseError;
 use super::progress::{DeploymentProgress, ProgressReporter};
+use crate::adapters::application_lock::{ApplicationLock, ApplicationLockError};
 use crate::adapters::git_source::{ResolveBranchError, resolve_branch};
 use crate::adapters::oci_image::{
     PullImageError, ResolveImageDigestError, pull_image, resolve_image_digest,
@@ -13,10 +14,17 @@ use crate::domain::deployment::{DeploymentType, SourceRevision};
 use crate::domain::git::CommitSha;
 use crate::domain::identity::ApplicationId;
 use crate::domain::release::{DeliverySpecification, OciArtifact};
-use crate::use_cases::release::{CreateReleaseError, create_release};
+use crate::use_cases::release::{CreateReleaseError, create_release_while_locked};
 
 #[derive(Debug, Error)]
 pub enum DeployBranchError {
+    #[error("failed to acquire deployment lock: {source}")]
+    ApplicationLock {
+        #[source]
+        source: ApplicationLockError,
+    },
+    #[error("application `{application_id}` already has an operation in progress")]
+    ApplicationBusy { application_id: String },
     #[error(
         "application `{application_id}` has no source configuration; re-import its manifest from a Git repository"
     )]
@@ -88,6 +96,13 @@ fn deploy_branch_reporting(
     public_configuration: Option<&PublicDeploymentConfiguration>,
     progress: &mut ProgressReporter<'_>,
 ) -> Result<DeploymentResult, DeployBranchError> {
+    let Some(_lock) = ApplicationLock::try_acquire_for_connection(connection, application_id)
+        .map_err(|source| DeployBranchError::ApplicationLock { source })?
+    else {
+        return Err(DeployBranchError::ApplicationBusy {
+            application_id: application_id.to_string(),
+        });
+    };
     let source = application_store::load_source(connection, application_id)
         .map_err(|source| DeployBranchError::SourceConfiguration { source })?
         .ok_or_else(|| DeployBranchError::NoSourceConfiguration {
@@ -130,6 +145,13 @@ fn deploy_branch_reporting(
 
 #[derive(Debug, Error)]
 pub enum DeployOciError {
+    #[error("failed to acquire deployment lock: {source}")]
+    ApplicationLock {
+        #[source]
+        source: ApplicationLockError,
+    },
+    #[error("application `{application_id}` already has an operation in progress")]
+    ApplicationBusy { application_id: String },
     #[error(
         "application `{application_id}` has no delivery configuration; re-import its manifest with a [delivery] section"
     )]
@@ -204,6 +226,13 @@ fn deploy_oci_reporting(
     public_configuration: Option<&PublicDeploymentConfiguration>,
     progress: &mut ProgressReporter<'_>,
 ) -> Result<DeploymentResult, DeployOciError> {
+    let Some(_lock) = ApplicationLock::try_acquire_for_connection(connection, application_id)
+        .map_err(|source| DeployOciError::ApplicationLock { source })?
+    else {
+        return Err(DeployOciError::ApplicationBusy {
+            application_id: application_id.to_string(),
+        });
+    };
     let delivery = application_store::load_delivery_specification(connection, application_id)
         .map_err(|source| DeployOciError::DeliveryConfiguration { source })?;
     let Some(delivery) = delivery else {
@@ -242,7 +271,7 @@ fn deploy_artifact_for_delivery(
         });
     }
     pull_image(artifact).map_err(|source| DeployOciError::PullImage { source })?;
-    let release = create_release(connection, application_id, artifact)
+    let release = create_release_while_locked(connection, application_id, artifact)
         .map_err(|source| DeployOciError::CreateRelease { source })?;
     let source_revision = source_commit.cloned().map(SourceRevision::from_commit);
     deploy_release_reporting(

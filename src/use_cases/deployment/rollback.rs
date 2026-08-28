@@ -4,6 +4,7 @@ use thiserror::Error;
 
 use super::execute::{DeploymentResult, PublicDeploymentConfiguration, deploy_release};
 use super::failure::DeployReleaseError;
+use crate::adapters::application_lock::{ApplicationLock, ApplicationLockError};
 use crate::adapters::oci_image::{PullImageError, pull_image};
 use crate::adapters::stores::application_store;
 use crate::adapters::stores::deployment_store;
@@ -12,6 +13,13 @@ use crate::domain::identity::ApplicationId;
 
 #[derive(Debug, Error)]
 pub enum RollbackError {
+    #[error("failed to acquire rollback lock: {source}")]
+    ApplicationLock {
+        #[source]
+        source: ApplicationLockError,
+    },
+    #[error("application `{application_id}` already has an operation in progress")]
+    ApplicationBusy { application_id: String },
     #[error("application `{application_id}` was not found")]
     ApplicationNotFound { application_id: String },
     #[error("application `{application_id}` has no previous successful deployment to roll back to")]
@@ -36,6 +44,13 @@ pub fn rollback_deployment(
     application_id: &ApplicationId,
     public_configuration: Option<&PublicDeploymentConfiguration>,
 ) -> Result<DeploymentResult, RollbackError> {
+    let Some(_lock) = ApplicationLock::try_acquire_for_connection(connection, application_id)
+        .map_err(|source| RollbackError::ApplicationLock { source })?
+    else {
+        return Err(RollbackError::ApplicationBusy {
+            application_id: application_id.to_string(),
+        });
+    };
     let exists =
         application_store::application_exists(connection, application_id).map_err(|source| {
             RollbackError::LoadTarget {

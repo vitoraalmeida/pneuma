@@ -2,14 +2,14 @@ use std::fs::{File, OpenOptions};
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 
+use rusqlite::Connection;
+
 use thiserror::Error;
 
 use crate::domain::identity::ApplicationId;
 
 #[derive(Debug, Error)]
 pub enum ApplicationLockError {
-    #[error("database path is unavailable for application locking")]
-    DatabasePathUnavailable,
     #[error("failed to open application lock {}: {source}", path.display())]
     Open {
         path: PathBuf,
@@ -30,6 +30,19 @@ pub struct ApplicationLock {
 }
 
 impl ApplicationLock {
+    // Uses the configured file database as the lock namespace. In-memory databases
+    // are process-local, so their connection address keeps independent test stores
+    // from contending with one another.
+    pub fn try_acquire_for_connection(
+        connection: &Connection,
+        application_id: &ApplicationId,
+    ) -> Result<Option<Self>, ApplicationLockError> {
+        let database_path = connection.path().map(PathBuf::from).unwrap_or_else(|| {
+            std::env::temp_dir().join(format!("pneuma-memory-{:p}", connection))
+        });
+        Self::try_acquire(&database_path, application_id)
+    }
+
     pub fn try_acquire(
         database_path: &Path,
         application_id: &ApplicationId,
@@ -84,6 +97,8 @@ pub(crate) fn lock_path(database_path: &Path, application_id: &ApplicationId) ->
 mod tests {
     use std::env;
     use std::fs;
+    use std::io::Read;
+    use std::process::{Command, Stdio};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{ApplicationLock, lock_path};
@@ -131,6 +146,55 @@ mod tests {
         );
         fs::remove_file(lock_path(&database, &application_id("application-a"))).unwrap();
         fs::remove_file(lock_path(&database, &application_id("application-b"))).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn releases_a_lock_when_the_holding_process_dies() {
+        let root = env::temp_dir().join(format!(
+            "pneuma-application-lock-process-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let database = root.join("pneuma.sqlite3");
+        let application = application_id("application-a");
+        let path = lock_path(&database, &application);
+        let script = format!(
+            "exec 9>\"{}\"; flock -n 9; printf ready; while :; do :; done",
+            path.display()
+        );
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg(script)
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut ready = [0; 5];
+        child
+            .stdout
+            .as_mut()
+            .unwrap()
+            .read_exact(&mut ready)
+            .unwrap();
+        assert_eq!(&ready, b"ready");
+        assert!(
+            ApplicationLock::try_acquire(&database, &application)
+                .unwrap()
+                .is_none()
+        );
+
+        child.kill().unwrap();
+        child.wait().unwrap();
+
+        assert!(
+            ApplicationLock::try_acquire(&database, &application)
+                .unwrap()
+                .is_some()
+        );
+        fs::remove_file(path).unwrap();
         fs::remove_dir_all(root).unwrap();
     }
 }

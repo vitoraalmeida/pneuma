@@ -3,6 +3,7 @@ use std::net::SocketAddr;
 use rusqlite::Connection;
 use thiserror::Error;
 
+use crate::adapters::application_lock::{ApplicationLock, ApplicationLockError};
 use crate::adapters::local_runtime::{
     ContainerCommandOutput, PodmanError, observe_container, resolve_container_id, start_container,
     stop_container,
@@ -93,6 +94,13 @@ impl RuntimeCommand {
 
 #[derive(Debug, Error)]
 pub enum RuntimeLifecycleError {
+    #[error("failed to acquire application lock: {source}")]
+    ApplicationLock {
+        #[source]
+        source: ApplicationLockError,
+    },
+    #[error("application `{application_id}` already has an operation in progress")]
+    ApplicationBusy { application_id: String },
     #[error("application `{application_name}` is not deployed")]
     NotDeployed { application_name: String },
     #[error(
@@ -147,6 +155,13 @@ pub fn report_application_status(
     application_id: &ApplicationId,
     application_name: &ApplicationName,
 ) -> Result<RuntimeObservation, RuntimeLifecycleError> {
+    let Some(_lock) = ApplicationLock::try_acquire_for_connection(connection, application_id)
+        .map_err(|source| RuntimeLifecycleError::ApplicationLock { source })?
+    else {
+        return Err(RuntimeLifecycleError::ApplicationBusy {
+            application_id: application_id.to_string(),
+        });
+    };
     let runtime = load_active_runtime(connection, application_id, application_name)?;
     let desired_runtime_state = load_desired_state(connection, application_id)?;
     let observation = observe_container(&runtime.external_runtime_id, runtime.container_port)
@@ -208,6 +223,13 @@ fn transition_application(
     application_name: &ApplicationName,
     command: RuntimeCommand,
 ) -> Result<RuntimeObservation, RuntimeLifecycleError> {
+    let Some(_lock) = ApplicationLock::try_acquire_for_connection(connection, application_id)
+        .map_err(|source| RuntimeLifecycleError::ApplicationLock { source })?
+    else {
+        return Err(RuntimeLifecycleError::ApplicationBusy {
+            application_id: application_id.to_string(),
+        });
+    };
     let desired_runtime_state = command.desired_state();
     let runtime = load_active_runtime(connection, application_id, application_name)?;
     // The desired state is the operator's intent and is persisted before any external
@@ -445,40 +467,23 @@ fn load_desired_state(
     }
 }
 
-// Updates operator intent with compare-and-set semantics so concurrent changes are not lost.
+// Records operator intent while the Application lock serializes this lifecycle workflow.
 fn set_desired_state(
     connection: &Connection,
     application_id: &ApplicationId,
     desired_runtime_state: DesiredRuntimeState,
 ) -> Result<(), RuntimeLifecycleError> {
-    let expected = load_desired_state(connection, application_id)?;
-    let updated = application_store::compare_and_set_desired_runtime_state(
-        connection,
-        application_id,
-        expected,
-        desired_runtime_state,
-    )
-    .map_err(|source| RuntimeLifecycleError::ApplicationStore { source })?;
-    if updated == crate::adapters::stores::PersistenceOutcome::Stale {
-        return Err(RuntimeLifecycleError::RuntimeChanged {
-            runtime_id: application_id.to_string(),
-        });
-    }
-    Ok(())
+    application_store::set_desired_runtime_state(connection, application_id, desired_runtime_state)
+        .map_err(|source| RuntimeLifecycleError::ApplicationStore { source })
 }
 
-// Persists an observation only while the runtime record remains current.
+// Persists the observed runtime state under the Application lock.
 fn persist_observation(
     connection: &Connection,
     runtime: &RuntimeInstance,
     observation: &ContainerObservation,
 ) -> Result<(), RuntimeLifecycleError> {
-    let updated = runtime_store::persist_observation(connection, &runtime.id, observation)?;
-    if updated == crate::adapters::stores::PersistenceOutcome::Stale {
-        return Err(RuntimeLifecycleError::RuntimeChanged {
-            runtime_id: runtime.id.to_string(),
-        });
-    }
+    runtime_store::persist_observation(connection, &runtime.id, observation)?;
     Ok(())
 }
 
@@ -805,7 +810,7 @@ exit \"${PNEUMA_FAKE_SYSTEMCTL_EXIT:-0}\"
     }
 
     #[test]
-    fn a_stale_runtime_record_surfaces_as_runtime_changed_instead_of_silent_success() {
+    fn lifecycle_observation_does_not_turn_a_zero_row_telemetry_write_into_a_conflict() {
         let scenario = RuntimeScenario::new("stale-record");
         scenario.seed_container_present(RECORDED_CONTAINER_ID);
         let mut connection = migrated_connection();
@@ -822,13 +827,13 @@ exit \"${PNEUMA_FAKE_SYSTEMCTL_EXIT:-0}\"
             )
             .unwrap();
 
-        let error =
-            stop_application(&mut connection, &application_id(), &application_name()).unwrap_err();
+        let observation =
+            stop_application(&mut connection, &application_id(), &application_name()).unwrap();
 
-        assert!(matches!(
-            error,
-            RuntimeLifecycleError::RuntimeChanged { .. }
-        ));
+        assert_eq!(
+            observation.desired_runtime_state,
+            DesiredRuntimeState::Stopped
+        );
         assert_eq!(persisted_desired_state(&connection), "stopped");
     }
 

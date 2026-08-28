@@ -119,8 +119,9 @@ layers without a documented secondary defense (see
 - operation ordering: persist intent before effects, observe, then persist
   confirmed completion;
 - external effects, compensation, and interrupted-work recovery;
-- authority coordination: kernel locks, ownership epochs, transaction
-  boundaries, and translating domain decisions into store and adapter calls.
+- authority coordination: per-Application kernel locks, targeted conditional
+  writes, transaction boundaries, and translating domain decisions into store
+  and adapter calls.
 
 **Adapters** (`src/adapters/`) own:
 
@@ -244,7 +245,7 @@ relationships, state values, and database invariants.
 Multiple authorities are intentional: persisted intent and observed external
 reality are different categories of state. SQLite does not prove that an
 external resource still exists. Rationale:
-[`ADR-0004`](../decisions/0004-sqlite-intent-vs-runtime-authority.md).
+[`ADR-0004`](../decisions/0004-state-authority-and-reconciliation.md).
 
 Use cases follow a local saga model:
 
@@ -321,7 +322,7 @@ Rationale for these boundaries is in [`../decisions/`](../decisions/) and
 - The `(application, digest)` pair identifies a reusable Release. Source
   revision belongs to Deployment because one artifact can be activated from
   different requests. Rationale:
-  [`ADR-0006`](../decisions/0006-release-deployment-runtime-model.md).
+  [`ADR-0003`](../decisions/0003-health-gated-activation.md).
 - Only one non-terminal Deployment may exist for an Application. Rollback creates
   a new `rollback` Deployment for a historical successful Release; it never edits
   prior history.
@@ -343,7 +344,7 @@ Rationale for these boundaries is in [`../decisions/`](../decisions/) and
   enable units through `systemctl --user enable`. Their Quadlet content includes
   `WantedBy=default.target`; with user linger, generated units can return after a
   host reboot. Rationale:
-  [`ADR-0003`](../decisions/0003-rootless-podman-and-quadlet.md).
+  [`ADR-0001`](../decisions/0001-single-host-runtime.md).
 - Promotion sets desired runtime intent to `running`. `app start` and `app stop`
   persist intent before controlling the runtime and persist the resulting
   observation afterward.
@@ -363,7 +364,7 @@ Rationale for these boundaries is in [`../decisions/`](../decisions/) and
   Stopping a public Application does not remove its existing Caddy fragment.
 - Internal visibility removes only the managed Caddy route. It leaves the
   loopback runtime running. Rationale:
-  [`ADR-0005`](../decisions/0005-caddy-for-public-exposure.md).
+  [`ADR-0001`](../decisions/0001-single-host-runtime.md).
 - The bootstrap-managed Caddy baseline returns generic HTTP `404 Not Found` for
   unmatched hosts. HTTPS can fail during TLS before this fallback when no
   certificate exists for the hostname.
@@ -556,7 +557,7 @@ its immutable Release if necessary, and runs the normal deployment flow as a new
 The restricted SSH dispatcher parses `SSH_ORIGINAL_COMMAND` and permits only
 `version` or `deploy <application> <branch-or-tag>`. It validates both arguments
 and dispatches the permitted deploy command through the same source-resolution
-flow. Security rationale: [`ADR-0007`](../decisions/0007-restricted-ssh-ci-interface.md)
+flow. Security rationale: [`ADR-0006`](../decisions/0006-restricted-ci-interface.md)
 and [`security-model.md`](security-model.md).
 
 ### Catalog and history
@@ -579,7 +580,6 @@ Application by name; an Application with no history reports that explicitly.
 reconcile <application>
   -> resolve Application by name
   -> try per-application kernel lock; held => Deferred (no observation happens)
-  -> short transaction: generate token and take operation ownership (generation fence)
   -> load persisted facts: desired state, active bundle, blocking deployment
   -> blocking non-terminal Deployment? run interrupted-deployment recovery instead:
      record it failed, clean only provably owned candidate resources
@@ -588,7 +588,8 @@ reconcile <application>
   -> adapters render canonical expectations (container name, Quadlet bytes,
      public route fragment)
   -> pure domain decision from persisted facts vs observations vs expectations
-  -> execute the decided variant with CAS confirmation
+  -> execute the decided variant with targeted CAS confirmation where an exact
+     persisted precondition matters
 ```
 
 The decision is computed without any store, filesystem, Podman, systemd, Caddy,

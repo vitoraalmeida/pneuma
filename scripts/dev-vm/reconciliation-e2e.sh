@@ -674,20 +674,20 @@ printf '%s\n' "\$!"
 REMOTE
 	for _ in $(seq 1 100); do
 		if root_ssh <<REMOTE; then
-test -f '$GATE_ROOT/${CASE_DIR##*/}/reconciliation.ownership-acquired.ready'
+test -f '$GATE_ROOT/${CASE_DIR##*/}/reconciliation.application-lock-acquired.ready'
 REMOTE
 			break
 		fi
 		sleep 0.1
 	done
-	remote_file "$GATE_ROOT/${CASE_DIR##*/}/reconciliation.ownership-acquired.ready"
+remote_file "$GATE_ROOT/${CASE_DIR##*/}/reconciliation.application-lock-acquired.ready"
 	local output
 	output=$(run_reconcile reconcile-b)
 	assert_result deferred "$output"
 	root_ssh <<REMOTE
 set -euo pipefail
-touch '$GATE_ROOT/${CASE_DIR##*/}/reconciliation.ownership-acquired.release'
-chown pneuma:pneuma '$GATE_ROOT/${CASE_DIR##*/}/reconciliation.ownership-acquired.release'
+touch '$GATE_ROOT/${CASE_DIR##*/}/reconciliation.application-lock-acquired.release'
+chown pneuma:pneuma '$GATE_ROOT/${CASE_DIR##*/}/reconciliation.application-lock-acquired.release'
 REMOTE
 	local pid
 	pid=$(<"$CASE_DIR/reconcile-a.pid")

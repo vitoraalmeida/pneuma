@@ -198,26 +198,24 @@ pub(crate) fn load_desired_runtime_state(
     })
 }
 
-// Changes Application runtime intent only when the persisted state matches the observation.
-pub(crate) fn compare_and_set_desired_runtime_state(
+// Records the operator's runtime intent while the Application lock serializes its workflow.
+pub(crate) fn set_desired_runtime_state(
     connection: &Connection,
     application_id: &ApplicationId,
-    expected: DesiredRuntimeState,
     desired: DesiredRuntimeState,
-) -> Result<PersistenceOutcome, ApplicationStoreError> {
-    let updated = connection
+) -> Result<(), ApplicationStoreError> {
+    connection
         .execute(
             "UPDATE applications
              SET desired_runtime_state = ?1, updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?2 AND desired_runtime_state = ?3",
+             WHERE id = ?2",
             params![
                 desired_runtime_state_value(desired),
-                application_id.as_str(),
-                desired_runtime_state_value(expected)
+                application_id.as_str()
             ],
         )
         .map_err(|source| ApplicationStoreError::Persistence { source })?;
-    Ok(outcome(updated))
+    Ok(())
 }
 
 // Persists the immutable delivery configuration associated with an imported Application.
@@ -549,15 +547,14 @@ mod tests {
     use rusqlite::{Connection, TransactionBehavior, params};
 
     use crate::adapters::database;
-    use crate::adapters::stores::PersistenceOutcome;
     use crate::domain::application::ApplicationName;
     use crate::domain::identity::{ApplicationId, SystemId};
 
     use super::{
-        ApplicationStoreError, DesiredRuntimeState, compare_and_set_desired_runtime_state,
-        insert_application, insert_delivery_spec, insert_runtime_spec, load_application_by_name,
-        load_application_for_import, load_delivery_specification, load_deployment_specification,
-        load_desired_runtime_state, load_source,
+        ApplicationStoreError, DesiredRuntimeState, insert_application, insert_delivery_spec,
+        insert_runtime_spec, load_application_by_name, load_application_for_import,
+        load_delivery_specification, load_deployment_specification, load_desired_runtime_state,
+        load_source,
     };
 
     fn application_id() -> ApplicationId {
@@ -601,30 +598,16 @@ mod tests {
     }
 
     #[test]
-    fn desired_runtime_state_cas_reports_updated_then_stale() {
+    fn desired_runtime_state_records_the_locked_lifecycle_intent() {
         let connection = database::open(Path::new(":memory:")).unwrap();
         seed_application(&connection, "app");
 
-        assert_eq!(
-            compare_and_set_desired_runtime_state(
-                &connection,
-                &application_id(),
-                DesiredRuntimeState::Stopped,
-                DesiredRuntimeState::Running,
-            )
-            .unwrap(),
-            PersistenceOutcome::Updated
-        );
-        assert_eq!(
-            compare_and_set_desired_runtime_state(
-                &connection,
-                &application_id(),
-                DesiredRuntimeState::Stopped,
-                DesiredRuntimeState::Running,
-            )
-            .unwrap(),
-            PersistenceOutcome::Stale
-        );
+        super::set_desired_runtime_state(
+            &connection,
+            &application_id(),
+            DesiredRuntimeState::Running,
+        )
+        .unwrap();
         assert_eq!(
             load_desired_runtime_state(&connection, &application_id()).unwrap(),
             DesiredRuntimeState::Running

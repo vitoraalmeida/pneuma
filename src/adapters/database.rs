@@ -32,8 +32,6 @@ const APPLICATION_SOURCES_V3_MIGRATION: &str =
     include_str!("../../migrations/0013_application_sources_v3.sql");
 const DEPLOYMENT_SOURCE_REVISION_MIGRATION: &str =
     include_str!("../../migrations/0014_deployment_source_revision.sql");
-const APPLICATION_OPERATIONS_MIGRATION: &str =
-    include_str!("../../migrations/0015_application_operations.sql");
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, INITIAL_MIGRATION),
     (2, DEPLOYMENT_MIGRATION),
@@ -49,7 +47,6 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (12, RUNTIME_PORT_RESERVATION_MIGRATION),
     (13, APPLICATION_SOURCES_V3_MIGRATION),
     (14, DEPLOYMENT_SOURCE_REVISION_MIGRATION),
-    (15, APPLICATION_OPERATIONS_MIGRATION),
 ];
 
 #[derive(Debug, Error)]
@@ -342,20 +339,10 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        let operation_table_count: i64 = connection
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_schema
-                 WHERE type = 'table' AND name = 'application_operations'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-
-        assert_eq!(migration_count, 15);
+        assert_eq!(migration_count, 14);
         assert_eq!(application_table_count, 1);
         assert_eq!(deployment_table_count, 1);
         assert!(deployment_source_revision_column);
-        assert_eq!(operation_table_count, 1);
     }
 
     #[test]
@@ -369,43 +356,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(migration_count, 15);
-    }
-
-    #[test]
-    fn upgrades_the_preceding_schema_to_application_operations() {
-        let mut connection = Connection::open_in_memory().unwrap();
-        connection
-            .execute_batch(
-                "PRAGMA foreign_keys = ON;
-                 CREATE TABLE schema_migrations (
-                    version INTEGER PRIMARY KEY,
-                    applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-                 );",
-            )
-            .unwrap();
-        for (version, migration) in MIGRATIONS.iter().take(14) {
-            connection.execute_batch(migration).unwrap();
-            connection
-                .execute(
-                    "INSERT INTO schema_migrations (version) VALUES (?1)",
-                    [version],
-                )
-                .unwrap();
-        }
-
-        migrate(&mut connection).unwrap();
-
-        let operation_table_exists: bool = connection
-            .query_row(
-                "SELECT EXISTS(
-                    SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'application_operations'
-                 )",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert!(operation_table_exists);
+        assert_eq!(migration_count, 14);
     }
 
     #[test]
@@ -456,17 +407,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        let operation_table_exists: bool = connection
-            .query_row(
-                "SELECT EXISTS(
-                    SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'application_operations'
-                 )",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
         assert_eq!(source_revision.as_deref(), Some("commit-sha"));
-        assert!(operation_table_exists);
     }
 
     #[test]

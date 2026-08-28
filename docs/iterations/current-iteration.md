@@ -16,12 +16,15 @@ incompatible; no existing database or backup is upgraded.
 
 ## Checkpoints
 
-1. [ ] Current ADR set and per-Application coordination
+1. [x] Current ADR set and per-Application coordination
    - Replace the ADR set with the six current decisions.
    - Use one per-Application kernel lock for every existing-Application mutation
      and remove operation tokens, generations, ownership storage, and related
      terminology.
    - Preserve targeted CAS only where an exact persisted precondition matters.
+   - Result: deploy, rollback, lifecycle, status observation, visibility, and
+     reconciliation hold the same lock; the operation store and migration are
+     removed, and contention is caller-visible (`Deferred` for reconciliation).
 2. [ ] Strict current domain types
    - Remove compatibility-only System, manifest-version, source-revision,
      failure-evidence, delivery, and local-source representations.
@@ -61,3 +64,7 @@ incompatible; no existing database or backup is upgraded.
 
 - Checkpoint 0: the approved design is indexed, this is the sole active tracker,
   and Checkpoint 1 is the unambiguous next implementation checkpoint.
+- Checkpoint 1: `cargo fmt --check`, Clippy with warnings denied, all-feature
+  tests, release build, markdown-link validation, and `bash -n` passed. The
+  three ignored OCI tests require a configured rootless Podman host. ShellCheck
+  was unavailable on this host and was not reported as passed.

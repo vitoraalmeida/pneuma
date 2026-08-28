@@ -5,15 +5,13 @@ use rusqlite::Connection;
 use super::activation::{PublicActivationInput, activate_public_candidate};
 use super::candidate::{CandidateStartInput, StartedCandidate, start_candidate};
 use super::cleanup::{CandidateResources, load_previous_runtime, retire_previous_runtime};
-use super::create::create_deployment_with_source_revision_and_ownership;
+use super::create::create_deployment_with_source_revision_while_locked;
 use super::failure::{
     DeployReleaseError, FailedExecution, finish_failed_deployment, internal_promotion_failure,
 };
 use super::progress::{DeploymentStep, ProgressReporter};
 use super::promotion::promote_internal_candidate;
-use crate::adapters::application_lock::{ApplicationLock, ApplicationLockError};
 use crate::adapters::stores::application_store;
-use crate::adapters::stores::operation_store;
 use crate::adapters::test_gate::wait_for_test_gate;
 use crate::domain::application::ApplicationDeploymentSpecification;
 use crate::domain::deployment::{
@@ -92,34 +90,16 @@ pub(crate) fn deploy_release_reporting(
         });
     }
 
-    let database_path =
-        connection
-            .path()
-            .map(std::path::Path::new)
-            .ok_or(DeployReleaseError::OperationLock {
-                source: ApplicationLockError::DatabasePathUnavailable,
-            })?;
-    let Some(_lock) = ApplicationLock::try_acquire(database_path, application_id)
-        .map_err(|source| DeployReleaseError::OperationLock { source })?
-    else {
-        return Err(DeployReleaseError::OperationInProgress {
-            application_id: application_id.to_string(),
-        });
-    };
-    let owner_token = operation_store::generate_token(connection)
-        .map_err(|source| DeployReleaseError::OperationToken { source })?;
-
     progress.started(
         DeploymentStep::CreateDeployment,
         format!("release {}", release.id),
     );
-    let deployment = create_deployment_with_source_revision_and_ownership(
+    let deployment = create_deployment_with_source_revision_while_locked(
         connection,
         application_id,
         &release.id,
         deployment_type,
         source_revision,
-        Some(&owner_token),
     )
     .map_err(|source| DeployReleaseError::CreateDeployment { source })?;
     progress.completed(
