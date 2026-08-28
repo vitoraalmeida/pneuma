@@ -19,13 +19,16 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=../lib/remote.sh
-source "$SCRIPT_DIR/../lib/remote.sh"
+# BASH_SOURCE[0] is unset when this script is piped to a remote
+# "bash -s" (the guest-side execution below); that path never uses
+# SCRIPT_DIR, so the fallback is only for that case.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 
 SSH_HOST="${1:-}"
 
 if [[ -n "$SSH_HOST" ]]; then
+	# shellcheck source=../lib/remote.sh
+	source "$SCRIPT_DIR/../lib/remote.sh"
 	remote_init "$SSH_HOST"
 	remote_ssh "$REMOTE_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && bash -s'" <"$0"
 	exit $?
