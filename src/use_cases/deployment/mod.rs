@@ -40,6 +40,7 @@ mod rollback;
 mod transition;
 
 pub use self::candidate::{RegisterCandidateRuntimeError, register_candidate_runtime};
+pub use self::cleanup::CandidateCleanupError;
 pub(crate) use self::cleanup::cleanup_failed_candidate;
 pub use self::create::{
     CreateDeploymentError, create_deployment, create_deployment_with_source_revision,

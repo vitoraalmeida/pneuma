@@ -697,4 +697,110 @@ mod tests {
             assert!(!source.to_string().is_empty());
         }
     }
+
+    #[test]
+    fn deployment_failure_diagnostics_reach_the_cli_boundary() {
+        use std::error::Error as _;
+
+        use pneuma::domain::deployment::DeploymentFailureCode;
+        use pneuma::domain::identity::RuntimeInstanceId;
+        use pneuma::use_cases::deployment::{
+            CandidateCleanupError, DeployOciError, DeployReleaseError, TransitionDeploymentError,
+        };
+
+        // Deploy failures reach the CLI wrapped by the OCI deploy operation; the
+        // transparent layers must not erase diagnostics or the cause chain.
+        fn deploy_failure(source: DeployReleaseError) -> CliError {
+            CliError::DeployOci {
+                source: Box::new(DeployOciError::DeployRelease { source }),
+            }
+        }
+
+        // Application not found.
+        let error = deploy_failure(DeployReleaseError::ApplicationNotFound {
+            application_id: "portal".to_owned(),
+        });
+        assert_eq!(error.class(), CliErrorClass::Failure);
+        assert!(
+            error
+                .to_string()
+                .contains("application `portal` was not found")
+        );
+
+        // Operation already in progress.
+        let error = deploy_failure(DeployReleaseError::OperationInProgress {
+            application_id: "portal".to_owned(),
+        });
+        assert_eq!(error.class(), CliErrorClass::Failure);
+        assert!(
+            error
+                .to_string()
+                .contains("already has an operation in progress")
+        );
+
+        // Ordinary deployment failure: id, semantic code, and original cause stay visible.
+        let error = deploy_failure(DeployReleaseError::DeploymentFailed {
+            deployment_id: "deployment-1".to_owned(),
+            code: DeploymentFailureCode::RuntimeStart,
+            source: Box::new(io::Error::other("container start failed")),
+        });
+        assert_eq!(error.class(), CliErrorClass::Failure);
+        let message = error.to_string();
+        assert!(message.contains("deployment-1"), "{message}");
+        assert!(message.contains("runtime_start_failed"), "{message}");
+        assert!(message.contains("container start failed"), "{message}");
+        let cause = error
+            .source()
+            .expect("a deployment failure must keep its cause");
+        assert!(cause.downcast_ref::<io::Error>().is_some());
+
+        // Cleanup divergence: the divergence is reported and the original failure
+        // text is preserved alongside it.
+        let error = deploy_failure(DeployReleaseError::Cleanup {
+            deployment_id: "deployment-1".to_owned(),
+            failure: "container start failed".to_owned(),
+            source: Box::new(CandidateCleanupError::RuntimeChanged {
+                runtime_id: RuntimeInstanceId::from("runtime-1"),
+            }),
+        });
+        assert_eq!(error.class(), CliErrorClass::Failure);
+        let message = error.to_string();
+        assert!(message.contains("could not be cleaned up"), "{message}");
+        assert!(message.contains("container start failed"), "{message}");
+        let source = error
+            .source()
+            .expect("a cleanup divergence must keep its cause");
+        assert!(
+            source
+                .downcast_ref::<Box<CandidateCleanupError>>()
+                .is_some_and(|error| matches!(
+                    error.as_ref(),
+                    CandidateCleanupError::RuntimeChanged { .. }
+                ))
+        );
+
+        // Failure-recording divergence: same preservation guarantees.
+        let error = deploy_failure(DeployReleaseError::RecordFailure {
+            deployment_id: "deployment-1".to_owned(),
+            failure: "container start failed".to_owned(),
+            source: TransitionDeploymentError::DeploymentNotFound {
+                deployment_id: "deployment-1".to_owned(),
+            },
+        });
+        assert_eq!(error.class(), CliErrorClass::Failure);
+        let message = error.to_string();
+        assert!(message.contains("could not be recorded"), "{message}");
+        assert!(message.contains("container start failed"), "{message}");
+        let source = error
+            .source()
+            .expect("a recording divergence must keep its cause");
+        assert!(
+            source
+                .downcast_ref::<TransitionDeploymentError>()
+                .is_some_and(|error| matches!(
+                    error,
+                    TransitionDeploymentError::DeploymentNotFound { .. }
+                ))
+        );
+    }
 }
