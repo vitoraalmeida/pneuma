@@ -65,7 +65,7 @@ report() {
 }
 
 pneuma_cmd() {
-	remote_remote_ssh "$SSH_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && $1'"
+	remote_ssh "$SSH_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && $1'"
 }
 
 check_remote() {

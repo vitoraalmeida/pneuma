@@ -161,6 +161,18 @@ else
 	FAILURES=$((FAILURES + 1))
 fi
 
+# Case 7: a user@host endpoint destination has its user part replaced, not
+# duplicated, by remote_ssh_as.
+begin_case
+(
+	export PNEUMA_SSH_PORT=2222
+	remote_init "root@127.0.0.1"
+	remote_ssh_as pneuma /tmp/pneuma-ci-key -o BatchMode=yes version
+)
+assert_arg "pneuma@127.0.0.1" "user@host endpoint replaces the destination user"
+assert_absent "pneuma@root@127.0.0.1" \
+	"user@host endpoint does not duplicate the destination user"
+
 echo
 if [[ "$FAILURES" -gt 0 ]]; then
 	echo "$FAILURES transport check(s) failed."

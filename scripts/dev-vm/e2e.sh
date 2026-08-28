@@ -51,7 +51,7 @@ echo "==> Step 3: Deploy all fixtures..."
 
 echo
 echo "==> Step 4: Verify baseline status..."
-remote_remote_ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma app status healthy-http"' 2>&1 | grep -v level=warning
+remote_ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma app status healthy-http"' 2>&1 | grep -v level=warning
 if ! remote_ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma app status redirect-public"' | grep -q "Observed state: Running"; then
 	echo "  ERROR: redirect-public is not Running"
 	exit 1
@@ -84,7 +84,7 @@ echo "  OK: redirect-public HTTPS, generic HTTP fallback, and internal transitio
 
 echo
 echo "==> Step 5: Failed candidate preserves healthy-http v1..."
-remote_remote_ssh "$SSH_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && podman build -q -t $REGISTRY/healthy-http:unhealthy /var/lib/pneuma/checkouts/fixtures/unhealthy-http >/dev/null && podman push --tls-verify=false $REGISTRY/healthy-http:unhealthy >/dev/null'"
+remote_ssh "$SSH_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && podman build -q -t $REGISTRY/healthy-http:unhealthy /var/lib/pneuma/checkouts/fixtures/unhealthy-http >/dev/null && podman push --tls-verify=false $REGISTRY/healthy-http:unhealthy >/dev/null'"
 UNHEALTHY_DIGEST=$(remote_ssh "$SSH_HOST" "curl -fsS -H 'Accept: application/vnd.oci.image.manifest.v1+json' http://$REGISTRY/v2/healthy-http/manifests/unhealthy -D - -o /dev/null | grep -i docker-content-digest | awk '{print \$2}' | tr -d '\r'")
 if DEPLOY_OUT=$(remote_ssh "$SSH_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && pneuma app deploy healthy-http --image $REGISTRY/healthy-http@$UNHEALTHY_DIGEST'" 2>&1); then
 	echo "  ERROR: unhealthy candidate deploy unexpectedly succeeded"
@@ -112,8 +112,8 @@ echo
 echo "==> Step 6: Upgrade healthy-http to v2..."
 sed 's/healthy-http v1.0/healthy-http v2.0/' "$FIXTURE_SRC/server.py" >"$TMP_V2/server.py"
 remote_scp_to -q "$TMP_V2/server.py" "$SSH_HOST":/var/lib/pneuma/checkouts/fixtures/healthy-http/server.py
-remote_remote_ssh "$SSH_HOST" 'chown pneuma:pneuma /var/lib/pneuma/checkouts/fixtures/healthy-http/server.py'
-remote_remote_ssh "$SSH_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && podman build -q -t $REGISTRY/healthy-http:latest /var/lib/pneuma/checkouts/fixtures/healthy-http 2>/dev/null && podman push --tls-verify=false $REGISTRY/healthy-http:latest 2>/dev/null'"
+remote_ssh "$SSH_HOST" 'chown pneuma:pneuma /var/lib/pneuma/checkouts/fixtures/healthy-http/server.py'
+remote_ssh "$SSH_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && podman build -q -t $REGISTRY/healthy-http:latest /var/lib/pneuma/checkouts/fixtures/healthy-http 2>/dev/null && podman push --tls-verify=false $REGISTRY/healthy-http:latest 2>/dev/null'"
 DIGEST=$(remote_ssh "$SSH_HOST" "curl -fsS -H 'Accept: application/vnd.oci.image.manifest.v1+json' http://$REGISTRY/v2/healthy-http/manifests/latest -D - -o /dev/null | grep -i docker-content-digest | awk '{print \$2}' | tr -d '\r'")
 DEPLOY_OUT=$(remote_ssh "$SSH_HOST" "runuser -u pneuma -- bash -lc 'cd \$HOME && pneuma app deploy healthy-http --image $REGISTRY/healthy-http@$DIGEST 2>&1'")
 echo "$DEPLOY_OUT" | grep -v level=warning || true
@@ -154,7 +154,7 @@ echo "  OK: rollback deployment recorded"
 echo
 echo "==> Step 8: Reboot VM..."
 BOOT_ID_BEFORE=$(remote_ssh "$SSH_HOST" 'cat /proc/sys/kernel/random/boot_id')
-remote_remote_ssh "$SSH_HOST" 'reboot' >/dev/null 2>&1 || true
+remote_ssh "$SSH_HOST" 'reboot' >/dev/null 2>&1 || true
 
 echo "  Waiting for SSH to disconnect..."
 DISCONNECTED=false

@@ -84,7 +84,8 @@ remote_scp_from() {
 # CI identity. The provisioning identity from PNEUMA_SSH_IDENTITY is not
 # offered on this connection; the caller's identity is the only one added.
 # Endpoint options (forwarded port, known-hosts file) are preserved. The
-# destination user@host is built from the configured endpoint, e.g.:
+# destination user is replaced on the configured endpoint, which may carry a
+# user part (e.g. "root@127.0.0.1"): it is replaced, never duplicated, e.g.:
 #   remote_ssh_as pneuma "$CI_KEY" -o BatchMode=yes version
 remote_ssh_as() {
 	local user="$1" identity="$2"
@@ -101,5 +102,5 @@ remote_ssh_as() {
 		index=$((index + 1))
 	done
 
-	ssh "${opts[@]}" -i "$identity" "${user}@${REMOTE_HOST}" "$@"
+	ssh "${opts[@]}" -i "$identity" "${user}@${REMOTE_HOST##*@}" "$@"
 }
