@@ -37,7 +37,7 @@ pub enum DeployReleaseError {
     #[error("deployment `{deployment_id}` failed with `{code}`: {source}")]
     DeploymentFailed {
         deployment_id: String,
-        code: &'static str,
+        code: DeploymentFailureCode,
         #[source]
         source: Box<dyn Error>,
     },
@@ -239,7 +239,7 @@ fn resolve_failure_recovery(
 
     DeployReleaseError::DeploymentFailed {
         deployment_id: deployment_id.to_string(),
-        code: code.as_str(),
+        code,
         source,
     }
 }
@@ -403,10 +403,50 @@ mod tests {
 
         match error {
             DeployReleaseError::DeploymentFailed { code, .. } => {
-                assert_eq!(code, "runtime_start_failed");
+                assert_eq!(code, DeploymentFailureCode::RuntimeStart);
             }
             other => panic!("expected the original failure, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn deployment_failed_keeps_the_semantic_code_typed_until_presentation() {
+        let error = resolve_failure_recovery(
+            &deployment_id(),
+            DeploymentFailureCode::RuntimeStart,
+            Box::new(TestFailure),
+            "test failure".to_owned(),
+            None,
+            None,
+        );
+
+        let DeployReleaseError::DeploymentFailed {
+            deployment_id,
+            code,
+            ..
+        } = error
+        else {
+            panic!("expected the original failure, got {error:?}")
+        };
+        // The semantic code stays an enum, so callers never reparse the
+        // persisted string, and the rendered text remains the stable one.
+        assert_eq!(code, DeploymentFailureCode::RuntimeStart);
+        assert_eq!(code.as_str(), "runtime_start_failed");
+        assert_eq!(deployment_id, "deployment-1");
+    }
+
+    #[test]
+    fn deployment_failed_formats_the_stable_persisted_code_string() {
+        let error = DeployReleaseError::DeploymentFailed {
+            deployment_id: "deployment-9".to_owned(),
+            code: DeploymentFailureCode::HealthCheck,
+            source: Box::new(TestFailure),
+        };
+
+        assert_eq!(
+            error.to_string(),
+            "deployment `deployment-9` failed with `health_check_failed`: test failure"
+        );
     }
 
     #[test]

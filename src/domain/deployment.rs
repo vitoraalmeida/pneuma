@@ -163,6 +163,14 @@ impl DeploymentFailureCode {
     }
 }
 
+// Renders the stable persisted string so workflow errors can carry the typed
+// code without changing any human-readable failure text.
+impl fmt::Display for DeploymentFailureCode {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 // Read model (projection): couples a hydrated deployment with its immutable artifact
 // and active marker for history views only. Transitions and promotions must load the
