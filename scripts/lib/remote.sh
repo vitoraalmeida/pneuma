@@ -41,6 +41,10 @@ remote_init() {
 		REMOTE_HOST=""
 	fi
 
+	# Exported so per-connection helpers (remote_ssh_as) can run in a child
+	# bash, e.g. under `timeout`, which can only exec programs.
+	export REMOTE_HOST
+
 	REMOTE_SSH_OPTS=()
 	REMOTE_SCP_OPTS=()
 	if [[ -n "${PNEUMA_SSH_PORT:-}" ]]; then
@@ -87,20 +91,27 @@ remote_scp_from() {
 # destination user is replaced on the configured endpoint, which may carry a
 # user part (e.g. "root@127.0.0.1"): it is replaced, never duplicated, e.g.:
 #   remote_ssh_as pneuma "$CI_KEY" -o BatchMode=yes version
+#
+# The transport settings are read from the PNEUMA_SSH_* environment rather
+# than the REMOTE_SSH_OPTS array because the function is exported: `timeout`
+# and similar exec-only wrappers reach it through `bash -c`, where caller
+# arrays are not visible. The env settings are the same source remote_init
+# translates into the arrays, so in-process and child-bash calls agree.
 remote_ssh_as() {
 	local user="$1" identity="$2"
 	shift 2
 
 	local -a opts=()
-	local index=0
-	while ((index < ${#REMOTE_SSH_OPTS[@]})); do
-		if [[ "${REMOTE_SSH_OPTS[$index]}" == "-i" ]]; then
-			index=$((index + 2))
-			continue
-		fi
-		opts+=("${REMOTE_SSH_OPTS[$index]}")
-		index=$((index + 1))
-	done
+	if [[ -n "${PNEUMA_SSH_PORT:-}" ]]; then
+		opts+=(-p "$PNEUMA_SSH_PORT")
+	fi
+	if [[ -n "${PNEUMA_SSH_KNOWN_HOSTS_FILE:-}" ]]; then
+		opts+=(-o "UserKnownHostsFile=$PNEUMA_SSH_KNOWN_HOSTS_FILE")
+	fi
+	if [[ -n "${PNEUMA_SSH_STRICT_HOST_KEY_CHECKING:-}" ]]; then
+		opts+=(-o "StrictHostKeyChecking=$PNEUMA_SSH_STRICT_HOST_KEY_CHECKING")
+	fi
 
 	ssh "${opts[@]}" -i "$identity" "${user}@${REMOTE_HOST##*@}" "$@"
 }
+export -f remote_ssh_as

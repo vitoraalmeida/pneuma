@@ -9,7 +9,9 @@
 #   3. explicit identity is passed correctly;
 #   4. known-hosts options target the dedicated file;
 #   5. the restricted connection uses the CI identity rather than the
-#      provisioning identity while preserving the endpoint port.
+#      provisioning identity while preserving the endpoint port;
+#   6. the restricted connection helper also works under `timeout`, which
+#      can only exec programs, via the exported function in a child bash.
 #
 # Usage:
 #   scripts/dev-vm/test-transport.sh
@@ -172,6 +174,23 @@ begin_case
 assert_arg "pneuma@127.0.0.1" "user@host endpoint replaces the destination user"
 assert_absent "pneuma@root@127.0.0.1" \
 	"user@host endpoint does not duplicate the destination user"
+
+# Case 8: the restricted helper is callable under `timeout`, which can only
+# exec programs; the exported function must survive into the child bash with
+# the endpoint settings derived from the environment.
+begin_case
+(
+	export PNEUMA_SSH_HOST=127.0.0.1
+	export PNEUMA_SSH_PORT=2222
+	remote_init "root@127.0.0.1"
+	timeout 5 bash -c 'remote_ssh_as "$@"' _ \
+		pneuma /tmp/pneuma-ci-key -o BatchMode=yes version
+)
+assert_arg "pneuma@127.0.0.1" \
+	"restricted helper runs under timeout in a child bash"
+assert_arg "/tmp/pneuma-ci-key" "timeout path uses the CI identity"
+assert_arg "-p" "timeout path preserves the forwarded port"
+assert_arg "2222" "timeout path preserves the port value"
 
 echo
 if [[ "$FAILURES" -gt 0 ]]; then

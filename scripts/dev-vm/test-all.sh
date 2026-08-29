@@ -100,7 +100,7 @@ ci_assert_ok() {
 	shift 2
 	local output rc
 	set +e
-	output=$(timeout 15 remote_ssh_as pneuma "$CI_KEY" -o BatchMode=yes "$@" 2>&1)
+	output=$(timeout 15 bash -c 'remote_ssh_as "$@"' _ pneuma "$CI_KEY" -o BatchMode=yes "$@" 2>&1)
 	rc=$?
 	set -e
 	if [[ "$rc" -eq 0 ]] && printf '%s' "$output" | grep -qF -- "$expected"; then
@@ -117,7 +117,7 @@ ci_assert_rejected() {
 	local output rc before after
 	before=$(pneuma_cmd "pneuma app deployments healthy-http" 2>&1 || true)
 	set +e
-	output=$(timeout 15 remote_ssh_as pneuma "$CI_KEY" -o BatchMode=yes "$@" 2>&1)
+	output=$(timeout 15 bash -c 'remote_ssh_as "$@"' _ pneuma "$CI_KEY" -o BatchMode=yes "$@" 2>&1)
 	rc=$?
 	set -e
 	after=$(pneuma_cmd "pneuma app deployments healthy-http" 2>&1 || true)
