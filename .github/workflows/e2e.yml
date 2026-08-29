@@ -1,0 +1,60 @@
+name: E2E
+
+on:
+  workflow_dispatch:
+
+# Disposable-VM E2E is expensive; a newer run on the same ref supersedes an
+# obsolete one without touching unrelated release validation.
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same toolchain policy as ci.yml; the guest never sees a compiler.
+      - uses: dtolnay/rust-toolchain@1.85.0
+
+      - name: Install outer-host VM prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 qemu-utils cloud-image-utils
+
+      - name: Make /dev/kvm usable when present
+        run: |
+          if [[ -e /dev/kvm ]]; then
+            sudo chmod 666 /dev/kvm
+            echo "/dev/kvm present; the launcher auto-selects KVM"
+          else
+            echo "no /dev/kvm; the launcher auto-selects TCG"
+          fi
+
+      # The same entry point used locally; lifecycle and cleanup stay in the
+      # shared VM scripts. Every SSH key is generated inside the job and no
+      # secret is required. The selected acceleration is printed by
+      # start-debian13.sh into this step's log.
+      - name: Run the disposable Debian 13 E2E
+        run: |
+          set -o pipefail
+          scripts/vm/run-e2e.sh 2>&1 | tee pneuma-e2e-run.log
+
+      # Small text logs only: the streamed run log (including the failure
+      # diagnostics with the serial-console tail), the provisioning log, and
+      # the test-all battery logs. The instance directory with its private
+      # keys and the mutable disk is already destroyed before this step and
+      # is never part of the artifact; upload does not mask the step result.
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-diagnostics-${{ github.run_id }}
+          if-no-files-found: ignore
+          path: |
+            pneuma-e2e-run.log
+            .tmp/pneuma-vm/provision.log
+            /tmp/pneuma-test-all/*.log
