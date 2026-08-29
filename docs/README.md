@@ -39,6 +39,7 @@ overrides current architecture.
 | Production host | Bootstrap, application operation, and non-destructive smoke tests only | [`getting-started.md`](getting-started.md) |
 | Development VM | Disposable Debian 13 provisioning and manual regression | [`operations/dev-vm-tutorial.md`](operations/dev-vm-tutorial.md) |
 | Automated VM regression | One-command disposable regression, fixture-cycle E2E, and reconciliation catalog | [`../scripts/dev-vm/test-regression.sh`](../scripts/dev-vm/test-regression.sh) (standard path), [`../scripts/dev-vm/e2e.sh`](../scripts/dev-vm/e2e.sh), [`../scripts/dev-vm/test-all.sh`](../scripts/dev-vm/test-all.sh), [`../scripts/dev-vm/reconciliation-e2e.sh`](../scripts/dev-vm/reconciliation-e2e.sh) |
+| Portable disposable VM E2E | Raw-QEMU Debian 13 harness, one command locally and on GitHub Actions (manual and `main`) | [`operations/dev-vm-tutorial.md`](operations/dev-vm-tutorial.md) (section 10), [`../scripts/vm/run-e2e.sh`](../scripts/vm/run-e2e.sh), [`../.github/workflows/e2e.yml`](../.github/workflows/e2e.yml) |
 
 Do not run reset, restore, bootstrap acceptance, or E2E scripts on production.
 

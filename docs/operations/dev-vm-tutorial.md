@@ -441,6 +441,56 @@ and deployment through `--branch`) and `e2e.sh` imports fixtures through local
 Git repositories; `reconciliation-e2e.sh` covers the drift catalog. The VPS is
 used only for final public-integration smoke tests (real DNS and TLS).
 
+## 10. Portable Raw-QEMU Disposable VM (`scripts/vm/`)
+
+Sections 1–9 describe the persistent libvirt development VM. The `scripts/vm/`
+harness is a second, fully disposable path to the same Debian 13 guest model:
+a raw `qemu-system-x86_64` launcher that needs no persistent daemon and runs
+identically on a developer Linux host and a GitHub Actions runner
+(`.github/workflows/e2e.yml`). The guest is the integration target; the outer
+host only needs VM/SSH tooling and Rust (`qemu-system-x86`, `qemu-utils`,
+`cloud-image-utils`, `git`, `cargo`, `ssh`/`scp`).
+
+Key properties:
+
+- The immutable Debian 13 genericcloud base image is downloaded once into
+  `.tmp/pneuma-vm/base/` and verified against the published `SHA512SUMS` on
+  every use (a stale cache is re-downloaded); each run writes a fresh qcow2
+  overlay in `.tmp/pneuma-vm/instance/`. `stop` preserves the instance; only
+  `destroy` removes it.
+- Acceleration is auto-detected: KVM when `/dev/kvm` is usable, TCG otherwise
+  (`PNEUMA_VM_ACCEL=kvm|tcg|auto`); the choice is printed on start.
+- SSH forwarding binds to `127.0.0.1` only, with a per-instance ephemeral key
+  and a disposable known-hosts file; nothing touches `~/.ssh/config`.
+
+One-command paths, all ephemeral by default (any previous instance is
+destroyed first, and the instance is destroyed again on exit):
+
+```bash
+scripts/vm/smoke.sh     # start -> provision -> sync-binary -> dev-vm smoke
+scripts/vm/run-e2e.sh   # smoke path + ephemeral restricted CI key + full test-all battery
+```
+
+`run-e2e.sh` is the full regression: the `test-all.sh` battery (failed-candidate
+preservation, digest deployment, upgrade, rollback, the real guest reboot with
+post-reboot recovery, branch deployment, restricted CI dispatch, backup/restore,
+smoke). On failure it prints state, serial-console, and test-log diagnostics
+before destroying the instance and keeps the original exit code.
+`PNEUMA_VM_KEEP=1` preserves the instance for debugging instead (it then
+refuses to run over a pre-existing instance); unset it and rerun when done.
+
+The same entry point runs in CI:
+
+- **Manual:** the `E2E` workflow (`.github/workflows/e2e.yml`) via
+  `workflow_dispatch` on a standard hosted runner.
+- **Automatic on `main`:** the same workflow also runs on every push to
+  `main`. Pull requests keep the fast `CI` workflow (docs, shell, Rust) and
+  never boot a VM.
+
+Both modes require no GitHub secrets: every SSH key is generated inside the
+run and dies with the instance, and failure artifacts contain only text logs
+(never the instance directory with its keys or the mutable disk).
+
 ## References
 
 - `scripts/dev-vm/provision-host.sh` — host provisioning (with `scripts/lib/provision-host.sh`).
@@ -455,4 +505,11 @@ used only for final public-integration smoke tests (real DNS and TLS).
 - `scripts/bootstrap-vps.sh`, `scripts/test-bootstrap-vps.sh` — production
   bootstrap and its acceptance test.
 - `scripts/dev-vm/fixtures/` — five deterministic fixtures for E2E scenarios
+- `scripts/vm/start-debian13.sh` (with `wait-for-ssh.sh`, `stop.sh`,
+  `destroy.sh`, `diagnostics.sh`, `instance.sh`) — raw-QEMU Debian 13
+  lifecycle (section 10).
+- `scripts/vm/provision.sh`, `scripts/vm/smoke.sh`, `scripts/vm/run-e2e.sh` —
+  one-command disposable provisioning, smoke, and full E2E (section 10).
+- `.github/workflows/e2e.yml` — the same disposable E2E on GitHub Actions,
+  manual and on `main` (section 10).
   (section 6).

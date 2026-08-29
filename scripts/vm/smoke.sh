@@ -62,6 +62,11 @@ cleanup() {
 	fi
 }
 trap cleanup EXIT
+# Route fatal signals through the EXIT trap: without this, TERM/INT (CI job
+# timeout, Ctrl-C) kill the shell before cleanup can destroy the instance.
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 vm_require_commands cargo ssh scp
 

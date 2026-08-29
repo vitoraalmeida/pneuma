@@ -78,19 +78,28 @@ rm -f "$INSTANCE_DIR/qemu.pid"
 
 # --- Immutable base image ---------------------------------------------------
 
+# Expected checksum for the configured image, resolved from the SHA512SUMS
+# published next to it. The base URL is the explicit Debian 13 release-line
+# source; `latest` may move to a newer image build, which is the intentional
+# update path (the major release stays fixed at 13).
+expected_checksum() {
+	local url_dir="${IMAGE_URL%/*}"
+	local checksum_url="$url_dir/SHA512SUMS" expected
+	expected="$(curl -fsSL --retry 3 "$checksum_url" | awk -v name="$IMAGE_NAME" '$2 == name || $2 == "*"name {print $1}')"
+	if [[ -z $expected ]]; then
+		die "no checksum entry for $IMAGE_NAME in $checksum_url; check PNEUMA_VM_IMAGE_URL"
+	fi
+	printf '%s\n' "$expected"
+}
+
 fetch_base_image() {
 	local url_dir="${IMAGE_URL%/*}"
 	local checksum_url="$url_dir/SHA512SUMS" tmp_file expected actual
 	tmp_file="$BASE_DIR/.download.$$"
-	trap 'rm -f "$tmp_file"' RETURN
 	printf 'downloading base image: %s\n' "$IMAGE_URL"
 	curl -fsSL --retry 3 -o "$tmp_file" "$IMAGE_URL"
 	printf 'verifying checksum: %s\n' "$checksum_url"
-	expected="$(curl -fsSL --retry 3 "$checksum_url" | awk -v name="$IMAGE_NAME" '$2 == name || $2 == "*"name {print $1}')"
-	if [[ -z $expected ]]; then
-		rm -f "$tmp_file"
-		die "no checksum entry for $IMAGE_NAME in $checksum_url; check PNEUMA_VM_IMAGE_URL"
-	fi
+	expected="$(expected_checksum)"
 	actual="$(sha512sum "$tmp_file" | awk '{print $1}')"
 	if [[ $actual != "$expected" ]]; then
 		rm -f "$tmp_file"
@@ -98,10 +107,23 @@ fetch_base_image() {
 	fi
 	mv "$tmp_file" "$BASE_IMAGE"
 	printf '%s\nurl=%s\nsha512=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$IMAGE_URL" "$expected" >"$PROVENANCE"
+	printf 'base image identity: %s (sha512 %s)\n' "$IMAGE_NAME" "$expected"
 }
 
 if [[ -s $BASE_IMAGE ]]; then
+	# A cached base is trusted only after re-verification against the
+	# published SHA512SUMS; a stale or corrupted cache is re-downloaded.
 	printf 'reusing cached immutable base image: %s\n' "$BASE_IMAGE"
+	expected="$(expected_checksum)"
+	actual="$(sha512sum "$BASE_IMAGE" | awk '{print $1}')"
+	if [[ $actual != "$expected" ]]; then
+		printf 'cached base image checksum mismatch (expected %s, got %s); re-downloading\n' \
+			"$expected" "$actual"
+		rm -f "$BASE_IMAGE" "$PROVENANCE"
+		fetch_base_image
+	else
+		printf 'base image identity: %s (sha512 %s)\n' "$IMAGE_NAME" "$expected"
+	fi
 else
 	fetch_base_image
 fi
