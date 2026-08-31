@@ -1,10 +1,10 @@
 use rusqlite::Connection;
 
+use pneuma::control::{Command, CommandResult, ControlExecutor};
 use pneuma::domain::release::OciArtifact;
 use pneuma::use_cases::deployment::{
     DeployBranchError, DeployOciError, PublicDeploymentConfiguration, deploy_branch,
-    deploy_branch_with_progress, deploy_oci, deploy_oci_with_progress, list_deployments,
-    rollback_deployment,
+    deploy_branch_with_progress, deploy_oci, deploy_oci_with_progress, rollback_deployment,
 };
 
 use super::error::CliError;
@@ -15,9 +15,9 @@ use super::shared::{
     resolve_application,
 };
 
-// Resolves the named application before listing only its deployment history.
+// Lists the deployment history resolved by the boundary.
 pub(crate) fn run_deployments(
-    connection: &Connection,
+    executor: &ControlExecutor,
     verbose: bool,
     application_name: &str,
 ) -> Result<(), CliError> {
@@ -25,16 +25,25 @@ pub(crate) fn run_deployments(
         verbose,
         format!("resolve application by name: {application_name}"),
     );
-    let application = resolve_application(connection, application_name)?;
+    let result = executor
+        .execute(Command::ListDeployments {
+            application_name: application_name.to_owned(),
+        })
+        .map_err(CliError::from_control)?;
+    let CommandResult::ApplicationDeployments {
+        application_name,
+        deployments,
+    } = result
+    else {
+        unreachable!("ListDeployments yields ApplicationDeployments");
+    };
     log_verbose(
         verbose,
-        format!("list deployments of application {}", application.name),
+        format!("list deployments of application {application_name}"),
     );
-    let deployments = list_deployments(connection, &application.id)
-        .map_err(|source| CliError::ListDeployments { source })?;
     println!(
         "{}",
-        output::deployment_history(&application.name, &deployments)
+        output::deployment_history(&application_name, &deployments)
     );
     Ok(())
 }

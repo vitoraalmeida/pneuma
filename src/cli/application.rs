@@ -1,49 +1,44 @@
-use rusqlite::Connection;
-
+use pneuma::control::{Command, CommandResult, ControlExecutor};
 use pneuma::use_cases::application::{
-    application_is_deployed, import_remote_application, list_applications,
     report_application_status, start_application, stop_application,
 };
 
 use super::error::CliError;
 use super::output;
-use super::shared::{
-    DEFAULT_WORKSPACE_PATH, WORKSPACE_PATH_ENVIRONMENT_VARIABLE, configured_path, log_verbose,
-    resolve_application,
-};
+use super::shared::{log_verbose, resolve_application};
 
-// Clones only remote repositories into an isolated checkout, then always attempts cleanup.
+// Imports a remote repository through the boundary and renders its summary.
 pub(crate) fn run_import(
-    connection: &mut Connection,
+    executor: &ControlExecutor,
     verbose: bool,
     repository: &str,
     system_name: Option<&str>,
     manifest_path: Option<&str>,
 ) -> Result<(), CliError> {
     log_verbose(verbose, format!("import repository: {repository}"));
-    let workspace = configured_path(WORKSPACE_PATH_ENVIRONMENT_VARIABLE, DEFAULT_WORKSPACE_PATH);
-    let application = import_remote_application(
-        connection,
-        repository,
-        &workspace,
-        system_name,
-        manifest_path,
-    )
-    .map_err(|source| CliError::Import { source })?;
+    let result = executor
+        .execute(Command::ImportApplication {
+            repository: repository.to_owned(),
+            system_name: system_name.map(str::to_owned),
+            manifest_path: manifest_path.map(str::to_owned),
+        })
+        .map_err(CliError::from_control)?;
+    let CommandResult::ApplicationImported(application) = result else {
+        unreachable!("ImportApplication yields ApplicationImported");
+    };
     println!("{}", output::imported_application(&application));
     Ok(())
 }
 
-// Reports each registered application's persisted deployment state.
-pub(crate) fn run_list(connection: &Connection, verbose: bool) -> Result<(), CliError> {
+// Renders the catalog projection returned by the boundary.
+pub(crate) fn run_list(executor: &ControlExecutor, verbose: bool) -> Result<(), CliError> {
     log_verbose(verbose, "list registered applications");
-    let applications = list_applications(connection).map_err(|source| CliError::List { source })?;
-    let mut entries = Vec::with_capacity(applications.len());
-    for application in applications {
-        let deployed = application_is_deployed(connection, &application.id)
-            .map_err(|source| CliError::List { source })?;
-        entries.push((application, deployed));
-    }
+    let result = executor
+        .execute(Command::ListApplications)
+        .map_err(CliError::from_control)?;
+    let CommandResult::Applications(entries) = result else {
+        unreachable!("ListApplications yields Applications");
+    };
     let rendered = output::application_list(&entries).trim_end().to_owned();
     if !rendered.is_empty() {
         println!("{rendered}");
@@ -53,7 +48,7 @@ pub(crate) fn run_list(connection: &Connection, verbose: bool) -> Result<(), Cli
 
 // Queries runtime status through the use case, which may inspect external runtime state.
 pub(crate) fn run_status(
-    connection: &mut Connection,
+    connection: &mut rusqlite::Connection,
     verbose: bool,
     application_name: &str,
 ) -> Result<(), CliError> {
@@ -77,7 +72,7 @@ pub(crate) fn run_status(
 
 // Requests a runtime stop through the use case and reports its resulting observation.
 pub(crate) fn run_stop(
-    connection: &mut Connection,
+    connection: &mut rusqlite::Connection,
     verbose: bool,
     application_name: &str,
 ) -> Result<(), CliError> {
@@ -100,7 +95,7 @@ pub(crate) fn run_stop(
 
 // Requests a runtime start through the use case and reports its resulting observation.
 pub(crate) fn run_start(
-    connection: &mut Connection,
+    connection: &mut rusqlite::Connection,
     verbose: bool,
     application_name: &str,
 ) -> Result<(), CliError> {

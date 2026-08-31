@@ -3,9 +3,12 @@ use thiserror::Error;
 use pneuma::adapters::database::DatabaseError;
 use pneuma::adapters::stores::application_store::ApplicationStoreError;
 use pneuma::adapters::stores::deployment_store::DeploymentStoreError;
+use pneuma::control::ControlError;
 use pneuma::domain::release::InvalidOciArtifact;
 use pneuma::domain::system::InvalidSystemName;
-use pneuma::use_cases::application::{ImportError, RemoteImportError, RuntimeLifecycleError};
+use pneuma::use_cases::application::{
+    ApplicationLookupError, ImportError, RemoteImportError, RuntimeLifecycleError,
+};
 use pneuma::use_cases::ci::CiDispatchError;
 use pneuma::use_cases::deployment::{DeployBranchError, DeployOciError, RollbackError};
 use pneuma::use_cases::exposure::ExposureChangeError;
@@ -85,6 +88,27 @@ pub(crate) enum CliError {
 }
 
 impl CliError {
+    // Maps a boundary failure onto the CLI's presentation error vocabulary,
+    // keeping messages and exit-code classes identical.
+    pub(crate) fn from_control(source: ControlError) -> CliError {
+        match source {
+            ControlError::Database { source } => CliError::Database { source },
+            ControlError::InvalidSystemName { source } => CliError::InvalidSystemName { source },
+            ControlError::SystemCreate { source } => CliError::SystemCreate { source },
+            ControlError::SystemList { source } => CliError::SystemList { source },
+            ControlError::SystemShow { source } => CliError::SystemShow { source },
+            ControlError::Import { source } => CliError::Import { source },
+            ControlError::ListApplications { source } => CliError::List { source },
+            ControlError::ApplicationLookup { source } => match source {
+                ApplicationLookupError::NotFound { application_name } => {
+                    CliError::ApplicationNotFound { application_name }
+                }
+                ApplicationLookupError::Store { source } => CliError::ApplicationLookup { source },
+            },
+            ControlError::ListDeployments { source } => CliError::ListDeployments { source },
+        }
+    }
+
     /// Classifies the failure for message/exit-code presentation without erasing context.
     pub(crate) fn class(&self) -> CliErrorClass {
         match self {

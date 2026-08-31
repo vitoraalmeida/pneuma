@@ -65,27 +65,27 @@ pub(crate) fn run(invocation: Invocation) -> Result<(), CliError> {
         }
         Command::SystemList => system::run_system_list(&executor, verbose),
         Command::SystemShow { name } => system::run_system_show(&executor, verbose, &name),
+        Command::Import {
+            repository,
+            system_name,
+            manifest_path,
+        } => application::run_import(
+            &executor,
+            verbose,
+            &repository,
+            system_name.as_deref(),
+            manifest_path.as_deref(),
+        ),
+        Command::List => application::run_list(&executor, verbose),
+        Command::Deployments { application_name } => {
+            deployment::run_deployments(&executor, verbose, &application_name)
+        }
         other => {
             let _lock = shared_database_lock(&database_path)?;
             let mut connection =
                 database::open(&database_path).map_err(|source| CliError::Database { source })?;
 
             match other {
-                Command::Import {
-                    repository,
-                    system_name,
-                    manifest_path,
-                } => application::run_import(
-                    &mut connection,
-                    verbose,
-                    &repository,
-                    system_name.as_deref(),
-                    manifest_path.as_deref(),
-                ),
-                Command::List => application::run_list(&connection, verbose),
-                Command::Deployments { application_name } => {
-                    deployment::run_deployments(&connection, verbose, &application_name)
-                }
                 Command::Status { application_name } => {
                     application::run_status(&mut connection, verbose, &application_name)
                 }
@@ -124,6 +124,9 @@ pub(crate) fn run(invocation: Invocation) -> Result<(), CliError> {
                 Command::SystemCreate { .. }
                 | Command::SystemList
                 | Command::SystemShow { .. }
+                | Command::Import { .. }
+                | Command::List
+                | Command::Deployments { .. }
                 | Command::Doctor
                 | Command::Version
                 | Command::DatabaseBackup { .. }

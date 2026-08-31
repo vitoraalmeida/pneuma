@@ -23,7 +23,7 @@ progress renderer. No daemon, HTTP, or TUI is implemented.
      create/list/show through it.
    - Result: the first non-CLI caller executes real commands through the
      library while CLI output and exit codes remain unchanged.
-2. [ ] Catalog and query slice
+2. [x] Catalog and query slice
    - Route import, application list, and deployment history through control;
      move workspace configuration and application-name resolution out of CLI.
    - Result: catalog commands prove configured paths and typed collections
@@ -103,3 +103,19 @@ progress renderer. No daemon, HTTP, or TUI is implemented.
   `cargo clippy --all-targets --all-features -- -D warnings`,
   `cargo test --all-features`, and `cargo build --workspace --release` all
   passed; the three ignored OCI tests remain environment-dependent.
+- Checkpoint 2 (catalog and query slice): `HostConfiguration` now owns
+  `PNEUMA_WORKSPACE_PATH`; `Command::ImportApplication`, `ListApplications`,
+  and `ListDeployments` execute through `ControlExecutor` with typed
+  `ApplicationImported`/`Applications`/`ApplicationDeployments` results.
+  Application-name resolution moved into
+  `use_cases::application::resolve_application` (`ApplicationLookupError`) and
+  catalog pairing into `list_application_catalog` (`ApplicationCatalogEntry`);
+  the CLI only maps arguments, renders results, and reuses the unchanged error
+  vocabulary via `CliError::from_control`. CLI import/list/deployments output
+  and exit codes are unchanged (existing CLI regression tests). New
+  `tests/control_catalog.rs` executes import, re-import idempotency, catalog
+  listing, empty history, missing-application lookup, and local-path rejection
+  through the library. `cargo fmt --check`, `cargo clippy --all-targets
+  --all-features -- -D warnings`, `cargo test --all-features`, and
+  `cargo build --workspace --release` all passed; the three ignored OCI tests
+  remain environment-dependent.

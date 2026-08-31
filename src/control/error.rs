@@ -1,7 +1,10 @@
 use thiserror::Error;
 
 use crate::adapters::database::DatabaseError;
+use crate::adapters::stores::application_store::ApplicationStoreError;
+use crate::adapters::stores::deployment_store::DeploymentStoreError;
 use crate::domain::system::InvalidSystemName;
+use crate::use_cases::application::{ApplicationLookupError, RemoteImportError};
 use crate::use_cases::system::ShowError;
 
 /// Typed failure of one executed command. Messages stay command-specific so
@@ -24,4 +27,18 @@ pub enum ControlError {
     },
     #[error(transparent)]
     SystemShow { source: ShowError },
+    #[error(transparent)]
+    Import { source: RemoteImportError },
+    #[error("failed to list applications: {source}")]
+    ListApplications {
+        #[source]
+        source: ApplicationStoreError,
+    },
+    #[error(transparent)]
+    ApplicationLookup { source: ApplicationLookupError },
+    #[error("failed to list deployments: {source}")]
+    ListDeployments {
+        #[source]
+        source: DeploymentStoreError,
+    },
 }

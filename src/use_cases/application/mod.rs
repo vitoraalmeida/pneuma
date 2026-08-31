@@ -17,8 +17,10 @@ mod remote_import;
 mod runtime;
 
 pub use self::import::{ImportError, import_application};
-pub use self::list::{application_is_deployed, list_applications};
-pub use self::lookup::find_application_by_name;
+pub use self::list::{
+    ApplicationCatalogEntry, application_is_deployed, list_application_catalog, list_applications,
+};
+pub use self::lookup::{ApplicationLookupError, find_application_by_name, resolve_application};
 pub use self::remote_import::{RemoteImportError, import_remote_application};
 pub use self::runtime::{
     RuntimeLifecycleError, RuntimeObservation, report_application_status, start_application,

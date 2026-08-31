@@ -1,4 +1,4 @@
-use pneuma::control::{Command, CommandResult, ControlError, ControlExecutor};
+use pneuma::control::{Command, CommandResult, ControlExecutor};
 
 use super::error::CliError;
 use super::output;
@@ -17,7 +17,7 @@ pub(crate) fn run_system_create(
             name: name.to_owned(),
             description: description.map(str::to_owned),
         })
-        .map_err(cli_error)?;
+        .map_err(CliError::from_control)?;
     let CommandResult::SystemCreated(system) = result else {
         unreachable!("SystemCreate yields SystemCreated");
     };
@@ -28,7 +28,9 @@ pub(crate) fn run_system_create(
 // Renders registered systems without adding CLI-layer filtering.
 pub(crate) fn run_system_list(executor: &ControlExecutor, verbose: bool) -> Result<(), CliError> {
     log_verbose(verbose, "list registered systems");
-    let result = executor.execute(Command::SystemList).map_err(cli_error)?;
+    let result = executor
+        .execute(Command::SystemList)
+        .map_err(CliError::from_control)?;
     let CommandResult::Systems(systems) = result else {
         unreachable!("SystemList yields Systems");
     };
@@ -50,21 +52,10 @@ pub(crate) fn run_system_show(
         .execute(Command::SystemShow {
             name: name.to_owned(),
         })
-        .map_err(cli_error)?;
+        .map_err(CliError::from_control)?;
     let CommandResult::SystemDetails(details) = result else {
         unreachable!("SystemShow yields SystemDetails");
     };
     println!("{}", output::system_details(&details));
     Ok(())
-}
-
-// Keeps the presentation error vocabulary identical while sourcing failures from the boundary.
-fn cli_error(source: ControlError) -> CliError {
-    match source {
-        ControlError::Database { source } => CliError::Database { source },
-        ControlError::InvalidSystemName { source } => CliError::InvalidSystemName { source },
-        ControlError::SystemCreate { source } => CliError::SystemCreate { source },
-        ControlError::SystemList { source } => CliError::SystemList { source },
-        ControlError::SystemShow { source } => CliError::SystemShow { source },
-    }
 }

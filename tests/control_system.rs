@@ -11,7 +11,10 @@ use pneuma::use_cases::system::ShowError;
 #[test]
 fn creates_lists_and_shows_systems_through_the_boundary() {
     let root = temporary_root("system-round-trip");
-    let executor = ControlExecutor::new(HostConfiguration::new(root.join("pneuma.sqlite3")));
+    let executor = ControlExecutor::new(HostConfiguration::new(
+        root.join("pneuma.sqlite3"),
+        root.join("checkouts"),
+    ));
 
     let created = executor
         .execute(Command::SystemCreate {
@@ -57,7 +60,10 @@ fn creates_lists_and_shows_systems_through_the_boundary() {
 #[test]
 fn showing_a_missing_system_is_a_typed_not_found_error() {
     let root = temporary_root("system-show-missing");
-    let executor = ControlExecutor::new(HostConfiguration::new(root.join("pneuma.sqlite3")));
+    let executor = ControlExecutor::new(HostConfiguration::new(
+        root.join("pneuma.sqlite3"),
+        root.join("checkouts"),
+    ));
 
     let error = executor
         .execute(Command::SystemShow {
@@ -78,7 +84,10 @@ fn showing_a_missing_system_is_a_typed_not_found_error() {
 #[test]
 fn invalid_system_names_are_rejected_as_typed_input_errors() {
     let root = temporary_root("system-invalid-name");
-    let executor = ControlExecutor::new(HostConfiguration::new(root.join("pneuma.sqlite3")));
+    let executor = ControlExecutor::new(HostConfiguration::new(
+        root.join("pneuma.sqlite3"),
+        root.join("checkouts"),
+    ));
 
     let error = executor
         .execute(Command::SystemCreate {
@@ -102,7 +111,10 @@ fn invalid_system_names_are_rejected_as_typed_input_errors() {
 fn a_conflicting_database_holder_is_a_typed_busy_error() {
     let root = temporary_root("system-busy");
     let database_path = root.join("pneuma.sqlite3");
-    let executor = ControlExecutor::new(HostConfiguration::new(database_path.clone()));
+    let executor = ControlExecutor::new(HostConfiguration::new(
+        database_path.clone(),
+        root.join("checkouts"),
+    ));
 
     let _exclusive = DatabaseLock::try_acquire(&database_path, LockMode::Exclusive)
         .unwrap()

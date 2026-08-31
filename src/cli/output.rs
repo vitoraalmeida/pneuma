@@ -6,7 +6,7 @@ use pneuma::domain::deployment::{DeploymentHistory, DeploymentLifecycle};
 use pneuma::domain::exposure::Visibility;
 use pneuma::domain::git::CommitSha;
 use pneuma::domain::system::System;
-use pneuma::use_cases::application::RuntimeObservation;
+use pneuma::use_cases::application::{ApplicationCatalogEntry, RuntimeObservation};
 use pneuma::use_cases::deployment::DeploymentResult;
 use pneuma::use_cases::exposure::ExposureChange;
 use pneuma::use_cases::reconciliation::ReconciliationResult;
@@ -24,16 +24,16 @@ pub(crate) fn imported_application(application: &ApplicationSummary) -> String {
     output
 }
 
-pub(crate) fn application_list(entries: &[(ApplicationSummary, bool)]) -> String {
+pub(crate) fn application_list(entries: &[ApplicationCatalogEntry]) -> String {
     entries
         .iter()
-        .map(|(application, deployed)| {
-            let deployment_status = if *deployed {
+        .map(|entry| {
+            let deployment_status = if entry.deployed {
                 "Deployed"
             } else {
                 "Not deployed"
             };
-            format!("{}\tRegistered\t{deployment_status}", application.name)
+            format!("{}\tRegistered\t{deployment_status}", entry.summary.name)
         })
         .collect::<Vec<_>>()
         .join("\n")

@@ -20,7 +20,7 @@ pub use self::result::CommandResult;
 
 use crate::adapters::database::{self, DatabaseError, DatabaseLock, LockMode};
 use crate::domain::system::SystemName;
-use crate::use_cases::system;
+use crate::use_cases::{application, deployment, system};
 
 /// Executes commands against the configured host without presentation concerns.
 pub struct ControlExecutor {
@@ -67,6 +67,36 @@ impl ControlExecutor {
                 let details = system::show_system(&connection, &name)
                     .map_err(|source| ControlError::SystemShow { source })?;
                 Ok(CommandResult::SystemDetails(details))
+            }
+            Command::ImportApplication {
+                repository,
+                system_name,
+                manifest_path,
+            } => {
+                let application = application::import_remote_application(
+                    &mut connection,
+                    &repository,
+                    &self.host.workspace_path,
+                    system_name.as_deref(),
+                    manifest_path.as_deref(),
+                )
+                .map_err(|source| ControlError::Import { source })?;
+                Ok(CommandResult::ApplicationImported(application))
+            }
+            Command::ListApplications => {
+                let entries = application::list_application_catalog(&connection)
+                    .map_err(|source| ControlError::ListApplications { source })?;
+                Ok(CommandResult::Applications(entries))
+            }
+            Command::ListDeployments { application_name } => {
+                let resolved = application::resolve_application(&connection, &application_name)
+                    .map_err(|source| ControlError::ApplicationLookup { source })?;
+                let deployments = deployment::list_deployments(&connection, &resolved.id)
+                    .map_err(|source| ControlError::ListDeployments { source })?;
+                Ok(CommandResult::ApplicationDeployments {
+                    application_name: resolved.name,
+                    deployments,
+                })
             }
         }
     }

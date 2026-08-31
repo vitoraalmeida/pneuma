@@ -10,4 +10,13 @@ pub enum Command {
     SystemShow {
         name: String,
     },
+    ImportApplication {
+        repository: String,
+        system_name: Option<String>,
+        manifest_path: Option<String>,
+    },
+    ListApplications,
+    ListDeployments {
+        application_name: String,
+    },
 }
