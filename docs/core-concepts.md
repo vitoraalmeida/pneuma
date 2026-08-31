@@ -213,5 +213,6 @@ repair, or must be left untouched.
 [`architecture/architecture.md`](architecture/architecture.md) covers behavior
 and authority boundaries, [`architecture/data-model.md`](architecture/data-model.md)
 the persisted schema, and [`architecture/invariants.md`](architecture/invariants.md)
-the durable-guarantee inventory. [`code-guide.md`](code-guide.md) traces
+the durable-guarantee inventory. [`code-map.md`](code-map.md) picks a flow to
+read in the code, and [`code-guide.md`](code-guide.md) traces
 each user-facing flow through the layers.

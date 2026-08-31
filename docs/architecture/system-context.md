@@ -219,6 +219,8 @@ visibility is independent from whether a runtime is running.
 
 ## Related Documents
 
+- [`../core-concepts.md`](../core-concepts.md) gives the domain vocabulary this
+  context assumes; read it next before the implementation-focused documents.
 - [`architecture.md`](architecture.md) describes implemented behavior.
 - [`data-model.md`](data-model.md) describes persisted entities and invariants.
 - [`security-model.md`](security-model.md) describes trust boundaries.

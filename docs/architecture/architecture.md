@@ -16,7 +16,8 @@ original design text remains in Git history.
 ## How to Read This Document
 
 Read [`system-context.md`](system-context.md) for motivation, scope, and
-constraints; [`../decisions/`](../decisions/) for architectural rationale;
+constraints; [`../core-concepts.md`](../core-concepts.md) for the domain
+vocabulary; [`../decisions/`](../decisions/) for architectural rationale;
 [`data-model.md`](data-model.md) for persisted semantics;
 [`invariants.md`](invariants.md) for the authoritative invariant inventory; and
 [`security-model.md`](security-model.md) for trust boundaries and architecture-level

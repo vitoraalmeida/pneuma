@@ -84,7 +84,7 @@ follow [`docs/getting-started.md`](docs/getting-started.md).
 | Understand architectural rationale | [`docs/decisions/`](docs/decisions/) |
 | Set up and operate a host | [`docs/getting-started.md`](docs/getting-started.md) |
 | Validate on a disposable VM | [`docs/operations/dev-vm-tutorial.md`](docs/operations/dev-vm-tutorial.md) |
-| See active work and future plans | [`docs/iterations/current-iteration.md`](docs/iterations/current-iteration.md), [`docs/roadmap.md`](docs/roadmap.md) |
+| See future plans | [`docs/roadmap.md`](docs/roadmap.md), [`docs/iterations/next-iteration.md`](docs/iterations/next-iteration.md) |
 | Navigate all documentation | [`docs/README.md`](docs/README.md) |
 
 ## Status

@@ -25,12 +25,35 @@ overrides current architecture.
 
 ## Reader Journeys
 
+The canonical newcomer path is:
+
+```text
+../README.md → architecture/system-context.md → core-concepts.md →
+architecture/architecture.md → code-map.md → code-guide.md → target implementation
+```
+
+Each step has one job: what Pneuma is, why it exists, the vocabulary,
+how it cooperates, where flows live in code, and how to trace them. The
+journeys below are role-oriented views of that path.
+
 | Intent | Read in order |
 |---|---|
-| Understand Pneuma | [`../README.md`](../README.md) → `architecture/system-context.md` → `architecture/architecture.md` → `architecture/data-model.md` → `architecture/security-model.md` → relevant ADR |
+| Understand Pneuma | [`../README.md`](../README.md) → `architecture/system-context.md` → [`core-concepts.md`](core-concepts.md) → `architecture/architecture.md` → `architecture/data-model.md` → `architecture/security-model.md` → relevant ADR |
 | Deploy Pneuma | [`getting-started.md`](getting-started.md) → [`operations/`](operations/) for disposable VM validation |
-| Contribute | system context → architecture → [`core-concepts.md`](core-concepts.md) → [`code-map.md`](code-map.md) → [`code-guide.md`](code-guide.md) → [`rust-guidelines.md`](rust-guidelines.md) → iteration trackers under [`iterations/`](iterations/) |
+| Contribute | system context → [`core-concepts.md`](core-concepts.md) → architecture → [`code-map.md`](code-map.md) → [`code-guide.md`](code-guide.md) → [`rust-guidelines.md`](rust-guidelines.md) → iteration trackers under [`iterations/`](iterations/) |
 | Understand future work | [`roadmap.md`](roadmap.md) → [`iterations/next-iteration.md`](iterations/next-iteration.md) |
+
+## Task Shortcuts
+
+Experienced readers can jump directly to a task:
+
+| Question | Route |
+|---|---|
+| How does deploy work? | [`architecture/architecture.md`](architecture/architecture.md) deploy and promotion flows → [`code-map.md`](code-map.md) "Deploy from OCI" → `src/use_cases/deployment/execute.rs` with `candidate.rs`, `activation.rs`, `promotion/` |
+| How does reconciliation work? | [`core-concepts.md`](core-concepts.md) Reconciliation → [`architecture/architecture.md`](architecture/architecture.md) Reconcile flow → `src/domain/reconciliation/decision.rs` → `src/use_cases/reconciliation/` |
+| What does this domain term mean? | [`core-concepts.md`](core-concepts.md) |
+| Where should a new rule live? | [`architecture/architecture.md`](architecture/architecture.md) Responsibilities and Ownership → [`architecture/invariants.md`](architecture/invariants.md) |
+| How do I operate a host? | [`getting-started.md`](getting-started.md) → [`operations/dev-vm-tutorial.md`](operations/dev-vm-tutorial.md) |
 
 ## Operating Environments
 
