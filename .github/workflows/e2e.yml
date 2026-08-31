@@ -1,32 +1,51 @@
 name: E2E
 
+# Tiered disposable-VM validation on real Debian 13 guests:
+#   - push to any non-main branch: smoke path only (fast infrastructure
+#     proof: boot, provision, binary sync, doctor, smoke);
+#   - pull_request targeting main and push to main: full battery plus the
+#     reconciliation drift catalog, sequentially on ONE fresh guest
+#     (run-e2e.sh); nothing reaches main without both passing;
+#   - workflow_dispatch: full by default, smoke selectable.
+# The fast no-VM gates stay in ci.yml as the first feedback layer.
 on:
-  workflow_dispatch:
   push:
+  pull_request:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: 'Suite to run'
+        type: choice
+        options:
+          - full
+          - smoke
+        default: full
 
-# Disposable-VM E2E is expensive; a newer run on the same ref supersedes an
-# obsolete one without touching unrelated release validation.
+# A newer run for the same ref/PR supersedes an obsolete one without touching
+# unrelated release validation. The event name in the group keeps PR, push,
+# and dispatch runs from cancelling each other.
 concurrency:
-  group: e2e-${{ github.ref }}
+  group: e2e-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  e2e:
+  smoke:
+    if: github.event_name == 'push' && github.ref != 'refs/heads/main'
     runs-on: ubuntu-latest
-    # Measured: a full KVM run on a hosted runner takes ~8 minutes (run 1:
-    # 7m44s) and a local KVM run ~10 minutes; internal waits are bounded.
-    # 30 minutes is roughly 4x the observed worst case.
-    timeout-minutes: 30
+    # Measured: a local KVM smoke run takes ~3 minutes (provisioned guest,
+    # prebuilt binary). 15 minutes is roughly 5x the observed worst case.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
       # Same toolchain policy as ci.yml; the guest never sees a compiler.
       - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: Swatinem/rust-cache@v2
 
       - name: Install outer-host VM prerequisites
         run: |
@@ -43,7 +62,46 @@ jobs:
             echo "no /dev/kvm; the launcher auto-selects TCG"
           fi
 
-      # The same entry point used locally; lifecycle and cleanup stay in the
+      - name: Run the disposable Debian 13 smoke
+        env:
+          PNEUMA_VM_ACCEL: kvm
+          PNEUMA_VM_CPUS: 4
+        run: scripts/vm/smoke.sh
+
+  e2e:
+    if: >-
+      github.event_name == 'pull_request' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    # Measured: a full KVM battery on a hosted runner takes ~8 minutes (run 1:
+    # 7m44s) and the reconciliation drift catalog ~11 minutes (21 cases, local
+    # KVM); with boot, provisioning, and the binary build the sequential run
+    # lands around 20-25 minutes. 45 minutes keeps roughly 2x headroom.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same toolchain policy as ci.yml; the guest never sees a compiler.
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install outer-host VM prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 qemu-utils cloud-image-utils
+
+      - name: Make /dev/kvm usable when present
+        run: |
+          if [[ -e /dev/kvm ]]; then
+            sudo chmod 666 /dev/kvm
+            echo "/dev/kvm present; the launcher auto-selects KVM"
+          else
+            echo "no /dev/kvm; the launcher auto-selects TCG"
+          fi
+
+      # The same entry points used locally; lifecycle and cleanup stay in the
       # shared VM scripts. Every SSH key is generated inside the job and no
       # secret is required. The selected acceleration is printed by
       # start-debian13.sh into this step's log.
@@ -55,12 +113,26 @@ jobs:
       # and fail early with the launcher's actionable error instead of an
       # implicit fallback that merely times out slowly. Local hosts keep
       # auto/TCG via PNEUMA_VM_ACCEL.
+      #
+      # PNEUMA_VM_RECONCILIATION=1 appends the 21-case reconciliation drift
+      # catalog after the battery on the same guest; the catalog resets its
+      # own fixture baseline.
       - name: Run the disposable Debian 13 E2E
+        if: github.event.inputs.suite != 'smoke'
         env:
           PNEUMA_VM_ACCEL: kvm
+          PNEUMA_VM_CPUS: 4
+          PNEUMA_VM_RECONCILIATION: 1
         run: |
           set -o pipefail
           scripts/vm/run-e2e.sh 2>&1 | tee pneuma-e2e-run.log
+
+      - name: Run the disposable Debian 13 smoke
+        if: github.event.inputs.suite == 'smoke'
+        env:
+          PNEUMA_VM_ACCEL: kvm
+          PNEUMA_VM_CPUS: 4
+        run: scripts/vm/smoke.sh
 
       # Small text logs only: the streamed run log (including the failure
       # diagnostics with the serial-console tail), the provisioning log, and

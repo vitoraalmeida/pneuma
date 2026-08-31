@@ -9,7 +9,8 @@
 #
 #   preflight -> start-debian13 -> provision -> sync-binary
 #   -> ephemeral restricted CI key -> scripts/dev-vm/test-all.sh
-#   -> summary/diagnostics on failure -> destroy
+#   -> [reconciliation drift catalog] -> summary/diagnostics on failure
+#   -> destroy
 #
 # test-all.sh exercises failed-candidate preservation, OCI digest deployment,
 # upgrade, rollback, the REAL guest reboot with post-reboot recovery of the
@@ -34,6 +35,10 @@
 #   PNEUMA_VM_KEEP  set to 1 to preserve the instance after the run so the
 #                   same overlay can be started again for debugging; a
 #                   pre-existing instance is then refused, never destroyed
+#   PNEUMA_VM_RECONCILIATION  set to 1 to also run the full reconciliation
+#                   drift catalog (scripts/dev-vm/reconciliation-e2e.sh) on
+#                   the same instance after test-all.sh; the catalog resets
+#                   its own fixture baseline, so no battery state leaks in
 
 set -euo pipefail
 
@@ -50,6 +55,14 @@ case $KEEP in
 0 | 1) ;;
 *)
 	die "invalid PNEUMA_VM_KEEP=$KEEP (expected unset, 0, or 1)"
+	;;
+esac
+
+RECONCILIATION="${PNEUMA_VM_RECONCILIATION:-0}"
+case $RECONCILIATION in
+0 | 1) ;;
+*)
+	die "invalid PNEUMA_VM_RECONCILIATION=$RECONCILIATION (expected unset, 0, or 1)"
 	;;
 esac
 
@@ -137,5 +150,10 @@ printf 'restricted CI key installed for the pneuma user (restrict + forced comma
 
 printf '\n== running the full test-all battery ==\n'
 "$SCRIPT_DIR/../dev-vm/test-all.sh" "$GUEST_TARGET" "$CI_KEY"
+
+if [[ $RECONCILIATION == 1 ]]; then
+	printf '\n== running the reconciliation drift catalog ==\n'
+	"$SCRIPT_DIR/../dev-vm/reconciliation-e2e.sh" "$GUEST_TARGET"
+fi
 
 printf '\nfull E2E on the disposable Debian host passed\n'
