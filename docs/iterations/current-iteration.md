@@ -1,104 +1,79 @@
 # Current Iteration
 
-**Status:** concluída
+**Status:** em andamento
 
-**Base:** `3671d53` (`docs: synchronize living documents with the v0.4.3 release`)
+**Base:** `e7ade02` (`chore(release): v0.5.0`)
 
 **Approved design:**
-[`../designs/greenfield-architecture-simplification.md`](../designs/greenfield-architecture-simplification.md)
-(approved 2026-08-28)
+[`../designs/interface-neutral-execution.md`](../designs/interface-neutral-execution.md)
+(approved 2026-08-31)
 
-## Iteration — Greenfield Architecture Simplification
+## Iteration — Interface-Neutral Execution
 
-Objective: replace obsolete compatibility, ownership, and migration mechanisms
-with the approved smaller current architecture. The database reset is explicitly
-incompatible; no existing database or backup is upgraded.
+Objective: move command execution out of the CLI presentation layer into a
+concrete, synchronous library boundary callable by the existing CLI and later by
+TUI or HTTP adapters, add semantic deployment events, and add an animated CLI
+progress renderer. No daemon, HTTP, or TUI is implemented.
 
 ## Checkpoints
 
-1. [x] Current ADR set and per-Application coordination
-   - Replace the ADR set with the six current decisions.
-   - Use one per-Application kernel lock for every existing-Application mutation
-     and remove operation tokens, generations, ownership storage, and related
-     terminology.
-   - Preserve targeted CAS only where an exact persisted precondition matters.
-   - Result: deploy, rollback, lifecycle, status observation, visibility, and
-     reconciliation hold the same lock; the operation store and migration are
-     removed, and contention is caller-visible (`Deferred` for reconciliation).
-2. [x] Strict current domain types
-   - Remove compatibility-only System, manifest-version, source-revision,
-     failure-evidence, delivery, and local-source representations.
-   - Validate current entity IDs at generation, boundaries, and hydration.
-   - Result: `Application.system_id` is a required `SystemId`; manifest schema
-     version is an import-boundary check only; source revisions are optional
-     validated `CommitSha`s; failed deployments carry complete typed evidence
-     (`DeploymentFailureCode` end to end); entity IDs validate the 32-character
-     lowercase-hex format at generation and hydration; `DeliveryType`,
-     `RepositoryKind`, local sources, and all legacy tolerances are removed,
-     with obsolete rows failing hydration explicitly.
-3. [x] Exact baseline schema and stores
-   - Replace the historical chain with the one exact eight-table baseline,
-     current ledger identity, constraints, and current SQL mappings.
-   - Result: `migrations/0001_current_schema.sql` replaces migrations 0001-0014
-     with the eight-table baseline (flattened Application specification,
-     canonical Release `image_reference`, no runtime `host_address` or `removed`
-     state, composite ownership foreign keys, evidence CHECKs, one-in-progress
-     Deployment index, case-insensitive public-domain uniqueness, and
-     one-reservation-per-Deployment). The runner initializes empty databases
-     atomically, reopens the exact current textual ledger, and rejects every
-     other schema as incompatible; reservation allocation is idempotent per
-     Deployment and registration consumes the exact reservation.
-4. [x] Boundary and workflow proof
-    - Prove checkout, Caddy, and runtime identity at external boundaries and make
-      lifecycle success depend on observed target state.
-    - Result: the checkout boundary is exactly the production Git effects
-      (`clone_repository`, `resolve_branch`, `cleanup_checkout`) and the retired
-      local-checkout machinery (`resolve_commit`, `create_checkout`,
-      `ensure_checkout`) is removed with its tests. Container destruction is now
-      proven by observation: retirement and failed-candidate cleanup observe
-      absence first (Quadlet's ExecStop removes the supervised container), force-
-      remove only a still-present container, re-observe, and record retirement or
-      missing state only after observed absence, with unproven removals reported
-      as warnings or `ContainerNotRemoved` divergence instead of silent success.
-5. [x] Database replacement safety
-    - Serialize normal database access and restore with a database-wide kernel
-      lock and accept only exact-current backups.
-    - Result: `DatabaseLock` in `src/adapters/database.rs` guards the database
-      file with a shared/exclusive `flock` sidecar (`<database>.lock`); every
-      command that opens the database holds it shared (doctor, backup, CI
-      dispatch, and all normal commands), restore holds it exclusively, and
-      `version` stays lock-free. The create-only restore marker is removed;
-      restore validates source integrity and the exact current schema ledger
-      before any live mutation, then keeps the pre-restore snapshot, atomic
-      replace, sidecar cleanup, and reopen-before-success. Lock contention is a
-      conflict (exit 4); incompatible or corrupt backups are rejected without
-      replacing the database or creating a snapshot.
-6. [x] Living documentation and invariant consolidation
-   - Synchronize implemented documentation and replace the invariant inventory
-     with the approved compact durable guarantees.
-   - Result: `docs/architecture/invariants.md` is now a compact inventory of
-     50 durable guarantees with stable `INV-*` IDs, one owner layer, and their
-     proofs, replacing the 452-line rule-by-rule table; the recovery-action and
-     retry classifications are condensed into two short contract sections, and
-     retired references (per-file migrations, `delivery_type`, nullable
-     `system_id`, struct-role section) are removed. The inventory is indexed in
-     `docs/README.md`, and the dead struct-role anchor in `architecture.md`
-     points at the inventory. No other living document required changes: they
-     were synchronized by their implementing checkpoints.
-7. [x] Operational regression and closure
-   - Run final CI, applicable rootless-Podman and disposable-host evidence, then
-     close only with every acceptance criterion proved.
+1. [ ] System vertical slice
+   - Add the control module (`Command`, `CommandResult`, `ControlError`,
+     `ControlExecutor`, host configuration) and route system
+     create/list/show through it.
+   - Result: the first non-CLI caller executes real commands through the
+     library while CLI output and exit codes remain unchanged.
+2. [ ] Catalog and query slice
+   - Route import, application list, and deployment history through control;
+     move workspace configuration and application-name resolution out of CLI.
+   - Result: catalog commands prove configured paths and typed collections
+     behind the boundary.
+3. [ ] Runtime lifecycle slice
+   - Route status, start, and stop through control with existing observation
+     effects and per-Application locking.
+   - Result: stateful host operations execute interface-neutrally without
+     weakening lock or transaction invariants.
+4. [ ] Exposure and reconciliation slice
+   - Route visibility changes and reconciliation through control with
+     control-owned Caddy path configuration.
+   - Result: all ordinary application management except deployment uses the
+     boundary.
+5. [ ] Semantic deployment events
+   - Replace presentation-bearing deployment progress with closed semantic
+     events, matched start/completion boundaries, typed failure codes, and
+     typed retirement warnings; add event-capable rollback.
+   - Result: deployment reports real blocking operations without UI prose in
+     use cases.
+6. [ ] Deployment and CI slice
+   - Route image deploy, branch deploy, rollback, and restricted CI dispatch
+     through control; CI translates its validated grammar into the same
+     commands as the interactive CLI.
+   - Result: interactive and CI deployments share one execution path, proved by
+     disposable-host functional E2E.
+7. [ ] Diagnostics and database slice
+   - Convert doctor to a typed report; route doctor, backup, and restore
+     through control; remove CLI-owned lock/connection lifetime and remaining
+     terminal output outside the interface layer.
+   - Result: every stateful command executes through the boundary.
+8. [ ] Concurrent CLI renderer
+   - Add a CLI-only renderer thread with animated TTY progress, stable verbose
+     lines, and deterministic non-TTY output.
+   - Result: progress animation exists entirely in the interface layer.
+9. [ ] Operational regression and closure
+   - Synchronize implemented documentation, remove temporary structure, and run
+     full CI plus the complete disposable-host regression.
 
 ## Acceptance Criteria
 
-- Every checkpoint meets the acceptance scenarios in the approved design without
-  adding its stated non-goals.
+- Every checkpoint meets the acceptance scenarios in the approved design
+  without adding its stated non-goals.
+- Existing CLI syntax, stdout, non-TTY stderr, and exit-code classes remain
+  unchanged throughout the iteration.
 - Each code checkpoint has focused tests plus `cargo fmt --check`,
   `cargo clippy --all-targets --all-features -- -D warnings`,
   `cargo test --all-features`, and `cargo build --workspace --release`.
-- Schema, CLI, shell, documentation, and environment-dependent checks have the
-  evidence required by their respective checkpoint; unavailable environments are
-  recorded as skips, never passes.
+- Disposable-host E2E is required at checkpoint 6 and at closure; unavailable
+  environments are recorded as skips, never passes.
 
 ## Blockers
 
@@ -106,45 +81,15 @@ incompatible; no existing database or backup is upgraded.
 
 ## Validation Evidence
 
-- Checkpoint 0: the approved design is indexed, this is the sole active tracker,
-  and Checkpoint 1 is the unambiguous next implementation checkpoint.
-- Checkpoint 1: `cargo fmt --check`, Clippy with warnings denied, all-feature
-  tests, release build, markdown-link validation, and `bash -n` passed. The
-  three ignored OCI tests require a configured rootless Podman host. ShellCheck
-  was unavailable on this host and was not reported as passed.
-- Checkpoint 2: `cargo fmt --check`, Clippy with warnings denied, all-feature
-  tests (25 suites green; the same three ignored OCI tests remain
-  environment-dependent), and release build passed.
-- Checkpoint 3: `cargo fmt --check`, Clippy with warnings denied, all-feature
-  tests (25 suites green; the same three ignored OCI tests remain
-  environment-dependent), and release build passed. Fresh initialization,
-  idempotent reopen, incompatible-schema rejection (including the retired
-  integer ledger), baseline transaction rollback, and representative constraint
-  tests are green in `src/adapters/database.rs`.
-- Checkpoint 4: `cargo fmt --check`, Clippy with warnings denied, all-feature
-  tests (25 suites green; the same three ignored OCI tests remain
-  environment-dependent), and release build passed. New proofs: adapter tests
-  for `container_exists`, retirement recorded only after observed container
-  absence (including the Quadlet-ExecStop path without force removal), and
-  candidate cleanup divergence when removal cannot be proven; real-git checkout
-  tests cover the surviving boundary only.
-- Checkpoint 5: `cargo fmt --check`, Clippy with warnings denied, all-feature
-  tests (25 suites green; the same three ignored OCI tests remain
-  environment-dependent), and release build passed. New proofs: database-lock
-  shared/exclusive serialization and process-death release, restore rejection of
-  incompatible and corrupt backups before any live mutation, busy restore under
-  a conflicting lock, valid restore with reopen, and CLI scenarios for restore
-  rejection, restore conflict under a held shared lock, and normal-command
-  conflict under a held exclusive lock.
-- Checkpoint 6: markdown-link validation, `cargo fmt --check`, Clippy with
-  warnings denied, all-feature tests (25 suites green; the same three ignored
-  OCI tests remain environment-dependent), and release build passed.
-- Checkpoint 7 (closure): all four CI gates green on the final code commit
-  `1fa5cae` (25 suites; the three ignored OCI tests remain skipped because
-  this host has no configured rootless Podman). Disposable-VM regression via
-  `scripts/dev-vm/test-regression.sh` passed: the shared clone battery (e2e
-  fixture cycle, branch-based Git flow, verified reset, and reconciliation
-  drift catalog R1-R6) and the pristine-clone bootstrap acceptance both
-  passed; the first `all` run failed only because the bootstrap ref was not
-  yet on the remote and was rerun green after the push. Every clone was
-  destroyed afterwards and `pneuma-dev-base` was never altered.
+- Checkpoint 0 (governance and baseline): the approved design is committed and
+  indexed, this tracker is the sole active execution tracker, and the roadmap
+  schedules the work as v0.5.1 before v0.6. Baseline on `e7ade02`:
+  `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D
+  warnings`, `cargo test --all-features`, `cargo build --workspace --release`,
+  and markdown-link validation all passed. The three ignored OCI tests require
+  a configured rootless Podman host and remain environment-dependent.
+  Disposable-VM baseline: `scripts/dev-vm/test-regression.sh e2e` passed on
+  `e7ade02` (fixture cycle, public HTTPS deployment, reboot recovery, rollback,
+  and branch-based Git flow); the disposable clone was destroyed afterwards and
+  `pneuma-dev-base` was never altered. Checkpoint 1 is the first pending
+  implementation checkpoint.

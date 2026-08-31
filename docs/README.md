@@ -8,8 +8,8 @@ Each category answers a different question.
 |---|---|---|
 | Current system truth | How does Pneuma work today? | [`architecture/`](architecture/), [`getting-started.md`](getting-started.md), [`operations/`](operations/) |
 | Architectural rationale | Why was this choice made? | [`decisions/`](decisions/) |
-| Approved design | What approved design fixed recent architecture scope? | [`designs/greenfield-architecture-simplification.md`](designs/greenfield-architecture-simplification.md) |
-| Active planning | What is being implemented now? | Nothing is active: [`iterations/current-iteration.md`](iterations/current-iteration.md) is the concluded v0.4.3 tracker, and [`iterations/next-iteration.md`](iterations/next-iteration.md) queues v0.6 planning |
+| Approved design | What approved design fixed recent architecture scope? | [`designs/interface-neutral-execution.md`](designs/interface-neutral-execution.md) (active); [`designs/greenfield-architecture-simplification.md`](designs/greenfield-architecture-simplification.md) (concluded) |
+| Active planning | What is being implemented now? | [`iterations/current-iteration.md`](iterations/current-iteration.md) tracks the v0.5.1 interface-neutral execution iteration; [`iterations/next-iteration.md`](iterations/next-iteration.md) queues v0.6 planning |
 | Product evolution | Where is Pneuma going? | [`roadmap.md`](roadmap.md) |
 | Released history | What changed in releases? | [`../CHANGELOG.md`](../CHANGELOG.md) |
 
@@ -90,7 +90,8 @@ product direction (`roadmap.md`).
 | [`architecture/invariants.md`](architecture/invariants.md) | Living | Compact inventory of durable guarantees with their owner layers |
 | [`architecture/security-model.md`](architecture/security-model.md) | Living | Assets, actors, trust boundaries, threats with their controls and residual risks, attack chains, and security posture |
 | [`decisions/`](decisions/) | Historical records | Retrospective architectural decision records |
+| [`designs/interface-neutral-execution.md`](designs/interface-neutral-execution.md) | Approved design (active) | Interface-neutral execution scope, fixed decisions, and checkpoint order |
 | [`designs/greenfield-architecture-simplification.md`](designs/greenfield-architecture-simplification.md) | Concluded design (implemented in v0.5.0) | Greenfield architecture reset scope, fixed decisions, and checkpoint order |
-| [`iterations/current-iteration.md`](iterations/current-iteration.md) | Concluded planning | Greenfield architecture simplification execution tracker (all checkpoints done) |
-| [`iterations/next-iteration.md`](iterations/next-iteration.md) | Queued planning | v0.6 observed state planning reminder |
+| [`iterations/current-iteration.md`](iterations/current-iteration.md) | Active planning | Interface-neutral execution tracker (v0.5.1) |
+| [`iterations/next-iteration.md`](iterations/next-iteration.md) | Queued planning | v0.6 observed state planning reminder, queued behind v0.5.1 |
 | [`roadmap.md`](roadmap.md) | Living | v0.1 → v1.0 evolution and direction |

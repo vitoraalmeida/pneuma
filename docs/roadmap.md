@@ -158,9 +158,28 @@ upgraded.
   pre-restore snapshot.
 - Retirement records success only after observing container absence.
 
+### v0.5.1 - Interface-Neutral Execution
+
+**Status:** in progress; approved design
+[`designs/interface-neutral-execution.md`](designs/interface-neutral-execution.md)
+(2026-08-31).
+
+Command execution moves out of the CLI into a synchronous, interface-neutral
+control boundary so the CLI becomes one adapter among possible future
+interfaces (TUI, local HTTP). No daemon, HTTP server, or TUI is implemented.
+
+- [x] Approved design, active tracker, and recorded baseline.
+- [ ] Control boundary for every stateful command, migrated one command family
+  at a time with unchanged CLI behavior.
+- [ ] Semantic deployment events with matched start/completion boundaries,
+  typed failure codes, and typed retirement warnings.
+- [ ] Animated TTY progress rendered entirely in the CLI, with deterministic
+  non-TTY output.
+
 ## v0.6 - Observed State / Host Observation
 
-**Status:** planned; not started. No approved design yet.
+**Status:** planned; not started. No approved design yet. Queued behind
+v0.5.1.
 
 Objective: stop depending predominantly on the state Pneuma itself recorded and
 start explicitly observing the real state of the host. This version establishes
@@ -349,6 +368,9 @@ v0.4.3  disposable regression automation
    │
    ▼
 v0.5    Architecture Simplification "a smaller current architecture"
+   │
+   ▼
+v0.5.1  Interface-Neutral Execution "one boundary, many interfaces"
    │
    ▼
 v0.6    Observed State            "what is really happening?"

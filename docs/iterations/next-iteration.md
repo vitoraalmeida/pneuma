@@ -2,7 +2,8 @@
 
 **Status:** planning reminder, not an execution tracker.
 
-**Target:** v0.6 - Observed State / Host Observation.
+**Target:** v0.6 - Observed State / Host Observation. Queued behind the active
+v0.5.1 interface-neutral execution iteration.
 
 Do not implement this work until an approved design exists and this tracker is
 promoted to `current-iteration.md`.
