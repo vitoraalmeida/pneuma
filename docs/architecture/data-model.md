@@ -41,7 +41,7 @@ guarded activation write additionally requires it to be `succeeded`.
 
 ### System
 
-`systems` is an optional grouping for Applications.
+`systems` groups Applications; import resolves or creates exactly one System for every imported Application (`applications.system_id` is required).
 
 | Field | Meaning |
 |---|---|

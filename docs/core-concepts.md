@@ -22,8 +22,7 @@ An Application always has one desired runtime state (`running` or `stopped`),
 one active deployment once a first promotion succeeds, and exactly one
 Exposure record. A **System** is an organizational grouping for Applications.
 Import requires selecting a System (by flag or from the manifest); Pneuma
-creates the named System when it does not exist yet. Only legacy rows persisted
-before Systems existed have none.
+creates the named System when it does not exist yet.
 
 ## Release
 
@@ -168,5 +167,5 @@ proven.
 [`architecture/architecture.md`](architecture/architecture.md) covers behavior
 and authority boundaries, [`architecture/data-model.md`](architecture/data-model.md)
 the persisted schema, and [`architecture/invariants.md`](architecture/invariants.md)
-the rule-by-rule invariant inventory. [`code-guide.md`](code-guide.md) traces
+the durable-guarantee inventory. [`code-guide.md`](code-guide.md) traces
 each user-facing flow through the layers.

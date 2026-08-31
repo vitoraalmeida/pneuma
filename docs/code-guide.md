@@ -157,10 +157,10 @@ application lock → recover branch → load → observe → decide (pure) → e
 |---|---|
 | CLI entry | `cli/reconciliation.rs::run_reconcile` |
 | Use cases | `reconciliation/mod.rs::reconcile_application` (ordering + compensation only); `recover.rs` (interrupted-deployment recovery), `load.rs` (persisted facts), `observe.rs` (external facts + boundary-rendered canonical expectations), `execute.rs` (decision translation, identity repair, rematerialization confirmation, exposure reserve/materialize/remove/failure recording) |
-| Domain rules | `domain/reconciliation.rs::decide` — pure function, no infrastructure imports; answers "what should happen?" over desired/persisted/observed facts with conservative precedence (stopped-in-sync → runtime identity repair → rematerialization → exposure classification → manual intervention) |
+| Domain rules | `domain/reconciliation/decision.rs::decide` — pure function, no infrastructure imports; answers "what should happen?" over desired/persisted/observed facts with conservative precedence (stopped-in-sync → runtime identity repair → rematerialization → exposure classification → manual intervention) |
 | Stores | read-side loads across application/deployment/runtime/exposure stores; writes are CAS-guarded (runtime identity repair, exposure reservations/completions) |
 | External adapters | `local_runtime` (container observation), `systemd_quadlet` (`observe_generated_unit`, unit rewrite), `caddy_exposure` (fragment observation/materialization/removal), `health_check_internal` after rematerialization |
-| Tests | decision matrix (25 cells) in-file at `src/domain/reconciliation.rs`; `tests/reconciliation.rs` (ownership deferral, blocking deployments, interrupted candidates, proven-route preservation); lost-completion-CAS restore scenarios in `tests/cli.rs` |
+| Tests | in-file decision tests at `src/domain/reconciliation/tests.rs`; `tests/reconciliation.rs` (ownership deferral, blocking deployments, interrupted candidates, proven-route preservation); lost-completion-CAS restore scenarios in `tests/cli.rs` |
 
 ---
 

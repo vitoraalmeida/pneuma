@@ -8,8 +8,8 @@ Each category answers a different question.
 |---|---|---|
 | Current system truth | How does Pneuma work today? | [`architecture/`](architecture/), [`getting-started.md`](getting-started.md), [`operations/`](operations/) |
 | Architectural rationale | Why was this choice made? | [`decisions/`](decisions/) |
-| Approved design | What architecture correction is being implemented? | [`designs/greenfield-architecture-simplification.md`](designs/greenfield-architecture-simplification.md) |
-| Active planning | What is being implemented now? | [`iterations/current-iteration.md`](iterations/current-iteration.md) |
+| Approved design | What approved design fixed recent architecture scope? | [`designs/greenfield-architecture-simplification.md`](designs/greenfield-architecture-simplification.md) |
+| Active planning | What is being implemented now? | Nothing is active: [`iterations/current-iteration.md`](iterations/current-iteration.md) is the concluded v0.4.3 tracker, and [`iterations/next-iteration.md`](iterations/next-iteration.md) queues v0.5 planning |
 | Product evolution | Where is Pneuma going? | [`roadmap.md`](roadmap.md) |
 | Released history | What changed in releases? | [`../CHANGELOG.md`](../CHANGELOG.md) |
 
@@ -29,7 +29,7 @@ overrides current architecture.
 |---|---|
 | Understand Pneuma | [`../README.md`](../README.md) → `architecture/system-context.md` → `architecture/architecture.md` → `architecture/data-model.md` → `architecture/security-model.md` → relevant ADR |
 | Deploy Pneuma | [`getting-started.md`](getting-started.md) → [`operations/`](operations/) for disposable VM validation |
-| Contribute | system context → architecture → [`core-concepts.md`](core-concepts.md) → [`code-map.md`](code-map.md) → [`code-guide.md`](code-guide.md) → [`rust-guidelines.md`](rust-guidelines.md) → active iteration |
+| Contribute | system context → architecture → [`core-concepts.md`](core-concepts.md) → [`code-map.md`](code-map.md) → [`code-guide.md`](code-guide.md) → [`rust-guidelines.md`](rust-guidelines.md) → iteration trackers under [`iterations/`](iterations/) |
 | Understand future work | [`roadmap.md`](roadmap.md) → [`iterations/next-iteration.md`](iterations/next-iteration.md) |
 
 ## Operating Environments
@@ -67,7 +67,7 @@ product direction (`roadmap.md`).
 | [`architecture/invariants.md`](architecture/invariants.md) | Living | Compact inventory of durable guarantees with their owner layers |
 | [`architecture/security-model.md`](architecture/security-model.md) | Living | Assets, actors, trust boundaries, threats with their controls and residual risks, attack chains, and security posture |
 | [`decisions/`](decisions/) | Historical records | Retrospective architectural decision records |
-| [`designs/greenfield-architecture-simplification.md`](designs/greenfield-architecture-simplification.md) | Approved | Greenfield architecture reset scope, fixed decisions, and checkpoint order |
-| [`iterations/current-iteration.md`](iterations/current-iteration.md) | Active planning | Greenfield architecture simplification execution tracker |
+| [`designs/greenfield-architecture-simplification.md`](designs/greenfield-architecture-simplification.md) | Concluded design (implemented in v0.4.3) | Greenfield architecture reset scope, fixed decisions, and checkpoint order |
+| [`iterations/current-iteration.md`](iterations/current-iteration.md) | Concluded planning | Greenfield architecture simplification execution tracker (all checkpoints done) |
 | [`iterations/next-iteration.md`](iterations/next-iteration.md) | Queued planning | v0.5 observed state planning reminder |
 | [`roadmap.md`](roadmap.md) | Living | v0.1 → v1.0 evolution and direction |

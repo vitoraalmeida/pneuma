@@ -196,7 +196,7 @@ history; external systems own their observable state.
 | Term | Meaning |
 |---|---|
 | Application | Durable command-facing identity, imported specification, desired runtime state, Releases, and Deployment history. |
-| System | Optional organizational grouping for Applications. |
+| System | Organizational grouping for Applications. Import requires a selected System and creates it when it does not already exist. |
 | Manifest | Validated `pneuma.toml` import-time specification for delivery, runtime, health, and exposure. |
 | Release | Reusable immutable OCI artifact for one Application, identified by digest. |
 | Deployment | One attempt to activate a Release. |
@@ -208,7 +208,7 @@ history; external systems own their observable state.
 | Materialization | Creating or confirming external runtime or route resources from persisted intent. |
 | Promotion | Transactionally recording a healthy Deployment and runtime as active. |
 | Retirement | Intentional removal of a prior or failed runtime; it records `removed_at`. |
-| Reconciliation | Future convergence of observed materialization toward unambiguous persisted intent. |
+| Reconciliation | Implemented on-demand convergence pass (`pneuma reconcile <application>`) that compares desired, persisted, and observed facts and executes the decided repair or records divergence. v0.5 will broaden it with explicit host observation. |
 | Drift | Difference between expected materialization and observed runtime or route state. |
 | Dispatcher | The forced-command CI interface that parses a restricted SSH request. |
 

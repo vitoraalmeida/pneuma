@@ -102,7 +102,7 @@ The project uses concrete synchronous Rust code. The constraints in
 
 Each layer owns exactly one kind of decision; rules are never split across
 layers without a documented secondary defense (see
-[`invariants.md`](invariants.md) for the rule-by-rule inventory).
+[`invariants.md`](invariants.md) for the durable-guarantee inventory).
 
 **Domain** (`src/domain/`) owns:
 
@@ -151,7 +151,7 @@ Application intent and Exposure route decision, `PersistedState` carries the
 blocking Deployment, confirmed active materialization, and specification
 snapshot, and observed Podman/systemd/Caddy facts stay separate in
 `ReconciliationObservation`. After observation, a pure domain function
-(`decide` in `src/domain/reconciliation.rs`) classifies the next action into a
+(`decide` in `src/domain/reconciliation/decision.rs`) classifies the next action into a
 `ReconciliationDecision` from persisted facts, observations, and
 boundary-rendered canonical expectations, without touching SQLite, Podman,
 systemd, Caddy, the filesystem, or clocks; the use case then executes exactly
@@ -596,7 +596,7 @@ reconcile <application>
 ```
 
 The decision is computed without any store, filesystem, Podman, systemd, Caddy,
-clock, or randomness access (`domain/reconciliation.rs::decide`). Outcomes are
+clock, or randomness access (`domain/reconciliation/decision.rs::decide`). Outcomes are
 reported as no-op, deferred, runtime repaired, exposure repaired, failed,
 diverged, or manual intervention with a reason; drift that no safe rule covers
 is never silently adopted. Unknown external states stay unknown rather than
