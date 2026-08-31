@@ -162,6 +162,52 @@ died mid-deployment, reconcile records the non-terminal Deployment failed and
 cleans the candidate only when its persisted and external identity can be
 proven.
 
+## Cross-cutting vocabulary
+
+These terms appear throughout deploy, exposure, and reconciliation
+explanations. They are cross-cutting: no single entity section above owns
+them.
+
+**Authority.** The component trusted for one category of fact. SQLite is
+authoritative for persisted intent and history; Podman and systemd for
+container and unit reality; Caddy for route reality; Git and the OCI registry
+for revisions and artifacts. No authority is trusted for another's category —
+SQLite never proves that a container still exists, which is why use cases
+observe before recording results.
+
+**Materialization.** Creating an external resource or configuration from
+persisted intent or canonical expectations: writing and starting a candidate's
+Quadlet unit, or writing a public Caddy fragment and reloading. A
+materialization is not trusted until its authority confirms it; Exposure
+tracks that confirmation per route.
+
+**Compensation.** A best-effort external operation that undoes an
+already-performed effect when a later step fails — restoring the previous
+Caddy fragment, removing a failed candidate's unit, container, and port
+reservation. It exists because a SQLite transaction cannot roll back Podman,
+systemd, or Caddy effects: external work is ordered so that compensation can
+repair it, and compensation that cannot itself be confirmed records
+divergence instead of silent success.
+
+**Divergence.** A state in which Pneuma cannot safely prove or restore
+agreement between its persisted or canonical expectations and observed
+external reality, and no safe rule covers the repair. Divergence is recorded
+explicitly (`diverged`) and demands manual inspection rather than a guessed
+correction.
+
+**Compare-and-set (CAS).** A guarded persisted write that succeeds only when
+the stored state still matches the caller's expected predecessor. Zero
+affected rows mean stale or concurrent state, never success — the caller
+treats it as a conflict instead of overwriting.
+
+**Canonical expectation.** The deterministic external identity and
+configuration Pneuma derives for a logical entity: the
+`pneuma-<application>-<deployment-id>` name shared by container, Quadlet
+file, and systemd service, the expected Quadlet unit bytes, and the expected
+Caddy fragment content. Reconciliation compares observations against these
+expectations to prove that an observed container or route is safe to adopt,
+repair, or must be left untouched.
+
 ## Reading further
 
 [`architecture/architecture.md`](architecture/architecture.md) covers behavior
