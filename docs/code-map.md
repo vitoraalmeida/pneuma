@@ -16,7 +16,10 @@ Every command starts the same way:
 2. `src/cli/args.rs` parses the Clap tree into the normalized `Command`.
 3. `src/cli/mod.rs::run` opens SQLite (`src/adapters/database.rs`) unless the
    command needs none (`version`, `doctor`, database backup/restore, CI
-   dispatch), then dispatches to one capability handler.
+   dispatch) or it routes through the interface-neutral control boundary
+   (`src/control/::ControlExecutor`, which owns the database-wide lock and
+   connection lifetime per command — currently the `system` family), then
+   dispatches to one capability handler.
 4. Handlers resolve application names through `src/cli/shared.rs::resolve_application`
    (→ `src/use_cases/application/lookup.rs::find_application_by_name`) and
    render through `src/cli/output.rs`; errors become classified `CliError`s in
@@ -286,7 +289,8 @@ Read-only flows; none of them mutate operator intent:
   `application_is_deployed`
 - deployment history: `src/cli/deployment.rs::run_deployments` →
   `deployment/query.rs::list_deployments`
-- systems: `src/cli/system.rs` → `use_cases/system/{create,list,show}.rs`
+- systems: `src/cli/system.rs` → `src/control/::ControlExecutor` →
+  `use_cases/system/{create,list,show}.rs`
 - host diagnostics: `src/cli/doctor.rs::run_doctor`; version needs no database
   (`src/cli/mod.rs::run_version`)
 

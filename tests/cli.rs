@@ -2551,6 +2551,73 @@ fn rollback_without_previous_deployment_exits_with_code_four() {
 }
 
 #[test]
+fn systems_round_trip_through_the_cli_with_unchanged_output() {
+    let database_path = temporary_database_path();
+
+    let create = run_pneuma(
+        &database_path,
+        &[
+            OsStr::new("system"),
+            OsStr::new("create"),
+            OsStr::new("platform"),
+            OsStr::new("--description"),
+            OsStr::new("Team platform"),
+        ],
+    );
+    let list = run_pneuma(&database_path, &[OsStr::new("system"), OsStr::new("list")]);
+    let show = run_pneuma(
+        &database_path,
+        &[
+            OsStr::new("system"),
+            OsStr::new("show"),
+            OsStr::new("platform"),
+        ],
+    );
+    let missing = run_pneuma(
+        &database_path,
+        &[
+            OsStr::new("system"),
+            OsStr::new("show"),
+            OsStr::new("missing"),
+        ],
+    );
+    let invalid = run_pneuma(
+        &database_path,
+        &[
+            OsStr::new("system"),
+            OsStr::new("create"),
+            OsStr::new("Not Valid"),
+        ],
+    );
+    let _ = fs::remove_file(&database_path);
+
+    assert_command_succeeded(&create);
+    assert_eq!(
+        String::from_utf8_lossy(&create.stdout),
+        "Created platform\n"
+    );
+    assert_command_succeeded(&list);
+    assert_eq!(String::from_utf8_lossy(&list.stdout), "platform\n");
+    assert_command_succeeded(&show);
+    assert_eq!(
+        String::from_utf8_lossy(&show.stdout),
+        "System: platform\nDescription: Team platform\nApplications: (none)\n"
+    );
+    assert_eq!(missing.status.code(), Some(3));
+    let stderr = String::from_utf8_lossy(&missing.stderr);
+    assert!(
+        stderr.contains("error: system `missing` was not found"),
+        "unexpected stderr: {stderr}"
+    );
+    assert_eq!(invalid.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&invalid.stderr);
+    assert!(
+        stderr.contains("error: invalid system name `Not Valid`"),
+        "unexpected stderr: {stderr}"
+    );
+}
+
+#[test]
 fn fake_external_commands_fail_when_the_database_has_an_open_write_transaction() {
     let environment = DeploymentEnvironment::new();
     let journal = environment.database_path.with_file_name(format!(

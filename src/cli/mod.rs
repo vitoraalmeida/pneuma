@@ -13,6 +13,7 @@ mod system;
 use std::path::Path;
 
 use pneuma::adapters::database::{self, DatabaseError, DatabaseLock, LockMode};
+use pneuma::control::ControlExecutor;
 
 use error::CliError;
 use shared::log_verbose;
@@ -56,66 +57,80 @@ pub(crate) fn run(invocation: Invocation) -> Result<(), CliError> {
 
     let database_path = database::configured_path();
     log_verbose(verbose, format!("database: {}", database_path.display()));
-    let _lock = shared_database_lock(&database_path)?;
-    let mut connection =
-        database::open(&database_path).map_err(|source| CliError::Database { source })?;
+    let executor = ControlExecutor::from_environment();
 
     match command {
         Command::SystemCreate { name, description } => {
-            system::run_system_create(&mut connection, verbose, &name, description.as_deref())
+            system::run_system_create(&executor, verbose, &name, description.as_deref())
         }
-        Command::SystemList => system::run_system_list(&connection, verbose),
-        Command::SystemShow { name } => system::run_system_show(&connection, verbose, &name),
-        Command::Import {
-            repository,
-            system_name,
-            manifest_path,
-        } => application::run_import(
-            &mut connection,
-            verbose,
-            &repository,
-            system_name.as_deref(),
-            manifest_path.as_deref(),
-        ),
-        Command::List => application::run_list(&connection, verbose),
-        Command::Deployments { application_name } => {
-            deployment::run_deployments(&connection, verbose, &application_name)
+        Command::SystemList => system::run_system_list(&executor, verbose),
+        Command::SystemShow { name } => system::run_system_show(&executor, verbose, &name),
+        other => {
+            let _lock = shared_database_lock(&database_path)?;
+            let mut connection =
+                database::open(&database_path).map_err(|source| CliError::Database { source })?;
+
+            match other {
+                Command::Import {
+                    repository,
+                    system_name,
+                    manifest_path,
+                } => application::run_import(
+                    &mut connection,
+                    verbose,
+                    &repository,
+                    system_name.as_deref(),
+                    manifest_path.as_deref(),
+                ),
+                Command::List => application::run_list(&connection, verbose),
+                Command::Deployments { application_name } => {
+                    deployment::run_deployments(&connection, verbose, &application_name)
+                }
+                Command::Status { application_name } => {
+                    application::run_status(&mut connection, verbose, &application_name)
+                }
+                Command::Stop { application_name } => {
+                    application::run_stop(&mut connection, verbose, &application_name)
+                }
+                Command::Start { application_name } => {
+                    application::run_start(&mut connection, verbose, &application_name)
+                }
+                Command::Deploy {
+                    application_name,
+                    image_reference,
+                    branch,
+                } => deployment::run_deploy(
+                    &mut connection,
+                    verbose,
+                    &application_name,
+                    image_reference,
+                    branch,
+                ),
+                Command::Rollback { application_name } => {
+                    deployment::run_rollback(&mut connection, verbose, &application_name)
+                }
+                Command::VisibilitySet {
+                    application_name,
+                    visibility,
+                } => exposure::run_visibility_set(
+                    &mut connection,
+                    verbose,
+                    &application_name,
+                    visibility,
+                ),
+                Command::Reconcile { application_name } => {
+                    reconciliation::run_reconcile(&mut connection, verbose, &application_name)
+                }
+                Command::SystemCreate { .. }
+                | Command::SystemList
+                | Command::SystemShow { .. }
+                | Command::Doctor
+                | Command::Version
+                | Command::DatabaseBackup { .. }
+                | Command::DatabaseRestore { .. }
+                | Command::CiDispatch => unreachable!(),
+            }
         }
-        Command::Status { application_name } => {
-            application::run_status(&mut connection, verbose, &application_name)
-        }
-        Command::Stop { application_name } => {
-            application::run_stop(&mut connection, verbose, &application_name)
-        }
-        Command::Start { application_name } => {
-            application::run_start(&mut connection, verbose, &application_name)
-        }
-        Command::Deploy {
-            application_name,
-            image_reference,
-            branch,
-        } => deployment::run_deploy(
-            &mut connection,
-            verbose,
-            &application_name,
-            image_reference,
-            branch,
-        ),
-        Command::Rollback { application_name } => {
-            deployment::run_rollback(&mut connection, verbose, &application_name)
-        }
-        Command::VisibilitySet {
-            application_name,
-            visibility,
-        } => exposure::run_visibility_set(&mut connection, verbose, &application_name, visibility),
-        Command::Reconcile { application_name } => {
-            reconciliation::run_reconcile(&mut connection, verbose, &application_name)
-        }
-        Command::Doctor
-        | Command::Version
-        | Command::DatabaseBackup { .. }
-        | Command::DatabaseRestore { .. }
-        | Command::CiDispatch => unreachable!(),
     }
 }
 

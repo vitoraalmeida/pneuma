@@ -17,7 +17,7 @@ progress renderer. No daemon, HTTP, or TUI is implemented.
 
 ## Checkpoints
 
-1. [ ] System vertical slice
+1. [x] System vertical slice
    - Add the control module (`Command`, `CommandResult`, `ControlError`,
      `ControlExecutor`, host configuration) and route system
      create/list/show through it.
@@ -88,8 +88,18 @@ progress renderer. No daemon, HTTP, or TUI is implemented.
   warnings`, `cargo test --all-features`, `cargo build --workspace --release`,
   and markdown-link validation all passed. The three ignored OCI tests require
   a configured rootless Podman host and remain environment-dependent.
-  Disposable-VM baseline: `scripts/dev-vm/test-regression.sh e2e` passed on
-  `e7ade02` (fixture cycle, public HTTPS deployment, reboot recovery, rollback,
-  and branch-based Git flow); the disposable clone was destroyed afterwards and
-  `pneuma-dev-base` was never altered. Checkpoint 1 is the first pending
-  implementation checkpoint.
+   Disposable-VM baseline: `scripts/dev-vm/test-regression.sh e2e` passed on
+   `e7ade02` (fixture cycle, public HTTPS deployment, reboot recovery, rollback,
+   and branch-based Git flow); the disposable clone was destroyed afterwards and
+   `pneuma-dev-base` was never altered. Checkpoint 1 is the first pending
+   implementation checkpoint.
+- Checkpoint 1 (system vertical slice): added `src/control/` with `Command`,
+  `CommandResult`, `ControlError`, `ControlExecutor`, and `HostConfiguration`;
+  the executor acquires the shared database-wide lock and opens one connection
+  per command; CLI `system create/list/show` route through it with unchanged
+  output and exit codes (new CLI regression test). New `tests/control_system.rs`
+  executes create/list/show, missing-system, invalid-name, and database-busy
+  scenarios directly through the library. `cargo fmt --check`,
+  `cargo clippy --all-targets --all-features -- -D warnings`,
+  `cargo test --all-features`, and `cargo build --workspace --release` all
+  passed; the three ignored OCI tests remain environment-dependent.

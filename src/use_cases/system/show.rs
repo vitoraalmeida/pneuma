@@ -23,6 +23,7 @@ pub enum ShowError {
 }
 
 // Combines a System with its catalog applications for the details view.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SystemDetails {
     pub system: System,
     pub applications: Vec<ApplicationSummary>,

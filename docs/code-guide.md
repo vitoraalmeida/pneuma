@@ -20,6 +20,7 @@ Deeper reference material lives in [`architecture/architecture.md`](architecture
 src/main.rs                  process bootstrap and composition root only
 src/config.rs                documented PNEUMA_* path variables, path resolution, verbose logging
 src/cli/                     argument tree, dispatch, handlers, output, error classes
+src/control/                 interface-neutral execution boundary (`ControlExecutor`, typed commands/results/errors)
 src/use_cases/<capability>/  workflow ordering and external-effect orchestration
 src/domain/                  value objects, entities, transitions, pure policy
 src/adapters/stores/         SQLite encoding, CAS primitives, transactions
@@ -43,6 +44,10 @@ Every normal command follows the same skeleton before reaching its flow:
    `Command` enum.
 3. `src/cli/mod.rs::run` opens the SQLite connection (except version, doctor,
    backup/restore, and CI dispatch) and dispatches to one capability handler.
+   Commands that execute through the control boundary (`src/control/`,
+   currently the `system` family) skip the CLI-owned connection: the
+   `ControlExecutor` acquires the shared database-wide lock and opens one
+   connection per command.
 4. Handlers in `src/cli/{system,application,deployment,exposure,reconciliation}.rs`
    validate CLI input, resolve names through `shared::resolve_application`,
    call exactly one use-case entry point, and render with `output.rs`.
@@ -66,11 +71,12 @@ holds it exclusively, and `version` stays lock-free.
 | Layer | Where |
 |---|---|
 | CLI entry | `cli/system.rs` (`run_system_create`, `run_system_list`, `run_system_show`) |
+| Control boundary | `control/mod.rs::ControlExecutor` — acquires the shared database-wide lock, opens one connection per command, maps `Command` to `CommandResult`/`ControlError` |
 | Use cases | `use_cases/system/create.rs`, `list.rs`, `show.rs` |
 | Domain rules | `domain/system.rs`: `SystemName` catalog-name validation; `SystemDetails` read model built by `show.rs` |
 | Stores | `stores/system_store.rs` (`create_or_load` is idempotent by name: same id, original description preserved) |
 | External adapters | none — pure persistence flow |
-| Tests | `tests/system_show.rs`; store round-trip and corruption tests inside `system_store.rs`; CLI scenarios in `tests/cli.rs` |
+| Tests | `tests/control_system.rs` (library boundary without Clap); `tests/system_show.rs`; store round-trip and corruption tests inside `system_store.rs`; CLI scenarios in `tests/cli.rs` |
 
 ## Flow 2: Import — `pneuma import <repository>`
 
