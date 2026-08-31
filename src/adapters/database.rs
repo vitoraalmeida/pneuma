@@ -142,14 +142,6 @@ impl Drop for DatabaseLock {
     }
 }
 
-// Names the database-wide lock sidecar from the configured database identity.
-fn lock_path(database_path: &Path) -> PathBuf {
-    if database_path.as_os_str().is_empty() || database_path == Path::new(":memory:") {
-        return std::env::temp_dir().join("pneuma-memory-database.lock");
-    }
-    PathBuf::from(format!("{}.lock", database_path.display()))
-}
-
 // Creates a SQLite-consistent backup without overwriting an existing operator-selected destination.
 pub fn backup(path: &Path, destination: &Path) -> Result<(), DatabaseError> {
     if destination.exists() {
@@ -188,18 +180,6 @@ pub fn restore_and_verify(path: &Path, source_path: &Path) -> Result<PathBuf, Da
     Ok(pre_restore)
 }
 
-// Resolves the configured database path, treating an empty override as unset.
-pub fn configured_path() -> PathBuf {
-    crate::config::configured_path(DATABASE_PATH_ENVIRONMENT_VARIABLE, DEFAULT_DATABASE_PATH)
-}
-
-// Returns the migration ledger identity recorded by an already-open database.
-pub fn migration_identity(connection: &Connection) -> Result<String, rusqlite::Error> {
-    connection.query_row("SELECT migration_id FROM schema_migrations", [], |row| {
-        row.get(0)
-    })
-}
-
 // Validates the restore source, then replaces the database under the caller's exclusive lock.
 fn restore(path: &Path, source_path: &Path) -> Result<PathBuf, DatabaseError> {
     let source = Connection::open_with_flags(source_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
@@ -225,6 +205,25 @@ fn restore(path: &Path, source_path: &Path) -> Result<PathBuf, DatabaseError> {
     restore_locked(path, &source)
 }
 
+// Accepts only the exact current ledger: one row carrying the baseline identity.
+fn verify_current_ledger(connection: &Connection, path: &Path) -> Result<(), DatabaseError> {
+    let incompatible = || DatabaseError::IncompatibleSchema {
+        path: path.to_path_buf(),
+    };
+    let mut statement = connection
+        .prepare("SELECT migration_id FROM schema_migrations")
+        .map_err(|_| incompatible())?;
+    let identities = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|_| incompatible())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| incompatible())?;
+    match identities.as_slice() {
+        [id] if id == BASELINE_MIGRATION_ID => Ok(()),
+        _ => Err(incompatible()),
+    }
+}
+
 // Replaces the database while the caller holds the exclusive database-wide lock.
 fn restore_locked(path: &Path, source: &Connection) -> Result<PathBuf, DatabaseError> {
     let timestamp = SystemTime::now()
@@ -248,6 +247,18 @@ fn restore_locked(path: &Path, source: &Connection) -> Result<PathBuf, DatabaseE
         }
     }
     Ok(pre_restore)
+}
+
+// Resolves the configured database path, treating an empty override as unset.
+pub fn configured_path() -> PathBuf {
+    crate::config::configured_path(DATABASE_PATH_ENVIRONMENT_VARIABLE, DEFAULT_DATABASE_PATH)
+}
+
+// Returns the migration ledger identity recorded by an already-open database.
+pub fn migration_identity(connection: &Connection) -> Result<String, rusqlite::Error> {
+    connection.query_row("SELECT migration_id FROM schema_migrations", [], |row| {
+        row.get(0)
+    })
 }
 
 // Opens a connection with foreign keys enforced, initializing the current
@@ -310,23 +321,12 @@ fn apply_baseline(
     Ok(())
 }
 
-// Accepts only the exact current ledger: one row carrying the baseline identity.
-fn verify_current_ledger(connection: &Connection, path: &Path) -> Result<(), DatabaseError> {
-    let incompatible = || DatabaseError::IncompatibleSchema {
-        path: path.to_path_buf(),
-    };
-    let mut statement = connection
-        .prepare("SELECT migration_id FROM schema_migrations")
-        .map_err(|_| incompatible())?;
-    let identities = statement
-        .query_map([], |row| row.get::<_, String>(0))
-        .map_err(|_| incompatible())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| incompatible())?;
-    match identities.as_slice() {
-        [id] if id == BASELINE_MIGRATION_ID => Ok(()),
-        _ => Err(incompatible()),
+// Names the database-wide lock sidecar from the configured database identity.
+fn lock_path(database_path: &Path) -> PathBuf {
+    if database_path.as_os_str().is_empty() || database_path == Path::new(":memory:") {
+        return std::env::temp_dir().join("pneuma-memory-database.lock");
     }
+    PathBuf::from(format!("{}.lock", database_path.display()))
 }
 
 #[cfg(test)]
@@ -380,6 +380,12 @@ mod tests {
 
         let ledger = current_ledger(&connection).unwrap();
         assert_eq!(ledger, vec![BASELINE_MIGRATION_ID.to_owned()]);
+    }
+
+    fn current_ledger(connection: &Connection) -> Result<Vec<String>, rusqlite::Error> {
+        let mut statement = connection.prepare("SELECT migration_id FROM schema_migrations")?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect()
     }
 
     #[test]
@@ -505,6 +511,21 @@ mod tests {
             rusqlite::Error::SqliteFailure(ref failure, _)
                 if failure.code == rusqlite::ErrorCode::ConstraintViolation
         ));
+    }
+
+    fn seed_application(connection: &Connection, id: &str, name: &str) {
+        connection
+            .execute_batch(&format!(
+                "INSERT INTO systems (id, name) VALUES ('{id}', 'team-{name}');
+                 INSERT INTO applications (
+                     id, system_id, name, repository_url, default_branch, manifest_path,
+                     image_repository, container_port, health_check_path,
+                     health_check_expected_status, desired_runtime_state
+                 ) VALUES (
+                     '{id}', '{id}', '{name}', 'https://example.test/app.git', 'main',
+                     'pneuma.toml', 'registry.example/app', 8080, '/healthz', 200, 'stopped');"
+            ))
+            .unwrap();
     }
 
     #[test]
@@ -689,6 +710,19 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    fn temporary_test_directory(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "pneuma-database-{name}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
     #[test]
     fn releases_the_database_lock_when_the_holding_process_dies() {
         let root = temporary_test_directory("database-lock-process");
@@ -802,6 +836,13 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    fn contains_pre_restore_snapshot(root: &Path) -> bool {
+        fs::read_dir(root)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
+            .any(|name| name.contains("pre-restore"))
+    }
+
     #[test]
     fn restore_rejects_a_corrupt_backup_before_touching_the_live_database() {
         let root = temporary_test_directory("restore-corrupt");
@@ -864,46 +905,5 @@ mod tests {
             .unwrap();
         assert_eq!(count, 1, "a busy restore must not replace the database");
         fs::remove_dir_all(root).unwrap();
-    }
-
-    fn contains_pre_restore_snapshot(root: &Path) -> bool {
-        fs::read_dir(root)
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
-            .any(|name| name.contains("pre-restore"))
-    }
-
-    fn temporary_test_directory(name: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!(
-            "pneuma-database-{name}-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&root).unwrap();
-        root
-    }
-
-    fn current_ledger(connection: &Connection) -> Result<Vec<String>, rusqlite::Error> {
-        let mut statement = connection.prepare("SELECT migration_id FROM schema_migrations")?;
-        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
-        rows.collect()
-    }
-
-    fn seed_application(connection: &Connection, id: &str, name: &str) {
-        connection
-            .execute_batch(&format!(
-                "INSERT INTO systems (id, name) VALUES ('{id}', 'team-{name}');
-                 INSERT INTO applications (
-                     id, system_id, name, repository_url, default_branch, manifest_path,
-                     image_repository, container_port, health_check_path,
-                     health_check_expected_status, desired_runtime_state
-                 ) VALUES (
-                     '{id}', '{id}', '{name}', 'https://example.test/app.git', 'main',
-                     'pneuma.toml', 'registry.example/app', 8080, '/healthz', 200, 'stopped');"
-            ))
-            .unwrap();
     }
 }

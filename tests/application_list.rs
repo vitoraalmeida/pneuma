@@ -44,6 +44,12 @@ fn finds_a_core_application_by_name_without_loading_the_catalog() {
     );
 }
 
+fn fixture_path(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
+
 #[test]
 fn returns_registered_applications_ordered_by_name() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
@@ -114,10 +120,4 @@ fn legacy_applications_without_a_system_cannot_exist() {
         rusqlite::Error::SqliteFailure(ref failure, _)
             if failure.code == rusqlite::ErrorCode::ConstraintViolation
     ));
-}
-
-fn fixture_path(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name)
 }

@@ -348,6 +348,16 @@ pub fn register_candidate_runtime(
     Ok(runtime)
 }
 
+// Enforces the external container-ID invariant before persistence.
+fn validate_external_runtime_id(
+    external_runtime_id: &str,
+) -> Result<(), RegisterCandidateRuntimeError> {
+    if !ContainerId::is_valid(external_runtime_id) {
+        return Err(RegisterCandidateRuntimeError::InvalidExternalRuntimeId);
+    }
+    Ok(())
+}
+
 // A runtime already registered with the identical deployment, endpoint, and port
 // makes re-registering the same external container idempotent instead of conflicting.
 fn matches_existing_registration(
@@ -359,16 +369,6 @@ fn matches_existing_registration(
     existing.deployment_id == *deployment_id
         && existing.expected_endpoint == endpoint
         && existing.container_port == container_port
-}
-
-// Enforces the external container-ID invariant before persistence.
-fn validate_external_runtime_id(
-    external_runtime_id: &str,
-) -> Result<(), RegisterCandidateRuntimeError> {
-    if !ContainerId::is_valid(external_runtime_id) {
-        return Err(RegisterCandidateRuntimeError::InvalidExternalRuntimeId);
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -492,6 +492,89 @@ exit 0
         }
     }
 
+    #[test]
+    fn start_failure_keeps_transition_code_and_empty_resources_when_the_first_advance_fails() {
+        let mut scenario = CandidateScenario::new();
+
+        let failed = run_start_candidate(&mut scenario, &app_id())
+            .expect_err("a missing deployment must fail the Start transition");
+
+        assert_eq!(failed.code(), DeploymentFailureCode::DeploymentTransition);
+        assert!(!failed.failure_persisted());
+        assert_resources(failed.resources(), false, false, false, false);
+    }
+
+    fn run_start_candidate(
+        scenario: &mut CandidateScenario,
+        application_id: &ApplicationId,
+    ) -> Result<StartedCandidate, FailedExecution> {
+        let deployment_id = DeploymentId::new("22222222222222222222222222222222").unwrap();
+        let application_name = ApplicationName::new("app").unwrap();
+        let artifact = artifact();
+        let runtime = runtime();
+        start_candidate(CandidateStartInput {
+            connection: &mut scenario.connection,
+            deployment_id: &deployment_id,
+            application_id,
+            application_name: &application_name,
+            artifact: &artifact,
+            runtime: &runtime,
+        })
+    }
+
+    fn artifact() -> OciArtifact {
+        OciArtifact::parse(
+            "registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        .unwrap()
+    }
+
+    fn runtime() -> RuntimeSpecification {
+        RuntimeSpecification::new(
+            ContainerPort::new(8080).unwrap(),
+            HealthCheckSpecification::new(
+                HealthCheckPath::new("/health").unwrap(),
+                HealthCheckStatus::new(200).unwrap(),
+            ),
+        )
+    }
+
+    fn app_id() -> ApplicationId {
+        ApplicationId::new("11111111111111111111111111111111").unwrap()
+    }
+
+    // Asserts the exact compensation payload a stage must carry: which resource kinds
+    // were already allocated when that stage failed.
+    fn assert_resources(
+        resources: &CandidateResources,
+        port_reserved: bool,
+        unit: bool,
+        container: bool,
+        runtime: bool,
+    ) {
+        assert_eq!(resources.port_reserved, port_reserved);
+        assert_eq!(resources.unit_name.is_some(), unit);
+        assert_eq!(resources.container_id.is_some(), container);
+        assert_eq!(resources.runtime_id.is_some(), runtime);
+    }
+
+    #[test]
+    fn start_failure_keeps_port_allocation_code_and_empty_resources() {
+        let mut scenario = CandidateScenario::new();
+        seed_deployment(&scenario.connection, "pending");
+
+        // A nonexistent application makes the reservation insert violate its foreign key.
+        let failed = run_start_candidate(
+            &mut scenario,
+            &ApplicationId::new("33333333333333333333333333333333").unwrap(),
+        )
+        .expect_err("port reservation must fail for an unknown application");
+
+        assert_eq!(failed.code(), DeploymentFailureCode::RuntimePortAllocation);
+        assert!(!failed.failure_persisted());
+        assert_resources(failed.resources(), false, false, false, false);
+    }
+
     fn seed_deployment(connection: &Connection, status: &str) {
         connection
             .execute_batch(
@@ -519,89 +602,6 @@ exit 0
                 [status],
             )
             .unwrap();
-    }
-
-    fn app_id() -> ApplicationId {
-        ApplicationId::new("11111111111111111111111111111111").unwrap()
-    }
-
-    fn artifact() -> OciArtifact {
-        OciArtifact::parse(
-            "registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        )
-        .unwrap()
-    }
-
-    fn runtime() -> RuntimeSpecification {
-        RuntimeSpecification::new(
-            ContainerPort::new(8080).unwrap(),
-            HealthCheckSpecification::new(
-                HealthCheckPath::new("/health").unwrap(),
-                HealthCheckStatus::new(200).unwrap(),
-            ),
-        )
-    }
-
-    fn run_start_candidate(
-        scenario: &mut CandidateScenario,
-        application_id: &ApplicationId,
-    ) -> Result<StartedCandidate, FailedExecution> {
-        let deployment_id = DeploymentId::new("22222222222222222222222222222222").unwrap();
-        let application_name = ApplicationName::new("app").unwrap();
-        let artifact = artifact();
-        let runtime = runtime();
-        start_candidate(CandidateStartInput {
-            connection: &mut scenario.connection,
-            deployment_id: &deployment_id,
-            application_id,
-            application_name: &application_name,
-            artifact: &artifact,
-            runtime: &runtime,
-        })
-    }
-
-    // Asserts the exact compensation payload a stage must carry: which resource kinds
-    // were already allocated when that stage failed.
-    fn assert_resources(
-        resources: &CandidateResources,
-        port_reserved: bool,
-        unit: bool,
-        container: bool,
-        runtime: bool,
-    ) {
-        assert_eq!(resources.port_reserved, port_reserved);
-        assert_eq!(resources.unit_name.is_some(), unit);
-        assert_eq!(resources.container_id.is_some(), container);
-        assert_eq!(resources.runtime_id.is_some(), runtime);
-    }
-
-    #[test]
-    fn start_failure_keeps_transition_code_and_empty_resources_when_the_first_advance_fails() {
-        let mut scenario = CandidateScenario::new();
-
-        let failed = run_start_candidate(&mut scenario, &app_id())
-            .expect_err("a missing deployment must fail the Start transition");
-
-        assert_eq!(failed.code(), DeploymentFailureCode::DeploymentTransition);
-        assert!(!failed.failure_persisted());
-        assert_resources(failed.resources(), false, false, false, false);
-    }
-
-    #[test]
-    fn start_failure_keeps_port_allocation_code_and_empty_resources() {
-        let mut scenario = CandidateScenario::new();
-        seed_deployment(&scenario.connection, "pending");
-
-        // A nonexistent application makes the reservation insert violate its foreign key.
-        let failed = run_start_candidate(
-            &mut scenario,
-            &ApplicationId::new("33333333333333333333333333333333").unwrap(),
-        )
-        .expect_err("port reservation must fail for an unknown application");
-
-        assert_eq!(failed.code(), DeploymentFailureCode::RuntimePortAllocation);
-        assert!(!failed.failure_persisted());
-        assert_resources(failed.resources(), false, false, false, false);
     }
 
     #[test]

@@ -131,14 +131,6 @@ pub fn clone_repository(url: &str, destination: &Path) -> Result<(), CloneReposi
     Ok(())
 }
 
-// Removes a temporary checkout when present while allowing idempotent cleanup after earlier failures.
-pub fn cleanup_checkout(path: &Path) -> Result<(), io::Error> {
-    if path.try_exists().map_err(io::Error::other)? {
-        fs::remove_dir_all(path)?;
-    }
-    Ok(())
-}
-
 // Selects Git's stderr diagnostic, preserving a useful exit status when it emits none.
 fn git_failure_message(output: &Output) -> String {
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
@@ -147,4 +139,12 @@ fn git_failure_message(output: &Output) -> String {
     } else {
         stderr
     }
+}
+
+// Removes a temporary checkout when present while allowing idempotent cleanup after earlier failures.
+pub fn cleanup_checkout(path: &Path) -> Result<(), io::Error> {
+    if path.try_exists().map_err(io::Error::other)? {
+        fs::remove_dir_all(path)?;
+    }
+    Ok(())
 }

@@ -362,10 +362,6 @@ impl InvalidExposure {
     }
 }
 
-fn is_trimmed_nonempty(value: &str) -> bool {
-    !value.is_empty() && value.trim() == value
-}
-
 // RFC-1123-style hostname grammar: one authority for what may become a public
 // route domain. Length and ASCII limits keep Caddy configuration and health
 // checks well-defined.
@@ -385,6 +381,10 @@ fn is_valid_domain_label(label: &str) -> bool {
         && bytes
             .iter()
             .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
+}
+
+fn is_trimmed_nonempty(value: &str) -> bool {
+    !value.is_empty() && value.trim() == value
 }
 
 #[cfg(test)]

@@ -30,6 +30,12 @@ fn creates_and_reuses_a_release_from_one_validated_artifact() {
     assert_eq!(first.artifact, artifact);
 }
 
+fn fixture_path(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
+
 #[test]
 fn rejects_invalid_artifact_identity_before_release_creation() {
     assert!(OciArtifact::parse("registry.example/app:latest").is_err());
@@ -84,10 +90,4 @@ fn persists_only_the_canonical_artifact_reference() {
         )
         .unwrap();
     assert_eq!(redundant_columns, 0);
-}
-
-fn fixture_path(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name)
 }

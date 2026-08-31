@@ -48,6 +48,63 @@ fn persists_a_running_candidate_linked_to_its_deployment() {
     assert_eq!(state, "starting");
 }
 
+fn starting_deployment(fixture: &str) -> (rusqlite::Connection, ApplicationId, DeploymentId) {
+    let mut connection = database::open(Path::new(":memory:")).unwrap();
+    let (application_id, deployment_id) = add_starting_deployment(&mut connection, fixture);
+    (connection, application_id, deployment_id)
+}
+
+fn add_starting_deployment(
+    connection: &mut rusqlite::Connection,
+    fixture: &str,
+) -> (ApplicationId, DeploymentId) {
+    let application = import_application(
+        connection,
+        &fixture_path(fixture),
+        None,
+        "https://example.test/app.git",
+        None,
+    )
+    .unwrap();
+    let artifact = if fixture == "valid" {
+        artifact('a')
+    } else {
+        artifact('b')
+    };
+    let release = create_release(connection, &application.id, &artifact).unwrap();
+    let deployment = create_deployment(
+        connection,
+        &application.id,
+        &release.id,
+        DeploymentType::Deploy,
+    )
+    .unwrap();
+    advance_deployment(connection, &deployment.id, DeploymentEvent::Start).unwrap();
+    (application.id, deployment.id)
+}
+
+fn fixture_path(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
+
+fn artifact(character: char) -> OciArtifact {
+    OciArtifact::new(
+        "localhost/test",
+        &format!("sha256:{}", character.to_string().repeat(64)),
+    )
+    .unwrap()
+}
+
+fn endpoint(addr: &str) -> ExpectedRuntimeEndpoint {
+    ExpectedRuntimeEndpoint::new(addr.parse().unwrap()).unwrap()
+}
+
+fn port(value: u16) -> ContainerPort {
+    ContainerPort::new(value).unwrap()
+}
+
 #[test]
 fn maps_retired_rows_to_explicit_retirement() {
     let (mut connection, _, deployment_id) = starting_deployment("valid");
@@ -77,6 +134,10 @@ fn maps_retired_rows_to_explicit_retirement() {
 
     assert_eq!(mapped.state, RuntimeState::Stopped);
     assert_eq!(mapped.retirement.unwrap().removed_at, "2026-08-20 12:00:00");
+}
+
+fn container_id(character: char) -> ContainerId {
+    ContainerId::from(character.to_string().repeat(64))
 }
 
 #[test]
@@ -299,65 +360,4 @@ fn database_rejects_a_runtime_identity_from_another_application() {
         .unwrap_err();
 
     assert!(matches!(error, rusqlite::Error::SqliteFailure(_, _)));
-}
-
-fn starting_deployment(fixture: &str) -> (rusqlite::Connection, ApplicationId, DeploymentId) {
-    let mut connection = database::open(Path::new(":memory:")).unwrap();
-    let (application_id, deployment_id) = add_starting_deployment(&mut connection, fixture);
-    (connection, application_id, deployment_id)
-}
-
-fn add_starting_deployment(
-    connection: &mut rusqlite::Connection,
-    fixture: &str,
-) -> (ApplicationId, DeploymentId) {
-    let application = import_application(
-        connection,
-        &fixture_path(fixture),
-        None,
-        "https://example.test/app.git",
-        None,
-    )
-    .unwrap();
-    let artifact = if fixture == "valid" {
-        artifact('a')
-    } else {
-        artifact('b')
-    };
-    let release = create_release(connection, &application.id, &artifact).unwrap();
-    let deployment = create_deployment(
-        connection,
-        &application.id,
-        &release.id,
-        DeploymentType::Deploy,
-    )
-    .unwrap();
-    advance_deployment(connection, &deployment.id, DeploymentEvent::Start).unwrap();
-    (application.id, deployment.id)
-}
-
-fn fixture_path(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name)
-}
-
-fn artifact(character: char) -> OciArtifact {
-    OciArtifact::new(
-        "localhost/test",
-        &format!("sha256:{}", character.to_string().repeat(64)),
-    )
-    .unwrap()
-}
-
-fn container_id(character: char) -> ContainerId {
-    ContainerId::from(character.to_string().repeat(64))
-}
-
-fn port(value: u16) -> ContainerPort {
-    ContainerPort::new(value).unwrap()
-}
-
-fn endpoint(addr: &str) -> ExpectedRuntimeEndpoint {
-    ExpectedRuntimeEndpoint::new(addr.parse().unwrap()).unwrap()
 }

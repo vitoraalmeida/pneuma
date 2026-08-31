@@ -187,6 +187,18 @@ pub fn report_application_status(
     ))
 }
 
+// A container reported missing while the operator wants the application stopped
+// is a stop already carried out (Quadlet removes the container on ExecStop).
+// The observation is recorded without retiring the runtime so subsequent
+// stop/start/status commands still find it.
+fn missing_container_satisfies_stop_intent(
+    observation: &ContainerObservation,
+    desired_runtime_state: DesiredRuntimeState,
+) -> bool {
+    *observation.state() == ObservedRuntimeState::Missing
+        && desired_runtime_state == DesiredRuntimeState::Stopped
+}
+
 // Records stopped intent before delegating the runtime transition to the shared controller.
 pub fn stop_application(
     connection: &mut Connection,
@@ -198,20 +210,6 @@ pub fn stop_application(
         application_id,
         application_name,
         RuntimeCommand::Stop,
-    )
-}
-
-// Records running intent before delegating the runtime transition to the shared controller.
-pub fn start_application(
-    connection: &mut Connection,
-    application_id: &ApplicationId,
-    application_name: &ApplicationName,
-) -> Result<RuntimeObservation, RuntimeLifecycleError> {
-    transition_application(
-        connection,
-        application_id,
-        application_name,
-        RuntimeCommand::Start,
     )
 }
 
@@ -242,18 +240,6 @@ fn transition_application(
     }
 
     transition_observed_runtime(connection, &runtime, application_name, command, current)
-}
-
-// A container reported missing while the operator wants the application stopped
-// is a stop already carried out (Quadlet removes the container on ExecStop).
-// The observation is recorded without retiring the runtime so subsequent
-// stop/start/status commands still find it.
-fn missing_container_satisfies_stop_intent(
-    observation: &ContainerObservation,
-    desired_runtime_state: DesiredRuntimeState,
-) -> bool {
-    *observation.state() == ObservedRuntimeState::Missing
-        && desired_runtime_state == DesiredRuntimeState::Stopped
 }
 
 // Interprets an absent container against the operator's intent: a stop is already
@@ -303,6 +289,20 @@ fn handle_missing_runtime(
     persist_observation(connection, runtime, &current.observation)?;
     Err(RuntimeLifecycleError::ContainerMissing {
         application_name: application_name.as_str().to_owned(),
+    })
+}
+
+// Reports whether the stable Quadlet unit for this runtime is materialized, mapping
+// supervision failures into diagnostics tied to the runtime being controlled.
+fn supervised_unit_exists(
+    application_name: &ApplicationName,
+    runtime: &RuntimeInstance,
+) -> Result<bool, RuntimeLifecycleError> {
+    let unit = unit_name(application_name, &runtime.deployment_id);
+    unit_exists(&unit).map_err(|source| RuntimeLifecycleError::Supervision {
+        operation: "checking Quadlet unit for",
+        runtime_id: runtime.id.to_string(),
+        source,
     })
 }
 
@@ -368,18 +368,18 @@ fn apply_runtime_control(
     Ok(())
 }
 
-// Reports whether the stable Quadlet unit for this runtime is materialized, mapping
-// supervision failures into diagnostics tied to the runtime being controlled.
-fn supervised_unit_exists(
+// Records running intent before delegating the runtime transition to the shared controller.
+pub fn start_application(
+    connection: &mut Connection,
+    application_id: &ApplicationId,
     application_name: &ApplicationName,
-    runtime: &RuntimeInstance,
-) -> Result<bool, RuntimeLifecycleError> {
-    let unit = unit_name(application_name, &runtime.deployment_id);
-    unit_exists(&unit).map_err(|source| RuntimeLifecycleError::Supervision {
-        operation: "checking Quadlet unit for",
-        runtime_id: runtime.id.to_string(),
-        source,
-    })
+) -> Result<RuntimeObservation, RuntimeLifecycleError> {
+    transition_application(
+        connection,
+        application_id,
+        application_name,
+        RuntimeCommand::Start,
+    )
 }
 
 // Quadlet recreates the container under the stable `pneuma-{application}-{deployment}`
@@ -624,6 +624,22 @@ exit \"${PNEUMA_FAKE_SYSTEMCTL_EXIT:-0}\"
             }
         }
 
+        fn podman_invocations(&self) -> Vec<String> {
+            self.invocations(&self.podman_log)
+        }
+
+        fn invocations(&self, log: &Path) -> Vec<String> {
+            fs::read_to_string(log)
+                .unwrap_or_default()
+                .lines()
+                .map(str::to_owned)
+                .collect()
+        }
+
+        fn systemctl_invocations(&self) -> Vec<String> {
+            self.invocations(&self.systemctl_log)
+        }
+
         fn set_var(&self, name: &str, value: &str) {
             self.path.set_var(name, value);
         }
@@ -638,22 +654,6 @@ exit \"${PNEUMA_FAKE_SYSTEMCTL_EXIT:-0}\"
         fn install_unit(&self, unit: &str) {
             fs::create_dir_all(&self.quadlet_directory).unwrap();
             fs::write(self.quadlet_directory.join(format!("{unit}.container")), "").unwrap();
-        }
-
-        fn invocations(&self, log: &Path) -> Vec<String> {
-            fs::read_to_string(log)
-                .unwrap_or_default()
-                .lines()
-                .map(str::to_owned)
-                .collect()
-        }
-
-        fn podman_invocations(&self) -> Vec<String> {
-            self.invocations(&self.podman_log)
-        }
-
-        fn systemctl_invocations(&self) -> Vec<String> {
-            self.invocations(&self.systemctl_log)
         }
     }
 
@@ -671,72 +671,6 @@ exit \"${PNEUMA_FAKE_SYSTEMCTL_EXIT:-0}\"
                 }
             }
         }
-    }
-
-    fn application_id() -> ApplicationId {
-        ApplicationId::new(APPLICATION_ID).unwrap()
-    }
-
-    fn application_name() -> ApplicationName {
-        ApplicationName::new("orchard").unwrap()
-    }
-
-    fn stable_unit() -> String {
-        format!("pneuma-orchard-{DEPLOYMENT_ID}")
-    }
-
-    fn migrated_connection() -> Connection {
-        database::open(Path::new(":memory:")).unwrap()
-    }
-
-    // Seeds one deployed application whose active succeeded deployment owns a running
-    // runtime record bound to the recorded external container identity.
-    fn seed_deployed_runtime(connection: &Connection, desired_state: &str) {
-        let digest = format!("sha256:{}", "a".repeat(64));
-        connection
-            .execute_batch(&format!(
-                "INSERT INTO systems (id, name) VALUES ('33333333333333333333333333333333', 'team');
-                 INSERT INTO applications (id, system_id, name, repository_url, manifest_path, image_repository, container_port, health_check_path, health_check_expected_status, desired_runtime_state)
-                 VALUES ('{APPLICATION_ID}', '33333333333333333333333333333333', 'orchard', 'https://example.test/app.git', 'pneuma.toml', 'registry.example/team/orchard', 8080, '/healthz', 200, '{desired_state}');
-                 INSERT INTO releases (id, application_id, image_reference, created_at)
-                 VALUES ('22222222222222222222222222222222', '{APPLICATION_ID}', 'registry.example/team/orchard@{digest}', '2026-01-01');
-                 INSERT INTO deployments (id, application_id, release_id, type, status, requested_at, started_at, finished_at)
-                 VALUES ('{DEPLOYMENT_ID}', '{APPLICATION_ID}', '22222222222222222222222222222222', 'deploy', 'succeeded', '2026-01-01', '2026-01-01', '2026-01-01');
-                 INSERT INTO runtime_instances (id, application_id, deployment_id, external_runtime_id, state, host_port, container_port, last_observed_state, last_observed_at)
-                 VALUES ('{RUNTIME_ID}', '{APPLICATION_ID}', '{DEPLOYMENT_ID}', '{RECORDED_CONTAINER_ID}', 'running', 30000, 8080, 'running', '2026-01-01');
-                 UPDATE applications SET active_deployment_id = '{DEPLOYMENT_ID}' WHERE id = '{APPLICATION_ID}';"
-            ))
-            .unwrap();
-    }
-
-    fn persisted_desired_state(connection: &Connection) -> String {
-        connection
-            .query_row(
-                "SELECT desired_runtime_state FROM applications",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap()
-    }
-
-    fn persisted_observed_state(connection: &Connection) -> String {
-        connection
-            .query_row(
-                "SELECT last_observed_state FROM runtime_instances",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap()
-    }
-
-    fn persisted_external_id(connection: &Connection) -> String {
-        connection
-            .query_row(
-                "SELECT external_runtime_id FROM runtime_instances",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap()
     }
 
     #[test]
@@ -771,6 +705,58 @@ exit \"${PNEUMA_FAKE_SYSTEMCTL_EXIT:-0}\"
             follow_up.observed_runtime_state,
             ObservedRuntimeState::Missing
         );
+    }
+
+    fn migrated_connection() -> Connection {
+        database::open(Path::new(":memory:")).unwrap()
+    }
+
+    // Seeds one deployed application whose active succeeded deployment owns a running
+    // runtime record bound to the recorded external container identity.
+    fn seed_deployed_runtime(connection: &Connection, desired_state: &str) {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        connection
+            .execute_batch(&format!(
+                "INSERT INTO systems (id, name) VALUES ('33333333333333333333333333333333', 'team');
+                 INSERT INTO applications (id, system_id, name, repository_url, manifest_path, image_repository, container_port, health_check_path, health_check_expected_status, desired_runtime_state)
+                 VALUES ('{APPLICATION_ID}', '33333333333333333333333333333333', 'orchard', 'https://example.test/app.git', 'pneuma.toml', 'registry.example/team/orchard', 8080, '/healthz', 200, '{desired_state}');
+                 INSERT INTO releases (id, application_id, image_reference, created_at)
+                 VALUES ('22222222222222222222222222222222', '{APPLICATION_ID}', 'registry.example/team/orchard@{digest}', '2026-01-01');
+                 INSERT INTO deployments (id, application_id, release_id, type, status, requested_at, started_at, finished_at)
+                 VALUES ('{DEPLOYMENT_ID}', '{APPLICATION_ID}', '22222222222222222222222222222222', 'deploy', 'succeeded', '2026-01-01', '2026-01-01', '2026-01-01');
+                 INSERT INTO runtime_instances (id, application_id, deployment_id, external_runtime_id, state, host_port, container_port, last_observed_state, last_observed_at)
+                 VALUES ('{RUNTIME_ID}', '{APPLICATION_ID}', '{DEPLOYMENT_ID}', '{RECORDED_CONTAINER_ID}', 'running', 30000, 8080, 'running', '2026-01-01');
+                 UPDATE applications SET active_deployment_id = '{DEPLOYMENT_ID}' WHERE id = '{APPLICATION_ID}';"
+            ))
+            .unwrap();
+    }
+
+    fn application_id() -> ApplicationId {
+        ApplicationId::new(APPLICATION_ID).unwrap()
+    }
+
+    fn application_name() -> ApplicationName {
+        ApplicationName::new("orchard").unwrap()
+    }
+
+    fn persisted_desired_state(connection: &Connection) -> String {
+        connection
+            .query_row(
+                "SELECT desired_runtime_state FROM applications",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    fn persisted_observed_state(connection: &Connection) -> String {
+        connection
+            .query_row(
+                "SELECT last_observed_state FROM runtime_instances",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
     }
 
     #[test]
@@ -808,6 +794,20 @@ exit \"${PNEUMA_FAKE_SYSTEMCTL_EXIT:-0}\"
             scenario.systemctl_invocations(),
             vec![format!("--user start {}.service", stable_unit())]
         );
+    }
+
+    fn stable_unit() -> String {
+        format!("pneuma-orchard-{DEPLOYMENT_ID}")
+    }
+
+    fn persisted_external_id(connection: &Connection) -> String {
+        connection
+            .query_row(
+                "SELECT external_runtime_id FROM runtime_instances",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
     }
 
     #[test]

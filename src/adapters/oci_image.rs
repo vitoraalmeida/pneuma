@@ -289,14 +289,6 @@ exit \"${PNEUMA_FAKE_PODMAN_PULL_EXIT:-0}\"
         }
     }
 
-    fn artifact(digest_character: char) -> OciArtifact {
-        OciArtifact::parse(&format!(
-            "registry.example/app@sha256:{}",
-            digest_character.to_string().repeat(64)
-        ))
-        .unwrap()
-    }
-
     #[test]
     fn pull_image_pulls_the_pinned_reference_and_confirms_the_digest() {
         let scoped = ScopedPodman::new("pull-verified", &format!("sha256:{}", "a".repeat(64)));
@@ -313,6 +305,14 @@ exit \"${PNEUMA_FAKE_PODMAN_PULL_EXIT:-0}\"
                 ),
             ]
         );
+    }
+
+    fn artifact(digest_character: char) -> OciArtifact {
+        OciArtifact::parse(&format!(
+            "registry.example/app@sha256:{}",
+            digest_character.to_string().repeat(64)
+        ))
+        .unwrap()
     }
 
     #[test]

@@ -22,6 +22,12 @@ fn rollback_fails_when_no_previous_deployment_exists() {
     assert!(matches!(error, RollbackError::NoPreviousDeployment { .. }));
 }
 
+fn fixture_path(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
+
 #[test]
 fn rollback_fails_for_unknown_application() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
@@ -30,10 +36,4 @@ fn rollback_fails_for_unknown_application() {
     let error = rollback_deployment(&mut connection, &application_id, None).unwrap_err();
 
     assert!(matches!(error, RollbackError::ApplicationNotFound { .. }));
-}
-
-fn fixture_path(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name)
 }

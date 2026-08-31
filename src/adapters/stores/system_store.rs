@@ -22,6 +22,20 @@ pub(crate) fn create_or_load(
     )
 }
 
+fn map_system(row: &rusqlite::Row<'_>) -> rusqlite::Result<System> {
+    Ok(System {
+        id: entity_id(0, &row.get::<_, String>(0)?)?,
+        name: SystemName::new(&row.get::<_, String>(1)?).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                1,
+                rusqlite::types::Type::Text,
+                Box::new(error),
+            )
+        })?,
+        description: row.get(2)?,
+    })
+}
+
 pub(crate) fn list(connection: &Connection) -> Result<Vec<System>, rusqlite::Error> {
     let mut statement =
         connection.prepare("SELECT id, name, description FROM systems ORDER BY name")?;
@@ -41,20 +55,6 @@ pub(crate) fn load_by_name(
             map_system,
         )
         .optional()
-}
-
-fn map_system(row: &rusqlite::Row<'_>) -> rusqlite::Result<System> {
-    Ok(System {
-        id: entity_id(0, &row.get::<_, String>(0)?)?,
-        name: SystemName::new(&row.get::<_, String>(1)?).map_err(|error| {
-            rusqlite::Error::FromSqlConversionFailure(
-                1,
-                rusqlite::types::Type::Text,
-                Box::new(error),
-            )
-        })?,
-        description: row.get(2)?,
-    })
 }
 
 #[cfg(test)]

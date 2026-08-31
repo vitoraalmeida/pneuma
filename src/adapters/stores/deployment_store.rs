@@ -174,6 +174,12 @@ pub(crate) fn list_deployment_history(
     rows.collect::<Result<Vec<_>, _>>().map_err(persistence)
 }
 
+fn deployment_from_row(row: &Row<'_>) -> rusqlite::Result<Deployment> {
+    raw_deployment_from_row(row)?
+        .into_deployment()
+        .map_err(|error| conversion_error(4, error))
+}
+
 // Loads the current Deployment status for transition and recovery decisions.
 pub(crate) fn load_status(
     connection: &Connection,
@@ -346,12 +352,6 @@ pub(crate) fn load_rollback_target(
     ).optional().map_err(persistence)
 }
 
-fn deployment_from_row(row: &Row<'_>) -> rusqlite::Result<Deployment> {
-    raw_deployment_from_row(row)?
-        .into_deployment()
-        .map_err(|error| conversion_error(4, error))
-}
-
 // Persistence row: private store-level encoding of a deployment row before it
 // is converted into the domain `Deployment`; never escapes the stores layer.
 struct RawDeployment {
@@ -498,43 +498,7 @@ fn invalid_evidence(deployment_id: &str, reason: &str) -> DeploymentStoreError {
         reason: reason.to_owned(),
     }
 }
-fn persistence(source: rusqlite::Error) -> DeploymentStoreError {
-    DeploymentStoreError::Persistence { source }
-}
-fn deployment_type_value(value: DeploymentType) -> &'static str {
-    match value {
-        DeploymentType::Deploy => "deploy",
-        DeploymentType::Rollback => "rollback",
-    }
-}
-fn deployment_type_from_value(value: &str) -> Option<DeploymentType> {
-    match value {
-        "deploy" => Some(DeploymentType::Deploy),
-        "rollback" => Some(DeploymentType::Rollback),
-        _ => None,
-    }
-}
-fn deployment_status_value(value: DeploymentStatus) -> &'static str {
-    match value {
-        DeploymentStatus::Pending => "pending",
-        DeploymentStatus::Starting => "starting",
-        DeploymentStatus::Verifying => "verifying",
-        DeploymentStatus::Activating => "activating",
-        DeploymentStatus::Succeeded => "succeeded",
-        DeploymentStatus::Failed => "failed",
-    }
-}
-fn deployment_status_from_value(value: &str) -> Option<DeploymentStatus> {
-    match value {
-        "pending" => Some(DeploymentStatus::Pending),
-        "starting" => Some(DeploymentStatus::Starting),
-        "verifying" => Some(DeploymentStatus::Verifying),
-        "activating" => Some(DeploymentStatus::Activating),
-        "succeeded" => Some(DeploymentStatus::Succeeded),
-        "failed" => Some(DeploymentStatus::Failed),
-        _ => None,
-    }
-}
+
 // The one persistence conversion between the stable persisted failure-code
 // string and its typed domain value; hydration rejects unknown text.
 fn deployment_failure_code_from_value(value: &str) -> Option<DeploymentFailureCode> {
@@ -560,6 +524,49 @@ fn deployment_failure_code_from_value(value: &str) -> Option<DeploymentFailureCo
         _ => None,
     }
 }
+
+fn deployment_status_from_value(value: &str) -> Option<DeploymentStatus> {
+    match value {
+        "pending" => Some(DeploymentStatus::Pending),
+        "starting" => Some(DeploymentStatus::Starting),
+        "verifying" => Some(DeploymentStatus::Verifying),
+        "activating" => Some(DeploymentStatus::Activating),
+        "succeeded" => Some(DeploymentStatus::Succeeded),
+        "failed" => Some(DeploymentStatus::Failed),
+        _ => None,
+    }
+}
+
+fn persistence(source: rusqlite::Error) -> DeploymentStoreError {
+    DeploymentStoreError::Persistence { source }
+}
+
+fn deployment_type_value(value: DeploymentType) -> &'static str {
+    match value {
+        DeploymentType::Deploy => "deploy",
+        DeploymentType::Rollback => "rollback",
+    }
+}
+
+fn deployment_type_from_value(value: &str) -> Option<DeploymentType> {
+    match value {
+        "deploy" => Some(DeploymentType::Deploy),
+        "rollback" => Some(DeploymentType::Rollback),
+        _ => None,
+    }
+}
+
+fn deployment_status_value(value: DeploymentStatus) -> &'static str {
+    match value {
+        DeploymentStatus::Pending => "pending",
+        DeploymentStatus::Starting => "starting",
+        DeploymentStatus::Verifying => "verifying",
+        DeploymentStatus::Activating => "activating",
+        DeploymentStatus::Succeeded => "succeeded",
+        DeploymentStatus::Failed => "failed",
+    }
+}
+
 fn conversion_error(
     index: usize,
     error: impl std::error::Error + Send + Sync + 'static,
@@ -585,10 +592,6 @@ mod tests {
     const RELEASE_ID: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     const DEPLOYMENT_ID: &str = "cccccccccccccccccccccccccccccccc";
 
-    fn deployment_id() -> DeploymentId {
-        DeploymentId::new(DEPLOYMENT_ID).unwrap()
-    }
-
     #[test]
     fn hydrates_complete_failed_evidence() {
         let mut connection = database::open(Path::new(":memory:")).unwrap();
@@ -611,6 +614,10 @@ mod tests {
         assert!(
             matches!(deployment.lifecycle, DeploymentLifecycle::Failed { ref failure } if failure.code == DeploymentFailureCode::HealthCheck && failure.finished_at == "finished")
         );
+    }
+
+    fn deployment_id() -> DeploymentId {
+        DeploymentId::new(DEPLOYMENT_ID).unwrap()
     }
 
     #[test]

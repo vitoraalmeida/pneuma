@@ -184,6 +184,18 @@ pub fn load_exposure(
     )))
 }
 
+fn exposure_materialization_state_from_value(value: &str) -> Option<ExposureMaterializationState> {
+    match value {
+        "not_materialized" => Some(ExposureMaterializationState::NotMaterialized),
+        "applying" => Some(ExposureMaterializationState::Applying),
+        "active" => Some(ExposureMaterializationState::Active),
+        "removing" => Some(ExposureMaterializationState::Removing),
+        "failed" => Some(ExposureMaterializationState::Failed),
+        "diverged" => Some(ExposureMaterializationState::Diverged),
+        _ => None,
+    }
+}
+
 // Begins a visibility transition with a compare-and-set on the prior intent.
 pub(crate) fn begin_exposure_change(
     transaction: &Transaction<'_>,
@@ -197,6 +209,17 @@ pub(crate) fn begin_exposure_change(
     };
     let updated = transaction.execute("UPDATE exposures SET desired_visibility = ?1, materialization_state = ?2, last_error_code = NULL, last_error_message = NULL WHERE application_id = ?3 AND desired_visibility = ?4", params![visibility_value(desired_visibility), exposure_materialization_state_value(materialization_state), application_id.as_str(), visibility_value(expected_visibility)]).map_err(|source| ExposureStoreError::Persistence { source })?;
     Ok(outcome(updated))
+}
+
+fn exposure_materialization_state_value(value: ExposureMaterializationState) -> &'static str {
+    match value {
+        ExposureMaterializationState::NotMaterialized => "not_materialized",
+        ExposureMaterializationState::Applying => "applying",
+        ExposureMaterializationState::Active => "active",
+        ExposureMaterializationState::Removing => "removing",
+        ExposureMaterializationState::Failed => "failed",
+        ExposureMaterializationState::Diverged => "diverged",
+    }
 }
 
 // Confirms public route materialization only while the matching transition remains in progress.
@@ -284,67 +307,12 @@ pub(crate) fn record_public_exposure_failure(
     Ok(outcome(updated))
 }
 
-fn exposure_materialization_state_value(value: ExposureMaterializationState) -> &'static str {
-    match value {
-        ExposureMaterializationState::NotMaterialized => "not_materialized",
-        ExposureMaterializationState::Applying => "applying",
-        ExposureMaterializationState::Active => "active",
-        ExposureMaterializationState::Removing => "removing",
-        ExposureMaterializationState::Failed => "failed",
-        ExposureMaterializationState::Diverged => "diverged",
-    }
-}
-
-fn exposure_materialization_state_from_value(value: &str) -> Option<ExposureMaterializationState> {
-    match value {
-        "not_materialized" => Some(ExposureMaterializationState::NotMaterialized),
-        "applying" => Some(ExposureMaterializationState::Applying),
-        "active" => Some(ExposureMaterializationState::Active),
-        "removing" => Some(ExposureMaterializationState::Removing),
-        "failed" => Some(ExposureMaterializationState::Failed),
-        "diverged" => Some(ExposureMaterializationState::Diverged),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const APP_ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const RUNTIME_ID: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-
-    fn application_id() -> ApplicationId {
-        ApplicationId::new(APP_ID).unwrap()
-    }
-
-    fn connection_with_exposure(visibility: &str, state: &str) -> Connection {
-        let connection = Connection::open_in_memory().unwrap();
-        connection
-            .execute_batch(
-                "CREATE TABLE exposures (
-                    application_id TEXT PRIMARY KEY,
-                    desired_visibility TEXT NOT NULL,
-                    domain TEXT,
-                    active_runtime_id TEXT,
-                    materialization_state TEXT NOT NULL,
-                    configuration_version TEXT,
-                    last_materialized_at TEXT,
-                    last_error_code TEXT,
-                    last_error_message TEXT);",
-            )
-            .unwrap();
-        connection
-            .execute(
-                &format!(
-                    "INSERT INTO exposures (application_id, desired_visibility, domain, materialization_state)
-                     VALUES ('{APP_ID}', '{visibility}', NULL, '{state}')"
-                ),
-                [],
-            )
-            .unwrap();
-        connection
-    }
 
     #[test]
     fn reconciliation_reservation_is_stale_unless_the_persisted_snapshot_matches() {
@@ -377,6 +345,38 @@ mod tests {
             .unwrap(),
             PersistenceOutcome::Stale
         );
+    }
+
+    fn connection_with_exposure(visibility: &str, state: &str) -> Connection {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE exposures (
+                    application_id TEXT PRIMARY KEY,
+                    desired_visibility TEXT NOT NULL,
+                    domain TEXT,
+                    active_runtime_id TEXT,
+                    materialization_state TEXT NOT NULL,
+                    configuration_version TEXT,
+                    last_materialized_at TEXT,
+                    last_error_code TEXT,
+                    last_error_message TEXT);",
+            )
+            .unwrap();
+        connection
+            .execute(
+                &format!(
+                    "INSERT INTO exposures (application_id, desired_visibility, domain, materialization_state)
+                     VALUES ('{APP_ID}', '{visibility}', NULL, '{state}')"
+                ),
+                [],
+            )
+            .unwrap();
+        connection
+    }
+
+    fn application_id() -> ApplicationId {
+        ApplicationId::new(APP_ID).unwrap()
     }
 
     #[test]

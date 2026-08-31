@@ -135,19 +135,6 @@ pub(crate) fn decide(
     Err(ReconciliationDecisionError::UnhandledDrift)
 }
 
-// Single owner of the canonicality rule: the observed Quadlet source must equal
-// the boundary-rendered canonical bytes exactly, in every classification path
-// that would rewrite or keep the unit.
-fn quadlet_source_is_canonical(
-    observation: &ReconciliationObservation,
-    expectations: &ReconciliationExpectations,
-) -> bool {
-    observation.quadlet_source
-        == (QuadletSourceObservation::Present {
-            contents: expectations.canonical_quadlet_contents.clone(),
-        })
-}
-
 // Repairs only a recreated container whose full identity matches the persisted
 // active runtime while the recorded container is gone and no public route exists.
 fn classify_runtime_identity_repair(
@@ -183,12 +170,17 @@ fn classify_runtime_identity_repair(
     ))
 }
 
-// Conservative classification of systemd's open-ended active-state vocabulary:
-// only the documented not-running states authorize an automatic start. Transient
-// or unrecognized states fall through to manual intervention instead of being
-// silently adopted as startable.
-fn known_not_running_unit_state(active_state: &str) -> bool {
-    matches!(active_state, "inactive" | "failed")
+// Single owner of the canonicality rule: the observed Quadlet source must equal
+// the boundary-rendered canonical bytes exactly, in every classification path
+// that would rewrite or keep the unit.
+fn quadlet_source_is_canonical(
+    observation: &ReconciliationObservation,
+    expectations: &ReconciliationExpectations,
+) -> bool {
+    observation.quadlet_source
+        == (QuadletSourceObservation::Present {
+            contents: expectations.canonical_quadlet_contents.clone(),
+        })
 }
 
 // Rematerializes an absent runtime only when nothing contradicts a clean start
@@ -225,6 +217,14 @@ fn classify_runtime_rematerialization(
             unit_needs_write: !quadlet_is_canonical,
         },
     ))
+}
+
+// Conservative classification of systemd's open-ended active-state vocabulary:
+// only the documented not-running states authorize an automatic start. Transient
+// or unrecognized states fall through to manual intervention instead of being
+// silently adopted as startable.
+fn known_not_running_unit_state(active_state: &str) -> bool {
+    matches!(active_state, "inactive" | "failed")
 }
 
 fn classify_exposure(

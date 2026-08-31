@@ -25,6 +25,12 @@ fn returns_an_empty_list_for_an_application_without_deployments() {
     assert!(deployments.is_empty());
 }
 
+fn fixture_path(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
+
 #[test]
 fn returns_deployments_ordered_newest_first() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
@@ -99,6 +105,14 @@ fn returns_deployments_ordered_newest_first() {
     ));
 }
 
+fn artifact(character: char) -> OciArtifact {
+    OciArtifact::new("localhost/test", &digest(character)).unwrap()
+}
+
+fn digest(character: char) -> String {
+    format!("sha256:{}", character.to_string().repeat(64))
+}
+
 #[test]
 fn returns_only_deployments_for_the_given_application() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
@@ -142,18 +156,4 @@ fn returns_only_deployments_for_the_given_application() {
     assert_eq!(first_deployments[0].release.artifact.digest(), digest('a'));
     assert_eq!(second_deployments.len(), 1);
     assert_eq!(second_deployments[0].release.artifact.digest(), digest('b'));
-}
-
-fn fixture_path(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name)
-}
-
-fn artifact(character: char) -> OciArtifact {
-    OciArtifact::new("localhost/test", &digest(character)).unwrap()
-}
-
-fn digest(character: char) -> String {
-    format!("sha256:{}", character.to_string().repeat(64))
 }

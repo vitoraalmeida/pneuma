@@ -47,6 +47,66 @@ fn imports_and_lists_an_application_idempotently() {
     );
 }
 
+fn temporary_database_path() -> PathBuf {
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    env::temp_dir().join(format!(
+        "pneuma-cli-{}-{unique_suffix}.sqlite3",
+        std::process::id()
+    ))
+}
+
+fn temporary_workspace_path() -> PathBuf {
+    env::temp_dir().join(format!(
+        "pneuma-cli-workspace-{}-{}",
+        std::process::id(),
+        unique_suffix()
+    ))
+}
+
+fn create_repository_from_fixture(workspace: &Path, fixture: &str) -> PathBuf {
+    let repository_path = workspace.join("remote");
+    fs::create_dir_all(&repository_path).unwrap();
+    fs::copy(
+        fixture_path(fixture).join("pneuma.toml"),
+        repository_path.join("pneuma.toml"),
+    )
+    .unwrap();
+    initialize_repository(&repository_path);
+    repository_path
+}
+
+fn fixture_path(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
+
+fn run_pneuma_env(
+    database_path: &Path,
+    workspace_path: Option<&Path>,
+    arguments: &[&OsStr],
+) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_pneuma"));
+    command
+        .env("PNEUMA_DATABASE_PATH", database_path)
+        .args(arguments);
+    if let Some(workspace_path) = workspace_path {
+        command.env("PNEUMA_WORKSPACE_PATH", workspace_path);
+    }
+    command.output().unwrap()
+}
+
+fn run_pneuma(database_path: &Path, arguments: &[&OsStr]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_pneuma"))
+        .env("PNEUMA_DATABASE_PATH", database_path)
+        .args(arguments)
+        .output()
+        .unwrap()
+}
+
 #[test]
 fn reports_manifest_errors_and_returns_failure() {
     let database_path = temporary_database_path();
@@ -2099,6 +2159,39 @@ fn visibility_set_toggles_public_and_internal() {
     );
 }
 
+fn run_visibility_command(environment: &DeploymentEnvironment, visibility: &str) -> Output {
+    run_visibility_command_with_curl_status(environment, visibility, 200)
+}
+
+fn run_visibility_command_with_curl_status(
+    environment: &DeploymentEnvironment,
+    visibility: &str,
+    curl_status: u16,
+) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_pneuma"))
+        .env("PNEUMA_DATABASE_PATH", &environment.database_path)
+        .env("PNEUMA_WORKSPACE_PATH", &environment.workspace_path)
+        .env(
+            "PNEUMA_CADDY_MANAGED_PATH",
+            &environment.managed_caddy_directory,
+        )
+        .env("PNEUMA_CADDYFILE_PATH", &environment.caddyfile_path)
+        .env("PATH", executable_path(&environment.fake_bin))
+        .env("PNEUMA_FAKE_PORT", "30000")
+        .env("PNEUMA_FAKE_CURL_LOG", environment.root.join("curl.log"))
+        .env("PNEUMA_FAKE_CURL_STATUS", curl_status.to_string())
+        .env("PNEUMA_ASSERT_CLOSED_DATABASE", &environment.database_path)
+        .args([
+            "app",
+            "visibility",
+            "set",
+            &environment.application_name,
+            visibility,
+        ])
+        .output()
+        .unwrap()
+}
+
 #[test]
 fn visibility_set_internal_is_idempotent_without_domain() {
     let environment = DeploymentEnvironment::new();
@@ -2144,6 +2237,30 @@ fn public_visibility_without_an_active_runtime_persists_failed_intent() {
     assert!(String::from_utf8_lossy(&public.stderr).contains("no active runtime"));
 
     assert_exposure_state(&environment, "public", "failed", Some("runtime_missing"));
+}
+
+fn assert_exposure_state(
+    environment: &DeploymentEnvironment,
+    visibility: &str,
+    materialization_state: &str,
+    error_code: Option<&str>,
+) {
+    let connection = database::open(&environment.database_path).unwrap();
+    let exposure: (String, String, Option<String>) = connection
+        .query_row(
+            "SELECT desired_visibility, materialization_state, last_error_code FROM exposures",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        exposure,
+        (
+            visibility.to_owned(),
+            materialization_state.to_owned(),
+            error_code.map(str::to_owned),
+        )
+    );
 }
 
 #[test]
@@ -2467,123 +2584,6 @@ fn fake_external_commands_fail_when_the_database_has_an_open_write_transaction()
     }
 }
 
-fn run_visibility_command(environment: &DeploymentEnvironment, visibility: &str) -> Output {
-    run_visibility_command_with_curl_status(environment, visibility, 200)
-}
-
-fn run_visibility_command_with_curl_status(
-    environment: &DeploymentEnvironment,
-    visibility: &str,
-    curl_status: u16,
-) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_pneuma"))
-        .env("PNEUMA_DATABASE_PATH", &environment.database_path)
-        .env("PNEUMA_WORKSPACE_PATH", &environment.workspace_path)
-        .env(
-            "PNEUMA_CADDY_MANAGED_PATH",
-            &environment.managed_caddy_directory,
-        )
-        .env("PNEUMA_CADDYFILE_PATH", &environment.caddyfile_path)
-        .env("PATH", executable_path(&environment.fake_bin))
-        .env("PNEUMA_FAKE_PORT", "30000")
-        .env("PNEUMA_FAKE_CURL_LOG", environment.root.join("curl.log"))
-        .env("PNEUMA_FAKE_CURL_STATUS", curl_status.to_string())
-        .env("PNEUMA_ASSERT_CLOSED_DATABASE", &environment.database_path)
-        .args([
-            "app",
-            "visibility",
-            "set",
-            &environment.application_name,
-            visibility,
-        ])
-        .output()
-        .unwrap()
-}
-
-fn assert_exposure_state(
-    environment: &DeploymentEnvironment,
-    visibility: &str,
-    materialization_state: &str,
-    error_code: Option<&str>,
-) {
-    let connection = database::open(&environment.database_path).unwrap();
-    let exposure: (String, String, Option<String>) = connection
-        .query_row(
-            "SELECT desired_visibility, materialization_state, last_error_code FROM exposures",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .unwrap();
-    assert_eq!(
-        exposure,
-        (
-            visibility.to_owned(),
-            materialization_state.to_owned(),
-            error_code.map(str::to_owned),
-        )
-    );
-}
-
-fn run_pneuma(database_path: &Path, arguments: &[&OsStr]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_pneuma"))
-        .env("PNEUMA_DATABASE_PATH", database_path)
-        .args(arguments)
-        .output()
-        .unwrap()
-}
-
-fn run_pneuma_env(
-    database_path: &Path,
-    workspace_path: Option<&Path>,
-    arguments: &[&OsStr],
-) -> Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_pneuma"));
-    command
-        .env("PNEUMA_DATABASE_PATH", database_path)
-        .args(arguments);
-    if let Some(workspace_path) = workspace_path {
-        command.env("PNEUMA_WORKSPACE_PATH", workspace_path);
-    }
-    command.output().unwrap()
-}
-
-fn temporary_workspace_path() -> PathBuf {
-    env::temp_dir().join(format!(
-        "pneuma-cli-workspace-{}-{}",
-        std::process::id(),
-        unique_suffix()
-    ))
-}
-
-fn temporary_database_path() -> PathBuf {
-    let unique_suffix = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    env::temp_dir().join(format!(
-        "pneuma-cli-{}-{unique_suffix}.sqlite3",
-        std::process::id()
-    ))
-}
-
-fn fixture_path(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name)
-}
-
-fn create_repository_from_fixture(workspace: &Path, fixture: &str) -> PathBuf {
-    let repository_path = workspace.join("remote");
-    fs::create_dir_all(&repository_path).unwrap();
-    fs::copy(
-        fixture_path(fixture).join("pneuma.toml"),
-        repository_path.join("pneuma.toml"),
-    )
-    .unwrap();
-    initialize_repository(&repository_path);
-    repository_path
-}
-
 struct DeploymentEnvironment {
     root: PathBuf,
     repository_path: PathBuf,
@@ -2610,10 +2610,6 @@ enum OciFailure {
 impl DeploymentEnvironment {
     fn new() -> Self {
         Self::from_fixture("another", "another-site")
-    }
-
-    fn public() -> Self {
-        Self::from_fixture("valid", "personal-site")
     }
 
     fn from_fixture(fixture: &str, application_name: &str) -> Self {
@@ -2675,6 +2671,139 @@ impl DeploymentEnvironment {
         }
     }
 
+    fn public() -> Self {
+        Self::from_fixture("valid", "personal-site")
+    }
+
+    fn deploy(&self, port: u16, verbose: bool) -> Output {
+        self.deploy_with_external_status(port, verbose, 200)
+    }
+
+    fn deploy_with_external_status(
+        &self,
+        port: u16,
+        verbose: bool,
+        external_status: u16,
+    ) -> Output {
+        let mut command = self.deploy_command(port);
+        command.env("PNEUMA_FAKE_CURL_STATUS", external_status.to_string());
+        if verbose {
+            command.arg("--verbose");
+        }
+        command.output().unwrap()
+    }
+
+    fn deploy_command(&self, port: u16) -> Command {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let reference = format!("{}@{digest}", self.image_repository);
+        let mut command = Command::new(env!("CARGO_BIN_EXE_pneuma"));
+        command
+            .env("PNEUMA_DATABASE_PATH", &self.database_path)
+            .env("PNEUMA_WORKSPACE_PATH", &self.workspace_path)
+            .env("PNEUMA_CADDY_MANAGED_PATH", &self.managed_caddy_directory)
+            .env("PNEUMA_CADDYFILE_PATH", &self.caddyfile_path)
+            .env("PNEUMA_QUADLET_DIR", self.root.join("quadlets"))
+            .env("PATH", executable_path(&self.fake_bin))
+            .env("PNEUMA_FAKE_PORT", port.to_string())
+            .env("PNEUMA_RUNTIME_PORT_RANGE", format!("{port}-{port}"))
+            .env("PNEUMA_FAKE_PODMAN_COUNT", self.root.join("podman-count"))
+            .env("PNEUMA_FAKE_PODMAN_LOG", self.root.join("podman.log"))
+            .env("PNEUMA_FAKE_CURL_LOG", self.root.join("curl.log"))
+            .env("PNEUMA_FAKE_CURL_STATUS", "200")
+            .env("PNEUMA_FAKE_PODMAN_DIGEST", digest)
+            .env("PNEUMA_ASSERT_CLOSED_DATABASE", &self.database_path)
+            .args([
+                "app",
+                "deploy",
+                &self.application_name,
+                "--image",
+                &reference,
+            ]);
+        command
+    }
+
+    fn deploy_current_revision(&self) {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || respond_once(&listener, 200));
+        assert_command_succeeded(&self.deploy(port, false));
+        server.join().unwrap();
+    }
+
+    fn spawn_gated_deploy(&self, port: u16, marker: &Path, release: &Path) -> Child {
+        let mut command = self.deploy_command(port);
+        command
+            .env("PNEUMA_FAKE_SYSTEMCTL_START_MARKER", marker)
+            .env("PNEUMA_FAKE_SYSTEMCTL_START_RELEASE", release)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        command.spawn().unwrap()
+    }
+
+    fn deploy_oci(&self, reference: &str, port: u16) -> Output {
+        self.run_oci_deploy(reference, port, None, None)
+    }
+
+    fn run_oci_deploy(
+        &self,
+        reference: &str,
+        port: u16,
+        failure: Option<OciFailure>,
+        branch: Option<&str>,
+    ) -> Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_pneuma"));
+        command
+            .env("PNEUMA_DATABASE_PATH", &self.database_path)
+            .env("PNEUMA_WORKSPACE_PATH", &self.workspace_path)
+            .env("PNEUMA_CADDY_MANAGED_PATH", &self.managed_caddy_directory)
+            .env("PNEUMA_CADDYFILE_PATH", &self.caddyfile_path)
+            .env("PNEUMA_QUADLET_DIR", self.root.join("quadlets"))
+            .env("PATH", executable_path(&self.fake_bin))
+            .env("PNEUMA_FAKE_PORT", port.to_string())
+            .env("PNEUMA_RUNTIME_PORT_RANGE", format!("{port}-{port}"))
+            .env("PNEUMA_FAKE_PODMAN_COUNT", self.root.join("podman-count"))
+            .env("PNEUMA_FAKE_PODMAN_LOG", self.root.join("podman.log"))
+            .env("PNEUMA_FAKE_CURL_LOG", self.root.join("curl.log"))
+            .env("PNEUMA_FAKE_CURL_STATUS", "200")
+            .env("PNEUMA_ASSERT_CLOSED_DATABASE", &self.database_path);
+        match failure {
+            Some(OciFailure::Pull) => {
+                command.env(
+                    "PNEUMA_FAKE_PODMAN_PULL_FAILURE",
+                    self.root.join("pull-failure"),
+                );
+                fs::write(self.root.join("pull-failure"), "fail").unwrap();
+            }
+            Some(OciFailure::DigestMismatch) => {
+                command.env(
+                    "PNEUMA_FAKE_PODMAN_DIGEST",
+                    format!("sha256:{}", "b".repeat(64)),
+                );
+            }
+            None => {
+                command.env(
+                    "PNEUMA_FAKE_PODMAN_DIGEST",
+                    format!("sha256:{}", "a".repeat(64)),
+                );
+            }
+        }
+        command.args([
+            "app",
+            "deploy",
+            &self.application_name,
+            "--image",
+            reference,
+        ]);
+        if let Some(branch) = branch {
+            command.args(["--branch", branch]);
+        }
+        command.output().unwrap()
+    }
+
+    fn deploy_oci_with_failure(&self, reference: &str, failure: OciFailure) -> Output {
+        self.run_oci_deploy(reference, 30000, Some(failure), None)
+    }
+
     fn import(&self) -> Output {
         let repository_url = format!("file://{}", self.repository_path.display());
         run_pneuma_env(
@@ -2704,28 +2833,6 @@ impl DeploymentEnvironment {
                 contents,
             ],
         );
-    }
-
-    fn deploy(&self, port: u16, verbose: bool) -> Output {
-        self.deploy_with_external_status(port, verbose, 200)
-    }
-
-    fn deploy_current_revision(&self) {
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = thread::spawn(move || respond_once(&listener, 200));
-        assert_command_succeeded(&self.deploy(port, false));
-        server.join().unwrap();
-    }
-
-    fn spawn_gated_deploy(&self, port: u16, marker: &Path, release: &Path) -> Child {
-        let mut command = self.deploy_command(port);
-        command
-            .env("PNEUMA_FAKE_SYSTEMCTL_START_MARKER", marker)
-            .env("PNEUMA_FAKE_SYSTEMCTL_START_RELEASE", release)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        command.spawn().unwrap()
     }
 
     fn run_lifecycle(&self, subcommand: &str) -> Output {
@@ -2815,113 +2922,6 @@ impl DeploymentEnvironment {
         }
         command.output().unwrap()
     }
-
-    fn deploy_with_external_status(
-        &self,
-        port: u16,
-        verbose: bool,
-        external_status: u16,
-    ) -> Output {
-        let mut command = self.deploy_command(port);
-        command.env("PNEUMA_FAKE_CURL_STATUS", external_status.to_string());
-        if verbose {
-            command.arg("--verbose");
-        }
-        command.output().unwrap()
-    }
-
-    fn deploy_command(&self, port: u16) -> Command {
-        let digest = format!("sha256:{}", "a".repeat(64));
-        let reference = format!("{}@{digest}", self.image_repository);
-        let mut command = Command::new(env!("CARGO_BIN_EXE_pneuma"));
-        command
-            .env("PNEUMA_DATABASE_PATH", &self.database_path)
-            .env("PNEUMA_WORKSPACE_PATH", &self.workspace_path)
-            .env("PNEUMA_CADDY_MANAGED_PATH", &self.managed_caddy_directory)
-            .env("PNEUMA_CADDYFILE_PATH", &self.caddyfile_path)
-            .env("PNEUMA_QUADLET_DIR", self.root.join("quadlets"))
-            .env("PATH", executable_path(&self.fake_bin))
-            .env("PNEUMA_FAKE_PORT", port.to_string())
-            .env("PNEUMA_RUNTIME_PORT_RANGE", format!("{port}-{port}"))
-            .env("PNEUMA_FAKE_PODMAN_COUNT", self.root.join("podman-count"))
-            .env("PNEUMA_FAKE_PODMAN_LOG", self.root.join("podman.log"))
-            .env("PNEUMA_FAKE_CURL_LOG", self.root.join("curl.log"))
-            .env("PNEUMA_FAKE_CURL_STATUS", "200")
-            .env("PNEUMA_FAKE_PODMAN_DIGEST", digest)
-            .env("PNEUMA_ASSERT_CLOSED_DATABASE", &self.database_path)
-            .args([
-                "app",
-                "deploy",
-                &self.application_name,
-                "--image",
-                &reference,
-            ]);
-        command
-    }
-
-    fn deploy_oci(&self, reference: &str, port: u16) -> Output {
-        self.run_oci_deploy(reference, port, None, None)
-    }
-
-    fn deploy_oci_with_failure(&self, reference: &str, failure: OciFailure) -> Output {
-        self.run_oci_deploy(reference, 30000, Some(failure), None)
-    }
-
-    fn run_oci_deploy(
-        &self,
-        reference: &str,
-        port: u16,
-        failure: Option<OciFailure>,
-        branch: Option<&str>,
-    ) -> Output {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_pneuma"));
-        command
-            .env("PNEUMA_DATABASE_PATH", &self.database_path)
-            .env("PNEUMA_WORKSPACE_PATH", &self.workspace_path)
-            .env("PNEUMA_CADDY_MANAGED_PATH", &self.managed_caddy_directory)
-            .env("PNEUMA_CADDYFILE_PATH", &self.caddyfile_path)
-            .env("PNEUMA_QUADLET_DIR", self.root.join("quadlets"))
-            .env("PATH", executable_path(&self.fake_bin))
-            .env("PNEUMA_FAKE_PORT", port.to_string())
-            .env("PNEUMA_RUNTIME_PORT_RANGE", format!("{port}-{port}"))
-            .env("PNEUMA_FAKE_PODMAN_COUNT", self.root.join("podman-count"))
-            .env("PNEUMA_FAKE_PODMAN_LOG", self.root.join("podman.log"))
-            .env("PNEUMA_FAKE_CURL_LOG", self.root.join("curl.log"))
-            .env("PNEUMA_FAKE_CURL_STATUS", "200")
-            .env("PNEUMA_ASSERT_CLOSED_DATABASE", &self.database_path);
-        match failure {
-            Some(OciFailure::Pull) => {
-                command.env(
-                    "PNEUMA_FAKE_PODMAN_PULL_FAILURE",
-                    self.root.join("pull-failure"),
-                );
-                fs::write(self.root.join("pull-failure"), "fail").unwrap();
-            }
-            Some(OciFailure::DigestMismatch) => {
-                command.env(
-                    "PNEUMA_FAKE_PODMAN_DIGEST",
-                    format!("sha256:{}", "b".repeat(64)),
-                );
-            }
-            None => {
-                command.env(
-                    "PNEUMA_FAKE_PODMAN_DIGEST",
-                    format!("sha256:{}", "a".repeat(64)),
-                );
-            }
-        }
-        command.args([
-            "app",
-            "deploy",
-            &self.application_name,
-            "--image",
-            reference,
-        ]);
-        if let Some(branch) = branch {
-            command.args(["--branch", branch]);
-        }
-        command.output().unwrap()
-    }
 }
 
 impl Drop for DeploymentEnvironment {
@@ -2953,6 +2953,15 @@ fn initialize_repository(repository_path: &Path) {
     );
 }
 
+fn assert_command_succeeded(output: &Output) {
+    assert!(
+        output.status.success(),
+        "command failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 fn git(repository_path: &Path, arguments: &[&str]) -> String {
     let output = Command::new("git")
         .arg("-C")
@@ -2962,6 +2971,42 @@ fn git(repository_path: &Path, arguments: &[&str]) -> String {
         .unwrap();
     assert_command_succeeded(&output);
     String::from_utf8(output.stdout).unwrap()
+}
+
+fn respond_once(listener: &TcpListener, status: u16) {
+    listener.set_nonblocking(true).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        match listener.accept() {
+            Ok((mut stream, _)) => {
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                read_request(&mut stream);
+                let response = format!("HTTP/1.1 {status} Test\r\nContent-Length: 0\r\n\r\n");
+                stream.write_all(response.as_bytes()).unwrap();
+                return;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    panic!("health server timed out waiting for a request");
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("health server failed to accept a request: {error}"),
+        }
+    }
+}
+
+fn read_request(stream: &mut TcpStream) {
+    let mut request = Vec::new();
+    while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+        let mut buffer = [0; 1024];
+        let bytes_read = stream.read(&mut buffer).unwrap();
+        assert_ne!(bytes_read, 0);
+        request.extend_from_slice(&buffer[..bytes_read]);
+    }
 }
 
 fn install_fake_podman(fake_bin: &Path) {
@@ -3162,32 +3207,6 @@ fn executable_path(fake_bin: &Path) -> OsString {
         .unwrap()
 }
 
-fn respond_once(listener: &TcpListener, status: u16) {
-    listener.set_nonblocking(true).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(2);
-    loop {
-        match listener.accept() {
-            Ok((mut stream, _)) => {
-                stream.set_nonblocking(false).unwrap();
-                stream
-                    .set_read_timeout(Some(Duration::from_secs(2)))
-                    .unwrap();
-                read_request(&mut stream);
-                let response = format!("HTTP/1.1 {status} Test\r\nContent-Length: 0\r\n\r\n");
-                stream.write_all(response.as_bytes()).unwrap();
-                return;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                if Instant::now() >= deadline {
-                    panic!("health server timed out waiting for a request");
-                }
-                thread::sleep(Duration::from_millis(10));
-            }
-            Err(error) => panic!("health server failed to accept a request: {error}"),
-        }
-    }
-}
-
 fn wait_for_file(path: &Path, timeout: Duration) {
     let deadline = Instant::now() + timeout;
     while !path.exists() {
@@ -3219,16 +3238,6 @@ fn wait_for_child(mut child: Child, timeout: Duration) -> Output {
     }
 }
 
-fn read_request(stream: &mut TcpStream) {
-    let mut request = Vec::new();
-    while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
-        let mut buffer = [0; 1024];
-        let bytes_read = stream.read(&mut buffer).unwrap();
-        assert_ne!(bytes_read, 0);
-        request.extend_from_slice(&buffer[..bytes_read]);
-    }
-}
-
 fn assert_identifier_line(line: &str, prefix: &str) {
     let identifier = line.strip_prefix(prefix).unwrap();
     assert_eq!(identifier.len(), 32);
@@ -3253,13 +3262,4 @@ fn unique_suffix() -> u128 {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos()
-}
-
-fn assert_command_succeeded(output: &Output) {
-    assert!(
-        output.status.success(),
-        "command failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
 }

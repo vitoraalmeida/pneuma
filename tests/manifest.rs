@@ -35,6 +35,12 @@ fn loads_and_validates_a_repository_manifest() {
     );
 }
 
+fn fixture_path(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
+
 #[test]
 fn reports_a_missing_manifest_with_its_path() {
     let repository = fixture_path("missing");
@@ -163,6 +169,18 @@ fn rejects_invalid_manifest_fields() {
         let contents = VALID_MANIFEST.replace(valid, invalid);
         assert_invalid_field(&contents, expected_field);
     }
+}
+
+fn assert_invalid_field(contents: &str, expected_field: &'static str) {
+    let error = parse_manifest(contents).expect_err(expected_field);
+
+    assert!(
+        matches!(
+            error,
+            ManifestError::InvalidField { field, .. } if field == expected_field
+        ),
+        "unexpected error for {expected_field}: {error}"
+    );
 }
 
 #[test]
@@ -309,22 +327,4 @@ fn reports_invalid_toml() {
 
     assert!(matches!(error, ManifestError::Parse { .. }));
     assert!(error.to_string().contains("invalid manifest TOML"));
-}
-
-fn assert_invalid_field(contents: &str, expected_field: &'static str) {
-    let error = parse_manifest(contents).expect_err(expected_field);
-
-    assert!(
-        matches!(
-            error,
-            ManifestError::InvalidField { field, .. } if field == expected_field
-        ),
-        "unexpected error for {expected_field}: {error}"
-    );
-}
-
-fn fixture_path(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name)
 }

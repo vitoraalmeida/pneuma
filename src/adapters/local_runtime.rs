@@ -60,6 +60,37 @@ pub(crate) fn start_container(container_id: &str) -> Result<ContainerCommandOutp
     control_container("starting", &["start"], container_id)
 }
 
+// Executes a lifecycle command after validating the external container ID used as its target.
+fn control_container(
+    operation: &'static str,
+    arguments: &[&str],
+    container_id: &str,
+) -> Result<ContainerCommandOutput, PodmanError> {
+    if !ContainerId::is_valid(container_id) {
+        return Err(PodmanError::InvalidInput {
+            reason: "container ID must be a non-empty hexadecimal value",
+        });
+    }
+
+    let output = Command::new("podman")
+        .args(arguments)
+        .arg(container_id)
+        .output()
+        .map_err(|source| PodmanError::Execute { operation, source })?;
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    if !output.status.success() {
+        return Err(PodmanError::CommandFailed {
+            operation,
+            target: container_id.to_owned(),
+            stdout,
+            stderr,
+        });
+    }
+
+    Ok(ContainerCommandOutput { stdout, stderr })
+}
+
 // Resolves Podman's current container ID by stable name because recreation changes external IDs.
 pub(crate) fn resolve_container_id(name: &str) -> Result<ContainerId, PodmanError> {
     if name.is_empty() {
@@ -168,6 +199,28 @@ pub(crate) fn observe_named_container(
     })
 }
 
+fn named_container_failure(
+    operation: &'static str,
+    name: &str,
+    output: std::process::Output,
+) -> PodmanError {
+    PodmanError::CommandFailed {
+        operation,
+        target: name.to_owned(),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
+}
+
+// Identity fields are required for adoption; anything else is refused as unusable output.
+fn invalid_materialization(name: &str) -> PodmanError {
+    PodmanError::InvalidOutput {
+        target: name.to_owned(),
+        description: "invalid materialization data",
+        output: None,
+    }
+}
+
 // Stops a validated container through the shared Podman lifecycle command path.
 pub(crate) fn stop_container(container_id: &str) -> Result<ContainerCommandOutput, PodmanError> {
     control_container("stopping", &["stop"], container_id)
@@ -199,6 +252,20 @@ pub(crate) fn container_exists(container_id: &ContainerId) -> Result<bool, Podma
         ));
     }
     Ok(true)
+}
+
+// Converts a failed Podman observation into diagnostics tied to the attempted operation and container.
+fn observation_failure(
+    operation: &'static str,
+    container_id: &str,
+    output: std::process::Output,
+) -> PodmanError {
+    PodmanError::CommandFailed {
+        operation,
+        target: container_id.to_owned(),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
 }
 
 // Observes container state and exposes an endpoint only while Podman confirms it is running.
@@ -268,56 +335,18 @@ pub(crate) fn observe_container(
     }
 }
 
-// Executes a lifecycle command after validating the external container ID used as its target.
-fn control_container(
-    operation: &'static str,
-    arguments: &[&str],
-    container_id: &str,
-) -> Result<ContainerCommandOutput, PodmanError> {
-    if !ContainerId::is_valid(container_id) {
-        return Err(PodmanError::InvalidInput {
-            reason: "container ID must be a non-empty hexadecimal value",
-        });
-    }
-
-    let output = Command::new("podman")
-        .args(arguments)
-        .arg(container_id)
-        .output()
-        .map_err(|source| PodmanError::Execute { operation, source })?;
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    if !output.status.success() {
-        return Err(PodmanError::CommandFailed {
-            operation,
-            target: container_id.to_owned(),
-            stdout,
-            stderr,
-        });
-    }
-
-    Ok(ContainerCommandOutput { stdout, stderr })
-}
-
-fn named_container_failure(
-    operation: &'static str,
-    name: &str,
-    output: std::process::Output,
-) -> PodmanError {
-    PodmanError::CommandFailed {
-        operation,
-        target: name.to_owned(),
-        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-    }
-}
-
-// Identity fields are required for adoption; anything else is refused as unusable output.
-fn invalid_materialization(name: &str) -> PodmanError {
-    PodmanError::InvalidOutput {
-        target: name.to_owned(),
-        description: "invalid materialization data",
-        output: None,
+// Maps Podman's open-ended state strings into the closed domain observation set.
+fn observed_state(status: &str) -> ObservedRuntimeState {
+    match status {
+        "configured" | "created" => ObservedRuntimeState::Created,
+        "initialized" => ObservedRuntimeState::Starting,
+        "running" => ObservedRuntimeState::Running,
+        "stopping" | "removing" => ObservedRuntimeState::Stopping,
+        "stopped" | "exited" => ObservedRuntimeState::Stopped,
+        "dead" => ObservedRuntimeState::Failed,
+        status => ObservedRuntimeState::Unknown {
+            status: status.to_owned(),
+        },
     }
 }
 
@@ -351,35 +380,6 @@ fn observe_endpoint(container_id: &str, container_port: u16) -> Result<SocketAdd
             output: Some(output),
         })?;
     Ok(endpoint)
-}
-
-// Converts a failed Podman observation into diagnostics tied to the attempted operation and container.
-fn observation_failure(
-    operation: &'static str,
-    container_id: &str,
-    output: std::process::Output,
-) -> PodmanError {
-    PodmanError::CommandFailed {
-        operation,
-        target: container_id.to_owned(),
-        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-    }
-}
-
-// Maps Podman's open-ended state strings into the closed domain observation set.
-fn observed_state(status: &str) -> ObservedRuntimeState {
-    match status {
-        "configured" | "created" => ObservedRuntimeState::Created,
-        "initialized" => ObservedRuntimeState::Starting,
-        "running" => ObservedRuntimeState::Running,
-        "stopping" | "removing" => ObservedRuntimeState::Stopping,
-        "stopped" | "exited" => ObservedRuntimeState::Stopped,
-        "dead" => ObservedRuntimeState::Failed,
-        status => ObservedRuntimeState::Unknown {
-            status: status.to_owned(),
-        },
-    }
 }
 
 // Prefers Podman's stderr failure detail, using stdout only when stderr is empty.

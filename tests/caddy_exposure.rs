@@ -21,18 +21,6 @@ const CADDYFILE_PATH: &str = "PNEUMA_CADDY_TEST_CADDYFILE";
 const CADDY_LOG: &str = "PNEUMA_CADDY_TEST_LOG";
 const APPLICATION_ID: &str = "0123456789abcdef0123456789abcdef";
 
-fn application_id() -> ApplicationId {
-    ApplicationId::new(APPLICATION_ID).unwrap()
-}
-
-fn domain_name(value: &str) -> DomainName {
-    DomainName::new(value).unwrap()
-}
-
-fn loopback_endpoint(address: &str) -> ExpectedRuntimeEndpoint {
-    ExpectedRuntimeEndpoint::new(address.parse().unwrap()).unwrap()
-}
-
 #[test]
 fn validates_the_complete_configuration_and_reloads_caddy() {
     let environment = CaddyTestEnvironment::new();
@@ -86,6 +74,14 @@ fn canonical_fragment_contents_changes_with_domain_or_endpoint() {
             loopback_endpoint("127.0.0.1:32000")
         )
     );
+}
+
+fn domain_name(value: &str) -> DomainName {
+    DomainName::new(value).unwrap()
+}
+
+fn loopback_endpoint(address: &str) -> ExpectedRuntimeEndpoint {
+    ExpectedRuntimeEndpoint::new(address.parse().unwrap()).unwrap()
 }
 
 #[test]
@@ -237,6 +233,10 @@ fn rejects_a_missing_main_caddyfile_before_creating_the_managed_directory() {
         }
     ));
     assert!(!managed_directory.exists());
+}
+
+fn application_id() -> ApplicationId {
+    ApplicationId::new(APPLICATION_ID).unwrap()
 }
 
 #[test]
@@ -394,13 +394,13 @@ impl CaddyTestEnvironment {
             .join(format!("{APPLICATION_ID}.caddy"))
     }
 
+    fn active_fragment(&self) -> String {
+        fs::read_to_string(self.fragment_path()).unwrap()
+    }
+
     fn temporary_path(&self) -> PathBuf {
         self.managed_directory
             .join(format!(".{APPLICATION_ID}.caddy.tmp"))
-    }
-
-    fn active_fragment(&self) -> String {
-        fs::read_to_string(self.fragment_path()).unwrap()
     }
 
     fn caddy_commands(&self) -> Vec<String> {

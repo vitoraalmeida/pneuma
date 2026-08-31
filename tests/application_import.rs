@@ -73,6 +73,12 @@ fn imports_and_persists_the_application_specification() {
     );
 }
 
+fn fixture_path(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
+
 #[test]
 fn importing_the_same_application_is_idempotent() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
@@ -407,10 +413,4 @@ fn reimport_is_create_only_when_arguments_diverge() {
         .unwrap();
     assert_eq!(persisted_url, original_url);
     assert_eq!(application_count, 1);
-}
-
-fn fixture_path(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name)
 }

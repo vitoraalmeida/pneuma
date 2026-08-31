@@ -131,6 +131,19 @@ pub struct Release {
     pub created_at: String,
 }
 
+// Requires a sha256 prefix followed by exactly 64 lowercase hexadecimal characters.
+// Shared with the OCI adapter so Podman output uses this single digest authority.
+pub(crate) fn is_sha256_digest(digest: &str) -> bool {
+    digest
+        .strip_prefix(DIGEST_ALGORITHM)
+        .is_some_and(|hex| hex.len() == SHA256_HEX_LENGTH && hex.bytes().all(is_lowercase_hex))
+}
+
+// Recognizes the lowercase hexadecimal alphabet required by OCI sha256 digests.
+fn is_lowercase_hex(byte: u8) -> bool {
+    byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')
+}
+
 // Accepts the restricted repository characters used by artifact validation.
 fn is_repository(repository: &str) -> bool {
     if repository.is_empty()
@@ -172,29 +185,13 @@ fn is_repository_component(component: &str, registry: bool) -> bool {
             .is_none_or(|port| !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
-// Requires a sha256 prefix followed by exactly 64 lowercase hexadecimal characters.
-// Shared with the OCI adapter so Podman output uses this single digest authority.
-pub(crate) fn is_sha256_digest(digest: &str) -> bool {
-    digest
-        .strip_prefix(DIGEST_ALGORITHM)
-        .is_some_and(|hex| hex.len() == SHA256_HEX_LENGTH && hex.bytes().all(is_lowercase_hex))
-}
-
-// Recognizes the lowercase hexadecimal alphabet required by OCI sha256 digests.
-fn is_lowercase_hex(byte: u8) -> bool {
-    byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')
-}
-
 #[cfg(test)]
 mod tests {
     use super::{DeliverySpecification, OciArtifact, OciRepository};
 
-    fn artifact(repository: &str) -> OciArtifact {
-        OciArtifact::new(
-            repository,
-            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        )
-        .expect("test artifact is valid")
+    #[test]
+    fn permits_the_exact_configured_repository() {
+        assert!(delivery("registry.example/app").permits(&artifact("registry.example/app")));
     }
 
     fn delivery(repository: &str) -> DeliverySpecification {
@@ -203,9 +200,12 @@ mod tests {
         )
     }
 
-    #[test]
-    fn permits_the_exact_configured_repository() {
-        assert!(delivery("registry.example/app").permits(&artifact("registry.example/app")));
+    fn artifact(repository: &str) -> OciArtifact {
+        OciArtifact::new(
+            repository,
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .expect("test artifact is valid")
     }
 
     #[test]

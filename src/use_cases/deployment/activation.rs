@@ -246,6 +246,15 @@ fn materialize_public_route(
     })
 }
 
+// Builds the canonical failure for one activation stage; resources are cloned only on failure.
+fn failed_activation(
+    code: DeploymentFailureCode,
+    source: impl Error + 'static,
+    resources: &CandidateResources,
+) -> FailedExecution {
+    FailedExecution::needing_persistence(code, source, resources.clone())
+}
+
 // Translates failed route materialization into its canonical failure while persisting the
 // exposure diagnostic; an unsuccessful adapter rollback upgrades the outcome to divergence.
 fn record_materialization_failure(
@@ -279,6 +288,24 @@ fn record_materialization_failure(
         source,
         resources.clone(),
     )
+}
+
+// Records an exposure failure so persisted state matches the host, wrapping persistence
+// errors so the original cause is never lost.
+fn record_exposure_failure(
+    connection: &Connection,
+    application_id: &ApplicationId,
+    diagnostic: &ExposureDiagnostic,
+    outcome: ExposureOutcome,
+    original: Box<dyn Error>,
+) -> Box<dyn Error> {
+    match record_public_exposure_failure(connection, application_id, diagnostic, outcome) {
+        Ok(()) => original,
+        Err(persistence) => Box::new(ExposureFailureRecordingError {
+            original,
+            persistence,
+        }),
+    }
 }
 
 // Checks the deployed route through its public domain; on rejection it restores the prior
@@ -332,6 +359,25 @@ fn verify_external_health_or_rollback(
     Ok(())
 }
 
+// Restores the prior route after activation fails and distinguishes recoverable failure from
+// externally diverged Caddy state.
+fn rollback_public_route(
+    original: impl Error + 'static,
+    materialized: &MaterializedCaddyFragment,
+    caddyfile_path: &Path,
+) -> (Box<dyn Error>, ExposureOutcome) {
+    match restore_materialized_caddy_fragment(materialized, caddyfile_path) {
+        Ok(()) => (Box::new(original), ExposureOutcome::Failed),
+        Err(recovery) => (
+            Box::new(PublicRouteRollbackError {
+                original: Box::new(original),
+                recovery,
+            }),
+            ExposureOutcome::Diverged,
+        ),
+    }
+}
+
 // Confirms the externally verified candidate; when persistence rejects the promotion it
 // restores the prior route and records the diagnostic before surfacing the failure.
 fn promote_public_runtime_or_rollback(
@@ -365,52 +411,6 @@ fn promote_public_runtime_or_rollback(
                 resources.clone(),
             ))
         }
-    }
-}
-
-// Builds the canonical failure for one activation stage; resources are cloned only on failure.
-fn failed_activation(
-    code: DeploymentFailureCode,
-    source: impl Error + 'static,
-    resources: &CandidateResources,
-) -> FailedExecution {
-    FailedExecution::needing_persistence(code, source, resources.clone())
-}
-
-// Records an exposure failure so persisted state matches the host, wrapping persistence
-// errors so the original cause is never lost.
-fn record_exposure_failure(
-    connection: &Connection,
-    application_id: &ApplicationId,
-    diagnostic: &ExposureDiagnostic,
-    outcome: ExposureOutcome,
-    original: Box<dyn Error>,
-) -> Box<dyn Error> {
-    match record_public_exposure_failure(connection, application_id, diagnostic, outcome) {
-        Ok(()) => original,
-        Err(persistence) => Box::new(ExposureFailureRecordingError {
-            original,
-            persistence,
-        }),
-    }
-}
-
-// Restores the prior route after activation fails and distinguishes recoverable failure from
-// externally diverged Caddy state.
-fn rollback_public_route(
-    original: impl Error + 'static,
-    materialized: &MaterializedCaddyFragment,
-    caddyfile_path: &Path,
-) -> (Box<dyn Error>, ExposureOutcome) {
-    match restore_materialized_caddy_fragment(materialized, caddyfile_path) {
-        Ok(()) => (Box::new(original), ExposureOutcome::Failed),
-        Err(recovery) => (
-            Box::new(PublicRouteRollbackError {
-                original: Box::new(original),
-                recovery,
-            }),
-            ExposureOutcome::Diverged,
-        ),
     }
 }
 

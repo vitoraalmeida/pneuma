@@ -287,24 +287,6 @@ mod tests {
 
     impl std::error::Error for TestFailure {}
 
-    fn container_id() -> ContainerId {
-        ContainerId::from("abc123def456")
-    }
-
-    fn runtime_id() -> RuntimeInstanceId {
-        RuntimeInstanceId::new("11111111111111111111111111111111").unwrap()
-    }
-
-    fn deployment_id() -> DeploymentId {
-        DeploymentId::new("22222222222222222222222222222222").unwrap()
-    }
-
-    fn transition_error() -> TransitionDeploymentError {
-        TransitionDeploymentError::DeploymentNotFound {
-            deployment_id: "deployment-1".to_owned(),
-        }
-    }
-
     #[test]
     fn internal_promotion_failure_is_already_persisted_for_unhealthy_candidates() {
         let failed = internal_promotion_failure(
@@ -323,6 +305,14 @@ mod tests {
         assert!(failed.failure_persisted);
         assert_eq!(failed.resources.unit_name.as_deref(), Some("unit-1"));
         assert!(failed.resources.port_reserved);
+    }
+
+    fn container_id() -> ContainerId {
+        ContainerId::from("abc123def456")
+    }
+
+    fn runtime_id() -> RuntimeInstanceId {
+        RuntimeInstanceId::new("11111111111111111111111111111111").unwrap()
     }
 
     #[test]
@@ -360,6 +350,16 @@ mod tests {
                 assert_eq!(failure, "test failure");
             }
             other => panic!("expected the cleanup divergence to win, got {other:?}"),
+        }
+    }
+
+    fn deployment_id() -> DeploymentId {
+        DeploymentId::new("22222222222222222222222222222222").unwrap()
+    }
+
+    fn transition_error() -> TransitionDeploymentError {
+        TransitionDeploymentError::DeploymentNotFound {
+            deployment_id: "deployment-1".to_owned(),
         }
     }
 

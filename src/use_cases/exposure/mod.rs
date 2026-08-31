@@ -400,6 +400,63 @@ fn make_public(
     })
 }
 
+// Persists public-route failure diagnostics after attempting any required compensation.
+fn fail_public<T>(
+    connection: &mut Connection,
+    application_id: &ApplicationId,
+    code: &str,
+    message: &str,
+    diverged: bool,
+    error: ExposureChangeError,
+) -> Result<T, ExposureChangeError> {
+    record_failure(
+        connection,
+        application_id,
+        Visibility::Public,
+        code,
+        message,
+        diverged,
+    )?;
+    Err(error)
+}
+
+// Confirms failed or diverged materialization with a compare-and-set transaction.
+fn record_failure(
+    connection: &mut Connection,
+    application_id: &ApplicationId,
+    visibility: Visibility,
+    code: &str,
+    message: &str,
+    diverged: bool,
+) -> Result<(), ExposureChangeError> {
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|source| ExposureChangeError::Persistence { source })?;
+    let state = if diverged {
+        ExposureMaterializationState::Diverged
+    } else {
+        ExposureMaterializationState::Failed
+    };
+    let diagnostic = ExposureDiagnostic::new(code, message)
+        .map_err(|_| ExposureChangeError::InvalidDiagnostic)?;
+    let updated = exposure_store::record_exposure_change_failure(
+        &transaction,
+        application_id,
+        visibility,
+        state,
+        &diagnostic,
+    )
+    .map_err(|source| ExposureChangeError::Store { source })?;
+    if updated == crate::adapters::stores::PersistenceOutcome::Stale {
+        return Err(ExposureChangeError::ExposureChanged {
+            application_id: application_id.to_string(),
+        });
+    }
+    transaction
+        .commit()
+        .map_err(|source| ExposureChangeError::Persistence { source })
+}
+
 // Removes the managed route without changing the application's loopback runtime.
 fn make_internal(
     connection: &mut Connection,
@@ -475,26 +532,6 @@ fn make_internal(
     })
 }
 
-// Persists public-route failure diagnostics after attempting any required compensation.
-fn fail_public<T>(
-    connection: &mut Connection,
-    application_id: &ApplicationId,
-    code: &str,
-    message: &str,
-    diverged: bool,
-    error: ExposureChangeError,
-) -> Result<T, ExposureChangeError> {
-    record_failure(
-        connection,
-        application_id,
-        Visibility::Public,
-        code,
-        message,
-        diverged,
-    )?;
-    Err(error)
-}
-
 // Persists internal-route failure diagnostics after attempting any required compensation.
 fn fail_internal<T>(
     connection: &mut Connection,
@@ -513,41 +550,4 @@ fn fail_internal<T>(
         diverged,
     )?;
     Err(error)
-}
-
-// Confirms failed or diverged materialization with a compare-and-set transaction.
-fn record_failure(
-    connection: &mut Connection,
-    application_id: &ApplicationId,
-    visibility: Visibility,
-    code: &str,
-    message: &str,
-    diverged: bool,
-) -> Result<(), ExposureChangeError> {
-    let transaction = connection
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|source| ExposureChangeError::Persistence { source })?;
-    let state = if diverged {
-        ExposureMaterializationState::Diverged
-    } else {
-        ExposureMaterializationState::Failed
-    };
-    let diagnostic = ExposureDiagnostic::new(code, message)
-        .map_err(|_| ExposureChangeError::InvalidDiagnostic)?;
-    let updated = exposure_store::record_exposure_change_failure(
-        &transaction,
-        application_id,
-        visibility,
-        state,
-        &diagnostic,
-    )
-    .map_err(|source| ExposureChangeError::Store { source })?;
-    if updated == crate::adapters::stores::PersistenceOutcome::Stale {
-        return Err(ExposureChangeError::ExposureChanged {
-            application_id: application_id.to_string(),
-        });
-    }
-    transaction
-        .commit()
-        .map_err(|source| ExposureChangeError::Persistence { source })
 }

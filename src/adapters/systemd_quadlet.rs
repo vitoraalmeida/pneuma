@@ -118,6 +118,17 @@ pub(crate) fn write_unit(
     Ok(unit)
 }
 
+// Resolves the configurable rootless Quadlet directory, defaulting under the current user's home.
+fn quadlet_directory() -> Result<PathBuf, QuadletError> {
+    if let Some(directory) =
+        env::var_os(QUADLET_DIRECTORY_ENVIRONMENT_VARIABLE).filter(|path| !path.is_empty())
+    {
+        return Ok(PathBuf::from(directory));
+    }
+    let home = env::var_os("HOME").ok_or(QuadletError::HomeUnavailable)?;
+    Ok(Path::new(&home).join(".config/containers/systemd"))
+}
+
 // Removes a generated Quadlet file idempotently so candidate cleanup can be retried safely.
 pub(crate) fn remove_unit(unit: &str) -> Result<(), QuadletError> {
     let path = quadlet_directory()?.join(format!("{unit}.container"));
@@ -187,24 +198,10 @@ pub(crate) fn daemon_reload() -> Result<(), QuadletError> {
         stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
     })
 }
+
 // Starts the generated user service for a logical Quadlet unit.
 pub(crate) fn start(unit: &str) -> Result<(), QuadletError> {
     control("starting", unit, &["start"])
-}
-// Stops the generated user service without removing its Quadlet definition.
-pub(crate) fn stop(unit: &str) -> Result<(), QuadletError> {
-    control("stopping", unit, &["stop"])
-}
-
-// Resolves the configurable rootless Quadlet directory, defaulting under the current user's home.
-fn quadlet_directory() -> Result<PathBuf, QuadletError> {
-    if let Some(directory) =
-        env::var_os(QUADLET_DIRECTORY_ENVIRONMENT_VARIABLE).filter(|path| !path.is_empty())
-    {
-        return Ok(PathBuf::from(directory));
-    }
-    let home = env::var_os("HOME").ok_or(QuadletError::HomeUnavailable)?;
-    Ok(Path::new(&home).join(".config/containers/systemd"))
 }
 
 // Invokes systemctl --user for a generated service and preserves its failure diagnostic.
@@ -223,6 +220,11 @@ fn control(operation: &'static str, unit: &str, arguments: &[&str]) -> Result<()
         unit: service,
         stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
     })
+}
+
+// Stops the generated user service without removing its Quadlet definition.
+pub(crate) fn stop(unit: &str) -> Result<(), QuadletError> {
+    control("stopping", unit, &["stop"])
 }
 
 #[cfg(test)]
@@ -279,17 +281,6 @@ mod tests {
         }
     }
 
-    fn artifact() -> OciArtifact {
-        OciArtifact::parse("registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap()
-    }
-
-    fn unit_inputs() -> (ApplicationName, DeploymentId) {
-        (
-            ApplicationName::new("app").unwrap(),
-            DeploymentId::new("22222222222222222222222222222222").unwrap(),
-        )
-    }
-
     #[test]
     fn write_unit_rewrites_canonical_bytes_so_updates_are_retry_safe() {
         let scoped = ScopedQuadletDirectory::new("write-retry");
@@ -327,6 +318,17 @@ mod tests {
         assert_eq!(fs::read_to_string(&path).unwrap(), canonical);
 
         assert!(unit_exists(&unit).unwrap());
+    }
+
+    fn unit_inputs() -> (ApplicationName, DeploymentId) {
+        (
+            ApplicationName::new("app").unwrap(),
+            DeploymentId::new("22222222222222222222222222222222").unwrap(),
+        )
+    }
+
+    fn artifact() -> OciArtifact {
+        OciArtifact::parse("registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap()
     }
 
     #[test]

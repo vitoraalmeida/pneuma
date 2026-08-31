@@ -119,11 +119,6 @@ pub(crate) fn run(invocation: Invocation) -> Result<(), CliError> {
     }
 }
 
-// Prints version information without requiring host configuration or database access.
-pub(crate) fn run_version() {
-    println!("pneuma {}", env!("CARGO_PKG_VERSION"));
-}
-
 // Acquires the shared database-wide lock held for as long as the command uses the database.
 fn shared_database_lock(database_path: &Path) -> Result<DatabaseLock, CliError> {
     match DatabaseLock::try_acquire(database_path, LockMode::Shared) {
@@ -135,4 +130,9 @@ fn shared_database_lock(database_path: &Path) -> Result<DatabaseLock, CliError> 
         }),
         Err(source) => Err(CliError::Database { source }),
     }
+}
+
+// Prints version information without requiring host configuration or database access.
+pub(crate) fn run_version() {
+    println!("pneuma {}", env!("CARGO_PKG_VERSION"));
 }

@@ -28,18 +28,6 @@ pub enum CiDispatchError {
     InvalidDeployFormat,
 }
 
-// Rejects shell metacharacters because branch names cross the SSH command boundary.
-fn is_valid_branch_name(name: &str) -> bool {
-    if name.is_empty() {
-        return false;
-    }
-    let shell_metacharacters = [
-        ';', '&', '|', '$', '`', '(', ')', '{', '}', '<', '>', '!', '\\', '\'', '"', ' ', '\t',
-        '\n', '\r',
-    ];
-    !name.chars().any(|c| shell_metacharacters.contains(&c))
-}
-
 // Parses the small SSH command protocol and validates every value before deployment dispatch.
 pub fn parse_ci_command(input: &str) -> Result<CiCommand, CiDispatchError> {
     let input = input.trim();
@@ -90,6 +78,18 @@ pub fn parse_ci_command(input: &str) -> Result<CiCommand, CiDispatchError> {
             command: command.to_owned(),
         }),
     }
+}
+
+// Rejects shell metacharacters because branch names cross the SSH command boundary.
+fn is_valid_branch_name(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    let shell_metacharacters = [
+        ';', '&', '|', '$', '`', '(', ')', '{', '}', '<', '>', '!', '\\', '\'', '"', ' ', '\t',
+        '\n', '\r',
+    ];
+    !name.chars().any(|c| shell_metacharacters.contains(&c))
 }
 
 #[cfg(test)]

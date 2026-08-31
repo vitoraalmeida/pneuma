@@ -71,24 +71,6 @@ pub fn deploy_branch(
     )
 }
 
-// Resolves and deploys a branch while forwarding deployment lifecycle progress to the caller.
-pub fn deploy_branch_with_progress(
-    connection: &mut Connection,
-    application_id: &ApplicationId,
-    branch: Option<&str>,
-    public_configuration: Option<&PublicDeploymentConfiguration>,
-    progress: &mut dyn FnMut(DeploymentProgress),
-) -> Result<DeploymentResult, DeployBranchError> {
-    let mut progress = ProgressReporter::enabled(progress);
-    deploy_branch_reporting(
-        connection,
-        application_id,
-        branch,
-        public_configuration,
-        &mut progress,
-    )
-}
-
 fn deploy_branch_reporting(
     connection: &mut Connection,
     application_id: &ApplicationId,
@@ -143,6 +125,24 @@ fn deploy_branch_reporting(
     .map_err(|source| DeployBranchError::DeployOci { source })
 }
 
+// Resolves and deploys a branch while forwarding deployment lifecycle progress to the caller.
+pub fn deploy_branch_with_progress(
+    connection: &mut Connection,
+    application_id: &ApplicationId,
+    branch: Option<&str>,
+    public_configuration: Option<&PublicDeploymentConfiguration>,
+    progress: &mut dyn FnMut(DeploymentProgress),
+) -> Result<DeploymentResult, DeployBranchError> {
+    let mut progress = ProgressReporter::enabled(progress);
+    deploy_branch_reporting(
+        connection,
+        application_id,
+        branch,
+        public_configuration,
+        &mut progress,
+    )
+}
+
 #[derive(Debug, Error)]
 pub enum DeployOciError {
     #[error("failed to acquire deployment lock: {source}")]
@@ -188,26 +188,6 @@ pub fn deploy_oci(
     public_configuration: Option<&PublicDeploymentConfiguration>,
 ) -> Result<DeploymentResult, DeployOciError> {
     let mut progress = ProgressReporter::disabled();
-    deploy_oci_reporting(
-        connection,
-        application_id,
-        artifact,
-        source_commit,
-        public_configuration,
-        &mut progress,
-    )
-}
-
-// Deploys an OCI artifact while forwarding lifecycle progress to the caller.
-pub fn deploy_oci_with_progress(
-    connection: &mut Connection,
-    application_id: &ApplicationId,
-    artifact: &OciArtifact,
-    source_commit: Option<&CommitSha>,
-    public_configuration: Option<&PublicDeploymentConfiguration>,
-    progress: &mut dyn FnMut(DeploymentProgress),
-) -> Result<DeploymentResult, DeployOciError> {
-    let mut progress = ProgressReporter::enabled(progress);
     deploy_oci_reporting(
         connection,
         application_id,
@@ -284,4 +264,24 @@ fn deploy_artifact_for_delivery(
         progress,
     )
     .map_err(|source| DeployOciError::DeployRelease { source })
+}
+
+// Deploys an OCI artifact while forwarding lifecycle progress to the caller.
+pub fn deploy_oci_with_progress(
+    connection: &mut Connection,
+    application_id: &ApplicationId,
+    artifact: &OciArtifact,
+    source_commit: Option<&CommitSha>,
+    public_configuration: Option<&PublicDeploymentConfiguration>,
+    progress: &mut dyn FnMut(DeploymentProgress),
+) -> Result<DeploymentResult, DeployOciError> {
+    let mut progress = ProgressReporter::enabled(progress);
+    deploy_oci_reporting(
+        connection,
+        application_id,
+        artifact,
+        source_commit,
+        public_configuration,
+        &mut progress,
+    )
 }

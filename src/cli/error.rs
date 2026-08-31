@@ -118,6 +118,30 @@ impl CliError {
     }
 }
 
+fn classify_deploy_branch(source: &DeployBranchError) -> CliErrorClass {
+    match source {
+        DeployBranchError::ResolveBranch { .. } | DeployBranchError::ResolveImageDigest { .. } => {
+            CliErrorClass::External
+        }
+        DeployBranchError::DeployOci { source } => classify_deploy_oci(source),
+        DeployBranchError::ApplicationLock { .. } | DeployBranchError::ApplicationBusy { .. } => {
+            CliErrorClass::Conflict
+        }
+        _ => CliErrorClass::Failure,
+    }
+}
+
+fn classify_deploy_oci(source: &DeployOciError) -> CliErrorClass {
+    match source {
+        DeployOciError::RepositoryMismatch { .. } => CliErrorClass::Usage,
+        DeployOciError::PullImage { .. } => CliErrorClass::External,
+        DeployOciError::ApplicationLock { .. } | DeployOciError::ApplicationBusy { .. } => {
+            CliErrorClass::Conflict
+        }
+        _ => CliErrorClass::Failure,
+    }
+}
+
 // Classifies import failures, separating rejected input from external and persistence causes.
 fn classify_remote_import(source: &RemoteImportError) -> CliErrorClass {
     match source {
@@ -143,30 +167,6 @@ fn classify_runtime_lifecycle(source: &RuntimeLifecycleError) -> CliErrorClass {
         RuntimeLifecycleError::Observe { .. }
         | RuntimeLifecycleError::Control { .. }
         | RuntimeLifecycleError::Supervision { .. } => CliErrorClass::External,
-        _ => CliErrorClass::Failure,
-    }
-}
-
-fn classify_deploy_oci(source: &DeployOciError) -> CliErrorClass {
-    match source {
-        DeployOciError::RepositoryMismatch { .. } => CliErrorClass::Usage,
-        DeployOciError::PullImage { .. } => CliErrorClass::External,
-        DeployOciError::ApplicationLock { .. } | DeployOciError::ApplicationBusy { .. } => {
-            CliErrorClass::Conflict
-        }
-        _ => CliErrorClass::Failure,
-    }
-}
-
-fn classify_deploy_branch(source: &DeployBranchError) -> CliErrorClass {
-    match source {
-        DeployBranchError::ResolveBranch { .. } | DeployBranchError::ResolveImageDigest { .. } => {
-            CliErrorClass::External
-        }
-        DeployBranchError::DeployOci { source } => classify_deploy_oci(source),
-        DeployBranchError::ApplicationLock { .. } | DeployBranchError::ApplicationBusy { .. } => {
-            CliErrorClass::Conflict
-        }
         _ => CliErrorClass::Failure,
     }
 }
@@ -226,38 +226,6 @@ mod tests {
     use pneuma::adapters::stores::application_store::ApplicationStoreError;
     use pneuma::use_cases::ci::CiDispatchError;
     use pneuma::use_cases::system::ShowError;
-
-    fn sqlite_error() -> rusqlite::Error {
-        rusqlite::Error::InvalidParameterName("test".to_owned())
-    }
-
-    fn clone_error() -> CloneRepositoryError {
-        CloneRepositoryError::Execute {
-            operation: "clone",
-            source: io::Error::other("no network"),
-        }
-    }
-
-    fn pull_image_error() -> PullImageError {
-        PullImageError::Pull {
-            reference: "registry.example/app@sha256:0000000000000000000000000000000000000000000000000000000000000000".to_owned(),
-            stdout: String::new(),
-            stderr: "denied".to_owned(),
-        }
-    }
-
-    fn podman_error() -> PodmanError {
-        PodmanError::Execute {
-            operation: "observing",
-            source: io::Error::other("no podman"),
-        }
-    }
-
-    fn store_error() -> ApplicationStoreError {
-        ApplicationStoreError::Persistence {
-            source: sqlite_error(),
-        }
-    }
 
     // Table-driven classification coverage: one representative error per major
     // command family, with every exit class exercised. Nested operation layering
@@ -640,6 +608,38 @@ mod tests {
                 expected.exit_code(),
                 "{description}"
             );
+        }
+    }
+
+    fn clone_error() -> CloneRepositoryError {
+        CloneRepositoryError::Execute {
+            operation: "clone",
+            source: io::Error::other("no network"),
+        }
+    }
+
+    fn store_error() -> ApplicationStoreError {
+        ApplicationStoreError::Persistence {
+            source: sqlite_error(),
+        }
+    }
+
+    fn sqlite_error() -> rusqlite::Error {
+        rusqlite::Error::InvalidParameterName("test".to_owned())
+    }
+
+    fn podman_error() -> PodmanError {
+        PodmanError::Execute {
+            operation: "observing",
+            source: io::Error::other("no podman"),
+        }
+    }
+
+    fn pull_image_error() -> PullImageError {
+        PullImageError::Pull {
+            reference: "registry.example/app@sha256:0000000000000000000000000000000000000000000000000000000000000000".to_owned(),
+            stdout: String::new(),
+            stderr: "denied".to_owned(),
         }
     }
 

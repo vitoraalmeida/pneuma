@@ -4,10 +4,6 @@ use pneuma::adapters::oci_image::{self, ResolveImageDigestError};
 use pneuma::domain::git::CommitSha;
 use pneuma::domain::release::OciRepository;
 
-fn oci_repository(value: &str) -> OciRepository {
-    OciRepository::new(value).unwrap()
-}
-
 #[test]
 #[ignore = "requires configured rootless Podman"]
 fn resolve_image_digest_returns_digest_for_existing_tag() {
@@ -57,6 +53,10 @@ fn resolve_image_digest_returns_digest_for_existing_tag() {
         .args(["image", "rm", "--force", &tagged])
         .output();
     let _ = std::fs::remove_dir_all(&build_dir);
+}
+
+fn oci_repository(value: &str) -> OciRepository {
+    OciRepository::new(value).unwrap()
 }
 
 #[test]

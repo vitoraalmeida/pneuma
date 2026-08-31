@@ -108,6 +108,13 @@ impl<'a> ProgressReporter<'a> {
         self.emit(DeploymentProgress::StepStarted { step, detail });
     }
 
+    // Invokes the optional callback while keeping disabled reporting side-effect free.
+    fn emit(&mut self, event: DeploymentProgress) {
+        if let Some(callback) = &mut self.callback {
+            callback(event);
+        }
+    }
+
     // Reports successful completion only after the step has finished.
     pub(crate) fn completed(&mut self, step: DeploymentStep, detail: String) {
         self.emit(DeploymentProgress::StepCompleted { step, detail });
@@ -127,12 +134,5 @@ impl<'a> ProgressReporter<'a> {
             deployment_id: deployment_id.to_owned(),
             code,
         });
-    }
-
-    // Invokes the optional callback while keeping disabled reporting side-effect free.
-    fn emit(&mut self, event: DeploymentProgress) {
-        if let Some(callback) = &mut self.callback {
-            callback(event);
-        }
     }
 }

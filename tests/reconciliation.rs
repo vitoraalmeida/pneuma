@@ -74,6 +74,19 @@ fn loads_the_active_reconciliation_snapshot_without_writing_sqlite() {
     fs::remove_dir_all(root).unwrap();
 }
 
+fn temporary_directory() -> PathBuf {
+    let root = env::temp_dir().join(format!(
+        "pneuma-reconciliation-test-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&root).unwrap();
+    root
+}
+
 #[test]
 fn observes_caddy_fragment_without_creating_it() {
     let root = temporary_directory();
@@ -132,6 +145,56 @@ fn reconcile_marks_an_interrupted_pending_deployment_failed_without_external_eff
     fs::remove_dir_all(root).unwrap();
 }
 
+fn seed_interrupted_deployment(connection: &rusqlite::Connection, status: &str, runtime: bool) {
+    let application_id = "1".repeat(32);
+    let system_id = "5".repeat(32);
+    let release_id = "2".repeat(32);
+    let deployment_id = "3".repeat(32);
+    let digest = format!("sha256:{}", "a".repeat(64));
+    connection
+        .execute_batch(&format!(
+            "INSERT INTO systems (id, name) VALUES ('{system_id}', 'team');
+             INSERT INTO applications (id, system_id, name, repository_url, manifest_path, image_repository, container_port, health_check_path, health_check_expected_status, desired_runtime_state)
+             VALUES ('{application_id}', '{system_id}', 'another', 'https://example.test/another.git', 'pneuma.toml', 'registry.example/team/another', 8080, '/healthz', 200, 'running');
+             INSERT INTO exposures (application_id, desired_visibility, domain, materialization_state)
+             VALUES ('{application_id}', 'public', 'another.example', 'applying');
+             INSERT INTO releases (id, application_id, image_reference, created_at)
+             VALUES ('{release_id}', '{application_id}', 'registry.example/team/another@{digest}', '2026-01-01');
+             INSERT INTO deployments (id, application_id, release_id, type, status, requested_at, started_at)
+             VALUES ('{deployment_id}', '{application_id}', '{release_id}', 'deploy', '{status}', '2026-01-01', '2026-01-01');"
+        ))
+        .unwrap();
+    if runtime {
+        connection
+            .execute_batch(&format!(
+                "INSERT INTO runtime_instances (id, application_id, deployment_id, external_runtime_id, state, host_port, container_port, last_observed_state, last_observed_at)
+                 VALUES ('{}', '{application_id}', '{deployment_id}', '{}', 'starting', 30000, 8080, 'running', '2026-01-01');",
+                "4".repeat(32),
+                "b".repeat(64),
+            ))
+            .unwrap();
+    }
+}
+
+fn reconcile_command(root: &std::path::Path, database_path: &std::path::Path) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_pneuma"));
+    command
+        .env("PNEUMA_DATABASE_PATH", database_path)
+        .env("PNEUMA_CADDY_MANAGED_PATH", root.join("caddy"))
+        .env("PNEUMA_CADDYFILE_PATH", root.join("Caddyfile"))
+        .env("PNEUMA_QUADLET_DIR", root.join("quadlets"))
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                root.join("bin").display(),
+                env::var("PATH").unwrap()
+            ),
+        )
+        .args(["reconcile", "another"]);
+    command
+}
+
 #[test]
 fn reconcile_cleans_a_verified_candidate_only_after_unit_identity_is_proven() {
     let root = temporary_directory();
@@ -180,6 +243,23 @@ fn reconcile_cleans_a_verified_candidate_only_after_unit_identity_is_proven() {
     );
     drop(connection);
     fs::remove_dir_all(root).unwrap();
+}
+
+fn install_cleanup_commands(directory: &std::path::Path) {
+    fs::create_dir_all(directory).unwrap();
+    for command in ["podman", "systemctl"] {
+        let path = directory.join(command);
+        let contents = if command == "podman" {
+            "#!/bin/sh\nif [ \"$1\" = container ] && [ \"$2\" = exists ]; then exit 1; fi\nexit 0\n"
+        } else {
+            "#!/bin/sh\nexit 0\n"
+        };
+        fs::write(&path, contents).unwrap();
+        let mut permissions = fs::metadata(&path).unwrap().permissions();
+        use std::os::unix::fs::PermissionsExt;
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).unwrap();
+    }
 }
 
 #[test]
@@ -426,84 +506,4 @@ fn only_nonterminal_deployments_block_reconciliation_dispatch() {
     assert!(input.persisted.blocking_deployment.is_none());
     drop(connection);
     fs::remove_dir_all(root).unwrap();
-}
-
-fn reconcile_command(root: &std::path::Path, database_path: &std::path::Path) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_pneuma"));
-    command
-        .env("PNEUMA_DATABASE_PATH", database_path)
-        .env("PNEUMA_CADDY_MANAGED_PATH", root.join("caddy"))
-        .env("PNEUMA_CADDYFILE_PATH", root.join("Caddyfile"))
-        .env("PNEUMA_QUADLET_DIR", root.join("quadlets"))
-        .env(
-            "PATH",
-            format!(
-                "{}:{}",
-                root.join("bin").display(),
-                env::var("PATH").unwrap()
-            ),
-        )
-        .args(["reconcile", "another"]);
-    command
-}
-
-fn seed_interrupted_deployment(connection: &rusqlite::Connection, status: &str, runtime: bool) {
-    let application_id = "1".repeat(32);
-    let system_id = "5".repeat(32);
-    let release_id = "2".repeat(32);
-    let deployment_id = "3".repeat(32);
-    let digest = format!("sha256:{}", "a".repeat(64));
-    connection
-        .execute_batch(&format!(
-            "INSERT INTO systems (id, name) VALUES ('{system_id}', 'team');
-             INSERT INTO applications (id, system_id, name, repository_url, manifest_path, image_repository, container_port, health_check_path, health_check_expected_status, desired_runtime_state)
-             VALUES ('{application_id}', '{system_id}', 'another', 'https://example.test/another.git', 'pneuma.toml', 'registry.example/team/another', 8080, '/healthz', 200, 'running');
-             INSERT INTO exposures (application_id, desired_visibility, domain, materialization_state)
-             VALUES ('{application_id}', 'public', 'another.example', 'applying');
-             INSERT INTO releases (id, application_id, image_reference, created_at)
-             VALUES ('{release_id}', '{application_id}', 'registry.example/team/another@{digest}', '2026-01-01');
-             INSERT INTO deployments (id, application_id, release_id, type, status, requested_at, started_at)
-             VALUES ('{deployment_id}', '{application_id}', '{release_id}', 'deploy', '{status}', '2026-01-01', '2026-01-01');"
-        ))
-        .unwrap();
-    if runtime {
-        connection
-            .execute_batch(&format!(
-                "INSERT INTO runtime_instances (id, application_id, deployment_id, external_runtime_id, state, host_port, container_port, last_observed_state, last_observed_at)
-                 VALUES ('{}', '{application_id}', '{deployment_id}', '{}', 'starting', 30000, 8080, 'running', '2026-01-01');",
-                "4".repeat(32),
-                "b".repeat(64),
-            ))
-            .unwrap();
-    }
-}
-
-fn install_cleanup_commands(directory: &std::path::Path) {
-    fs::create_dir_all(directory).unwrap();
-    for command in ["podman", "systemctl"] {
-        let path = directory.join(command);
-        let contents = if command == "podman" {
-            "#!/bin/sh\nif [ \"$1\" = container ] && [ \"$2\" = exists ]; then exit 1; fi\nexit 0\n"
-        } else {
-            "#!/bin/sh\nexit 0\n"
-        };
-        fs::write(&path, contents).unwrap();
-        let mut permissions = fs::metadata(&path).unwrap().permissions();
-        use std::os::unix::fs::PermissionsExt;
-        permissions.set_mode(0o755);
-        fs::set_permissions(path, permissions).unwrap();
-    }
-}
-
-fn temporary_directory() -> PathBuf {
-    let root = env::temp_dir().join(format!(
-        "pneuma-reconciliation-test-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    fs::create_dir_all(&root).unwrap();
-    root
 }

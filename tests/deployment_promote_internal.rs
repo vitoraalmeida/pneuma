@@ -57,6 +57,99 @@ fn promotes_a_healthy_internal_candidate_idempotently() {
     assert_eq!(desired_state, "running");
 }
 
+fn server_with_statuses(statuses: &[u16]) -> (SocketAddr, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let endpoint = listener.local_addr().unwrap();
+    let statuses = statuses.to_vec();
+    let server = thread::spawn(move || {
+        for status in statuses {
+            let (mut stream, _) = listener.accept().unwrap();
+            read_request(&mut stream);
+            let response = format!("HTTP/1.1 {status} Test\r\nContent-Length: 0\r\n\r\n");
+            stream.write_all(response.as_bytes()).unwrap();
+        }
+    });
+    (endpoint, server)
+}
+
+fn read_request(stream: &mut TcpStream) {
+    let mut request = Vec::new();
+    while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+        let mut buffer = [0; 1024];
+        let bytes_read = stream.read(&mut buffer).unwrap();
+        assert_ne!(bytes_read, 0);
+        request.extend_from_slice(&buffer[..bytes_read]);
+    }
+}
+
+fn add_verifying_candidate(
+    connection: &mut rusqlite::Connection,
+    fixture: &str,
+    commit_character: char,
+    runtime_character: char,
+    endpoint: SocketAddr,
+) -> RuntimeInstanceId {
+    let application = import_application(
+        connection,
+        &fixture_path(fixture),
+        None,
+        "https://example.test/app.git",
+        None,
+    )
+    .unwrap();
+    let digest = format!("sha256:{}", commit_character.to_string().repeat(64));
+    let artifact = OciArtifact::new("localhost/test", &digest).unwrap();
+    let release = create_release(connection, &application.id, &artifact).unwrap();
+    let deployment = create_deployment(
+        connection,
+        &application.id,
+        &release.id,
+        DeploymentType::Deploy,
+    )
+    .unwrap();
+    advance_deployment(connection, &deployment.id, DeploymentEvent::Start).unwrap();
+    let external_runtime_id = ContainerId::from(runtime_character.to_string().repeat(64));
+    let runtime = register_candidate_runtime(
+        connection,
+        &deployment.id,
+        &external_runtime_id,
+        ExpectedRuntimeEndpoint::new(endpoint).unwrap(),
+        ContainerPort::new(8080).unwrap(),
+    )
+    .unwrap();
+    advance_deployment(connection, &deployment.id, DeploymentEvent::RuntimeRunning).unwrap();
+    runtime.id
+}
+
+fn fixture_path(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
+
+fn health_check() -> HealthCheckSpecification {
+    HealthCheckSpecification::new(
+        HealthCheckPath::new("/healthz").unwrap(),
+        HealthCheckStatus::new(200).unwrap(),
+    )
+}
+
+fn runtime_and_deployment_state(
+    connection: &rusqlite::Connection,
+    runtime_id: &RuntimeInstanceId,
+) -> (String, String, Option<String>) {
+    connection
+        .query_row(
+            "SELECT runtime_instances.state, deployments.status, deployments.finished_at
+             FROM runtime_instances
+             JOIN deployments ON deployments.id = runtime_instances.deployment_id
+             WHERE runtime_instances.id = ?1",
+            [runtime_id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap()
+}
+
 #[test]
 fn replaces_the_previous_current_runtime_atomically() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
@@ -160,97 +253,4 @@ fn refuses_public_application_before_health_check() {
         error,
         PromoteInternalCandidateError::PublicApplication { .. }
     ));
-}
-
-fn add_verifying_candidate(
-    connection: &mut rusqlite::Connection,
-    fixture: &str,
-    commit_character: char,
-    runtime_character: char,
-    endpoint: SocketAddr,
-) -> RuntimeInstanceId {
-    let application = import_application(
-        connection,
-        &fixture_path(fixture),
-        None,
-        "https://example.test/app.git",
-        None,
-    )
-    .unwrap();
-    let digest = format!("sha256:{}", commit_character.to_string().repeat(64));
-    let artifact = OciArtifact::new("localhost/test", &digest).unwrap();
-    let release = create_release(connection, &application.id, &artifact).unwrap();
-    let deployment = create_deployment(
-        connection,
-        &application.id,
-        &release.id,
-        DeploymentType::Deploy,
-    )
-    .unwrap();
-    advance_deployment(connection, &deployment.id, DeploymentEvent::Start).unwrap();
-    let external_runtime_id = ContainerId::from(runtime_character.to_string().repeat(64));
-    let runtime = register_candidate_runtime(
-        connection,
-        &deployment.id,
-        &external_runtime_id,
-        ExpectedRuntimeEndpoint::new(endpoint).unwrap(),
-        ContainerPort::new(8080).unwrap(),
-    )
-    .unwrap();
-    advance_deployment(connection, &deployment.id, DeploymentEvent::RuntimeRunning).unwrap();
-    runtime.id
-}
-
-fn health_check() -> HealthCheckSpecification {
-    HealthCheckSpecification::new(
-        HealthCheckPath::new("/healthz").unwrap(),
-        HealthCheckStatus::new(200).unwrap(),
-    )
-}
-
-fn runtime_and_deployment_state(
-    connection: &rusqlite::Connection,
-    runtime_id: &RuntimeInstanceId,
-) -> (String, String, Option<String>) {
-    connection
-        .query_row(
-            "SELECT runtime_instances.state, deployments.status, deployments.finished_at
-             FROM runtime_instances
-             JOIN deployments ON deployments.id = runtime_instances.deployment_id
-             WHERE runtime_instances.id = ?1",
-            [runtime_id.as_str()],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .unwrap()
-}
-
-fn server_with_statuses(statuses: &[u16]) -> (SocketAddr, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-    let endpoint = listener.local_addr().unwrap();
-    let statuses = statuses.to_vec();
-    let server = thread::spawn(move || {
-        for status in statuses {
-            let (mut stream, _) = listener.accept().unwrap();
-            read_request(&mut stream);
-            let response = format!("HTTP/1.1 {status} Test\r\nContent-Length: 0\r\n\r\n");
-            stream.write_all(response.as_bytes()).unwrap();
-        }
-    });
-    (endpoint, server)
-}
-
-fn read_request(stream: &mut TcpStream) {
-    let mut request = Vec::new();
-    while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
-        let mut buffer = [0; 1024];
-        let bytes_read = stream.read(&mut buffer).unwrap();
-        assert_ne!(bytes_read, 0);
-        request.extend_from_slice(&buffer[..bytes_read]);
-    }
-}
-
-fn fixture_path(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name)
 }

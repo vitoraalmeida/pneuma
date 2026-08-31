@@ -125,6 +125,14 @@ pub(crate) fn map_application_row(row: &Row<'_>) -> rusqlite::Result<Application
     })
 }
 
+fn desired_runtime_state_from_value(value: &str) -> Option<DesiredRuntimeState> {
+    match value {
+        "running" => Some(DesiredRuntimeState::Running),
+        "stopped" => Some(DesiredRuntimeState::Stopped),
+        _ => None,
+    }
+}
+
 // Extends the core Application row mapping with catalog source fields.
 pub(crate) fn map_application_summary_row(row: &Row<'_>) -> rusqlite::Result<ApplicationSummary> {
     let application = map_application_row(row)?;
@@ -223,6 +231,13 @@ pub(crate) fn set_desired_runtime_state(
         )
         .map_err(|source| ApplicationStoreError::Persistence { source })?;
     Ok(())
+}
+
+fn desired_runtime_state_value(value: DesiredRuntimeState) -> &'static str {
+    match value {
+        DesiredRuntimeState::Running => "running",
+        DesiredRuntimeState::Stopped => "stopped",
+    }
 }
 
 // Checks durable Application existence before dependent persistence work.
@@ -401,20 +416,6 @@ pub fn load_deployment_specification(
     }))
 }
 
-fn desired_runtime_state_from_value(value: &str) -> Option<DesiredRuntimeState> {
-    match value {
-        "running" => Some(DesiredRuntimeState::Running),
-        "stopped" => Some(DesiredRuntimeState::Stopped),
-        _ => None,
-    }
-}
-fn desired_runtime_state_value(value: DesiredRuntimeState) -> &'static str {
-    match value {
-        DesiredRuntimeState::Running => "running",
-        DesiredRuntimeState::Stopped => "stopped",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -440,10 +441,6 @@ mod tests {
 
     const APP_ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const SYSTEM_ID: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-
-    fn application_id() -> ApplicationId {
-        ApplicationId::new(APP_ID).unwrap()
-    }
 
     #[test]
     fn absent_lookups_are_ok_none_never_a_not_found_error() {
@@ -471,37 +468,8 @@ mod tests {
         );
     }
 
-    fn specification(name: &ApplicationName) -> ImportedApplicationSpecification<'static> {
-        specification_leaked(name)
-    }
-
-    // Builds a specification with `'static` borrowed fields for test convenience.
-    fn specification_leaked(name: &ApplicationName) -> ImportedApplicationSpecification<'static> {
-        let system_id = Box::leak(SystemId::new(SYSTEM_ID).unwrap().into());
-        let source = Box::leak(Box::new(
-            ApplicationSource::new(
-                "https://example.test/app.git",
-                Some("main".to_owned()),
-                RelativeManifestPath::new("pneuma.toml").unwrap(),
-            )
-            .unwrap(),
-        ));
-        let image_repository =
-            Box::leak(OciRepository::new("registry.example/app").unwrap().into());
-        let runtime = Box::leak(Box::new(RuntimeSpecification::new(
-            ContainerPort::new(8080).unwrap(),
-            HealthCheckSpecification::new(
-                HealthCheckPath::new("/healthz").unwrap(),
-                HealthCheckStatus::new(200).unwrap(),
-            ),
-        )));
-        ImportedApplicationSpecification {
-            system_id,
-            name: Box::leak(name.clone().into()),
-            source,
-            image_repository,
-            runtime,
-        }
+    fn application_id() -> ApplicationId {
+        ApplicationId::new(APP_ID).unwrap()
     }
 
     #[test]
@@ -519,6 +487,21 @@ mod tests {
             load_desired_runtime_state(&connection, &application_id()).unwrap(),
             DesiredRuntimeState::Running
         );
+    }
+
+    fn seed_application(connection: &Connection, id: &str) {
+        connection
+            .execute_batch(&format!(
+                "INSERT INTO systems (id, name) VALUES ('{SYSTEM_ID}', 'team');
+                 INSERT INTO applications (
+                     id, system_id, name, repository_url, default_branch, manifest_path,
+                     image_repository, container_port, health_check_path,
+                     health_check_expected_status, desired_runtime_state
+                 ) VALUES (
+                     '{id}', '{SYSTEM_ID}', '{id}', 'https://example.test/app.git', 'main',
+                     'pneuma.toml', 'registry.example/app', 8080, '/healthz', 200, 'stopped')"
+            ))
+            .unwrap();
     }
 
     #[test]
@@ -567,6 +550,39 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM applications", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 0, "applications must stay empty after a rollback");
+    }
+
+    fn specification(name: &ApplicationName) -> ImportedApplicationSpecification<'static> {
+        specification_leaked(name)
+    }
+
+    // Builds a specification with `'static` borrowed fields for test convenience.
+    fn specification_leaked(name: &ApplicationName) -> ImportedApplicationSpecification<'static> {
+        let system_id = Box::leak(SystemId::new(SYSTEM_ID).unwrap().into());
+        let source = Box::leak(Box::new(
+            ApplicationSource::new(
+                "https://example.test/app.git",
+                Some("main".to_owned()),
+                RelativeManifestPath::new("pneuma.toml").unwrap(),
+            )
+            .unwrap(),
+        ));
+        let image_repository =
+            Box::leak(OciRepository::new("registry.example/app").unwrap().into());
+        let runtime = Box::leak(Box::new(RuntimeSpecification::new(
+            ContainerPort::new(8080).unwrap(),
+            HealthCheckSpecification::new(
+                HealthCheckPath::new("/healthz").unwrap(),
+                HealthCheckStatus::new(200).unwrap(),
+            ),
+        )));
+        ImportedApplicationSpecification {
+            system_id,
+            name: Box::leak(name.clone().into()),
+            source,
+            image_repository,
+            runtime,
+        }
     }
 
     #[test]
@@ -676,20 +692,5 @@ mod tests {
             error,
             Err(ApplicationStoreError::Persistence { .. })
         ));
-    }
-
-    fn seed_application(connection: &Connection, id: &str) {
-        connection
-            .execute_batch(&format!(
-                "INSERT INTO systems (id, name) VALUES ('{SYSTEM_ID}', 'team');
-                 INSERT INTO applications (
-                     id, system_id, name, repository_url, default_branch, manifest_path,
-                     image_repository, container_port, health_check_path,
-                     health_check_expected_status, desired_runtime_state
-                 ) VALUES (
-                     '{id}', '{SYSTEM_ID}', '{id}', 'https://example.test/app.git', 'main',
-                     'pneuma.toml', 'registry.example/app', 8080, '/healthz', 200, 'stopped')"
-            ))
-            .unwrap();
     }
 }

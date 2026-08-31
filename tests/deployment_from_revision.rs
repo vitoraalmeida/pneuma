@@ -307,12 +307,6 @@ impl FakePodman {
         self.run_internal(operation, None)
     }
 
-    fn run_with_pull_failure<T>(&self, operation: impl FnOnce() -> T) -> T {
-        let failure_path = self.root.join("pull-failure");
-        fs::write(&failure_path, "fail").unwrap();
-        self.run_internal(operation, Some(&failure_path))
-    }
-
     fn run_internal<T>(&self, operation: impl FnOnce() -> T, failure: Option<&Path>) -> T {
         let _environment_lock = environment_lock().lock().unwrap();
         let digest = format!("sha256:{}", "a".repeat(64));
@@ -343,6 +337,12 @@ impl FakePodman {
             unsafe { env::set_var("PATH", path) };
         }
         result
+    }
+
+    fn run_with_pull_failure<T>(&self, operation: impl FnOnce() -> T) -> T {
+        let failure_path = self.root.join("pull-failure");
+        fs::write(&failure_path, "fail").unwrap();
+        self.run_internal(operation, Some(&failure_path))
     }
 
     fn log(&self) -> String {
@@ -404,12 +404,15 @@ impl GitRepository {
         repository
     }
 
-    fn url(&self) -> String {
-        format!("file://{}", self.path.display())
-    }
-
-    fn head_commit(&self) -> String {
-        self.git(&["rev-parse", "HEAD"]).trim().to_owned()
+    fn git(&self, arguments: &[&str]) -> String {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&self.path)
+            .args(arguments)
+            .output()
+            .unwrap();
+        assert_git_succeeded(&output);
+        String::from_utf8(output.stdout).unwrap()
     }
 
     fn commit_on_new_branch(&self, branch: &str, contents: &str) -> String {
@@ -430,15 +433,12 @@ impl GitRepository {
         self.head_commit()
     }
 
-    fn git(&self, arguments: &[&str]) -> String {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(&self.path)
-            .args(arguments)
-            .output()
-            .unwrap();
-        assert_git_succeeded(&output);
-        String::from_utf8(output.stdout).unwrap()
+    fn head_commit(&self) -> String {
+        self.git(&["rev-parse", "HEAD"]).trim().to_owned()
+    }
+
+    fn url(&self) -> String {
+        format!("file://{}", self.path.display())
     }
 }
 

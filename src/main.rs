@@ -6,6 +6,22 @@ mod cli;
 
 const HOST_ENVIRONMENT_FILE: &str = "/etc/pneuma/environment";
 
+// Initializes process-wide environment before parsing and dispatching the CLI request.
+fn main() -> ExitCode {
+    load_host_environment();
+    configure_runtime_environment();
+
+    let result = cli::run(cli::parse_invocation());
+
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("error: {error}");
+            ExitCode::from(error.class().exit_code())
+        }
+    }
+}
+
 // Loads host defaults without overriding explicit environment supplied by the caller.
 fn load_host_environment() {
     let Ok(content) = fs::read_to_string(HOST_ENVIRONMENT_FILE) else {
@@ -49,22 +65,6 @@ fn configure_runtime_environment() {
             unsafe {
                 env::set_var("PNEUMA_QUADLET_DIR", &quadlet_dir);
             }
-        }
-    }
-}
-
-// Initializes process-wide environment before parsing and dispatching the CLI request.
-fn main() -> ExitCode {
-    load_host_environment();
-    configure_runtime_environment();
-
-    let result = cli::run(cli::parse_invocation());
-
-    match result {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            eprintln!("error: {error}");
-            ExitCode::from(error.class().exit_code())
         }
     }
 }

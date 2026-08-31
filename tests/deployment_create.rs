@@ -45,6 +45,17 @@ fn immediate_transaction_acquires_the_writer_lock_before_reading() {
     assert_eq!(failure.code, ErrorCode::DatabaseBusy);
 }
 
+fn temporary_database_path() -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "pneuma-deployment-create-{}-{}.sqlite3",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ))
+}
+
 #[test]
 fn persists_a_pending_deployment_atomically() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
@@ -70,6 +81,20 @@ fn persists_a_pending_deployment_atomically() {
     assert_eq!(deployment.release_id, release.id);
     assert_eq!(deployment.status(), DeploymentStatus::Pending);
     assert!(!deployment.requested_at.is_empty());
+}
+
+fn fixture_path(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
+
+fn artifact(character: char) -> OciArtifact {
+    OciArtifact::new(
+        "localhost/test",
+        &format!("sha256:{}", character.to_string().repeat(64)),
+    )
+    .unwrap()
 }
 
 #[test]
@@ -287,6 +312,50 @@ fn a_running_active_runtime_blocks_deploying_the_same_release() {
     ));
 }
 
+fn setup_active_runtime(
+    connection: &mut rusqlite::Connection,
+    runtime_state: &str,
+    removed_at: Option<&str>,
+) -> (String, String) {
+    let application = import_application(
+        connection,
+        &fixture_path("valid"),
+        None,
+        "https://example.test/app.git",
+        None,
+    )
+    .unwrap();
+    let release = create_release(connection, &application.id, &artifact('a')).unwrap();
+    connection
+        .execute(
+            "INSERT INTO deployments (
+                id, application_id, release_id, type, status, requested_at, finished_at
+             ) VALUES ('cccccccccccccccccccccccccccccccc', ?1, ?2, 'deploy', 'succeeded',
+                       CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            rusqlite::params![application.id.as_str(), release.id.as_str()],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO runtime_instances (
+                id, application_id, deployment_id, external_runtime_id, state,
+                host_port, container_port, last_observed_state,
+                last_observed_at, removed_at
+             ) VALUES ('dddddddddddddddddddddddddddddddd', ?1, 'cccccccccccccccccccccccccccccccc', 'aabbccdd', ?2,
+                       30000, 8080, ?2, CURRENT_TIMESTAMP, ?3)",
+            rusqlite::params![application.id.as_str(), runtime_state, removed_at],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE applications SET active_deployment_id = 'cccccccccccccccccccccccccccccccc' WHERE id = ?1",
+            [application.id.as_str()],
+        )
+        .unwrap();
+
+    (application.id.to_string(), release.id.to_string())
+}
+
 #[test]
 fn a_stopped_active_runtime_blocks_deploying_the_same_release() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
@@ -376,73 +445,4 @@ fn database_rejects_a_release_from_another_application() {
         .unwrap_err();
 
     assert!(matches!(error, rusqlite::Error::SqliteFailure(_, _)));
-}
-
-fn setup_active_runtime(
-    connection: &mut rusqlite::Connection,
-    runtime_state: &str,
-    removed_at: Option<&str>,
-) -> (String, String) {
-    let application = import_application(
-        connection,
-        &fixture_path("valid"),
-        None,
-        "https://example.test/app.git",
-        None,
-    )
-    .unwrap();
-    let release = create_release(connection, &application.id, &artifact('a')).unwrap();
-    connection
-        .execute(
-            "INSERT INTO deployments (
-                id, application_id, release_id, type, status, requested_at, finished_at
-             ) VALUES ('cccccccccccccccccccccccccccccccc', ?1, ?2, 'deploy', 'succeeded',
-                       CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-            rusqlite::params![application.id.as_str(), release.id.as_str()],
-        )
-        .unwrap();
-    connection
-        .execute(
-            "INSERT INTO runtime_instances (
-                id, application_id, deployment_id, external_runtime_id, state,
-                host_port, container_port, last_observed_state,
-                last_observed_at, removed_at
-             ) VALUES ('dddddddddddddddddddddddddddddddd', ?1, 'cccccccccccccccccccccccccccccccc', 'aabbccdd', ?2,
-                       30000, 8080, ?2, CURRENT_TIMESTAMP, ?3)",
-            rusqlite::params![application.id.as_str(), runtime_state, removed_at],
-        )
-        .unwrap();
-    connection
-        .execute(
-            "UPDATE applications SET active_deployment_id = 'cccccccccccccccccccccccccccccccc' WHERE id = ?1",
-            [application.id.as_str()],
-        )
-        .unwrap();
-
-    (application.id.to_string(), release.id.to_string())
-}
-
-fn fixture_path(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name)
-}
-
-fn artifact(character: char) -> OciArtifact {
-    OciArtifact::new(
-        "localhost/test",
-        &format!("sha256:{}", character.to_string().repeat(64)),
-    )
-    .unwrap()
-}
-
-fn temporary_database_path() -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "pneuma-deployment-create-{}-{}.sqlite3",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ))
 }

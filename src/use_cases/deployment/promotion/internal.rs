@@ -155,6 +155,18 @@ pub fn promote_internal_candidate(
     })
 }
 
+// Loads and validates persisted state text before making promotion decisions.
+fn load_target(
+    connection: &Connection,
+    runtime_id: &RuntimeInstanceId,
+) -> Result<PromotionTarget, PromoteInternalCandidateError> {
+    deployment_store::load_promotion_target(connection, runtime_id)?.ok_or_else(|| {
+        PromoteInternalCandidateError::RuntimeNotFound {
+            runtime_id: runtime_id.to_string(),
+        }
+    })
+}
+
 // Rejects any freshly loaded target that may not proceed to an internal promotion write.
 fn ensure_internal_promotable(
     target: &PromotionTarget,
@@ -187,14 +199,6 @@ fn ensure_internal_promotable(
     Ok(())
 }
 
-// Names the concurrent-change rejection shared by every compare-and-set promotion write.
-fn changed_during_promotion(deployment_id: &DeploymentId) -> PromoteInternalCandidateError {
-    PromoteInternalCandidateError::InvalidDeploymentState {
-        deployment_id: deployment_id.to_string(),
-        actual: "changed during promotion".to_owned(),
-    }
-}
-
 // Asks the domain whether the loaded deployment may record its candidate activation.
 fn ensure_activation_ready(target: &PromotionTarget) -> Result<(), PromoteInternalCandidateError> {
     target
@@ -207,14 +211,10 @@ fn ensure_activation_ready(target: &PromotionTarget) -> Result<(), PromoteIntern
     Ok(())
 }
 
-// Loads and validates persisted state text before making promotion decisions.
-fn load_target(
-    connection: &Connection,
-    runtime_id: &RuntimeInstanceId,
-) -> Result<PromotionTarget, PromoteInternalCandidateError> {
-    deployment_store::load_promotion_target(connection, runtime_id)?.ok_or_else(|| {
-        PromoteInternalCandidateError::RuntimeNotFound {
-            runtime_id: runtime_id.to_string(),
-        }
-    })
+// Names the concurrent-change rejection shared by every compare-and-set promotion write.
+fn changed_during_promotion(deployment_id: &DeploymentId) -> PromoteInternalCandidateError {
+    PromoteInternalCandidateError::InvalidDeploymentState {
+        deployment_id: deployment_id.to_string(),
+        actual: "changed during promotion".to_owned(),
+    }
 }

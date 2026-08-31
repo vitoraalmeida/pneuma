@@ -104,13 +104,6 @@ mod tests {
     use super::{ApplicationLock, lock_path};
     use crate::domain::identity::ApplicationId;
 
-    // Derives a stable, valid identifier per test name so distinct names stay
-    // distinct locks while every identifier satisfies the current format.
-    fn application_id(value: &str) -> ApplicationId {
-        let seed: u64 = value.bytes().map(u64::from).sum();
-        ApplicationId::new(&format!("{seed:032x}")).unwrap()
-    }
-
     #[test]
     fn serializes_same_application_and_keeps_different_applications_independent() {
         let root = env::temp_dir().join(format!(
@@ -153,6 +146,13 @@ mod tests {
         fs::remove_file(lock_path(&database, &application_id("application-a"))).unwrap();
         fs::remove_file(lock_path(&database, &application_id("application-b"))).unwrap();
         fs::remove_dir_all(root).unwrap();
+    }
+
+    // Derives a stable, valid identifier per test name so distinct names stay
+    // distinct locks while every identifier satisfies the current format.
+    fn application_id(value: &str) -> ApplicationId {
+        let seed: u64 = value.bytes().map(u64::from).sum();
+        ApplicationId::new(&format!("{seed:032x}")).unwrap()
     }
 
     #[test]

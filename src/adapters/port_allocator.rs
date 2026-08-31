@@ -93,6 +93,41 @@ pub(crate) fn reserve_port(
     Err(PortAllocationError::Exhausted { start, end })
 }
 
+// Parses the host-configured allocation range.
+fn configured_range() -> Result<(u16, u16), PortAllocationError> {
+    let value = env::var(RUNTIME_PORT_RANGE_ENVIRONMENT_VARIABLE)
+        .unwrap_or_else(|_| DEFAULT_RUNTIME_PORT_RANGE.to_owned());
+    parse_range(&value)
+}
+
+// Parses an allocation range and rejects zero, inverted, or malformed bounds.
+fn parse_range(value: &str) -> Result<(u16, u16), PortAllocationError> {
+    let invalid = || PortAllocationError::InvalidRange {
+        value: value.to_owned(),
+    };
+    let Some((start, end)) = value.split_once('-') else {
+        return Err(invalid());
+    };
+    let (Ok(start), Ok(end)) = (start.parse::<u16>(), end.parse::<u16>()) else {
+        return Err(invalid());
+    };
+    if start == 0 || end == 0 || start > end {
+        return Err(invalid());
+    }
+    Ok((start, end))
+}
+
+fn invalid_reserved_port(port: i64) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(
+        0,
+        rusqlite::types::Type::Integer,
+        Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("invalid reserved host port: {port}"),
+        )),
+    )
+}
+
 // Releases all reservations owned by a deployment after cleanup; repeating the
 // release is an explicitly idempotent operation.
 pub(crate) fn release_port(
@@ -130,41 +165,6 @@ pub(crate) fn consume_port_reservation(
         });
     }
     Ok(())
-}
-
-fn invalid_reserved_port(port: i64) -> rusqlite::Error {
-    rusqlite::Error::FromSqlConversionFailure(
-        0,
-        rusqlite::types::Type::Integer,
-        Box::new(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("invalid reserved host port: {port}"),
-        )),
-    )
-}
-
-// Parses the host-configured allocation range.
-fn configured_range() -> Result<(u16, u16), PortAllocationError> {
-    let value = env::var(RUNTIME_PORT_RANGE_ENVIRONMENT_VARIABLE)
-        .unwrap_or_else(|_| DEFAULT_RUNTIME_PORT_RANGE.to_owned());
-    parse_range(&value)
-}
-
-// Parses an allocation range and rejects zero, inverted, or malformed bounds.
-fn parse_range(value: &str) -> Result<(u16, u16), PortAllocationError> {
-    let invalid = || PortAllocationError::InvalidRange {
-        value: value.to_owned(),
-    };
-    let Some((start, end)) = value.split_once('-') else {
-        return Err(invalid());
-    };
-    let (Ok(start), Ok(end)) = (start.parse::<u16>(), end.parse::<u16>()) else {
-        return Err(invalid());
-    };
-    if start == 0 || end == 0 || start > end {
-        return Err(invalid());
-    }
-    Ok((start, end))
 }
 
 #[cfg(test)]
@@ -221,6 +221,37 @@ mod tests {
         release_port(&connection, &deployment()).unwrap();
         let reused = reserve_port(&mut connection, &application(), &deployment()).unwrap();
         assert_eq!(reused.get(), 30000);
+    }
+
+    // Seeds the application, release, and deployment rows required by reservation foreign keys.
+    fn seed_runtime_inputs(connection: &rusqlite::Connection) {
+        connection
+            .execute_batch(
+                "INSERT INTO systems (id, name) VALUES ('33333333333333333333333333333333', 'team');
+                 INSERT INTO applications (
+                     id, system_id, name, repository_url, manifest_path, image_repository,
+                     container_port, health_check_path, health_check_expected_status,
+                     desired_runtime_state
+                 ) VALUES (
+                     '11111111111111111111111111111111', '33333333333333333333333333333333', 'app',
+                     'https://example.test/app.git', 'pneuma.toml', 'registry.example/app',
+                     8080, '/healthz', 200, 'stopped');
+                 INSERT INTO releases (id, application_id, image_reference, created_at)
+                 VALUES ('44444444444444444444444444444444', '11111111111111111111111111111111',
+                         'registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                         'now');
+                 INSERT INTO deployments (id, application_id, release_id, type, status, requested_at)
+                 VALUES ('22222222222222222222222222222222', '11111111111111111111111111111111', '44444444444444444444444444444444', 'deploy', 'pending', 'now');",
+            )
+            .unwrap();
+    }
+
+    fn application() -> ApplicationId {
+        ApplicationId::new("11111111111111111111111111111111").unwrap()
+    }
+
+    fn deployment() -> DeploymentId {
+        DeploymentId::new("22222222222222222222222222222222").unwrap()
     }
 
     #[test]
@@ -378,36 +409,5 @@ mod tests {
             rusqlite::Error::SqliteFailure(ref failure, _)
                 if failure.code == ErrorCode::ConstraintViolation
         ));
-    }
-
-    fn application() -> ApplicationId {
-        ApplicationId::new("11111111111111111111111111111111").unwrap()
-    }
-
-    fn deployment() -> DeploymentId {
-        DeploymentId::new("22222222222222222222222222222222").unwrap()
-    }
-
-    // Seeds the application, release, and deployment rows required by reservation foreign keys.
-    fn seed_runtime_inputs(connection: &rusqlite::Connection) {
-        connection
-            .execute_batch(
-                "INSERT INTO systems (id, name) VALUES ('33333333333333333333333333333333', 'team');
-                 INSERT INTO applications (
-                     id, system_id, name, repository_url, manifest_path, image_repository,
-                     container_port, health_check_path, health_check_expected_status,
-                     desired_runtime_state
-                 ) VALUES (
-                     '11111111111111111111111111111111', '33333333333333333333333333333333', 'app',
-                     'https://example.test/app.git', 'pneuma.toml', 'registry.example/app',
-                     8080, '/healthz', 200, 'stopped');
-                 INSERT INTO releases (id, application_id, image_reference, created_at)
-                 VALUES ('44444444444444444444444444444444', '11111111111111111111111111111111',
-                         'registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-                         'now');
-                 INSERT INTO deployments (id, application_id, release_id, type, status, requested_at)
-                 VALUES ('22222222222222222222222222222222', '11111111111111111111111111111111', '44444444444444444444444444444444', 'deploy', 'pending', 'now');",
-            )
-            .unwrap();
     }
 }

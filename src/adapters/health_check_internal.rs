@@ -213,6 +213,31 @@ mod tests {
         );
     }
 
+    fn server_with_responses(statuses: &[u16]) -> (SocketAddr, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let endpoint = listener.local_addr().unwrap();
+        let statuses = statuses.to_vec();
+        let server = thread::spawn(move || {
+            for status in statuses {
+                let (mut stream, _) = listener.accept().unwrap();
+                read_request(&mut stream);
+                let response = format!("HTTP/1.1 {status} Test\r\nContent-Length: 0\r\n\r\n");
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+        });
+        (endpoint, server)
+    }
+
+    fn read_request(stream: &mut TcpStream) {
+        let mut request = Vec::new();
+        while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+            let mut buffer = [0; 1024];
+            let bytes_read = stream.read(&mut buffer).unwrap();
+            assert_ne!(bytes_read, 0);
+            request.extend_from_slice(&buffer[..bytes_read]);
+        }
+    }
+
     #[test]
     fn retries_until_the_expected_status_is_observed() {
         let (endpoint, server) = server_with_responses(&[503, 200]);
@@ -339,30 +364,5 @@ mod tests {
         let error = check_internal_health(endpoint, &health_check()).unwrap_err();
 
         assert_eq!(error, RuntimeEndpointError::NotIpv4Loopback { endpoint });
-    }
-
-    fn server_with_responses(statuses: &[u16]) -> (SocketAddr, thread::JoinHandle<()>) {
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-        let endpoint = listener.local_addr().unwrap();
-        let statuses = statuses.to_vec();
-        let server = thread::spawn(move || {
-            for status in statuses {
-                let (mut stream, _) = listener.accept().unwrap();
-                read_request(&mut stream);
-                let response = format!("HTTP/1.1 {status} Test\r\nContent-Length: 0\r\n\r\n");
-                stream.write_all(response.as_bytes()).unwrap();
-            }
-        });
-        (endpoint, server)
-    }
-
-    fn read_request(stream: &mut TcpStream) {
-        let mut request = Vec::new();
-        while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
-            let mut buffer = [0; 1024];
-            let bytes_read = stream.read(&mut buffer).unwrap();
-            assert_ne!(bytes_read, 0);
-            request.extend_from_slice(&buffer[..bytes_read]);
-        }
     }
 }

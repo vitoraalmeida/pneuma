@@ -28,16 +28,32 @@ const CONTAINER_ID: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const CANONICAL_UNIT: &str = "canonical-unit";
 const CANONICAL_ROUTE: &str = "app.example { reverse_proxy }";
 
+fn input(desired_state: DesiredRuntimeState, exposure: Option<Exposure>) -> ReconciliationInput {
+    ReconciliationInput {
+        desired: DesiredState {
+            application: Application {
+                id: ApplicationId::new(APPLICATION_ID).unwrap(),
+                system_id: SystemId::new(SYSTEM_ID).unwrap(),
+                name: application_name(),
+                desired_runtime_state: desired_state,
+                active_deployment_id: Some(DeploymentId::new(DEPLOYMENT_ID).unwrap()),
+            },
+            exposure,
+        },
+        persisted: PersistedState {
+            blocking_deployment: None,
+            active: Some(ActiveRuntime {
+                deployment: deployment(),
+                release: release(),
+                runtime: Some(runtime()),
+            }),
+            specification: Some(specification()),
+        },
+    }
+}
+
 fn application_name() -> ApplicationName {
     ApplicationName::new("app").unwrap()
-}
-
-fn endpoint() -> ExpectedRuntimeEndpoint {
-    ExpectedRuntimeEndpoint::new(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 30000)).unwrap()
-}
-
-fn socket_addr() -> SocketAddr {
-    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 30000)
 }
 
 fn deployment() -> Deployment {
@@ -85,6 +101,10 @@ fn runtime() -> RuntimeInstance {
     }
 }
 
+fn endpoint() -> ExpectedRuntimeEndpoint {
+    ExpectedRuntimeEndpoint::new(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 30000)).unwrap()
+}
+
 fn specification() -> ApplicationDeploymentSpecification {
     ApplicationDeploymentSpecification {
         application_id: ApplicationId::new(APPLICATION_ID).unwrap(),
@@ -100,62 +120,15 @@ fn specification() -> ApplicationDeploymentSpecification {
     }
 }
 
-fn input(desired_state: DesiredRuntimeState, exposure: Option<Exposure>) -> ReconciliationInput {
-    ReconciliationInput {
-        desired: DesiredState {
-            application: Application {
-                id: ApplicationId::new(APPLICATION_ID).unwrap(),
-                system_id: SystemId::new(SYSTEM_ID).unwrap(),
-                name: application_name(),
-                desired_runtime_state: desired_state,
-                active_deployment_id: Some(DeploymentId::new(DEPLOYMENT_ID).unwrap()),
-            },
-            exposure,
-        },
-        persisted: PersistedState {
-            blocking_deployment: None,
-            active: Some(ActiveRuntime {
-                deployment: deployment(),
-                release: release(),
-                runtime: Some(runtime()),
-            }),
-            specification: Some(specification()),
-        },
-    }
-}
-
-fn observation(
-    recorded_container: ContainerObservation,
-    named_container: NamedContainerObservation,
-    quadlet_source: QuadletSourceObservation,
-    systemd_unit: SystemdUnitObservation,
-    caddy_fragment: CaddyFragmentObservation,
-) -> ReconciliationObservation {
-    ReconciliationObservation {
-        recorded_container,
-        named_container,
-        quadlet_source,
-        systemd_unit,
-        caddy_fragment,
-    }
-}
-
-fn everything_missing() -> ReconciliationObservation {
-    observation(
-        ContainerObservation::missing(),
-        NamedContainerObservation::Missing,
-        QuadletSourceObservation::Missing,
-        SystemdUnitObservation::Missing,
-        CaddyFragmentObservation::Missing,
+fn named_present(container_observation: ContainerObservation) -> NamedContainerObservation {
+    let artifact = release().artifact;
+    recreated_container(
+        format!("/pneuma-app-{DEPLOYMENT_ID}"),
+        artifact.reference().to_owned(),
+        Some("app".to_owned()),
+        Some(artifact.digest().to_owned()),
+        container_observation,
     )
-}
-
-fn expectations(canonical_route_fragment: Option<String>) -> ReconciliationExpectations {
-    ReconciliationExpectations {
-        container_name: format!("pneuma-app-{DEPLOYMENT_ID}"),
-        canonical_quadlet_contents: CANONICAL_UNIT.to_owned(),
-        canonical_route_fragment,
-    }
 }
 
 fn recreated_container(
@@ -175,15 +148,42 @@ fn recreated_container(
     }
 }
 
-fn named_present(container_observation: ContainerObservation) -> NamedContainerObservation {
-    let artifact = release().artifact;
-    recreated_container(
-        format!("/pneuma-app-{DEPLOYMENT_ID}"),
-        artifact.reference().to_owned(),
-        Some("app".to_owned()),
-        Some(artifact.digest().to_owned()),
-        container_observation,
+fn everything_missing() -> ReconciliationObservation {
+    observation(
+        ContainerObservation::missing(),
+        NamedContainerObservation::Missing,
+        QuadletSourceObservation::Missing,
+        SystemdUnitObservation::Missing,
+        CaddyFragmentObservation::Missing,
     )
+}
+
+fn observation(
+    recorded_container: ContainerObservation,
+    named_container: NamedContainerObservation,
+    quadlet_source: QuadletSourceObservation,
+    systemd_unit: SystemdUnitObservation,
+    caddy_fragment: CaddyFragmentObservation,
+) -> ReconciliationObservation {
+    ReconciliationObservation {
+        recorded_container,
+        named_container,
+        quadlet_source,
+        systemd_unit,
+        caddy_fragment,
+    }
+}
+
+fn socket_addr() -> SocketAddr {
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 30000)
+}
+
+fn expectations(canonical_route_fragment: Option<String>) -> ReconciliationExpectations {
+    ReconciliationExpectations {
+        container_name: format!("pneuma-app-{DEPLOYMENT_ID}"),
+        canonical_quadlet_contents: CANONICAL_UNIT.to_owned(),
+        canonical_route_fragment,
+    }
 }
 
 fn quadlet(contents: &str) -> QuadletSourceObservation {

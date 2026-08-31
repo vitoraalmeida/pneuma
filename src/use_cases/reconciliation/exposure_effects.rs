@@ -76,6 +76,90 @@ pub(crate) fn remove_internal_route(
     Ok(ReconciliationResult::ExposureRepaired)
 }
 
+fn reserve_exposure(
+    connection: &Connection,
+    application_id: &ApplicationId,
+    visibility: Visibility,
+    state: ExposureMaterializationState,
+) -> Result<(), ReconciliationReadError> {
+    let outcome = match visibility {
+        Visibility::Public => {
+            exposure_store::begin_public_exposure_reconciliation(connection, application_id, state)
+        }
+        Visibility::Internal => exposure_store::begin_internal_exposure_reconciliation(
+            connection,
+            application_id,
+            state,
+        ),
+    }
+    .map_err(|source| ReconciliationReadError::Exposure { source })?;
+    if outcome == PersistenceOutcome::Stale {
+        return Err(ReconciliationReadError::NotConverged {
+            reason: "exposure changed before reconciliation could reserve it".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+// Persists why an exposure change ended abnormally and returns the matching
+// terminal reconciliation result; a lost reservation refuses to converge.
+fn record_exposure_failure(
+    connection: &Connection,
+    application_id: &ApplicationId,
+    visibility: Visibility,
+    expected_state: ExposureMaterializationState,
+    code: &str,
+    message: &str,
+    outcome: ExposureOutcome,
+) -> Result<ReconciliationResult, ReconciliationReadError> {
+    let diagnostic = ExposureDiagnostic::new(code, message).map_err(|_| {
+        ReconciliationReadError::NotConverged {
+            reason: "reconciliation produced an invalid exposure diagnostic".to_owned(),
+        }
+    })?;
+    let recorded = exposure_store::record_reconciliation_exposure_failure(
+        connection,
+        application_id,
+        visibility,
+        expected_state,
+        outcome.state(),
+        &diagnostic,
+    )
+    .map_err(|source| ReconciliationReadError::Exposure { source })?;
+    if recorded == PersistenceOutcome::Stale {
+        return Err(ReconciliationReadError::NotConverged {
+            reason: "exposure changed before reconciliation failure could be recorded".to_owned(),
+        });
+    }
+    Ok(match outcome {
+        ExposureOutcome::Diverged => ReconciliationResult::Diverged {
+            reason: message.to_owned(),
+        },
+        ExposureOutcome::Failed => ReconciliationResult::Failed {
+            reason: message.to_owned(),
+        },
+    })
+}
+
+// A failed adapter recovery leaves host state outside every persisted outcome;
+// a recovered one ends the change as a plain recorded failure.
+fn recovery_outcome(recovery_failed: bool) -> ExposureOutcome {
+    if recovery_failed {
+        ExposureOutcome::Diverged
+    } else {
+        ExposureOutcome::Failed
+    }
+}
+
+// A compensating restore either reinstates the recorded prior route (a clean
+// failure) or leaves host state no persisted outcome can describe (divergence).
+fn restoration_outcome(restored: Result<(), CaddyRecoveryError>) -> ExposureOutcome {
+    match restored {
+        Ok(()) => ExposureOutcome::Failed,
+        Err(_) => ExposureOutcome::Diverged,
+    }
+}
+
 // Materializes the canonical public route, verifies external health, then persists confirmation.
 //
 // Stages: prepare and reserve the exposure snapshot, apply the canonical Caddy
@@ -256,88 +340,4 @@ pub(crate) fn record_public_exposure_failure(
         failure.kind.message(),
         ExposureOutcome::Failed,
     )
-}
-
-fn reserve_exposure(
-    connection: &Connection,
-    application_id: &ApplicationId,
-    visibility: Visibility,
-    state: ExposureMaterializationState,
-) -> Result<(), ReconciliationReadError> {
-    let outcome = match visibility {
-        Visibility::Public => {
-            exposure_store::begin_public_exposure_reconciliation(connection, application_id, state)
-        }
-        Visibility::Internal => exposure_store::begin_internal_exposure_reconciliation(
-            connection,
-            application_id,
-            state,
-        ),
-    }
-    .map_err(|source| ReconciliationReadError::Exposure { source })?;
-    if outcome == PersistenceOutcome::Stale {
-        return Err(ReconciliationReadError::NotConverged {
-            reason: "exposure changed before reconciliation could reserve it".to_owned(),
-        });
-    }
-    Ok(())
-}
-
-// A failed adapter recovery leaves host state outside every persisted outcome;
-// a recovered one ends the change as a plain recorded failure.
-fn recovery_outcome(recovery_failed: bool) -> ExposureOutcome {
-    if recovery_failed {
-        ExposureOutcome::Diverged
-    } else {
-        ExposureOutcome::Failed
-    }
-}
-
-// A compensating restore either reinstates the recorded prior route (a clean
-// failure) or leaves host state no persisted outcome can describe (divergence).
-fn restoration_outcome(restored: Result<(), CaddyRecoveryError>) -> ExposureOutcome {
-    match restored {
-        Ok(()) => ExposureOutcome::Failed,
-        Err(_) => ExposureOutcome::Diverged,
-    }
-}
-
-// Persists why an exposure change ended abnormally and returns the matching
-// terminal reconciliation result; a lost reservation refuses to converge.
-fn record_exposure_failure(
-    connection: &Connection,
-    application_id: &ApplicationId,
-    visibility: Visibility,
-    expected_state: ExposureMaterializationState,
-    code: &str,
-    message: &str,
-    outcome: ExposureOutcome,
-) -> Result<ReconciliationResult, ReconciliationReadError> {
-    let diagnostic = ExposureDiagnostic::new(code, message).map_err(|_| {
-        ReconciliationReadError::NotConverged {
-            reason: "reconciliation produced an invalid exposure diagnostic".to_owned(),
-        }
-    })?;
-    let recorded = exposure_store::record_reconciliation_exposure_failure(
-        connection,
-        application_id,
-        visibility,
-        expected_state,
-        outcome.state(),
-        &diagnostic,
-    )
-    .map_err(|source| ReconciliationReadError::Exposure { source })?;
-    if recorded == PersistenceOutcome::Stale {
-        return Err(ReconciliationReadError::NotConverged {
-            reason: "exposure changed before reconciliation failure could be recorded".to_owned(),
-        });
-    }
-    Ok(match outcome {
-        ExposureOutcome::Diverged => ReconciliationResult::Diverged {
-            reason: message.to_owned(),
-        },
-        ExposureOutcome::Failed => ReconciliationResult::Failed {
-            reason: message.to_owned(),
-        },
-    })
 }

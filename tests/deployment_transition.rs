@@ -67,6 +67,41 @@ fn advances_in_order_through_internal_verification() {
     assert_eq!(error.stage, DeploymentStatus::Verifying);
 }
 
+fn pending_deployment() -> (rusqlite::Connection, DeploymentId, ApplicationId) {
+    let mut connection = database::open(Path::new(":memory:")).unwrap();
+    let application = import_application(
+        &mut connection,
+        &fixture_path("valid"),
+        None,
+        "https://example.test/app.git",
+        None,
+    )
+    .unwrap();
+    let release = create_release(&mut connection, &application.id, &artifact('a')).unwrap();
+    let deployment = create_deployment(
+        &mut connection,
+        &application.id,
+        &release.id,
+        DeploymentType::Deploy,
+    )
+    .unwrap();
+    (connection, deployment.id, application.id)
+}
+
+fn fixture_path(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
+
+fn artifact(character: char) -> OciArtifact {
+    OciArtifact::new(
+        "localhost/test",
+        &format!("sha256:{}", character.to_string().repeat(64)),
+    )
+    .unwrap()
+}
+
 #[test]
 fn advances_through_public_verification_and_can_fail_there() {
     let (mut connection, deployment_id, _) = pending_deployment();
@@ -235,39 +270,4 @@ fn rejects_incomplete_failure_details_without_changing_state() {
         advance_deployment(&connection, &deployment_id, DeploymentEvent::Start).unwrap(),
         DeploymentStatus::Starting
     );
-}
-
-fn pending_deployment() -> (rusqlite::Connection, DeploymentId, ApplicationId) {
-    let mut connection = database::open(Path::new(":memory:")).unwrap();
-    let application = import_application(
-        &mut connection,
-        &fixture_path("valid"),
-        None,
-        "https://example.test/app.git",
-        None,
-    )
-    .unwrap();
-    let release = create_release(&mut connection, &application.id, &artifact('a')).unwrap();
-    let deployment = create_deployment(
-        &mut connection,
-        &application.id,
-        &release.id,
-        DeploymentType::Deploy,
-    )
-    .unwrap();
-    (connection, deployment.id, application.id)
-}
-
-fn fixture_path(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name)
-}
-
-fn artifact(character: char) -> OciArtifact {
-    OciArtifact::new(
-        "localhost/test",
-        &format!("sha256:{}", character.to_string().repeat(64)),
-    )
-    .unwrap()
 }

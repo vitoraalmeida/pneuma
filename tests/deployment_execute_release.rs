@@ -984,10 +984,6 @@ impl DeploymentEnvironment {
         Self::from_fixture("another", "another-site")
     }
 
-    fn public() -> Self {
-        Self::from_fixture("valid", "personal-site")
-    }
-
     fn from_fixture(fixture: &str, application_name: &str) -> Self {
         let root = env::temp_dir().join(format!(
             "pneuma-deploy-release-{}-{}",
@@ -1044,18 +1040,8 @@ impl DeploymentEnvironment {
         }
     }
 
-    fn import(&self) -> Output {
-        let repository_url = format!("file://{}", self.repository_path.display());
-        Command::new(env!("CARGO_BIN_EXE_pneuma"))
-            .env("PNEUMA_DATABASE_PATH", &self.database_path)
-            .env("PNEUMA_WORKSPACE_PATH", &self.workspace_path)
-            .args([
-                OsStr::new("app"),
-                OsStr::new("import"),
-                OsStr::new(&repository_url),
-            ])
-            .output()
-            .unwrap()
+    fn public() -> Self {
+        Self::from_fixture("valid", "personal-site")
     }
 
     fn deploy(&self, port: u16, verbose: bool) -> Output {
@@ -1071,10 +1057,6 @@ impl DeploymentEnvironment {
         self.deploy_with_options(port, verbose, external_status, false)
     }
 
-    fn deploy_with_start_failure(&self, port: u16) -> Output {
-        self.deploy_with_options(port, false, 200, true)
-    }
-
     fn deploy_with_options(
         &self,
         port: u16,
@@ -1085,22 +1067,6 @@ impl DeploymentEnvironment {
         self.deploy_command(port, verbose, external_status, systemctl_start_failure)
             .output()
             .unwrap()
-    }
-
-    fn deploy_gated_with_curl_delay(
-        &self,
-        port: u16,
-        gate_directory: &Path,
-        curl_delay_seconds: &str,
-    ) -> Child {
-        let mut command = self.deploy_command(port, false, 200, false);
-        command
-            .env("PNEUMA_TEST_GATE_DIRECTORY", gate_directory)
-            .env("PNEUMA_FAKE_CURL_DELAY", curl_delay_seconds)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        command.spawn().unwrap()
     }
 
     fn deploy_command(
@@ -1159,6 +1125,40 @@ impl DeploymentEnvironment {
             &reference,
         ]);
         command
+    }
+
+    fn deploy_with_start_failure(&self, port: u16) -> Output {
+        self.deploy_with_options(port, false, 200, true)
+    }
+
+    fn deploy_gated_with_curl_delay(
+        &self,
+        port: u16,
+        gate_directory: &Path,
+        curl_delay_seconds: &str,
+    ) -> Child {
+        let mut command = self.deploy_command(port, false, 200, false);
+        command
+            .env("PNEUMA_TEST_GATE_DIRECTORY", gate_directory)
+            .env("PNEUMA_FAKE_CURL_DELAY", curl_delay_seconds)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        command.spawn().unwrap()
+    }
+
+    fn import(&self) -> Output {
+        let repository_url = format!("file://{}", self.repository_path.display());
+        Command::new(env!("CARGO_BIN_EXE_pneuma"))
+            .env("PNEUMA_DATABASE_PATH", &self.database_path)
+            .env("PNEUMA_WORKSPACE_PATH", &self.workspace_path)
+            .args([
+                OsStr::new("app"),
+                OsStr::new("import"),
+                OsStr::new(&repository_url),
+            ])
+            .output()
+            .unwrap()
     }
 
     fn deploy_with_different_digest(&self, port: u16, digest_char: char) -> Output {
@@ -1273,6 +1273,15 @@ fn initialize_repository(repository_path: &Path) {
     );
 }
 
+fn assert_command_succeeded(output: &Output) {
+    assert!(
+        output.status.success(),
+        "command failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 fn git(repository_path: &Path, arguments: &[&str]) -> String {
     let output = Command::new("git")
         .arg("-C")
@@ -1282,6 +1291,61 @@ fn git(repository_path: &Path, arguments: &[&str]) -> String {
         .unwrap();
     assert_command_succeeded(&output);
     String::from_utf8(output.stdout).unwrap()
+}
+
+fn respond_until_timeout(listener: &TcpListener, status: u16) {
+    listener.set_nonblocking(true).unwrap();
+    let timeout = Duration::from_secs(2);
+    let start = std::time::Instant::now();
+    loop {
+        match listener.accept() {
+            Ok((mut stream, _)) => {
+                stream.set_nonblocking(false).unwrap();
+                read_request(&mut stream);
+                let response = format!("HTTP/1.1 {status} Test\r\nContent-Length: 0\r\n\r\n");
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                if start.elapsed() > timeout {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(_) => break,
+        }
+    }
+}
+
+fn read_request(stream: &mut TcpStream) {
+    let mut request = Vec::new();
+    while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+        let mut buffer = [0; 1024];
+        let bytes_read = stream.read(&mut buffer).unwrap();
+        assert_ne!(bytes_read, 0);
+        request.extend_from_slice(&buffer[..bytes_read]);
+    }
+}
+
+fn wait_for_first_file(directory: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if count_directory_entries(directory) > 0 {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for a file in {}",
+            directory.display()
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn count_directory_entries(directory: &Path) -> usize {
+    fs::read_dir(directory)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .count()
 }
 
 fn install_fake_podman(fake_bin: &Path) {
@@ -1460,39 +1524,6 @@ fn executable_path(fake_bin: &Path) -> std::ffi::OsString {
         .unwrap()
 }
 
-fn respond_until_timeout(listener: &TcpListener, status: u16) {
-    listener.set_nonblocking(true).unwrap();
-    let timeout = Duration::from_secs(2);
-    let start = std::time::Instant::now();
-    loop {
-        match listener.accept() {
-            Ok((mut stream, _)) => {
-                stream.set_nonblocking(false).unwrap();
-                read_request(&mut stream);
-                let response = format!("HTTP/1.1 {status} Test\r\nContent-Length: 0\r\n\r\n");
-                stream.write_all(response.as_bytes()).unwrap();
-            }
-            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                if start.elapsed() > timeout {
-                    break;
-                }
-                thread::sleep(Duration::from_millis(10));
-            }
-            Err(_) => break,
-        }
-    }
-}
-
-fn read_request(stream: &mut TcpStream) {
-    let mut request = Vec::new();
-    while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
-        let mut buffer = [0; 1024];
-        let bytes_read = stream.read(&mut buffer).unwrap();
-        assert_ne!(bytes_read, 0);
-        request.extend_from_slice(&buffer[..bytes_read]);
-    }
-}
-
 fn fixture_path(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
@@ -1518,21 +1549,6 @@ fn wait_for_path(path: &Path) {
     }
 }
 
-fn wait_for_first_file(directory: &Path) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        if count_directory_entries(directory) > 0 {
-            return;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "timed out waiting for a file in {}",
-            directory.display()
-        );
-        thread::sleep(Duration::from_millis(20));
-    }
-}
-
 fn wait_for_child(child: &mut Child) -> ExitStatus {
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
@@ -1545,13 +1561,6 @@ fn wait_for_child(child: &mut Child) -> ExitStatus {
         );
         thread::sleep(Duration::from_millis(50));
     }
-}
-
-fn count_directory_entries(directory: &Path) -> usize {
-    fs::read_dir(directory)
-        .unwrap()
-        .filter_map(|entry| entry.ok())
-        .count()
 }
 
 // Verifies the centralized finalizer released every retained candidate resource.
@@ -1597,15 +1606,6 @@ fn assert_candidate_resources_released(
     assert_eq!(
         runtime_state, "missing",
         "rejected candidate runtime must be marked missing"
-    );
-}
-
-fn assert_command_succeeded(output: &Output) {
-    assert!(
-        output.status.success(),
-        "command failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
     );
 }
 

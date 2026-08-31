@@ -197,6 +197,33 @@ impl TestRepository {
         repository
     }
 
+    fn git(&self, arguments: &[&str]) -> String {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&self.path)
+            .args(arguments)
+            .output()
+            .unwrap();
+        assert_git_succeeded(&output);
+        String::from_utf8(output.stdout).unwrap()
+    }
+
+    fn commit_file(&self, contents: &str, message: &str) -> String {
+        fs::write(self.path.join("site.txt"), contents).unwrap();
+        self.git(&["add", "site.txt"]);
+        self.git(&[
+            "-c",
+            "user.name=Pneuma Tests",
+            "-c",
+            "user.email=pneuma@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            message,
+        ]);
+        self.head_commit()
+    }
+
     fn head_commit(&self) -> String {
         self.git(&["rev-parse", "HEAD"]).trim().to_owned()
     }
@@ -221,33 +248,6 @@ impl TestRepository {
 
     fn create_branch(&self, branch: &str) {
         self.git(&["branch", branch]);
-    }
-
-    fn commit_file(&self, contents: &str, message: &str) -> String {
-        fs::write(self.path.join("site.txt"), contents).unwrap();
-        self.git(&["add", "site.txt"]);
-        self.git(&[
-            "-c",
-            "user.name=Pneuma Tests",
-            "-c",
-            "user.email=pneuma@example.invalid",
-            "commit",
-            "--quiet",
-            "-m",
-            message,
-        ]);
-        self.head_commit()
-    }
-
-    fn git(&self, arguments: &[&str]) -> String {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(&self.path)
-            .args(arguments)
-            .output()
-            .unwrap();
-        assert_git_succeeded(&output);
-        String::from_utf8(output.stdout).unwrap()
     }
 }
 

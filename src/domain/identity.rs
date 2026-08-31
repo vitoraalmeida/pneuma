@@ -131,15 +131,15 @@ mod tests {
         ApplicationId, DeploymentId, ReleaseId, RuntimeInstanceId, SystemId, is_valid_catalog_name,
     };
 
-    fn valid_id(seed: u8) -> String {
-        format!("{seed:032x}")
-    }
-
     #[test]
     fn accepts_the_current_store_generated_format() {
         for value in [valid_id(0), valid_id(255), "a".repeat(32)] {
             assert!(ApplicationId::new(&value).is_ok(), "{value:?}");
         }
+    }
+
+    fn valid_id(seed: u8) -> String {
+        format!("{seed:032x}")
     }
 
     #[test]

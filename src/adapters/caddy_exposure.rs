@@ -396,24 +396,17 @@ impl CaddyRecoveryError {
     }
 }
 
-// Ensures the application identity is safe to embed in managed Caddy file names.
-fn is_safe_fragment_stem(application_id: &str) -> bool {
-    application_id.len() == 32 && application_id.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
-// Reads the prior fragment while treating its absence as the expected first-materialization state.
-fn read_previous_fragment(
+// Restores the prior fragment and reloads it so filesystem and running Caddy state converge together.
+fn recover_previous_configuration(
     fragment_path: &Path,
-) -> Result<Option<Vec<u8>>, MaterializeCaddyFragmentError> {
-    match fs::read(fragment_path) {
-        Ok(contents) => Ok(Some(contents)),
-        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(source) => Err(MaterializeCaddyFragmentError::Filesystem {
-            action: CaddyFilesystemAction::ReadPreviousFragment,
-            path: fragment_path.to_path_buf(),
-            source,
-        }),
-    }
+    temporary_path: &Path,
+    previous_fragment: Option<&[u8]>,
+    caddyfile_path: &Path,
+) -> Result<(), CaddyRecoveryError> {
+    restore_fragment(fragment_path, temporary_path, previous_fragment)?;
+    caddy_command("reload", caddyfile_path)
+        .map_err(|failure| CaddyRecoveryError::Reload { failure })?;
+    Ok(())
 }
 
 // Restores prior bytes atomically or removes a fragment that did not previously exist.
@@ -452,17 +445,24 @@ fn restore_fragment(
     Ok(())
 }
 
-// Restores the prior fragment and reloads it so filesystem and running Caddy state converge together.
-fn recover_previous_configuration(
+// Ensures the application identity is safe to embed in managed Caddy file names.
+fn is_safe_fragment_stem(application_id: &str) -> bool {
+    application_id.len() == 32 && application_id.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+// Reads the prior fragment while treating its absence as the expected first-materialization state.
+fn read_previous_fragment(
     fragment_path: &Path,
-    temporary_path: &Path,
-    previous_fragment: Option<&[u8]>,
-    caddyfile_path: &Path,
-) -> Result<(), CaddyRecoveryError> {
-    restore_fragment(fragment_path, temporary_path, previous_fragment)?;
-    caddy_command("reload", caddyfile_path)
-        .map_err(|failure| CaddyRecoveryError::Reload { failure })?;
-    Ok(())
+) -> Result<Option<Vec<u8>>, MaterializeCaddyFragmentError> {
+    match fs::read(fragment_path) {
+        Ok(contents) => Ok(Some(contents)),
+        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(MaterializeCaddyFragmentError::Filesystem {
+            action: CaddyFilesystemAction::ReadPreviousFragment,
+            path: fragment_path.to_path_buf(),
+            source,
+        }),
+    }
 }
 
 // Preserves successful Caddy diagnostics for callers that need materialization evidence.

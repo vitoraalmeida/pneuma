@@ -121,6 +121,38 @@ pub(crate) fn begin_public_exposure(
     })
 }
 
+// Loads the promotion target so later checks can reject incompatible state before promotion writes.
+fn load_public_target(
+    connection: &Connection,
+    runtime_id: &RuntimeInstanceId,
+) -> Result<PromotionTarget, PromotePublicCandidateError> {
+    deployment_store::load_promotion_target(connection, runtime_id)?.ok_or_else(|| {
+        PromotePublicCandidateError::RuntimeNotFound {
+            runtime_id: runtime_id.to_string(),
+        }
+    })
+}
+
+// Rejects runtimes whose declared or observed state forbids a public promotion write.
+fn ensure_public_runtime_promotable(
+    target: &PromotionTarget,
+) -> Result<(), PromotePublicCandidateError> {
+    target.validate_promotion_candidate().map_err(|rejection| {
+        PromotePublicCandidateError::InvalidRuntime {
+            runtime_id: target.runtime_id.to_string(),
+            reason: match rejection {
+                PromotionCandidateRejection::NotStarting { actual } => {
+                    format!("state is `{actual}`")
+                }
+                PromotionCandidateRejection::NotRunning { actual } => {
+                    format!("observed state is `{actual}`")
+                }
+                PromotionCandidateRejection::Removed => "runtime has been removed".to_owned(),
+            },
+        }
+    })
+}
+
 // Records whether failed public-route compensation left a safe or diverged state.
 pub(crate) fn record_public_exposure_failure(
     connection: &Connection,
@@ -219,36 +251,4 @@ fn changed_during_promotion(runtime_id: &RuntimeInstanceId) -> PromotePublicCand
         runtime_id: runtime_id.to_string(),
         reason: "state changed during promotion".to_owned(),
     }
-}
-
-// Rejects runtimes whose declared or observed state forbids a public promotion write.
-fn ensure_public_runtime_promotable(
-    target: &PromotionTarget,
-) -> Result<(), PromotePublicCandidateError> {
-    target.validate_promotion_candidate().map_err(|rejection| {
-        PromotePublicCandidateError::InvalidRuntime {
-            runtime_id: target.runtime_id.to_string(),
-            reason: match rejection {
-                PromotionCandidateRejection::NotStarting { actual } => {
-                    format!("state is `{actual}`")
-                }
-                PromotionCandidateRejection::NotRunning { actual } => {
-                    format!("observed state is `{actual}`")
-                }
-                PromotionCandidateRejection::Removed => "runtime has been removed".to_owned(),
-            },
-        }
-    })
-}
-
-// Loads the promotion target so later checks can reject incompatible state before promotion writes.
-fn load_public_target(
-    connection: &Connection,
-    runtime_id: &RuntimeInstanceId,
-) -> Result<PromotionTarget, PromotePublicCandidateError> {
-    deployment_store::load_promotion_target(connection, runtime_id)?.ok_or_else(|| {
-        PromotePublicCandidateError::RuntimeNotFound {
-            runtime_id: runtime_id.to_string(),
-        }
-    })
 }

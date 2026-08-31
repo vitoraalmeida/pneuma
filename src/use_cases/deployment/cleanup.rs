@@ -105,28 +105,6 @@ pub(crate) fn load_previous_runtime(
     runtime_store::load_previous_runtime(connection, application_id, candidate_runtime_id)
 }
 
-// Proves a container is gone before any caller confirms its destruction: absence is
-// observed first (Quadlet's ExecStop removes the container itself), a container still
-// present is force-removed, and absence is re-observed so a removal that Podman did
-// not actually apply is never treated as a completed destruction.
-fn prove_container_removed(container_id: &ContainerId) -> Result<(), CandidateCleanupError> {
-    if !container_exists(container_id)
-        .map_err(|source| CandidateCleanupError::RemoveContainer { source })?
-    {
-        return Ok(());
-    }
-    remove_container(container_id.as_str())
-        .map_err(|source| CandidateCleanupError::RemoveContainer { source })?;
-    if container_exists(container_id)
-        .map_err(|source| CandidateCleanupError::RemoveContainer { source })?
-    {
-        return Err(CandidateCleanupError::ContainerNotRemoved {
-            container_id: container_id.to_string(),
-        });
-    }
-    Ok(())
-}
-
 // Retires the prior runtime only after promotion; every external destruction is proven
 // by observation before retirement is recorded, and any failure remains a warning that
 // does not undo the promotion.
@@ -172,6 +150,28 @@ pub(crate) fn retire_previous_runtime(
     }
 }
 
+// Proves a container is gone before any caller confirms its destruction: absence is
+// observed first (Quadlet's ExecStop removes the container itself), a container still
+// present is force-removed, and absence is re-observed so a removal that Podman did
+// not actually apply is never treated as a completed destruction.
+fn prove_container_removed(container_id: &ContainerId) -> Result<(), CandidateCleanupError> {
+    if !container_exists(container_id)
+        .map_err(|source| CandidateCleanupError::RemoveContainer { source })?
+    {
+        return Ok(());
+    }
+    remove_container(container_id.as_str())
+        .map_err(|source| CandidateCleanupError::RemoveContainer { source })?;
+    if container_exists(container_id)
+        .map_err(|source| CandidateCleanupError::RemoveContainer { source })?
+    {
+        return Err(CandidateCleanupError::ContainerNotRemoved {
+            container_id: container_id.to_string(),
+        });
+    }
+    Ok(())
+}
+
 // Compensates failed candidates while refusing to remove a runtime that may already be active.
 pub(crate) fn cleanup_failed_candidate(
     connection: &Connection,
@@ -214,14 +214,6 @@ pub(crate) fn cleanup_failed_candidate(
 mod tests {
     use super::{CandidateResources, ContainerId, RuntimeInstanceId};
 
-    fn container_id() -> ContainerId {
-        ContainerId::from("abc123")
-    }
-
-    fn runtime_id() -> RuntimeInstanceId {
-        RuntimeInstanceId::new("11111111111111111111111111111111").unwrap()
-    }
-
     #[test]
     fn empty_resources_need_no_cleanup() {
         assert!(!CandidateResources::empty().needs_cleanup());
@@ -239,5 +231,13 @@ mod tests {
             CandidateResources::with_container_and_runtime(&container_id(), &runtime_id())
                 .needs_cleanup()
         );
+    }
+
+    fn container_id() -> ContainerId {
+        ContainerId::from("abc123")
+    }
+
+    fn runtime_id() -> RuntimeInstanceId {
+        RuntimeInstanceId::new("11111111111111111111111111111111").unwrap()
     }
 }

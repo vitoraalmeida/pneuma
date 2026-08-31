@@ -107,6 +107,19 @@ pub(crate) fn run_deploy_oci(
     Ok(())
 }
 
+fn public_deployment_configuration() -> PublicDeploymentConfiguration {
+    PublicDeploymentConfiguration {
+        managed_caddy_directory: configured_path(
+            CADDY_MANAGED_PATH_ENVIRONMENT_VARIABLE,
+            DEFAULT_CADDY_MANAGED_PATH,
+        ),
+        caddyfile_path: configured_path(
+            CADDYFILE_PATH_ENVIRONMENT_VARIABLE,
+            DEFAULT_CADDYFILE_PATH,
+        ),
+    }
+}
+
 // Resolves and deploys the requested branch's published OCI artifact with host-configured paths.
 pub(crate) fn run_deploy_branch(
     connection: &mut Connection,
@@ -178,17 +191,4 @@ pub(crate) fn run_rollback(
         output::rollback_result(&application.name, &rolled_back)
     );
     Ok(())
-}
-
-fn public_deployment_configuration() -> PublicDeploymentConfiguration {
-    PublicDeploymentConfiguration {
-        managed_caddy_directory: configured_path(
-            CADDY_MANAGED_PATH_ENVIRONMENT_VARIABLE,
-            DEFAULT_CADDY_MANAGED_PATH,
-        ),
-        caddyfile_path: configured_path(
-            CADDYFILE_PATH_ENVIRONMENT_VARIABLE,
-            DEFAULT_CADDYFILE_PATH,
-        ),
-    }
 }

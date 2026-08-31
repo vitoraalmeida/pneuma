@@ -141,10 +141,6 @@ pub struct InvalidCommitSha {
 mod tests {
     use super::{ApplicationSource, CommitSha, RelativeManifestPath, is_remote_git_location};
 
-    fn manifest_path() -> RelativeManifestPath {
-        RelativeManifestPath::new("deploy/pneuma.toml").expect("test path is valid")
-    }
-
     #[test]
     fn classifies_locations_by_transport_prefix() {
         assert!(is_remote_git_location(
@@ -175,6 +171,10 @@ mod tests {
         );
         assert_eq!(source.default_branch(), Some("main"));
         assert_eq!(source.manifest_path().as_str(), "deploy/pneuma.toml");
+    }
+
+    fn manifest_path() -> RelativeManifestPath {
+        RelativeManifestPath::new("deploy/pneuma.toml").expect("test path is valid")
     }
 
     #[test]

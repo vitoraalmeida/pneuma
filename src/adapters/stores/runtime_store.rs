@@ -92,6 +92,55 @@ pub(crate) fn load_active_successful_runtime(
         .optional()
 }
 
+// Maps persisted runtime identity and enforces the loopback-only endpoint invariant.
+fn map_runtime_instance(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeInstance> {
+    let state_text = row.get::<_, String>(4)?;
+    let removed_at = row.get::<_, Option<String>>(11)?;
+    let state = runtime_state_from_value(&state_text)
+        .ok_or_else(|| invalid_text_value(4, "runtime state", &state_text))?;
+    // Retirement is explicit removal evidence; it can never coexist with a live
+    // running state, matching the schema CHECK.
+    let retirement = match (state, removed_at) {
+        (RuntimeState::Running, Some(_)) => {
+            return Err(invalid_text_value(
+                11,
+                "running runtime with removed_at",
+                &state_text,
+            ));
+        }
+        (_, removed_at) => removed_at.map(|removed_at| RuntimeRetirement { removed_at }),
+    };
+    let observed_state_text = row.get::<_, String>(7)?;
+
+    Ok(RuntimeInstance {
+        id: entity_id(0, &row.get::<_, String>(0)?)?,
+        application_id: entity_id(1, &row.get::<_, String>(1)?)?,
+        deployment_id: entity_id(2, &row.get::<_, String>(2)?)?,
+        external_runtime_id: hydrate_container_id(3, &row.get::<_, String>(3)?)?,
+        state,
+        expected_endpoint: ExpectedRuntimeEndpoint::new(SocketAddr::from((
+            Ipv4Addr::LOCALHOST,
+            row.get::<_, u16>(5)?,
+        )))
+        .map_err(|error| invalid_text_value(5, "runtime endpoint", &error.to_string()))?,
+        container_port: ContainerPort::new(row.get::<_, u16>(6)?)
+            .map_err(|error| invalid_text_value(6, "runtime container port", &error.to_string()))?,
+        observed_state: observed_runtime_state_from_value(&observed_state_text),
+        observed_at: row.get(8)?,
+        exit_code: row.get(9)?,
+        observation_reason: row.get(10)?,
+        retirement,
+    })
+}
+
+// Hydrates a persisted container identity only when it satisfies the domain invariant.
+fn hydrate_container_id(column: usize, value: &str) -> rusqlite::Result<ContainerId> {
+    if !ContainerId::is_valid(value) {
+        return Err(invalid_text_value(column, "external runtime id", value));
+    }
+    Ok(ContainerId::from(value.to_owned()))
+}
+
 // Replaces an external container ID only when the logical runtime still has the expected ID.
 pub(crate) fn reconcile_external_runtime_id(
     connection: &Connection,
@@ -277,55 +326,6 @@ pub(crate) fn mark_starting_runtime_missing(
     Ok(outcome(updated))
 }
 
-// Maps persisted runtime identity and enforces the loopback-only endpoint invariant.
-fn map_runtime_instance(row: &rusqlite::Row<'_>) -> rusqlite::Result<RuntimeInstance> {
-    let state_text = row.get::<_, String>(4)?;
-    let removed_at = row.get::<_, Option<String>>(11)?;
-    let state = runtime_state_from_value(&state_text)
-        .ok_or_else(|| invalid_text_value(4, "runtime state", &state_text))?;
-    // Retirement is explicit removal evidence; it can never coexist with a live
-    // running state, matching the schema CHECK.
-    let retirement = match (state, removed_at) {
-        (RuntimeState::Running, Some(_)) => {
-            return Err(invalid_text_value(
-                11,
-                "running runtime with removed_at",
-                &state_text,
-            ));
-        }
-        (_, removed_at) => removed_at.map(|removed_at| RuntimeRetirement { removed_at }),
-    };
-    let observed_state_text = row.get::<_, String>(7)?;
-
-    Ok(RuntimeInstance {
-        id: entity_id(0, &row.get::<_, String>(0)?)?,
-        application_id: entity_id(1, &row.get::<_, String>(1)?)?,
-        deployment_id: entity_id(2, &row.get::<_, String>(2)?)?,
-        external_runtime_id: hydrate_container_id(3, &row.get::<_, String>(3)?)?,
-        state,
-        expected_endpoint: ExpectedRuntimeEndpoint::new(SocketAddr::from((
-            Ipv4Addr::LOCALHOST,
-            row.get::<_, u16>(5)?,
-        )))
-        .map_err(|error| invalid_text_value(5, "runtime endpoint", &error.to_string()))?,
-        container_port: ContainerPort::new(row.get::<_, u16>(6)?)
-            .map_err(|error| invalid_text_value(6, "runtime container port", &error.to_string()))?,
-        observed_state: observed_runtime_state_from_value(&observed_state_text),
-        observed_at: row.get(8)?,
-        exit_code: row.get(9)?,
-        observation_reason: row.get(10)?,
-        retirement,
-    })
-}
-
-// Hydrates a persisted container identity only when it satisfies the domain invariant.
-fn hydrate_container_id(column: usize, value: &str) -> rusqlite::Result<ContainerId> {
-    if !ContainerId::is_valid(value) {
-        return Err(invalid_text_value(column, "external runtime id", value));
-    }
-    Ok(ContainerId::from(value.to_owned()))
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -343,32 +343,6 @@ mod tests {
     const RUNTIME_ID: &str = "dddddddddddddddddddddddddddddddd";
     const OTHER_RUNTIME_ID: &str = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
     const SYSTEM_ID: &str = "ffffffffffffffffffffffffffffffff";
-
-    fn runtime_id() -> RuntimeInstanceId {
-        RuntimeInstanceId::new(RUNTIME_ID).unwrap()
-    }
-
-    fn seed_deployment_chain(connection: &rusqlite::Connection) {
-        connection
-            .execute_batch(&format!(
-                "INSERT INTO systems (id, name) VALUES ('{SYSTEM_ID}', 'team');
-                 INSERT INTO applications (
-                     id, system_id, name, repository_url, manifest_path, image_repository,
-                     container_port, health_check_path, health_check_expected_status,
-                     desired_runtime_state
-                 ) VALUES (
-                     '{APP_ID}', '{SYSTEM_ID}', 'app', 'https://example.test/app.git', 'pneuma.toml',
-                     'registry.example/app', 8080, '/healthz', 200, 'stopped');
-                 INSERT INTO releases (id, application_id, image_reference, created_at)
-                 VALUES ('{RELEASE_ID}', '{APP_ID}',
-                         'registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-                         'now');
-                 INSERT INTO deployments (
-                     id, application_id, release_id, type, status, requested_at
-                 ) VALUES ('{DEPLOYMENT_ID}', '{APP_ID}', '{RELEASE_ID}', 'deploy', 'starting', 'now');"
-            ))
-            .unwrap();
-    }
 
     #[test]
     fn loads_a_typed_runtime_state_and_rejects_invalid_persisted_text() {
@@ -402,6 +376,10 @@ mod tests {
             ),
             Err(rusqlite::Error::FromSqlConversionFailure(_, _, _))
         ));
+    }
+
+    fn runtime_id() -> RuntimeInstanceId {
+        RuntimeInstanceId::new(RUNTIME_ID).unwrap()
     }
 
     #[test]
@@ -572,5 +550,27 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("removed_at"));
+    }
+
+    fn seed_deployment_chain(connection: &rusqlite::Connection) {
+        connection
+            .execute_batch(&format!(
+                "INSERT INTO systems (id, name) VALUES ('{SYSTEM_ID}', 'team');
+                 INSERT INTO applications (
+                     id, system_id, name, repository_url, manifest_path, image_repository,
+                     container_port, health_check_path, health_check_expected_status,
+                     desired_runtime_state
+                 ) VALUES (
+                     '{APP_ID}', '{SYSTEM_ID}', 'app', 'https://example.test/app.git', 'pneuma.toml',
+                     'registry.example/app', 8080, '/healthz', 200, 'stopped');
+                 INSERT INTO releases (id, application_id, image_reference, created_at)
+                 VALUES ('{RELEASE_ID}', '{APP_ID}',
+                         'registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                         'now');
+                 INSERT INTO deployments (
+                     id, application_id, release_id, type, status, requested_at
+                 ) VALUES ('{DEPLOYMENT_ID}', '{APP_ID}', '{RELEASE_ID}', 'deploy', 'starting', 'now');"
+            ))
+            .unwrap();
     }
 }

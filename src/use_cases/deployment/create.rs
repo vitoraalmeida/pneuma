@@ -100,31 +100,6 @@ pub(crate) fn create_deployment_with_source_revision_while_locked(
     Ok(deployment)
 }
 
-// Atomically verifies deployment preconditions and records one pending deployment, preventing
-// concurrent active deployments for the same application.
-pub fn create_deployment_with_source_revision(
-    connection: &mut Connection,
-    application_id: &ApplicationId,
-    release_id: &ReleaseId,
-    deployment_type: DeploymentType,
-    source_revision: Option<&CommitSha>,
-) -> Result<Deployment, CreateDeploymentError> {
-    let Some(_lock) = ApplicationLock::try_acquire_for_connection(connection, application_id)
-        .map_err(|source| CreateDeploymentError::ApplicationLock { source })?
-    else {
-        return Err(CreateDeploymentError::ApplicationBusy {
-            application_id: application_id.to_string(),
-        });
-    };
-    create_deployment_with_source_revision_while_locked(
-        connection,
-        application_id,
-        release_id,
-        deployment_type,
-        source_revision,
-    )
-}
-
 fn create_deployment_in_transaction(
     transaction: &rusqlite::Transaction<'_>,
     application_id: &ApplicationId,
@@ -170,4 +145,29 @@ fn create_deployment_in_transaction(
     let deployment = deployment_store::load_deployment(transaction, &deployment_id)?;
 
     Ok(deployment)
+}
+
+// Atomically verifies deployment preconditions and records one pending deployment, preventing
+// concurrent active deployments for the same application.
+pub fn create_deployment_with_source_revision(
+    connection: &mut Connection,
+    application_id: &ApplicationId,
+    release_id: &ReleaseId,
+    deployment_type: DeploymentType,
+    source_revision: Option<&CommitSha>,
+) -> Result<Deployment, CreateDeploymentError> {
+    let Some(_lock) = ApplicationLock::try_acquire_for_connection(connection, application_id)
+        .map_err(|source| CreateDeploymentError::ApplicationLock { source })?
+    else {
+        return Err(CreateDeploymentError::ApplicationBusy {
+            application_id: application_id.to_string(),
+        });
+    };
+    create_deployment_with_source_revision_while_locked(
+        connection,
+        application_id,
+        release_id,
+        deployment_type,
+        source_revision,
+    )
 }

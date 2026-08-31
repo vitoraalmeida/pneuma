@@ -59,19 +59,6 @@ fn swap_recorded_container_id(
     })
 }
 
-// Returns the deployment specification every rematerialization verifies health against.
-fn required_deployment_specification(
-    input: &ReconciliationInput,
-) -> Result<&ApplicationDeploymentSpecification, ReconciliationReadError> {
-    input
-        .persisted
-        .specification
-        .as_ref()
-        .ok_or_else(|| ReconciliationReadError::NotConverged {
-            reason: "application has no persisted deployment specification".to_owned(),
-        })
-}
-
 // Rematerializes the decided runtime from persisted identity and confirms it before persisting.
 //
 // Stages: bring the unit up from persisted identity, prove that the started container
@@ -121,6 +108,19 @@ pub(crate) fn rematerialize_runtime(
         &container_id,
         "rematerialization could be confirmed",
     )
+}
+
+// Returns the deployment specification every rematerialization verifies health against.
+fn required_deployment_specification(
+    input: &ReconciliationInput,
+) -> Result<&ApplicationDeploymentSpecification, ReconciliationReadError> {
+    input
+        .persisted
+        .specification
+        .as_ref()
+        .ok_or_else(|| ReconciliationReadError::NotConverged {
+            reason: "application has no persisted deployment specification".to_owned(),
+        })
 }
 
 // Rewrites the Quadlet when the plan demands it and brings the unit up through systemd.
