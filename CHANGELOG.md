@@ -1,5 +1,40 @@
 # Changelog
 
+## v0.5.0 - Architecture Simplification (2026-08-31)
+
+### Changed
+
+- **Incompatible database reset.** The historical migration chain was replaced
+  by one exact baseline schema (`migrations/0001_current_schema.sql`). Pneuma
+  initializes empty databases atomically, reopens only the exact current
+  schema, and rejects every other schema as incompatible; existing v0.4
+  databases are not upgraded and must be recreated.
+- Every mutation of an existing Application holds one per-Application kernel
+  `flock`. Operation tokens, generations, and ownership bookkeeping were
+  removed; concurrent mutations surface as conflicts, and reconciliation
+  reports `Deferred` while a mutation is in progress.
+- Domain state is strict: `Application.system_id` is a required `SystemId`;
+  entity IDs validate the 32-character lowercase-hex format at generation and
+  hydration; source revisions are optional validated `CommitSha`s; failed
+  deployments carry complete typed failure evidence; legacy tolerances were
+  removed.
+- The database file is guarded by a database-wide `flock`: normal commands
+  hold it shared, restore holds it exclusively, and lock contention is a
+  conflict. Restore validates source integrity and the exact current schema
+  before touching the live database and keeps a pre-restore snapshot.
+- Retirement and failed-candidate cleanup record success only after observing
+  container absence; unproven removals surface as warnings or
+  `ContainerNotRemoved` divergence instead of silent success.
+- The local-checkout machinery was removed; the Git boundary is exactly
+  `clone_repository`, `resolve_branch`, and `cleanup_checkout`.
+
+### Documentation
+
+- Living documentation synchronized with the current architecture: a compact
+  durable-guarantee inventory, cross-cutting vocabulary, a canonical newcomer
+  reading path with task shortcuts, and module-level docs on the central
+  deployment modules.
+
 ## v0.4.3 — Disposable Regression Automation (2026-08-27)
 
 ### Added

@@ -135,7 +135,30 @@ automatic rollback after promotion.
   canonical `FailedExecution` failure carrier, one durable failure-code
   vocabulary in the domain, and table-driven CLI classification.
 
-## v0.5 - Observed State / Host Observation
+### v0.5 - Architecture Simplification
+
+**Status:** completed on 2026-08-31 (tagged and released).
+
+The obsolete compatibility, ownership, and migration machinery was replaced by
+the current smaller architecture. This release intentionally contains an
+incompatible database reset: existing v0.4 databases are rejected, not
+upgraded.
+
+- One baseline schema (`migrations/0001_current_schema.sql`) replaces the
+  historical migration chain; the runner initializes empty databases
+  atomically and rejects every other schema.
+- One per-Application kernel lock guards every existing-Application mutation;
+  operation tokens, generations, and ownership storage were removed, and
+  contention is caller-visible (`Deferred` for reconciliation).
+- Strict domain types: required `SystemId`, validated 32-hex entity IDs,
+  optional validated `CommitSha` source revisions, and complete typed failure
+  evidence.
+- A database-wide lock serializes normal access against restore; restore
+  accepts only exact-current, integrity-checked backups and keeps a
+  pre-restore snapshot.
+- Retirement records success only after observing container absence.
+
+## v0.6 - Observed State / Host Observation
 
 **Status:** planned; not started. No approved design yet.
 
@@ -166,17 +189,17 @@ the separation between:
   healthy/failed. `Unknown`, `Unobservable`, and partially observed results are
   legitimate outcomes so Pneuma never invents certainty.
 
-Result: after v0.5, manually killing a container or editing a unit must let
+Result: after v0.6, manually killing a container or editing a unit must let
 Pneuma report "the desired state is X, but I observed Y" before attempting any
 repair.
 
-## v0.6 - Recovery & Resilience
+## v0.7 - Recovery & Resilience
 
-**Status:** planned; depends on v0.5 observed state.
+**Status:** planned; depends on v0.6 observed state.
 
 Objective: turn reconciliation from "try to reach the expected state" into a
 mechanism that stays robust when something breaks during reconciliation itself.
-v0.5 answers "is the system divergent?"; v0.6 answers "can I recover this system
+v0.6 answers "is the system divergent?"; v0.7 answers "can I recover this system
 safely?".
 
 - [ ] Idempotent operations: repeating an operation must not corrupt state.
@@ -203,7 +226,7 @@ safely?".
 Result: intermediate events stop being the source of truth; current state
 becomes reconstructable.
 
-## v0.7 - Multi-Service Applications
+## v0.8 - Multi-Service Applications
 
 **Status:** planned.
 
@@ -227,12 +250,12 @@ managing systems of cooperating services rather than isolated containers.
 - [ ] Per-service reconciliation: an application can be divergent in one service
   while others are in sync; act on the smallest appropriate unit.
 
-## v0.8 - Workload Identity / mTLS
+## v0.9 - Workload Identity / mTLS
 
 **Status:** planned.
 
 Objective: give workloads a verifiable cryptographic identity so services can
-authenticate each other. v0.7 creates real relationships between services; v0.8
+authenticate each other. v0.8 creates real relationships between services; v0.9
 secures them.
 
 - [ ] Workload identity per service (conceptually
@@ -248,7 +271,7 @@ secures them.
 Result: a process is no longer trusted merely because it runs on the same host;
 it must prove which workload it is.
 
-## v0.9 - Resource Isolation
+## v0.10 - Resource Isolation
 
 **Status:** planned.
 
@@ -267,7 +290,7 @@ than an internal scheduler.
 - [ ] Resource-policy reconciliation: manual drift such as changing
   `MemoryMax=512M` to `MemoryMax=infinity` must be detectable.
 
-## v0.10 - Network Isolation
+## v0.11 - Network Isolation
 
 **Status:** planned.
 
@@ -281,7 +304,7 @@ to "communication must be explicitly allowed".
   services stay unexposed.
 - [ ] Simple egress classes initially (allow internet / deny internet / allow
   destinations) without an elaborate firewall DSL.
-- [ ] Integration with v0.8 identity: networking decides whether traffic may
+- [ ] Integration with v0.9 identity: networking decides whether traffic may
   reach a target, identity decides who is trying, mTLS proves it.
 
 Result: a compromised application loses automatic lateral movement on the host.
@@ -325,22 +348,25 @@ v0.4.2  basic reconciliation
 v0.4.3  disposable regression automation
    │
    ▼
-v0.5    Observed State            "what is really happening?"
+v0.5    Architecture Simplification "a smaller current architecture"
    │
    ▼
-v0.6    Recovery & Resilience     "can I return to a valid state?"
+v0.6    Observed State            "what is really happening?"
    │
    ▼
-v0.7    Multi-Service             "can I administer a system?"
+v0.7    Recovery & Resilience     "can I return to a valid state?"
    │
    ▼
-v0.8    Identity / mTLS           "who is each workload?"
+v0.8    Multi-Service             "can I administer a system?"
    │
    ▼
-v0.9    Resource Isolation        "how much may each workload consume?"
+v0.9    Identity / mTLS           "who is each workload?"
    │
    ▼
-v0.10   Network Isolation         "who may talk to whom?"
+v0.10    Resource Isolation        "how much may each workload consume?"
+   │
+   ▼
+v0.11   Network Isolation         "who may talk to whom?"
    │
    ▼
 v1.0    Hardening                 "can I trust this operationally?"

@@ -2,7 +2,7 @@
 
 **Status:** planning reminder, not an execution tracker.
 
-**Target:** v0.5 - Observed State / Host Observation.
+**Target:** v0.6 - Observed State / Host Observation.
 
 Do not implement this work until an approved design exists and this tracker is
 promoted to `current-iteration.md`.
@@ -32,9 +32,9 @@ and observed state (what actually exists now).
 ## Boundaries
 
 - Repair/recovery robustness (idempotent operations, crash recovery, retry
-  policy) belongs to v0.6; v0.5 only observes and reports divergence.
-- Multi-service applications belong to v0.7.
+  policy) belongs to v0.7; v0.6 only observes and reports divergence.
+- Multi-service applications belong to v0.8.
 - No new product features beyond this scope before an approved design defines
   entities, persistence, runtime behavior, and acceptance scenarios.
 
-See [`../roadmap.md`](../roadmap.md) for the authoritative v0.5 scope.
+See [`../roadmap.md`](../roadmap.md) for the authoritative v0.6 scope.

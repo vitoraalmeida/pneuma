@@ -208,7 +208,7 @@ history; external systems own their observable state.
 | Materialization | Creating or confirming external runtime or route resources from persisted intent. |
 | Promotion | Transactionally recording a healthy Deployment and runtime as active. |
 | Retirement | Intentional removal of a prior or failed runtime; it records `removed_at`. |
-| Reconciliation | Implemented on-demand convergence pass (`pneuma reconcile <application>`) that compares desired, persisted, and observed facts and executes the decided repair or records divergence. v0.5 will broaden it with explicit host observation. |
+| Reconciliation | Implemented on-demand convergence pass (`pneuma reconcile <application>`) that compares desired, persisted, and observed facts and executes the decided repair or records divergence. v0.6 will broaden it with explicit host observation. |
 | Drift | Difference between expected materialization and observed runtime or route state. |
 | Dispatcher | The forced-command CI interface that parses a restricted SSH request. |
 
