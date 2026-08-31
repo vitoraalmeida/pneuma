@@ -1,3 +1,12 @@
+//! Drives a fully started public candidate to the point of promotion.
+//!
+//! Owns the public finish variant of the deploy spine: verify internal health,
+//! transition to Activating, materialize the Caddy route, verify external health
+//! through the public domain, then confirm promotion. Every later-stage failure
+//! compensates the prior route state and flows into the shared failure finalizer with
+//! the resources it was given — this module never cleans resources itself and does not
+//! decide internal promotion (`super::promotion`).
+
 use std::error::Error;
 use std::net::SocketAddr;
 use std::path::Path;

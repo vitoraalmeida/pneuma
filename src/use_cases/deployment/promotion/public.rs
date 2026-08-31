@@ -1,3 +1,8 @@
+//! Promotion primitives for public candidates: reserve the exposure intent before any
+//! Caddy effect, atomically confirm the promoted runtime, deployment, and active route
+//! after external verification, and record whether failed compensation stayed safe or
+//! diverged.
+
 use std::error::Error;
 
 use rusqlite::{Connection, TransactionBehavior};

@@ -1,3 +1,8 @@
+//! Confirms an internal candidate: loopback health check outside any transaction, then
+//! one immediate promotion transaction guarded by compare-and-set writes. The target is
+//! revalidated inside the transaction because concurrent deployments may change it
+//! between the health check and the promotion writes.
+
 use std::error::Error;
 
 use rusqlite::{Connection, TransactionBehavior};

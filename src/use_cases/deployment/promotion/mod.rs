@@ -1,6 +1,7 @@
-// The two candidate promotion workflows. Internal candidates are health-checked and then
-// promoted inside one immediate transaction; public candidates additionally coordinate Caddy
-// route state across SQLite transactions before their promotion is confirmed.
+//! The two candidate promotion workflows. Internal candidates are health-checked and
+//! then promoted inside one immediate transaction; public candidates additionally
+//! coordinate Caddy route state across SQLite transactions before their promotion is
+//! confirmed.
 mod internal;
 mod public;
 

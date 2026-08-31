@@ -1,3 +1,15 @@
+//! Materializes a pending deployment as a candidate runtime.
+//!
+//! Owns the ordered external acquisition steps — reserve a loopback port, write and
+//! start the Quadlet unit, observe the container, register the runtime — and retains
+//! every acquired resource in a [`CandidateResources`] set so later failures can be
+//! compensated by the failure finalizer (`super::failure`). It stops before
+//! verification and promotion: internal confirmation belongs to `promotion`, public
+//! route work to `activation`.
+//!
+//! The step order is deliberate: the reservation funds the unit's endpoint, and the
+//! runtime is registered only after Podman observation confirms the container.
+
 use std::error::Error;
 use std::net::SocketAddr;
 
