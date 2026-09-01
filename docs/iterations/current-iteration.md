@@ -35,7 +35,7 @@ unchanged.
      error classification.
    - Result: one CLI adapter path executes and renders all ordinary control
      commands.
-4. [ ] Deployment and CI execution
+4. [x] Deployment and CI execution
    - Consolidate event-capable deployment execution and restricted CI branch
      deployment routing; prove the existing interactive and CI contracts.
    - Result: all deployment entry points share one CLI execution path without
@@ -103,3 +103,14 @@ unchanged.
   test --all-features`, and `cargo build --workspace --release` passed. The
   three OCI tests remain ignored because this host has no `podman`. Checkpoint 4
   is the first pending implementation checkpoint.
+- Checkpoint 4 (deployment and CI execution): `src/cli/mod.rs` now owns one
+  event-capable execution path for image deploy, branch deploy, rollback, and
+  restricted CI branch deploy. The redundant deployment handler module was
+  removed, while the CI dispatcher preserves its existing SSH grammar and
+  routes its validated branch request to the shared control command path. A new
+  binary CLI regression proves the CI deployment output and non-TTY progress
+  contract; all 74 binary CLI regressions pass. `cargo fmt --check`, `cargo
+  clippy --all-targets --all-features -- -D warnings`, `cargo test
+  --all-features`, `cargo build --workspace --release`, and markdown-link
+  validation passed. The three OCI tests remain ignored because this host has
+  no `podman`. Checkpoint 5 is the first pending implementation checkpoint.

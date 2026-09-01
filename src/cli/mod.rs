@@ -1,6 +1,5 @@
 mod args;
 mod ci;
-mod deployment;
 mod error;
 mod output;
 mod progress;
@@ -9,6 +8,7 @@ mod shared;
 use pneuma::control::{Command, CommandResult, ControlError, ControlExecutor};
 
 use error::CliError;
+use progress::DeploymentProgressRenderer;
 use shared::log_verbose;
 
 pub(crate) use args::{Invocation, InvocationTarget, parse_invocation};
@@ -40,29 +40,31 @@ pub(crate) fn run(invocation: Invocation) -> Result<(), CliError> {
         );
     }
 
-    match command {
-        Command::DeployImage {
-            application_name,
-            image_reference,
-        } => deployment::run_deploy_oci(&executor, verbose, &application_name, &image_reference),
-        Command::DeployBranch {
-            application_name,
-            branch,
-        } => deployment::run_deploy_branch(&executor, verbose, &application_name, &branch),
-        Command::Rollback { application_name } => {
-            deployment::run_rollback(&executor, verbose, &application_name)
-        }
-        command => execute_and_render(&executor, command, verbose),
-    }
+    execute_control_command(&executor, command, verbose)
 }
 
-// Executes all non-deployment commands through one control-to-CLI adaptation path.
-fn execute_and_render(
+// Executes a control command and attaches CLI-only progress rendering when it deploys.
+pub(crate) fn execute_control_command(
     executor: &ControlExecutor,
     command: Command,
     verbose: bool,
 ) -> Result<(), CliError> {
     log_command_start(&command, verbose);
+
+    match command {
+        command @ (Command::DeployImage { .. }
+        | Command::DeployBranch { .. }
+        | Command::Rollback { .. }) => execute_deployment_with_events(executor, command, verbose),
+        command => execute_without_events(executor, command, verbose),
+    }
+}
+
+// Runs ordinary commands without constructing a terminal progress renderer.
+fn execute_without_events(
+    executor: &ControlExecutor,
+    command: Command,
+    verbose: bool,
+) -> Result<(), CliError> {
     match executor.execute(command) {
         Ok(result) => render_command_result(result, verbose),
         Err(ControlError::DoctorConnection { source, report }) => {
@@ -71,6 +73,27 @@ fn execute_and_render(
         }
         Err(source) => Err(CliError::from_control(source)),
     }
+}
+
+// Runs every deployment command through the same event-capable control invocation.
+fn execute_deployment_with_events(
+    executor: &ControlExecutor,
+    command: Command,
+    verbose: bool,
+) -> Result<(), CliError> {
+    let requested_input = match &command {
+        Command::DeployImage {
+            image_reference, ..
+        } => Some(("image", image_reference.as_str())),
+        Command::DeployBranch { branch, .. } => Some(("branch", branch.as_str())),
+        Command::Rollback { .. } => None,
+        _ => unreachable!("only deployment commands use the event-capable execution path"),
+    };
+    let mut renderer = DeploymentProgressRenderer::new(verbose, requested_input);
+    let mut events = |event| renderer.report(event);
+    let result = executor.execute_with_events(command, &mut events);
+    renderer.finish();
+    render_command_result(result.map_err(CliError::from_control)?, verbose)
 }
 
 // Renders every boundary result without relying on the command that produced it.
@@ -216,12 +239,19 @@ fn log_command_start(command: &Command, verbose: bool) {
                 format!("reconcile application: {application_name}"),
             );
         }
-        Command::Doctor
-        | Command::DatabaseBackup { .. }
-        | Command::DatabaseRestore { .. }
-        | Command::DeployImage { .. }
-        | Command::DeployBranch { .. }
-        | Command::Rollback { .. } => {}
+        Command::DeployImage {
+            application_name, ..
+        }
+        | Command::DeployBranch {
+            application_name, ..
+        }
+        | Command::Rollback { application_name } => {
+            log_verbose(
+                verbose,
+                format!("resolve application by name: {application_name}"),
+            );
+        }
+        Command::Doctor | Command::DatabaseBackup { .. } | Command::DatabaseRestore { .. } => {}
     }
 }
 

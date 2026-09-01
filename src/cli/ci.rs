@@ -1,6 +1,6 @@
 use std::env;
 
-use pneuma::control::ControlExecutor;
+use pneuma::control::{Command, ControlExecutor};
 use pneuma::use_cases::ci::{CiCommand, CiDispatchError, parse_ci_command};
 
 use super::error::CliError;
@@ -25,6 +25,13 @@ pub(crate) fn run_ci_dispatch(executor: &ControlExecutor, verbose: bool) -> Resu
         CiCommand::Deploy {
             application,
             branch,
-        } => super::deployment::run_deploy_branch(executor, verbose, &application, &branch),
+        } => super::execute_control_command(
+            executor,
+            Command::DeployBranch {
+                application_name: application,
+                branch,
+            },
+            verbose,
+        ),
     }
 }

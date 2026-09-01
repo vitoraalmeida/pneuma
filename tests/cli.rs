@@ -371,6 +371,29 @@ fn verbose_deploy_reports_lifecycle_steps_on_stderr() {
 }
 
 #[test]
+fn ci_dispatch_deploys_a_branch_with_the_existing_progress_contract() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || respond_once(&listener, 200));
+
+    let output = environment.ci_dispatch(port);
+    server.join().unwrap();
+
+    assert_command_succeeded(&output);
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "Deploying another-site...\n"
+    );
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .starts_with("Deployed another-site\n")
+    );
+}
+
+#[test]
 fn reimport_reports_the_real_state_of_a_deployed_application() {
     let environment = DeploymentEnvironment::new();
     assert_command_succeeded(&environment.import());
@@ -2799,6 +2822,32 @@ impl DeploymentEnvironment {
                 &reference,
             ]);
         command
+    }
+
+    fn ci_dispatch(&self, port: u16) -> Output {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        Command::new(env!("CARGO_BIN_EXE_pneuma"))
+            .env("PNEUMA_DATABASE_PATH", &self.database_path)
+            .env("PNEUMA_WORKSPACE_PATH", &self.workspace_path)
+            .env("PNEUMA_CADDY_MANAGED_PATH", &self.managed_caddy_directory)
+            .env("PNEUMA_CADDYFILE_PATH", &self.caddyfile_path)
+            .env("PNEUMA_QUADLET_DIR", self.root.join("quadlets"))
+            .env("PATH", executable_path(&self.fake_bin))
+            .env("PNEUMA_FAKE_PORT", port.to_string())
+            .env("PNEUMA_RUNTIME_PORT_RANGE", format!("{port}-{port}"))
+            .env("PNEUMA_FAKE_PODMAN_COUNT", self.root.join("podman-count"))
+            .env("PNEUMA_FAKE_PODMAN_LOG", self.root.join("podman.log"))
+            .env("PNEUMA_FAKE_CURL_LOG", self.root.join("curl.log"))
+            .env("PNEUMA_FAKE_CURL_STATUS", "200")
+            .env("PNEUMA_FAKE_PODMAN_DIGEST", digest)
+            .env("PNEUMA_ASSERT_CLOSED_DATABASE", &self.database_path)
+            .env(
+                "SSH_ORIGINAL_COMMAND",
+                format!("deploy {} main", self.application_name),
+            )
+            .args(["ci", "dispatch"])
+            .output()
+            .unwrap()
     }
 
     fn deploy_current_revision(&self) {
