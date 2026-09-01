@@ -14,18 +14,14 @@ Every command starts the same way:
    (`load_host_environment`) and derives uid-scoped runtime variables
    (`configure_runtime_environment`).
 2. `src/cli/args.rs` parses the Clap tree into the normalized `Command`.
-3. `src/cli/mod.rs::run` opens SQLite (`src/adapters/database.rs`) unless the
-   command needs none (`version`, `doctor`, database backup/restore, CI
-   dispatch) or it routes through the interface-neutral control boundary
-   (`src/control/::ControlExecutor`, which owns the database-wide lock and
-   connection lifetime per command — currently the `system` family, the
-   catalog/query commands, runtime lifecycle status/start/stop, and exposure
-   and reconciliation commands), then
-   dispatches to one capability handler.
-4. Handlers resolve application names through `src/cli/shared.rs::resolve_application`
-   (→ `src/use_cases/application/lookup.rs::find_application_by_name`) and
-   render through `src/cli/output.rs`; errors become classified `CliError`s in
-   `src/cli/error.rs`.
+3. `src/cli/mod.rs::run` maps every stateful parsed command to
+   `src/control/::ControlExecutor`, which captures host configuration, acquires
+   the database-wide lock, and owns the connection lifetime for one command.
+   `version` is the only command that bypasses the executor.
+4. Capability handlers construct typed control commands, render typed results
+   through `src/cli/output.rs`, and turn `ControlError`s into classified
+   `CliError`s in `src/cli/error.rs`. Deployment handlers additionally render
+   semantic events, using an animated TTY-only renderer or deterministic text.
 
 Every mutation of an existing Application holds its per-application `flock`
 (`src/adapters/application_lock.rs::ApplicationLock::try_acquire_for_connection`)
@@ -100,7 +96,8 @@ Everything else matches **Application start**.
 
 Command: `pneuma app deploy <app> --branch <b>`
 
-Start: `src/cli/deployment.rs::run_deploy_branch`
+Start: `src/cli/deployment.rs::run_deploy_branch` → `ControlExecutor`
+(`Command::DeployBranch`)
 
 Resolution: `src/use_cases/deployment/deploy.rs::deploy_branch`
 - `application_store::load_source` (manifest default branch as fallback)
@@ -122,16 +119,16 @@ no default branch, and no delivery configuration before any external effect.
 
 Command: `pneuma app deploy <app> --image <ref>`
 
-Start: `src/cli/deployment.rs::run_deploy_oci` — parses
-`OciArtifact::parse` before any effect; assembles
-`PublicDeploymentConfiguration` from the Caddy paths.
+Start: `src/cli/deployment.rs::run_deploy_oci` → `ControlExecutor`
+(`Command::DeployImage`), which parses `OciArtifact` and builds
+`PublicDeploymentConfiguration` from host configuration before any effect.
 
 Resolution: `src/use_cases/deployment/deploy.rs::deploy_oci` →
 `deploy_artifact_for_delivery`:
 `DeliverySpecification::permits` allow-list → `pull_image` →
 `src/use_cases/release/mod.rs::create_release_while_locked` (digest-pinned reuse).
 
-Execution spine (`src/use_cases/deployment/execute.rs::deploy_release_reporting`):
+Execution spine (`src/use_cases/deployment/execute.rs`):
 
 ```text
 application lock
@@ -215,7 +212,8 @@ see below.
 
 Command: `pneuma deployment rollback <app>`
 
-Start: `src/cli/deployment.rs::run_rollback`
+Start: `src/cli/deployment.rs::run_rollback` → `ControlExecutor`
+(`Command::Rollback`)
 
 Happy path: `src/use_cases/deployment/rollback.rs::rollback_deployment`
 - existence check → target selection `previous_release`
@@ -297,8 +295,9 @@ Read-only flows; none of them mutate operator intent:
   (`Command::ListDeployments`) → `deployment/query.rs::list_deployments`
 - systems: `src/cli/system.rs` → `src/control/::ControlExecutor` →
   `use_cases/system/{create,list,show}.rs`
-- host diagnostics: `src/cli/doctor.rs::run_doctor`; version needs no database
-  (`src/cli/mod.rs::run_version`)
+- host diagnostics: `src/cli/doctor.rs::run_doctor` → control
+  (`Command::Doctor`); database backup/restore use their corresponding control
+  commands; version alone needs no database (`src/cli/mod.rs::run_version`)
 
 Adapters: `local_runtime::observe_container` for live state; stores otherwise.
 
@@ -311,7 +310,8 @@ Start: `src/cli/ci.rs::run_ci_dispatch`
 
 Happy path: read `SSH_ORIGINAL_COMMAND` → validate with
 `src/use_cases/ci/mod.rs::parse_ci_command` (only `version` or
-`deploy <application> <branch>`; shell metacharacters rejected) → dispatch to
-`run_deploy_branch`.
+`deploy <application> <branch>`; shell metacharacters rejected) → map the
+deploy grammar to the same `Command::DeployBranch` execution used by the
+interactive CLI.
 
 Domain rules: reuse of the catalog `ApplicationName` rule at the SSH boundary.

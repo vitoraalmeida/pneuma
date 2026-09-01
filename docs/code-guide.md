@@ -1,12 +1,12 @@
 # Pneuma Code Guide
 
-**Status:** living document - describes the code layout as implemented in v0.5.0.
+**Status:** living document - describes the current code layout.
 
 This guide is for a new contributor who needs to follow one user-facing flow
 end to end without global searching. It maps each flow through the layers:
 
 ```text
-CLI entry → use case → domain rules → stores → external adapters → tests
+CLI entry → control boundary → use case → domain rules → stores → external adapters → tests
 ```
 
 Deeper reference material lives in [`architecture/architecture.md`](architecture/architecture.md)
@@ -42,16 +42,14 @@ Every normal command follows the same skeleton before reaching its flow:
    `PNEUMA_QUADLET_DIR`), then calls `cli::run(cli::parse_invocation())`.
 2. `src/cli/args.rs` owns the Clap tree and translates it into the normalized
    `Command` enum.
-3. `src/cli/mod.rs::run` opens the SQLite connection (except version, doctor,
-   backup/restore, and CI dispatch) and dispatches to one capability handler.
-   Commands that execute through the control boundary (`src/control/`,
-   currently the `system` family, the catalog/query commands, runtime
-   lifecycle status/start/stop, and exposure/reconciliation) skip the
-   CLI-owned connection: the `ControlExecutor` acquires the shared
-   database-wide lock and opens one connection per command.
+3. `src/cli/mod.rs::run` maps every stateful command to `src/control/`.
+   `ControlExecutor` captures host configuration, acquires the shared
+   database-wide lock, opens one connection, executes one typed command, and
+   closes the connection. `version` alone bypasses the executor.
 4. Handlers in `src/cli/{system,application,deployment,exposure,reconciliation}.rs`
-   validate CLI input, resolve names through `shared::resolve_application`,
-   call exactly one use-case entry point, and render with `output.rs`.
+   map arguments to one typed command, render the typed result with `output.rs`,
+   and map `ControlError` to `CliError`. Deployment handlers pass semantic
+   events to the CLI-only progress renderer.
 5. Failures map to `CliError` variants in `error.rs`; `CliError::class()`
    assigns stable exit codes (1 failure, 2 usage, 3 not-found, 4 conflict,
    5 external).
@@ -99,8 +97,9 @@ The richest workflow; read top-down through `use_cases/deployment/` whose
 
 | Layer | Where |
 |---|---|
-| CLI entry | `cli/deployment.rs::run_deploy` selects OCI vs branch; `run_deploy_oci` parses `OciArtifact::parse` **before** any effect and assembles `PublicDeploymentConfiguration` (Caddy paths) |
-| Use cases | `deployment/deploy.rs::deploy_oci` (Application lock → delivery check → pull → release) → `release/create_release_while_locked` (digest reuse) → `deployment/execute.rs::deploy_release_reporting` (pending deployment → candidate execution → promotion or finalized failure) → `deployment/candidate.rs::start_candidate` (port → unit → start → observe → register) → `promotion/internal.rs::promote_internal_candidate` (internal) or `activation.rs::activate_public_candidate` (public) |
+| CLI entry | `cli/deployment.rs::run_deploy` selects OCI vs branch; `run_deploy_oci` maps image input to `Command::DeployImage` and renders its semantic events |
+| Control boundary | `control/mod.rs::ControlExecutor` parses `OciArtifact`, supplies Caddy paths from `HostConfiguration`, invokes `deploy_oci_with_events`, and returns a typed deployment result |
+| Use cases | `deployment/deploy.rs::deploy_oci_with_events` (Application lock → delivery check → pull → release) → `release/create_release_while_locked` (digest reuse) → `deployment/execute.rs` (pending deployment → candidate execution → promotion or finalized failure) → `deployment/candidate.rs::start_candidate` (port → unit → start → observe → register) → `promotion/internal.rs::promote_internal_candidate` (internal) or `activation.rs::activate_public_candidate` (public) |
 | Domain rules | `domain/release.rs`: `OciArtifact` digest grammar, `DeliverySpecification::permits` repository allow-list (INV-REL-002); `domain/deployment.rs`: single transition table `DeploymentStatus::transition(DeploymentEvent)` (INV-DEP-001); `Visibility` decides internal-vs-public activation path |
 | Stores | `application_store` (deployment specification load), `release_store` (digest-pinned reuse), `deployment_store` (pending insert under partial unique index INV-DB-001, targeted CAS status advance, guarded `activate_deployment` INV-APP-002), `runtime_store` (candidate registration, tombstones), port reservations via `port_allocator` |
 | External adapters | `oci_image::pull_image` (digest verify), `port_allocator::reserve_port`, `systemd_quadlet` (`write_unit`, `daemon_reload`, `start`), `local_runtime` (`resolve_container_id`, `observe_container`), `health_check_internal` (loopback), `caddy_exposure::materialize_caddy_fragment` + external health (public only) |
@@ -113,7 +112,8 @@ Identical to Flow 3 after source resolution; only the front differs.
 
 | Layer | Where |
 |---|---|
-| CLI entry | `cli/deployment.rs::run_deploy_branch` |
+| CLI entry | `cli/deployment.rs::run_deploy_branch` maps the request to `Command::DeployBranch` and renders its semantic events |
+| Control boundary | `control/mod.rs::ControlExecutor` supplies Caddy paths from `HostConfiguration`, invokes `deploy_branch_with_events`, and returns a typed deployment result |
 | Use cases | `deployment/deploy.rs::deploy_branch`: load persisted source configuration (`application_store::load_source`, falling back to the manifest default branch) → resolve commit → load delivery configuration → resolve digest → hand the loaded delivery policy to `deploy_artifact_for_delivery` with `source_commit` (the shared validated path behind `deploy_oci`, so the specification is never re-read) |
 | Domain rules | `domain/git.rs::CommitSha` validated hex; resolved commit is recorded directly as an optional `CommitSha` on the deployment (`domain/deployment.rs`) |
 | Stores | `application_store::load_source` / `load_delivery_specification`; everything downstream identical to Flow 3 |
@@ -124,7 +124,8 @@ Identical to Flow 3 after source resolution; only the front differs.
 
 | Layer | Where |
 |---|---|
-| CLI entry | `cli/deployment.rs::run_rollback` |
+| CLI entry | `cli/deployment.rs::run_rollback` maps the request to `Command::Rollback` and renders its semantic events |
+| Control boundary | `control/mod.rs::ControlExecutor` supplies Caddy paths from `HostConfiguration`, invokes `rollback_deployment_with_events`, and returns a typed rollback result |
 | Use cases | `deployment/rollback.rs::rollback_deployment`: application existence check → select target → re-pull historical artifact → run the normal release deployment as type `Rollback` |
 | Domain rules | target selection rule "newest succeeded deployment that is not currently active" implemented by `deployment_store::load_rollback_target` and returned as a domain `RollbackTarget` carrying provenance (an optional `CommitSha`) |
 | Stores | `deployment_store` (history query), then the full Flow 3 store set with `DeploymentType::Rollback` |

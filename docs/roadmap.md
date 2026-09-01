@@ -169,11 +169,11 @@ control boundary so the CLI becomes one adapter among possible future
 interfaces (TUI, local HTTP). No daemon, HTTP server, or TUI is implemented.
 
 - [x] Approved design, active tracker, and recorded baseline.
-- [ ] Control boundary for every stateful command, migrated one command family
+- [x] Control boundary for every stateful command, migrated one command family
   at a time with unchanged CLI behavior.
-- [ ] Semantic deployment events with matched start/completion boundaries,
+- [x] Semantic deployment events with matched start/completion boundaries,
   typed failure codes, and typed retirement warnings.
-- [ ] Animated TTY progress rendered entirely in the CLI, with deterministic
+- [x] Animated TTY progress rendered entirely in the CLI, with deterministic
   non-TTY output.
 
 ## v0.6 - Observed State / Host Observation

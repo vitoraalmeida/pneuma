@@ -1,6 +1,6 @@
 # Pneuma Architecture
 
-**Status:** living document - describes the system as implemented in v0.5.0.
+**Status:** living document - describes the current implementation.
 
 Pneuma is a single-host deployment CLI. It imports application specifications
 from Git repositories, deploys immutable OCI artifacts with rootless Podman and
@@ -90,7 +90,8 @@ runtime path without the Caddy traffic path.
 
 | Layer | Owns | Does not own |
 |---|---|---|
-| `src/main.rs` and `src/cli/` | Process bootstrap and host configuration (`src/main.rs`), CLI definition (`src/cli/args.rs`), dependency construction, command dispatch and handlers by capability (`src/cli/mod.rs`, `src/cli/`), error classification with message and exit-code mapping (`src/cli/error.rs`), result rendering (`src/cli/output.rs`) | Domain decisions or persistence rules; import checkouts are cloned and cleaned up by use cases and the Git adapter |
+| `src/main.rs` and `src/cli/` | Process bootstrap (`src/main.rs`), CLI definition (`src/cli/args.rs`), argument-to-command mapping, result/event rendering, and error classification with message and exit-code mapping (`src/cli/error.rs`) | Domain decisions, database connections and locks, persistence rules, or external effects |
+| `src/control/` | Immutable host configuration, synchronous typed command execution, database-wide lock and connection lifetime, typed results/errors, and observational deployment-event delivery | Terminal output, TTY detection, CLI parsing, process exit codes, or workflow policy |
 | `src/domain/` | Domain entities, closed state sets, and value invariants | External effects, SQL, or external file formats |
 | `src/use_cases/` | Business decisions, effect ordering, short transaction boundaries, and compensation | SQL mapping or process invocation details |
 | `src/adapters/stores/` | SQL, row-to-domain mapping, migrations, and compare-and-set writes | Deployment policy or external effects |
@@ -133,9 +134,16 @@ layers without a documented secondary defense (see
 - persistence: migrations, row mapping, constraints, and compare-and-set
   primitives that make zero-row writes explicit conflicts.
 
-**CLI** (`src/main.rs` and `src/cli/`) owns argument parsing, host-environment
-bootstrap, dependency composition, output rendering, and exit-code
-classification. It holds no domain rules and never bypasses use cases to reach
+**Control** (`src/control/`) owns execution of every stateful command. Its
+concrete `ControlExecutor` captures immutable host configuration, takes the
+shared database lock, opens one connection for the command, then returns typed
+`CommandResult` or `ControlError`. It forwards deployment events only to an
+optional observer; event delivery cannot change command execution.
+
+**CLI** (`src/main.rs` and `src/cli/`) owns process bootstrap, argument parsing,
+mapping arguments onto control commands, output rendering (including TTY-only
+deployment animation), and exit-code classification. It holds no domain rules,
+database connection, or lock and never bypasses control to reach use cases or
 persistence.
 
 ### Reconciliation
@@ -267,10 +275,10 @@ All configurable paths and ports use `PNEUMA_DATABASE_PATH`,
 `PNEUMA_WORKSPACE_PATH`, `PNEUMA_CADDY_MANAGED_PATH`,
 `PNEUMA_CADDYFILE_PATH`, `PNEUMA_RUNTIME_PORT_RANGE`, and
 `PNEUMA_QUADLET_DIR`, with host defaults described in the getting-started guide.
-The workspace, Caddy-managed, and Caddyfile variables plus shared path
-resolution have one owner in `src/config.rs`; verbose rendering stays in the CLI
-adapter. The database-path constants remain beside their store in
-`src/adapters/database.rs`.
+`ControlExecutor` captures database, workspace, and Caddy paths in
+`HostConfiguration` once per invocation; shared non-database path resolution
+lives in `src/config.rs`, and database-path constants remain beside their store
+in `src/adapters/database.rs`.
 
 ## Cross-Cutting Invariants
 
@@ -399,7 +407,7 @@ rejected. It creates no Deployment and leaves runtime intent stopped.
 
 ```text
 --branch: Application source -> Git branch or tag -> commit -> OCI commit tag -> digest
---image:  CLI digest reference -> allowed repository validation
+--image:  supplied digest reference -> allowed repository validation
 both:     pull and verify OCI image -> reuse or create Release -> DeployRelease
 ```
 
@@ -426,14 +434,15 @@ never promoted, so the previously active runtime and public route remain in use.
 
 ### Deployment Sequence
 
-The requester is either an operator invoking the CLI or the validated restricted
-CI dispatcher. The sequence shows branch or tag deployment; explicit digest
-deployment starts at digest verification.
+The requester is either an operator through the CLI or the validated restricted
+CI dispatcher. Both map their input to the same control command. The sequence
+shows branch or tag deployment; explicit digest deployment starts at digest
+verification.
 
 ```mermaid
 sequenceDiagram
     actor Requester
-    participant CLI as Pneuma CLI
+    participant Control as Control executor
     participant DB as SQLite
     participant Git
     participant Podman
@@ -443,75 +452,75 @@ sequenceDiagram
     participant Candidate as candidate loopback endpoint
     participant Caddy
 
-    Requester->>CLI: deploy application branch or tag
-    CLI->>DB: load imported source and delivery configuration
-    CLI->>Git: resolve revision to full commit SHA
-    Git-->>CLI: commit SHA
-    CLI->>Podman: pull repository:commit-sha
+    Requester->>Control: deploy application branch or tag
+    Control->>DB: load imported source and delivery configuration
+    Control->>Git: resolve revision to full commit SHA
+    Git-->>Control: commit SHA
+    Control->>Podman: pull repository:commit-sha
     Podman->>Registry: fetch tagged artifact
     Registry-->>Podman: OCI artifact
-    CLI->>Podman: inspect resolved digest
-    Podman-->>CLI: digest-pinned image reference
-    CLI->>Podman: pull and verify digest-pinned image
+    Control->>Podman: inspect resolved digest
+    Podman-->>Control: digest-pinned image reference
+    Control->>Podman: pull and verify digest-pinned image
     Podman->>Registry: fetch digest if not cached
     Registry-->>Podman: digest-addressed artifact
-    Podman-->>CLI: verified digest
-    CLI->>DB: create or reuse Release
-    CLI->>DB: create pending Deployment
-    Note over CLI,DB: Each transaction ends before subsequent external effects
-    CLI->>DB: transition Starting and reserve loopback port
-    CLI->>Quadlet: write candidate unit
-    CLI->>Systemd: daemon-reload
+    Podman-->>Control: verified digest
+    Control->>DB: create or reuse Release
+    Control->>DB: create pending Deployment
+    Note over Control,DB: Each transaction ends before subsequent external effects
+    Control->>DB: transition Starting and reserve loopback port
+    Control->>Quadlet: write candidate unit
+    Control->>Systemd: daemon-reload
     Systemd->>Quadlet: read file and generate service
-    CLI->>Systemd: start candidate service
+    Control->>Systemd: start candidate service
     Systemd->>Podman: create and start container
     Podman->>Candidate: bind reserved loopback endpoint
-    CLI->>Podman: inspect deterministic container name
-    Podman-->>CLI: container identity, state, and endpoint
-    CLI->>DB: register RuntimeInstance, consume reservation, transition Verifying
-    CLI->>Candidate: internal health against loopback endpoint
-    Candidate-->>CLI: candidate health result
+    Control->>Podman: inspect deterministic container name
+    Podman-->>Control: container identity, state, and endpoint
+    Control->>DB: register RuntimeInstance, consume reservation, transition Verifying
+    Control->>Candidate: internal health against loopback endpoint
+    Candidate-->>Control: candidate health result
     alt Candidate health fails
-        CLI->>DB: record failed Deployment evidence
-        CLI->>Systemd: stop candidate service
-        CLI->>Quadlet: remove candidate unit
-        CLI->>Systemd: daemon-reload
-        CLI->>DB: mark runtime removed and release reservation
-        Note over CLI,Caddy: Prior active runtime and route remain unchanged
+        Control->>DB: record failed Deployment evidence
+        Control->>Systemd: stop candidate service
+        Control->>Quadlet: remove candidate unit
+        Control->>Systemd: daemon-reload
+        Control->>DB: mark runtime removed and release reservation
+        Note over Control,Caddy: Prior active runtime and route remain unchanged
     else Candidate health passes
         alt Internal Application
-            CLI->>DB: transactionally promote Deployment and runtime
-            CLI->>Systemd: best-effort retire prior runtime after promotion
+            Control->>DB: transactionally promote Deployment and runtime
+            Control->>Systemd: best-effort retire prior runtime after promotion
         else Public Application
-            CLI->>DB: transition Activating and persist exposure applying
-            CLI->>Caddy: write fragment, validate configuration, and reload
-            Caddy-->>CLI: materialization result
+            Control->>DB: transition Activating and persist exposure applying
+            Control->>Caddy: write fragment, validate configuration, and reload
+            Caddy-->>Control: materialization result
             alt Materialization fails
-                CLI->>Caddy: attempt to restore previous route and reload
-                Caddy-->>CLI: compensation result
-                CLI->>DB: record exposure failed or diverged and Deployment failed
-                CLI->>Systemd: clean resources proven to belong to candidate
-                Note over CLI,Caddy: Prior runtime remains active and route can be diverged if compensation fails
+                Control->>Caddy: attempt to restore previous route and reload
+                Caddy-->>Control: compensation result
+                Control->>DB: record exposure failed or diverged and Deployment failed
+                Control->>Systemd: clean resources proven to belong to candidate
+                Note over Control,Caddy: Prior runtime remains active and route can be diverged if compensation fails
             else Materialization succeeds
-                CLI->>Caddy: external health through public route
+                Control->>Caddy: external health through public route
                 Caddy->>Candidate: loopback health request
                 Candidate-->>Caddy: health response
-                Caddy-->>CLI: route health result
+                Caddy-->>Control: route health result
                 alt Route health fails
-                    CLI->>Caddy: attempt to restore previous route and reload
-                    Caddy-->>CLI: compensation result
-                    CLI->>DB: record exposure failed or diverged and Deployment failed
-                    CLI->>Systemd: clean resources proven to belong to candidate
+                    Control->>Caddy: attempt to restore previous route and reload
+                    Caddy-->>Control: compensation result
+                    Control->>DB: record exposure failed or diverged and Deployment failed
+                    Control->>Systemd: clean resources proven to belong to candidate
                 else Route health passes
-                    CLI->>DB: transactionally promote Deployment, runtime, and exposure
-                    DB-->>CLI: promotion result
+                    Control->>DB: transactionally promote Deployment, runtime, and exposure
+                    DB-->>Control: promotion result
                     alt Promotion succeeds
-                        CLI->>Systemd: best-effort retire prior runtime after promotion
+                        Control->>Systemd: best-effort retire prior runtime after promotion
                     else Promotion fails
-                        CLI->>Caddy: attempt to restore previous route and reload
-                        Caddy-->>CLI: compensation result
-                        CLI->>DB: record exposure failed or diverged and Deployment failed
-                        CLI->>Systemd: clean resources proven to belong to candidate
+                        Control->>Caddy: attempt to restore previous route and reload
+                        Caddy-->>Control: compensation result
+                        Control->>DB: record exposure failed or diverged and Deployment failed
+                        Control->>Systemd: clean resources proven to belong to candidate
                     end
                 end
             end
