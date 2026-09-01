@@ -2,8 +2,8 @@
 
 **Status:** planning reminder, not an execution tracker.
 
-**Target:** v0.6 - Observed State / Host Observation. Queued behind the
-completed v0.5.2 CLI adapter consolidation iteration.
+**Target:** v0.6 - Observed State / Host Observation. Queued behind the active
+v0.5.3 CLI adapter integrity iteration.
 
 Do not implement this work until an approved design exists and this tracker is
 promoted to `current-iteration.md`.

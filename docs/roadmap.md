@@ -187,6 +187,18 @@ output, progress, error, and exit-code behavior.
 - [x] Consolidate control execution, result rendering, deployment progress, and
   restricted CI routing.
 
+### v0.5.3 - CLI Adapter Integrity
+
+**Status:** in progress. Approved design:
+[`designs/cli-adapter-integrity.md`](designs/cli-adapter-integrity.md).
+
+This maintenance iteration corrects internal CLI adapter imprecision without
+changing the released CLI or operational contract.
+
+- [ ] Reject missing interactive deploy sources during argument normalization.
+- [ ] Consolidate deployment classification and remaining lifecycle rendering
+  ownership within the CLI adapter.
+
 ## v0.6 - Observed State / Host Observation
 
 **Status:** planned; not started. No approved design yet. Queued behind
@@ -385,6 +397,9 @@ v0.5.1  Interface-Neutral Execution "one boundary, many interfaces"
    │
    ▼
 v0.5.2  CLI Adapter Consolidation   "one adapter path"
+   │
+   ▼
+v0.5.3  CLI Adapter Integrity       "precise adapter boundaries"
    │
    ▼
 v0.6    Observed State            "what is really happening?"
