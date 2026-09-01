@@ -30,6 +30,17 @@ pub enum Command {
     ApplicationStart {
         application_name: String,
     },
+    DeployImage {
+        application_name: String,
+        image_reference: String,
+    },
+    DeployBranch {
+        application_name: String,
+        branch: String,
+    },
+    Rollback {
+        application_name: String,
+    },
     VisibilitySet {
         application_name: String,
         visibility: Visibility,

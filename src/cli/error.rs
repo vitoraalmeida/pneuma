@@ -111,6 +111,14 @@ impl CliError {
             | ControlError::RuntimeStart { source } => CliError::ApplicationRuntime {
                 source: Box::new(source),
             },
+            ControlError::InvalidOciArtifact { source } => CliError::InvalidOciArtifact { source },
+            ControlError::DeployOci { source } => CliError::DeployOci {
+                source: Box::new(source),
+            },
+            ControlError::DeployBranch { source } => CliError::DeployBranch {
+                source: Box::new(source),
+            },
+            ControlError::Rollback { source } => CliError::Rollback { source },
             ControlError::VisibilitySet { source } => CliError::VisibilitySet { source },
             ControlError::Reconcile { source } => CliError::Reconcile { source },
         }

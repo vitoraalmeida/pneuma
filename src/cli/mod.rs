@@ -52,7 +52,7 @@ pub(crate) fn run(invocation: Invocation) -> Result<(), CliError> {
     }
 
     if matches!(command, Command::CiDispatch) {
-        return ci::run_ci_dispatch(verbose);
+        return ci::run_ci_dispatch(&ControlExecutor::from_environment(), verbose);
     }
 
     let database_path = database::configured_path();
@@ -96,44 +96,25 @@ pub(crate) fn run(invocation: Invocation) -> Result<(), CliError> {
         Command::Reconcile { application_name } => {
             reconciliation::run_reconcile(&executor, verbose, &application_name)
         }
-        other => {
-            let _lock = shared_database_lock(&database_path)?;
-            let mut connection =
-                database::open(&database_path).map_err(|source| CliError::Database { source })?;
-
-            match other {
-                Command::Deploy {
-                    application_name,
-                    image_reference,
-                    branch,
-                } => deployment::run_deploy(
-                    &mut connection,
-                    verbose,
-                    &application_name,
-                    image_reference,
-                    branch,
-                ),
-                Command::Rollback { application_name } => {
-                    deployment::run_rollback(&mut connection, verbose, &application_name)
-                }
-                Command::SystemCreate { .. }
-                | Command::SystemList
-                | Command::SystemShow { .. }
-                | Command::Import { .. }
-                | Command::List
-                | Command::Deployments { .. }
-                | Command::Status { .. }
-                | Command::Stop { .. }
-                | Command::Start { .. }
-                | Command::VisibilitySet { .. }
-                | Command::Reconcile { .. }
-                | Command::Doctor
-                | Command::Version
-                | Command::DatabaseBackup { .. }
-                | Command::DatabaseRestore { .. }
-                | Command::CiDispatch => unreachable!(),
-            }
+        Command::Deploy {
+            application_name,
+            image_reference,
+            branch,
+        } => deployment::run_deploy(
+            &executor,
+            verbose,
+            &application_name,
+            image_reference,
+            branch,
+        ),
+        Command::Rollback { application_name } => {
+            deployment::run_rollback(&executor, verbose, &application_name)
         }
+        Command::CiDispatch => unreachable!(),
+        Command::Doctor
+        | Command::Version
+        | Command::DatabaseBackup { .. }
+        | Command::DatabaseRestore { .. } => unreachable!(),
     }
 }
 

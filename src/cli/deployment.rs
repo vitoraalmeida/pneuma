@@ -1,20 +1,9 @@
-use rusqlite::Connection;
-
 use pneuma::control::{Command, CommandResult, ControlExecutor};
-use pneuma::domain::release::OciArtifact;
-use pneuma::use_cases::deployment::{
-    DeployBranchError, DeployOciError, DeploymentEvent, DeploymentStep,
-    PublicDeploymentConfiguration, RetirementWarning, deploy_branch_with_events,
-    deploy_oci_with_events, rollback_deployment_with_events,
-};
+use pneuma::use_cases::deployment::{DeploymentEvent, DeploymentStep, RetirementWarning};
 
 use super::error::CliError;
 use super::output;
-use super::shared::{
-    CADDY_MANAGED_PATH_ENVIRONMENT_VARIABLE, CADDYFILE_PATH_ENVIRONMENT_VARIABLE,
-    DEFAULT_CADDY_MANAGED_PATH, DEFAULT_CADDYFILE_PATH, configured_path, log_verbose,
-    resolve_application,
-};
+use super::shared::log_verbose;
 
 // Lists the deployment history resolved by the boundary.
 pub(crate) fn run_deployments(
@@ -51,23 +40,23 @@ pub(crate) fn run_deployments(
 
 // Selects the delivery mode requested by the deploy command options.
 pub(crate) fn run_deploy(
-    connection: &mut Connection,
+    executor: &ControlExecutor,
     verbose: bool,
     application_name: &str,
     image_reference: Option<String>,
     branch: Option<String>,
 ) -> Result<(), CliError> {
     if let Some(branch) = branch {
-        run_deploy_branch(connection, verbose, application_name, &branch)
+        run_deploy_branch(executor, verbose, application_name, &branch)
     } else {
         let image_reference = image_reference.ok_or(CliError::MissingDeployOption)?;
-        run_deploy_oci(connection, verbose, application_name, &image_reference)
+        run_deploy_oci(executor, verbose, application_name, &image_reference)
     }
 }
 
-// Deploys a supplied OCI reference with host-configured public exposure paths.
+// Deploys a supplied OCI reference through the interface-neutral boundary.
 pub(crate) fn run_deploy_oci(
-    connection: &mut Connection,
+    executor: &ControlExecutor,
     verbose: bool,
     application_name: &str,
     image_reference: &str,
@@ -76,53 +65,32 @@ pub(crate) fn run_deploy_oci(
         verbose,
         format!("resolve application by name: {application_name}"),
     );
-    let artifact = OciArtifact::parse(image_reference)
-        .map_err(|source| CliError::InvalidOciArtifact { source })?;
-    let application = resolve_application(connection, application_name)?;
-    let public_configuration = public_deployment_configuration();
-    if verbose {
-        log_verbose(
-            verbose,
-            format!(
-                "deployment input: application {}, image {image_reference}",
-                application.name
-            ),
-        );
-    } else {
-        eprintln!("Deploying {}...", application.name);
-    }
-    let mut events = |event| render_deployment_event_if_visible(&event, verbose);
-    let deployed = deploy_oci_with_events(
-        connection,
-        &application.id,
-        &artifact,
-        None,
-        Some(&public_configuration),
-        &mut events,
-    )
-    .map_err(|source: DeployOciError| CliError::DeployOci {
-        source: Box::new(source),
-    })?;
-    println!("{}", output::deployed(&application.name, &deployed));
+    let mut events = |event| {
+        render_deployment_event_if_visible(&event, verbose, Some(("image", image_reference)))
+    };
+    let result = executor
+        .execute_with_events(
+            Command::DeployImage {
+                application_name: application_name.to_owned(),
+                image_reference: image_reference.to_owned(),
+            },
+            &mut events,
+        )
+        .map_err(CliError::from_control)?;
+    let CommandResult::ApplicationDeployed {
+        application_name,
+        deployment,
+    } = result
+    else {
+        unreachable!("DeployImage yields ApplicationDeployed");
+    };
+    println!("{}", output::deployed(&application_name, &deployment));
     Ok(())
 }
 
-fn public_deployment_configuration() -> PublicDeploymentConfiguration {
-    PublicDeploymentConfiguration {
-        managed_caddy_directory: configured_path(
-            CADDY_MANAGED_PATH_ENVIRONMENT_VARIABLE,
-            DEFAULT_CADDY_MANAGED_PATH,
-        ),
-        caddyfile_path: configured_path(
-            CADDYFILE_PATH_ENVIRONMENT_VARIABLE,
-            DEFAULT_CADDYFILE_PATH,
-        ),
-    }
-}
-
-// Resolves and deploys the requested branch's published OCI artifact with host-configured paths.
+// Resolves and deploys the requested branch through the interface-neutral boundary.
 pub(crate) fn run_deploy_branch(
-    connection: &mut Connection,
+    executor: &ControlExecutor,
     verbose: bool,
     application_name: &str,
     branch: &str,
@@ -131,37 +99,31 @@ pub(crate) fn run_deploy_branch(
         verbose,
         format!("resolve application by name: {application_name}"),
     );
-    let application = resolve_application(connection, application_name)?;
-    let public_configuration = public_deployment_configuration();
-    if verbose {
-        log_verbose(
-            verbose,
-            format!(
-                "deployment input: application {}, branch {branch}",
-                application.name
-            ),
-        );
-    } else {
-        eprintln!("Deploying {}...", application.name);
-    }
-    let mut events = |event| render_deployment_event_if_visible(&event, verbose);
-    let deployed = deploy_branch_with_events(
-        connection,
-        &application.id,
-        Some(branch),
-        Some(&public_configuration),
-        &mut events,
-    )
-    .map_err(|source: DeployBranchError| CliError::DeployBranch {
-        source: Box::new(source),
-    })?;
-    println!("{}", output::deployed(&application.name, &deployed));
+    let mut events =
+        |event| render_deployment_event_if_visible(&event, verbose, Some(("branch", branch)));
+    let result = executor
+        .execute_with_events(
+            Command::DeployBranch {
+                application_name: application_name.to_owned(),
+                branch: branch.to_owned(),
+            },
+            &mut events,
+        )
+        .map_err(CliError::from_control)?;
+    let CommandResult::ApplicationDeployed {
+        application_name,
+        deployment,
+    } = result
+    else {
+        unreachable!("DeployBranch yields ApplicationDeployed");
+    };
+    println!("{}", output::deployed(&application_name, &deployment));
     Ok(())
 }
 
-// Rolls back through the use case while supplying paths needed for public exposure effects.
+// Rolls back through the interface-neutral boundary.
 pub(crate) fn run_rollback(
-    connection: &mut Connection,
+    executor: &ControlExecutor,
     verbose: bool,
     application_name: &str,
 ) -> Result<(), CliError> {
@@ -169,28 +131,55 @@ pub(crate) fn run_rollback(
         verbose,
         format!("resolve application by name: {application_name}"),
     );
-    let application = resolve_application(connection, application_name)?;
-    log_verbose(
-        verbose,
-        format!("rolling back application {}", application.name),
-    );
-    let public_configuration = public_deployment_configuration();
-    let mut events = |event| render_deployment_event_if_visible(&event, verbose);
-    let rolled_back = rollback_deployment_with_events(
-        connection,
-        &application.id,
-        Some(&public_configuration),
-        &mut events,
-    )
-    .map_err(|source| CliError::Rollback { source })?;
+    let mut events = |event| render_deployment_event_if_visible(&event, verbose, None);
+    let result = executor
+        .execute_with_events(
+            Command::Rollback {
+                application_name: application_name.to_owned(),
+            },
+            &mut events,
+        )
+        .map_err(CliError::from_control)?;
+    let CommandResult::ApplicationRolledBack {
+        application_name,
+        deployment: rolled_back,
+    } = result
+    else {
+        unreachable!("Rollback yields ApplicationRolledBack");
+    };
     println!(
         "{}",
-        output::rollback_result(&application.name, &rolled_back)
+        output::rollback_result(&application_name, &rolled_back)
     );
     Ok(())
 }
 
-fn render_deployment_event_if_visible(event: &DeploymentEvent, verbose: bool) {
+fn render_deployment_event_if_visible(
+    event: &DeploymentEvent,
+    verbose: bool,
+    requested_input: Option<(&str, &str)>,
+) {
+    if let DeploymentEvent::DeploymentRequested { application_name } = event {
+        match requested_input {
+            Some((input_kind, input)) => {
+                if verbose {
+                    log_verbose(
+                        true,
+                        format!(
+                            "deployment input: application {application_name}, {input_kind} {input}"
+                        ),
+                    );
+                } else {
+                    eprintln!("Deploying {application_name}...");
+                }
+            }
+            None => log_verbose(
+                verbose,
+                format!("rolling back application {application_name}"),
+            ),
+        }
+        return;
+    }
     if verbose || matches!(event, DeploymentEvent::RetirementWarning { .. }) {
         eprintln!("{}", render_deployment_event(event));
     }
@@ -199,6 +188,9 @@ fn render_deployment_event_if_visible(event: &DeploymentEvent, verbose: bool) {
 // Renders use-case events with the CLI's stable text vocabulary.
 fn render_deployment_event(event: &DeploymentEvent) -> String {
     match event {
+        DeploymentEvent::DeploymentRequested { .. } => {
+            unreachable!("deployment requests are rendered separately")
+        }
         DeploymentEvent::StepStarted { step } => {
             format!("{}: started", deployment_step_label(*step))
         }

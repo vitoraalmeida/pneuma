@@ -3,10 +3,12 @@ use thiserror::Error;
 use crate::adapters::database::DatabaseError;
 use crate::adapters::stores::application_store::ApplicationStoreError;
 use crate::adapters::stores::deployment_store::DeploymentStoreError;
+use crate::domain::release::InvalidOciArtifact;
 use crate::domain::system::InvalidSystemName;
 use crate::use_cases::application::{
     ApplicationLookupError, RemoteImportError, RuntimeLifecycleError,
 };
+use crate::use_cases::deployment::{DeployBranchError, DeployOciError, RollbackError};
 use crate::use_cases::exposure::ExposureChangeError;
 use crate::use_cases::reconciliation::ReconciliationReadError;
 use crate::use_cases::system::ShowError;
@@ -51,6 +53,14 @@ pub enum ControlError {
     RuntimeStop { source: RuntimeLifecycleError },
     #[error(transparent)]
     RuntimeStart { source: RuntimeLifecycleError },
+    #[error(transparent)]
+    InvalidOciArtifact { source: InvalidOciArtifact },
+    #[error(transparent)]
+    DeployOci { source: DeployOciError },
+    #[error(transparent)]
+    DeployBranch { source: DeployBranchError },
+    #[error(transparent)]
+    Rollback { source: RollbackError },
     #[error(transparent)]
     VisibilitySet { source: ExposureChangeError },
     #[error(transparent)]

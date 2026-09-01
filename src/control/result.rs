@@ -2,6 +2,7 @@ use crate::domain::application::{ApplicationName, ApplicationSummary};
 use crate::domain::deployment::DeploymentHistory;
 use crate::domain::system::System;
 use crate::use_cases::application::{ApplicationCatalogEntry, RuntimeObservation};
+use crate::use_cases::deployment::DeploymentResult;
 use crate::use_cases::exposure::ExposureChange;
 use crate::use_cases::reconciliation::ReconciliationResult;
 use crate::use_cases::system::SystemDetails;
@@ -29,6 +30,14 @@ pub enum CommandResult {
     ApplicationStarted {
         application_name: ApplicationName,
         observation: RuntimeObservation,
+    },
+    ApplicationDeployed {
+        application_name: ApplicationName,
+        deployment: DeploymentResult,
+    },
+    ApplicationRolledBack {
+        application_name: ApplicationName,
+        deployment: DeploymentResult,
     },
     ExposureChanged {
         application_name: ApplicationName,

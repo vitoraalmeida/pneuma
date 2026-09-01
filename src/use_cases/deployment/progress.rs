@@ -1,3 +1,4 @@
+use crate::domain::application::ApplicationName;
 use crate::domain::deployment::{DeploymentFailureCode, DeploymentStatus};
 use crate::domain::identity::{DeploymentId, RuntimeInstanceId};
 
@@ -31,9 +32,12 @@ pub enum RetirementWarning {
     PersistenceFailed,
 }
 
-// Closed workflow events emitted around real deployment and rollback operation boundaries.
+// Closed semantic events emitted by the control boundary and deployment workflow.
 #[derive(Debug, PartialEq, Eq)]
 pub enum DeploymentEvent {
+    DeploymentRequested {
+        application_name: ApplicationName,
+    },
     StepStarted {
         step: DeploymentStep,
     },

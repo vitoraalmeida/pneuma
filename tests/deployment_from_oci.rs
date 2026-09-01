@@ -308,6 +308,9 @@ enum EventShape {
 
 fn event_shape(event: &DeploymentEvent) -> EventShape {
     match event {
+        DeploymentEvent::DeploymentRequested { .. } => {
+            panic!("use-case deployment events do not include control request events")
+        }
         DeploymentEvent::StepStarted { step } => EventShape::Started(*step),
         DeploymentEvent::StepCompleted { step } => EventShape::Completed(*step),
         DeploymentEvent::StateChanged { status, .. } => EventShape::StateChanged(*status),

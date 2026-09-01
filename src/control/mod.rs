@@ -20,6 +20,7 @@ pub use self::result::CommandResult;
 
 use crate::adapters::database::{self, DatabaseError, DatabaseLock, LockMode};
 use crate::domain::application::ApplicationName;
+use crate::domain::release::OciArtifact;
 use crate::domain::system::SystemName;
 use crate::use_cases::reconciliation::ReconciliationReadError;
 use crate::use_cases::{application, deployment, exposure, reconciliation, system};
@@ -46,6 +47,16 @@ impl ControlExecutor {
 
     // Executes one command, acquiring and releasing the database-wide lock around it.
     pub fn execute(&self, command: Command) -> Result<CommandResult, ControlError> {
+        let mut ignore_events = |_| {};
+        self.execute_with_events(command, &mut ignore_events)
+    }
+
+    // Executes one command while forwarding semantic deployment events to an observer.
+    pub fn execute_with_events(
+        &self,
+        command: Command,
+        events: &mut dyn FnMut(deployment::DeploymentEvent),
+    ) -> Result<CommandResult, ControlError> {
         let _lock = self.acquire_shared_database_lock()?;
         let mut connection = database::open(&self.host.database_path)
             .map_err(|source| ControlError::Database { source })?;
@@ -134,6 +145,83 @@ impl ControlExecutor {
                 Ok(CommandResult::ApplicationStarted {
                     application_name: resolved.name,
                     observation,
+                })
+            }
+            Command::DeployImage {
+                application_name,
+                image_reference,
+            } => {
+                let resolved = application::resolve_application(&connection, &application_name)
+                    .map_err(|source| ControlError::ApplicationLookup { source })?;
+                let artifact = OciArtifact::parse(&image_reference)
+                    .map_err(|source| ControlError::InvalidOciArtifact { source })?;
+                events(deployment::DeploymentEvent::DeploymentRequested {
+                    application_name: resolved.name.clone(),
+                });
+                let public_configuration = deployment::PublicDeploymentConfiguration {
+                    managed_caddy_directory: self.host.caddy_managed_path.clone(),
+                    caddyfile_path: self.host.caddyfile_path.clone(),
+                };
+                let deployment = deployment::deploy_oci_with_events(
+                    &mut connection,
+                    &resolved.id,
+                    &artifact,
+                    None,
+                    Some(&public_configuration),
+                    events,
+                )
+                .map_err(|source| ControlError::DeployOci { source })?;
+                Ok(CommandResult::ApplicationDeployed {
+                    application_name: resolved.name,
+                    deployment,
+                })
+            }
+            Command::DeployBranch {
+                application_name,
+                branch,
+            } => {
+                let resolved = application::resolve_application(&connection, &application_name)
+                    .map_err(|source| ControlError::ApplicationLookup { source })?;
+                events(deployment::DeploymentEvent::DeploymentRequested {
+                    application_name: resolved.name.clone(),
+                });
+                let public_configuration = deployment::PublicDeploymentConfiguration {
+                    managed_caddy_directory: self.host.caddy_managed_path.clone(),
+                    caddyfile_path: self.host.caddyfile_path.clone(),
+                };
+                let deployment = deployment::deploy_branch_with_events(
+                    &mut connection,
+                    &resolved.id,
+                    Some(&branch),
+                    Some(&public_configuration),
+                    events,
+                )
+                .map_err(|source| ControlError::DeployBranch { source })?;
+                Ok(CommandResult::ApplicationDeployed {
+                    application_name: resolved.name,
+                    deployment,
+                })
+            }
+            Command::Rollback { application_name } => {
+                let resolved = application::resolve_application(&connection, &application_name)
+                    .map_err(|source| ControlError::ApplicationLookup { source })?;
+                events(deployment::DeploymentEvent::DeploymentRequested {
+                    application_name: resolved.name.clone(),
+                });
+                let public_configuration = deployment::PublicDeploymentConfiguration {
+                    managed_caddy_directory: self.host.caddy_managed_path.clone(),
+                    caddyfile_path: self.host.caddyfile_path.clone(),
+                };
+                let deployment = deployment::rollback_deployment_with_events(
+                    &mut connection,
+                    &resolved.id,
+                    Some(&public_configuration),
+                    events,
+                )
+                .map_err(|source| ControlError::Rollback { source })?;
+                Ok(CommandResult::ApplicationRolledBack {
+                    application_name: resolved.name,
+                    deployment,
                 })
             }
             Command::VisibilitySet {

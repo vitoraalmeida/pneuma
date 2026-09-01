@@ -44,7 +44,7 @@ progress renderer. No daemon, HTTP, or TUI is implemented.
      typed retirement warnings; add event-capable rollback.
    - Result: deployment reports real blocking operations without UI prose in
      use cases.
-6. [ ] Deployment and CI slice
+6. [x] Deployment and CI slice
    - Route image deploy, branch deploy, rollback, and restricted CI dispatch
      through control; CI translates its validated grammar into the same
      commands as the interactive CLI.
@@ -168,3 +168,18 @@ progress renderer. No daemon, HTTP, or TUI is implemented.
   all passed; markdown-link validation and shell syntax checks passed. The three
   ignored OCI tests remain environment-dependent; `shellcheck` and `shfmt` were
   unavailable locally, and no shell files changed.
+- Checkpoint 6 (deployment and CI slice): `Command::DeployImage`,
+  `DeployBranch`, and `Rollback` execute through `ControlExecutor` with typed
+  deployment results, errors, and semantic event delivery; the boundary owns
+  public Caddy-path configuration and preserves the CLI's existing output and
+  error classification. The restricted CI adapter now translates its validated
+  grammar into the same branch-deploy command as the interactive CLI. New
+  `tests/control_deployment.rs` directly imports, deploys an image, deploys
+  branches (including the CI grammar), and rolls back through the library with
+  typed results and collected events. `cargo fmt --check`, `cargo clippy
+  --all-targets --all-features -- -D warnings`, `cargo test --all-features`, and
+  `cargo build --workspace --release` all passed; the three ignored OCI tests
+  remain environment-dependent. Disposable-host E2E passed via
+  `scripts/dev-vm/test-regression.sh e2e`: all 45 checks passed, including
+  branch deployment and restricted CI dispatch; the disposable clone was
+  destroyed afterwards and `pneuma-dev-base` was never altered.
