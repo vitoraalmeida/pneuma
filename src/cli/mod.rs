@@ -11,25 +11,28 @@ mod reconciliation;
 mod shared;
 mod system;
 
-use pneuma::control::ControlExecutor;
+use pneuma::control::{Command, ControlExecutor};
 
 use error::CliError;
 use shared::log_verbose;
 
-pub(crate) use args::{Command, Invocation, parse_invocation};
+pub(crate) use args::{Invocation, InvocationTarget, parse_invocation};
 
 // Routes parsed commands into the interface-neutral control boundary.
 pub(crate) fn run(invocation: Invocation) -> Result<(), CliError> {
-    let Invocation { verbose, command } = invocation;
+    let Invocation { verbose, target } = invocation;
 
-    if matches!(command, Command::Version) {
-        run_version();
-        return Ok(());
-    }
-
-    if matches!(command, Command::CiDispatch) {
-        return ci::run_ci_dispatch(&ControlExecutor::from_environment(), verbose);
-    }
+    let command = match target {
+        InvocationTarget::Version => {
+            run_version();
+            return Ok(());
+        }
+        InvocationTarget::CiDispatch => {
+            return ci::run_ci_dispatch(&ControlExecutor::from_environment(), verbose);
+        }
+        InvocationTarget::MissingDeployOption => return Err(CliError::MissingDeployOption),
+        InvocationTarget::Control(command) => command,
+    };
 
     let executor = ControlExecutor::from_environment();
     if !matches!(
@@ -48,7 +51,7 @@ pub(crate) fn run(invocation: Invocation) -> Result<(), CliError> {
         }
         Command::SystemList => system::run_system_list(&executor, verbose),
         Command::SystemShow { name } => system::run_system_show(&executor, verbose, &name),
-        Command::Import {
+        Command::ImportApplication {
             repository,
             system_name,
             manifest_path,
@@ -59,17 +62,17 @@ pub(crate) fn run(invocation: Invocation) -> Result<(), CliError> {
             system_name.as_deref(),
             manifest_path.as_deref(),
         ),
-        Command::List => application::run_list(&executor, verbose),
-        Command::Deployments { application_name } => {
+        Command::ListApplications => application::run_list(&executor, verbose),
+        Command::ListDeployments { application_name } => {
             deployment::run_deployments(&executor, verbose, &application_name)
         }
-        Command::Status { application_name } => {
+        Command::ApplicationStatus { application_name } => {
             application::run_status(&executor, verbose, &application_name)
         }
-        Command::Stop { application_name } => {
+        Command::ApplicationStop { application_name } => {
             application::run_stop(&executor, verbose, &application_name)
         }
-        Command::Start { application_name } => {
+        Command::ApplicationStart { application_name } => {
             application::run_start(&executor, verbose, &application_name)
         }
         Command::VisibilitySet {
@@ -79,24 +82,20 @@ pub(crate) fn run(invocation: Invocation) -> Result<(), CliError> {
         Command::Reconcile { application_name } => {
             reconciliation::run_reconcile(&executor, verbose, &application_name)
         }
-        Command::Deploy {
+        Command::DeployImage {
             application_name,
             image_reference,
+        } => deployment::run_deploy_oci(&executor, verbose, &application_name, &image_reference),
+        Command::DeployBranch {
+            application_name,
             branch,
-        } => deployment::run_deploy(
-            &executor,
-            verbose,
-            &application_name,
-            image_reference,
-            branch,
-        ),
+        } => deployment::run_deploy_branch(&executor, verbose, &application_name, &branch),
         Command::Rollback { application_name } => {
             deployment::run_rollback(&executor, verbose, &application_name)
         }
         Command::Doctor => doctor::run_doctor(&executor, verbose),
         Command::DatabaseBackup { path } => doctor::run_database_backup(&executor, &path),
         Command::DatabaseRestore { path } => doctor::run_database_restore(&executor, &path),
-        Command::CiDispatch | Command::Version => unreachable!(),
     }
 }
 

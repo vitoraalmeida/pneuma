@@ -38,22 +38,6 @@ pub(crate) fn run_deployments(
     Ok(())
 }
 
-// Selects the delivery mode requested by the deploy command options.
-pub(crate) fn run_deploy(
-    executor: &ControlExecutor,
-    verbose: bool,
-    application_name: &str,
-    image_reference: Option<String>,
-    branch: Option<String>,
-) -> Result<(), CliError> {
-    if let Some(branch) = branch {
-        run_deploy_branch(executor, verbose, application_name, &branch)
-    } else {
-        let image_reference = image_reference.ok_or(CliError::MissingDeployOption)?;
-        run_deploy_oci(executor, verbose, application_name, &image_reference)
-    }
-}
-
 // Deploys a supplied OCI reference through the interface-neutral boundary.
 pub(crate) fn run_deploy_oci(
     executor: &ControlExecutor,

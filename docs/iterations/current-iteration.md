@@ -23,7 +23,7 @@ unchanged.
      CLI output/exit-code plus full CI baseline evidence from v0.5.1.
    - Result: the first implementation checkpoint has an unambiguous, green
      behavioral baseline.
-2. [ ] Direct command mapping
+2. [x] Direct command mapping
    - Map parsed interactive arguments directly to `control::Command`; remove
      the duplicate CLI command vocabulary while retaining version and CI-only
      dispatch.
@@ -79,3 +79,14 @@ unchanged.
   passed. `bash -n` passed. The three ignored OCI tests remain skipped because
   `podman` is not installed; `shellcheck` and `shfmt` are unavailable locally.
   Checkpoint 2 is the first pending implementation checkpoint.
+- Checkpoint 2 (direct command mapping): `src/cli/args.rs` now maps each
+  ordinary parsed command directly to `control::Command` inside
+  `InvocationTarget`; only CLI-only version, CI dispatch, and the existing
+  missing deploy option remain adapter targets. The dispatcher consumes that
+  control command directly, including branch/image deploy selection. New unit
+  tests cover representative direct mappings, deploy selection, and
+  adapter-only targets; all 73 CLI regressions pass. `cargo fmt --check`,
+  `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test
+  --all-features`, and `cargo build --workspace --release` passed. The three
+  OCI tests remain ignored because this host has no `podman`. Checkpoint 3 is
+  the first pending implementation checkpoint.
