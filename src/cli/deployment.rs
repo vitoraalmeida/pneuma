@@ -1,42 +1,8 @@
-use pneuma::control::{Command, CommandResult, ControlExecutor};
+use pneuma::control::{Command, ControlExecutor};
 
 use super::error::CliError;
-use super::output;
 use super::progress::DeploymentProgressRenderer;
 use super::shared::log_verbose;
-
-// Lists the deployment history resolved by the boundary.
-pub(crate) fn run_deployments(
-    executor: &ControlExecutor,
-    verbose: bool,
-    application_name: &str,
-) -> Result<(), CliError> {
-    log_verbose(
-        verbose,
-        format!("resolve application by name: {application_name}"),
-    );
-    let result = executor
-        .execute(Command::ListDeployments {
-            application_name: application_name.to_owned(),
-        })
-        .map_err(CliError::from_control)?;
-    let CommandResult::ApplicationDeployments {
-        application_name,
-        deployments,
-    } = result
-    else {
-        unreachable!("ListDeployments yields ApplicationDeployments");
-    };
-    log_verbose(
-        verbose,
-        format!("list deployments of application {application_name}"),
-    );
-    println!(
-        "{}",
-        output::deployment_history(&application_name, &deployments)
-    );
-    Ok(())
-}
 
 // Deploys a supplied OCI reference through the interface-neutral boundary.
 pub(crate) fn run_deploy_oci(
@@ -59,16 +25,7 @@ pub(crate) fn run_deploy_oci(
         &mut events,
     );
     renderer.finish();
-    let result = result.map_err(CliError::from_control)?;
-    let CommandResult::ApplicationDeployed {
-        application_name,
-        deployment,
-    } = result
-    else {
-        unreachable!("DeployImage yields ApplicationDeployed");
-    };
-    println!("{}", output::deployed(&application_name, &deployment));
-    Ok(())
+    super::render_command_result(result.map_err(CliError::from_control)?, verbose)
 }
 
 // Resolves and deploys the requested branch through the interface-neutral boundary.
@@ -92,16 +49,7 @@ pub(crate) fn run_deploy_branch(
         &mut events,
     );
     renderer.finish();
-    let result = result.map_err(CliError::from_control)?;
-    let CommandResult::ApplicationDeployed {
-        application_name,
-        deployment,
-    } = result
-    else {
-        unreachable!("DeployBranch yields ApplicationDeployed");
-    };
-    println!("{}", output::deployed(&application_name, &deployment));
-    Ok(())
+    super::render_command_result(result.map_err(CliError::from_control)?, verbose)
 }
 
 // Rolls back through the interface-neutral boundary.
@@ -123,17 +71,5 @@ pub(crate) fn run_rollback(
         &mut events,
     );
     renderer.finish();
-    let result = result.map_err(CliError::from_control)?;
-    let CommandResult::ApplicationRolledBack {
-        application_name,
-        deployment: rolled_back,
-    } = result
-    else {
-        unreachable!("Rollback yields ApplicationRolledBack");
-    };
-    println!(
-        "{}",
-        output::rollback_result(&application_name, &rolled_back)
-    );
-    Ok(())
+    super::render_command_result(result.map_err(CliError::from_control)?, verbose)
 }

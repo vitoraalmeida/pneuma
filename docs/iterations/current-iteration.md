@@ -29,7 +29,7 @@ unchanged.
      dispatch.
    - Result: every ordinary interactive command reaches control without a
      parallel CLI representation.
-3. [ ] Unified execution and rendering
+3. [x] Unified execution and rendering
    - Consolidate ordinary control execution and exhaustive result rendering;
      remove redundant command-family handlers while preserving output and
      error classification.
@@ -90,3 +90,16 @@ unchanged.
   --all-features`, and `cargo build --workspace --release` passed. The three
   OCI tests remain ignored because this host has no `podman`. Checkpoint 3 is
   the first pending implementation checkpoint.
+- Checkpoint 3 (unified execution and rendering): `src/cli/mod.rs` now owns
+  ordinary control execution, `ControlError` conversion, and one exhaustive
+  `CommandResult` renderer. Redundant application, system, exposure,
+  reconciliation, and diagnostics handler modules were removed; the existing
+  progress-aware deployment handlers delegate their final rendering to that
+  renderer. Doctor still renders reports for unhealthy checks and database-open
+  failures before returning the prior failure class. The 73 binary CLI
+  regressions, including stdout, stderr, and exit-code contracts, pass; focused
+  renderer coverage preserves the unhealthy-doctor error class. `cargo fmt
+  --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo
+  test --all-features`, and `cargo build --workspace --release` passed. The
+  three OCI tests remain ignored because this host has no `podman`. Checkpoint 4
+  is the first pending implementation checkpoint.
