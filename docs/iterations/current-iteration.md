@@ -24,13 +24,16 @@ progress behavior remain unchanged.
 2. [ ] Fallible argument normalization
    - Reject an interactive deploy request without a source during argument
      normalization, before dispatch or any side effect.
+   - Cover global `--verbose` and deploy-source grammar with
+     `Cli::try_parse_from`, preserving Clap's conflicting-source rejection.
    - Result: no invalid-input variant exists in `InvocationTarget`.
 3. [ ] Execution organization
    - Give deployment command classification one CLI owner while retaining the
      shared interactive and CI execution path.
    - Result: no deployment output or event sequence changes.
 4. [ ] Rendering organization
-   - Move application status and lifecycle result text into `output.rs`.
+   - Move application status and lifecycle result text into `output.rs`; remove
+     the redundant list-rendering trim and copy from dispatch.
    - Result: final command text is owned by output functions while dispatch
      retains rendering policy and control flow.
 5. [ ] Operational regression and closure
