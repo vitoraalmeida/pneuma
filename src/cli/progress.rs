@@ -8,7 +8,7 @@ use pneuma::use_cases::deployment::{DeploymentEvent, DeploymentStep, RetirementW
 use super::shared::log_verbose;
 
 // Renders deployment events without making control execution depend on terminal behavior.
-pub(crate) struct DeploymentProgressRenderer {
+pub(super) struct DeploymentProgressRenderer {
     output: ProgressOutput,
 }
 
@@ -24,7 +24,7 @@ enum ProgressOutput {
 }
 
 impl DeploymentProgressRenderer {
-    pub(crate) fn new(verbose: bool, requested_input: Option<(&str, &str)>) -> Self {
+    pub(super) fn new(verbose: bool, requested_input: Option<(&str, &str)>) -> Self {
         if !verbose && io::stderr().is_terminal() {
             let (sender, receiver) = mpsc::channel();
             let show_request = requested_input.is_some();
@@ -47,7 +47,7 @@ impl DeploymentProgressRenderer {
     }
 
     // Reports events observationally: a disconnected animation thread changes no command result.
-    pub(crate) fn report(&mut self, event: DeploymentEvent) {
+    pub(super) fn report(&mut self, event: DeploymentEvent) {
         match &mut self.output {
             ProgressOutput::Stable {
                 verbose,
@@ -68,7 +68,7 @@ impl DeploymentProgressRenderer {
     }
 
     // Stops the terminal renderer before command output or errors are printed.
-    pub(crate) fn finish(&mut self) {
+    pub(super) fn finish(&mut self) {
         let ProgressOutput::Animated { events, thread } = &mut self.output else {
             return;
         };
@@ -174,7 +174,7 @@ fn clear_progress(visible: &mut bool) {
 }
 
 // Renders use-case events with the CLI's stable text vocabulary.
-pub(crate) fn render_deployment_event(event: &DeploymentEvent) -> String {
+fn render_deployment_event(event: &DeploymentEvent) -> String {
     match event {
         DeploymentEvent::DeploymentRequested { .. } => {
             unreachable!("deployment requests are rendered separately")

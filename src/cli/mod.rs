@@ -43,18 +43,34 @@ pub(crate) fn run(invocation: Invocation) -> Result<(), CliError> {
 }
 
 // Executes a control command and attaches CLI-only progress rendering when it deploys.
-pub(crate) fn execute_control_command(
+fn execute_control_command(
     executor: &ControlExecutor,
     command: Command,
     verbose: bool,
 ) -> Result<(), CliError> {
     log_command_start(&command, verbose);
 
+    match deployment_request(&command) {
+        Some(request) => execute_deployment_with_events(executor, command, request, verbose),
+        None => execute_without_events(executor, command, verbose),
+    }
+}
+
+// Classifies the deployment requests that use event-capable execution.
+enum DeploymentRequest {
+    Image(String),
+    Branch(String),
+    Rollback,
+}
+
+fn deployment_request(command: &Command) -> Option<DeploymentRequest> {
     match command {
-        command @ (Command::DeployImage { .. }
-        | Command::DeployBranch { .. }
-        | Command::Rollback { .. }) => execute_deployment_with_events(executor, command, verbose),
-        command => execute_without_events(executor, command, verbose),
+        Command::DeployImage {
+            image_reference, ..
+        } => Some(DeploymentRequest::Image(image_reference.clone())),
+        Command::DeployBranch { branch, .. } => Some(DeploymentRequest::Branch(branch.clone())),
+        Command::Rollback { .. } => Some(DeploymentRequest::Rollback),
+        _ => None,
     }
 }
 
@@ -78,15 +94,13 @@ fn execute_without_events(
 fn execute_deployment_with_events(
     executor: &ControlExecutor,
     command: Command,
+    request: DeploymentRequest,
     verbose: bool,
 ) -> Result<(), CliError> {
-    let requested_input = match &command {
-        Command::DeployImage {
-            image_reference, ..
-        } => Some(("image", image_reference.as_str())),
-        Command::DeployBranch { branch, .. } => Some(("branch", branch.as_str())),
-        Command::Rollback { .. } => None,
-        _ => unreachable!("only deployment commands use the event-capable execution path"),
+    let requested_input = match &request {
+        DeploymentRequest::Image(image_reference) => Some(("image", image_reference.as_str())),
+        DeploymentRequest::Branch(branch) => Some(("branch", branch.as_str())),
+        DeploymentRequest::Rollback => None,
     };
     let mut renderer = DeploymentProgressRenderer::new(verbose, requested_input);
     let mut events = |event| renderer.report(event);
@@ -96,7 +110,7 @@ fn execute_deployment_with_events(
 }
 
 // Renders every boundary result without relying on the command that produced it.
-pub(crate) fn render_command_result(result: CommandResult, verbose: bool) -> Result<(), CliError> {
+fn render_command_result(result: CommandResult, verbose: bool) -> Result<(), CliError> {
     match result {
         CommandResult::SystemCreated(system) => println!("{}", output::created_system(&system)),
         CommandResult::Systems(systems) => print_nonempty(output::system_list(&systems)),
@@ -270,16 +284,49 @@ fn render_doctor_report(report: &pneuma::adapters::diagnostics::DoctorReport, ve
 }
 
 // Prints version information without requiring host configuration or database access.
-pub(crate) fn run_version() {
+fn run_version() {
     println!("pneuma {}", env!("CARGO_PKG_VERSION"));
 }
 
 #[cfg(test)]
 mod tests {
     use pneuma::adapters::diagnostics::DoctorReport;
-    use pneuma::control::CommandResult;
+    use pneuma::control::{Command, CommandResult};
 
-    use super::{CliError, render_command_result};
+    use super::{CliError, DeploymentRequest, deployment_request, render_command_result};
+
+    #[test]
+    fn deployment_classification_selects_event_capable_execution() {
+        let image = Command::DeployImage {
+            application_name: "portal".to_owned(),
+            image_reference: "registry.example/portal@sha256:abc".to_owned(),
+        };
+        let branch = Command::DeployBranch {
+            application_name: "portal".to_owned(),
+            branch: "main".to_owned(),
+        };
+        let rollback = Command::Rollback {
+            application_name: "portal".to_owned(),
+        };
+        let ordinary = Command::ApplicationStatus {
+            application_name: "portal".to_owned(),
+        };
+
+        assert!(matches!(
+            deployment_request(&image),
+            Some(DeploymentRequest::Image(reference))
+                if reference == "registry.example/portal@sha256:abc"
+        ));
+        assert!(matches!(
+            deployment_request(&branch),
+            Some(DeploymentRequest::Branch(branch)) if branch == "main"
+        ));
+        assert!(matches!(
+            deployment_request(&rollback),
+            Some(DeploymentRequest::Rollback)
+        ));
+        assert!(deployment_request(&ordinary).is_none());
+    }
 
     #[test]
     fn unhealthy_doctor_result_keeps_the_diagnostic_failure_class() {

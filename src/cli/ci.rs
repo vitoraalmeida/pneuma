@@ -7,7 +7,7 @@ use super::error::CliError;
 use super::shared::log_verbose;
 
 // Restricts SSH CI execution to the validated command carried by SSH_ORIGINAL_COMMAND.
-pub(crate) fn run_ci_dispatch(executor: &ControlExecutor, verbose: bool) -> Result<(), CliError> {
+pub(super) fn run_ci_dispatch(executor: &ControlExecutor, verbose: bool) -> Result<(), CliError> {
     let original_command = env::var("SSH_ORIGINAL_COMMAND").map_err(|_| CliError::CiDispatch {
         source: CiDispatchError::MissingSshOriginalCommand,
     })?;

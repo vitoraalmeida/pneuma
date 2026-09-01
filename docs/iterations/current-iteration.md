@@ -27,7 +27,7 @@ progress behavior remain unchanged.
    - Cover global `--verbose` and deploy-source grammar with
      `Cli::try_parse_from`, preserving Clap's conflicting-source rejection.
    - Result: no invalid-input variant exists in `InvocationTarget`.
-3. [ ] Execution organization
+3. [x] Execution organization
    - Give deployment command classification one CLI owner while retaining the
      shared interactive and CI execution path.
    - Result: no deployment output or event sequence changes.
@@ -84,3 +84,16 @@ progress behavior remain unchanged.
   denied, all-feature tests (191 library tests, 17 CLI unit tests, 75 binary CLI
   regressions; the three OCI tests remain ignored without rootless Podman), and
   the release build passed. Checkpoint 3 is the next implementation checkpoint.
+- Checkpoint 3 (execution organization): one private `deployment_request`
+  classifier in `cli/mod.rs` now solely decides event-capable execution and
+  feeds the progress renderer, removing the duplicated match and its
+  `unreachable!` arm. `execute_control_command` remains the shared interactive
+  and CI path, CI still routes validated branch input to
+  `Command::DeployBranch`, and child-module visibility was tightened to
+  `pub(super)`/private. A unit test covers image, branch, rollback, and ordinary
+  classification; interactive image deployment, branch conflict, rollback, CI
+  branch deployment, verbose output, and progress coverage are retained. `cargo
+  fmt --check`, Clippy with warnings denied, all-feature tests (191 library
+  tests, 18 CLI unit tests, 75 binary CLI regressions; the three OCI tests
+  remain ignored without rootless Podman), and the release build passed.
+  Checkpoint 4 is the next implementation checkpoint.
