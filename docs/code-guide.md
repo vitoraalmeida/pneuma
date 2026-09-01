@@ -39,9 +39,12 @@ Every normal command follows the same skeleton before reaching its flow:
 1. `src/main.rs` loads host configuration from `/etc/pneuma/environment`
    (never overriding caller-supplied variables), derives the uid-scoped runtime
    environment (`XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`, default
-   `PNEUMA_QUADLET_DIR`), then calls `cli::run(cli::parse_invocation())`.
-2. `src/cli/args.rs` owns the Clap tree and translates it into the normalized
-   `Command` enum.
+   `PNEUMA_QUADLET_DIR`), then composes `cli::parse_invocation()` with
+   `cli::run` through `and_then`, so a normalization failure never reaches
+   dispatch.
+2. `src/cli/args.rs` owns the Clap tree and translates it fallibly into the
+   normalized `Command` enum; an `app deploy` request without `--image` or
+   `--branch` fails there as `CliError::MissingDeployOption`.
 3. `src/cli/mod.rs::run` maps every stateful command to `src/control/`.
    `ControlExecutor` captures host configuration, acquires the shared
    database-wide lock, opens one connection, executes one typed command, and
