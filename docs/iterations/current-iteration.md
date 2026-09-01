@@ -1,81 +1,68 @@
 # Current Iteration
 
-**Status:** concluída
+**Status:** em andamento
 
-**Base:** `e7ade02` (`chore(release): v0.5.0`)
+**Base:** `5b0f564` (`docs: approve CLI adapter consolidation design`)
 
 **Approved design:**
-[`../designs/interface-neutral-execution.md`](../designs/interface-neutral-execution.md)
-(approved 2026-08-31)
+[`../designs/cli-adapter-consolidation.md`](../designs/cli-adapter-consolidation.md)
+(approved 2026-09-01)
 
-## Iteration — Interface-Neutral Execution
+## Iteration - CLI Adapter Consolidation
 
-Objective: move command execution out of the CLI presentation layer into a
-concrete, synchronous library boundary callable by the existing CLI and later by
-TUI or HTTP adapters, add semantic deployment events, and add an animated CLI
-progress renderer. No daemon, HTTP, or TUI is implemented.
+Objective: consolidate the CLI adapter so parsed interactive arguments map
+directly to the existing control command vocabulary and one adapter flow owns
+execution and result rendering. This is a structural refactor: CLI syntax,
+text output, exit-code classes, CI grammar, and progress behavior remain
+unchanged.
 
 ## Checkpoints
 
-1. [x] System vertical slice
-   - Add the control module (`Command`, `CommandResult`, `ControlError`,
-     `ControlExecutor`, host configuration) and route system
-     create/list/show through it.
-   - Result: the first non-CLI caller executes real commands through the
-     library while CLI output and exit codes remain unchanged.
-2. [x] Catalog and query slice
-   - Route import, application list, and deployment history through control;
-     move workspace configuration and application-name resolution out of CLI.
-   - Result: catalog commands prove configured paths and typed collections
-     behind the boundary.
-3. [x] Runtime lifecycle slice
-   - Route status, start, and stop through control with existing observation
-     effects and per-Application locking.
-   - Result: stateful host operations execute interface-neutrally without
-     weakening lock or transaction invariants.
-4. [x] Exposure and reconciliation slice
-   - Route visibility changes and reconciliation through control with
-     control-owned Caddy path configuration.
-   - Result: all ordinary application management except deployment uses the
-     boundary.
-5. [x] Semantic deployment events
-   - Replace presentation-bearing deployment progress with closed semantic
-     events, matched start/completion boundaries, typed failure codes, and
-     typed retirement warnings; add event-capable rollback.
-   - Result: deployment reports real blocking operations without UI prose in
-     use cases.
-6. [x] Deployment and CI slice
-   - Route image deploy, branch deploy, rollback, and restricted CI dispatch
-     through control; CI translates its validated grammar into the same
-     commands as the interactive CLI.
-   - Result: interactive and CI deployments share one execution path, proved by
-     disposable-host functional E2E.
-7. [x] Diagnostics and database slice
-   - Convert doctor to a typed report; route doctor, backup, and restore
-     through control; remove CLI-owned lock/connection lifetime and remaining
-     terminal output outside the interface layer.
-   - Result: every stateful command executes through the boundary.
-8. [x] Concurrent CLI renderer
-   - Add a CLI-only renderer thread with animated TTY progress, stable verbose
-     lines, and deterministic non-TTY output.
-   - Result: progress animation exists entirely in the interface layer.
-9. [x] Operational regression and closure
-   - Synchronize implemented documentation, remove temporary structure, and run
-     full CI plus the complete disposable-host regression.
-   - Result: living documentation reflects the control boundary; QEMU E2E,
-     reconciliation, bootstrap, and CI evidence all passed.
+1. [x] Governance and baseline
+   - Confirm the approved committed design, activate this tracker, and record
+     CLI output/exit-code plus full CI baseline evidence from v0.5.1.
+   - Result: the first implementation checkpoint has an unambiguous, green
+     behavioral baseline.
+2. [ ] Direct command mapping
+   - Map parsed interactive arguments directly to `control::Command`; remove
+     the duplicate CLI command vocabulary while retaining version and CI-only
+     dispatch.
+   - Result: every ordinary interactive command reaches control without a
+     parallel CLI representation.
+3. [ ] Unified execution and rendering
+   - Consolidate ordinary control execution and exhaustive result rendering;
+     remove redundant command-family handlers while preserving output and
+     error classification.
+   - Result: one CLI adapter path executes and renders all ordinary control
+     commands.
+4. [ ] Deployment and CI execution
+   - Consolidate event-capable deployment execution and restricted CI branch
+     deployment routing; prove the existing interactive and CI contracts.
+   - Result: all deployment entry points share one CLI execution path without
+     changing event, progress, or SSH behavior.
+5. [ ] Operational regression and closure
+   - Synchronize implemented documentation and run the required regression
+     ladder before closing the iteration.
+   - Result: living documentation reflects the consolidated adapter and the
+     public CLI contract remains proven.
 
 ## Acceptance Criteria
 
-- Every checkpoint meets the acceptance scenarios in the approved design
-  without adding its stated non-goals.
-- Existing CLI syntax, stdout, non-TTY stderr, and exit-code classes remain
-  unchanged throughout the iteration.
-- Each code checkpoint has focused tests plus `cargo fmt --check`,
+- Every non-version interactive command maps directly to one `control::Command`;
+  no duplicate CLI command enum remains.
+- One exhaustive result-rendering path covers every `CommandResult` variant;
+  deployment and CI branch deploy retain their event-capable CLI execution path.
+- Existing CLI syntax, stdout, non-TTY stderr, verbose output, TTY animation,
+  error wording, and exit-code classes remain unchanged.
+- Doctor retains diagnostic report rendering for failed checks and database-open
+  failures before returning the existing failure class.
+- Control integration tests remain CLI- and terminal-free; focused CLI tests
+  cover command mapping, rendering policy, and each command family's contract.
+- Each code checkpoint passes `cargo fmt --check`,
   `cargo clippy --all-targets --all-features -- -D warnings`,
   `cargo test --all-features`, and `cargo build --workspace --release`.
-- Disposable-host E2E is required at checkpoint 6 and at closure; unavailable
-  environments are recorded as skips, never passes.
+- Environment-dependent OCI and disposable-host checks record their actual
+  PASS/FAIL/SKIP state and are never called green when unavailable.
 
 ## Blockers
 
@@ -83,142 +70,12 @@ progress renderer. No daemon, HTTP, or TUI is implemented.
 
 ## Validation Evidence
 
-- Checkpoint 0 (governance and baseline): the approved design is committed and
-  indexed, this tracker is the sole active execution tracker, and the roadmap
-  schedules the work as v0.5.1 before v0.6. Baseline on `e7ade02`:
-  `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D
-  warnings`, `cargo test --all-features`, `cargo build --workspace --release`,
-  and markdown-link validation all passed. The three ignored OCI tests require
-  a configured rootless Podman host and remain environment-dependent.
-   Disposable-VM baseline: `scripts/dev-vm/test-regression.sh e2e` passed on
-   `e7ade02` (fixture cycle, public HTTPS deployment, reboot recovery, rollback,
-   and branch-based Git flow); the disposable clone was destroyed afterwards and
-   `pneuma-dev-base` was never altered. Checkpoint 1 is the first pending
-   implementation checkpoint.
-- Checkpoint 1 (system vertical slice): added `src/control/` with `Command`,
-  `CommandResult`, `ControlError`, `ControlExecutor`, and `HostConfiguration`;
-  the executor acquires the shared database-wide lock and opens one connection
-  per command; CLI `system create/list/show` route through it with unchanged
-  output and exit codes (new CLI regression test). New `tests/control_system.rs`
-  executes create/list/show, missing-system, invalid-name, and database-busy
-  scenarios directly through the library. `cargo fmt --check`,
-  `cargo clippy --all-targets --all-features -- -D warnings`,
-  `cargo test --all-features`, and `cargo build --workspace --release` all
-  passed; the three ignored OCI tests remain environment-dependent.
-- Checkpoint 2 (catalog and query slice): `HostConfiguration` now owns
-  `PNEUMA_WORKSPACE_PATH`; `Command::ImportApplication`, `ListApplications`,
-  and `ListDeployments` execute through `ControlExecutor` with typed
-  `ApplicationImported`/`Applications`/`ApplicationDeployments` results.
-  Application-name resolution moved into
-  `use_cases::application::resolve_application` (`ApplicationLookupError`) and
-  catalog pairing into `list_application_catalog` (`ApplicationCatalogEntry`);
-  the CLI only maps arguments, renders results, and reuses the unchanged error
-  vocabulary via `CliError::from_control`. CLI import/list/deployments output
-  and exit codes are unchanged (existing CLI regression tests). New
-  `tests/control_catalog.rs` executes import, re-import idempotency, catalog
-  listing, empty history, missing-application lookup, and local-path rejection
-  through the library. `cargo fmt --check`, `cargo clippy --all-targets
-  --all-features -- -D warnings`, `cargo test --all-features`, and
-  `cargo build --workspace --release` all passed; the three ignored OCI tests
-  remain environment-dependent.
-- Checkpoint 3 (runtime lifecycle slice): `Command::ApplicationStatus`,
-  `ApplicationStop`, and `ApplicationStart` execute through `ControlExecutor`
-  with typed `ApplicationStatus`/`ApplicationStopped`/`ApplicationStarted`
-  results carrying the use-case `RuntimeObservation`; application resolution
-  happens inside the boundary. The per-Application kernel lock and
-  intent-before-effect ordering remain owned by
-  `use_cases/application/runtime.rs`, so lock and transaction invariants are
-  unchanged. CLI status/stop/start map arguments and render observations only;
-  messages and exit-code classes are unchanged (`RuntimeStatus`, `RuntimeStop`,
-  and `RuntimeStart` map onto the existing `CliError::ApplicationRuntime`
-  vocabulary). New `tests/control_lifecycle.rs` executes observation,
-  direct-container stop, supervised start recovery of a recreated container,
-  missing-application lookup errors, and undeployed `NotDeployed` errors
-  through the library without Clap or terminal output. `cargo fmt --check`,
-  `cargo clippy --all-targets --all-features -- -D warnings`,
-  `cargo test --all-features`, and `cargo build --workspace --release` all
-  passed; the three ignored OCI tests remain environment-dependent.
-- Checkpoint 4 (exposure and reconciliation slice): `HostConfiguration` now
-  owns `PNEUMA_CADDY_MANAGED_PATH` and `PNEUMA_CADDYFILE_PATH`;
-  `Command::VisibilitySet` and `Command::Reconcile` execute through
-  `ControlExecutor` with typed `ExposureChanged` and `Reconciled` results. The
-  CLI renders only; messages and exit-code classes are unchanged, including the
-  reconcile invalid-name path mapping onto the existing
-  `ReconciliationReadError::ApplicationNotFound` vocabulary. The per-Application
-  lock, CAS exposure reservations, and Caddy compensation ordering remain owned
-  by the use cases. New `tests/control_exposure.rs` executes missing-application
-  lookup, domain-required rejection, a full internal→public materialization
-  (typed result, canonical fragment, fake `caddy` validate/reload, external
-  health `curl`, persisted `public`/`active` state), and missing/undeployed
-  reconcile errors through the library without Clap or terminal output.
-  `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D
-  warnings`, `cargo test --all-features`, and `cargo build --workspace
-  --release` all passed; the three ignored OCI tests remain
-   environment-dependent.
-- Checkpoint 5 (semantic deployment events): replaced the presentation-bearing
-  progress API with closed `DeploymentEvent`/`DeploymentStep` enums, including
-  typed `DeploymentFailureCode` evidence and `RetirementWarning` variants.
-  Branch resolution, image resolution and pulling, candidate materialization,
-  health checks, promotion, cleanup, and prior-runtime retirement now emit
-  matched boundaries around their real operations; rollback has the same
-  event-capable path. Deployment use cases no longer write retirement warnings
-  to the terminal; the CLI renders event labels and preserves non-verbose
-  retirement warnings. Deployment integration tests assert complete OCI and
-  branch event sequences, typed failure/warning events, and verbose rollback
-  events. `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D
-  warnings`, `cargo test --all-features`, and `cargo build --workspace --release`
-  all passed; markdown-link validation and shell syntax checks passed. The three
-  ignored OCI tests remain environment-dependent; `shellcheck` and `shfmt` were
-  unavailable locally, and no shell files changed.
-- Checkpoint 6 (deployment and CI slice): `Command::DeployImage`,
-  `DeployBranch`, and `Rollback` execute through `ControlExecutor` with typed
-  deployment results, errors, and semantic event delivery; the boundary owns
-  public Caddy-path configuration and preserves the CLI's existing output and
-  error classification. The restricted CI adapter now translates its validated
-  grammar into the same branch-deploy command as the interactive CLI. New
-  `tests/control_deployment.rs` directly imports, deploys an image, deploys
-  branches (including the CI grammar), and rolls back through the library with
-  typed results and collected events. `cargo fmt --check`, `cargo clippy
-  --all-targets --all-features -- -D warnings`, `cargo test --all-features`, and
-  `cargo build --workspace --release` all passed; the three ignored OCI tests
-  remain environment-dependent. Disposable-host E2E passed via
-  `scripts/dev-vm/test-regression.sh e2e`: all 45 checks passed, including
-  branch deployment and restricted CI dispatch; the disposable clone was
-  destroyed afterwards and `pneuma-dev-base` was never altered.
-- Checkpoint 7 (diagnostics and database slice): `Command::Doctor`,
-  `DatabaseBackup`, and `DatabaseRestore` now execute through `ControlExecutor`;
-  doctor returns a typed `DoctorReport`, including a typed database-open failure
-  report, while the CLI owns verbose and report rendering. Backup reuses the
-  executor-owned connection under the shared lock; restore retains its exclusive
-  lock path and returns typed source and pre-restore paths. Diagnostic adapters,
-  control, use cases, and configuration no longer write to the terminal. New
-  `tests/control_diagnostics_database.rs` executes diagnostics, backup, restore,
-  and database-open failure directly through the library; CLI backup/restore
-  output remains covered. `cargo fmt --check`, `cargo clippy --all-targets
-  --all-features -- -D warnings`, `cargo test --all-features`, and `cargo build
-  --workspace --release`, markdown-link validation, and shell syntax checks all
-  passed; the three ignored OCI tests remain environment-dependent. `shellcheck`
-  and `shfmt` were unavailable locally, and no shell files changed.
-- Checkpoint 8 (concurrent CLI renderer): non-verbose deployment and rollback
-  event callbacks now feed a CLI-only `std` channel and renderer thread when
-  stderr is a TTY. The renderer animates the active semantic step, clears it
-  before final output or warnings, and never affects command execution when its
-  receiver is unavailable. Verbose output remains synchronous and non-TTY
-  output retains the existing deterministic text without cursor controls.
-  `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D
-  warnings`, `cargo test --all-features`, and `cargo build --workspace --release`
-  all passed; the three ignored OCI tests remain environment-dependent.
-- Checkpoint 9 (closure): living documentation now records the control boundary,
-  typed event delivery, and CLI-only renderer; no temporary direct CLI execution
-  structure remains. On `1d247ad`, `cargo fmt --check`, `cargo clippy
-  --all-targets --all-features -- -D warnings`, `cargo test --all-features`, and
-  `cargo build --workspace --release` all passed, as did markdown-link validation
-  and shell syntax checks. The three ignored OCI tests remain skipped because
-  this host has no configured rootless Podman; `shellcheck` and `shfmt` were
-  unavailable locally, and no shell files changed. The cloud-image QEMU suite
-  (`PNEUMA_VM_ACCEL=kvm PNEUMA_VM_CPUS=4 PNEUMA_VM_RECONCILIATION=1
-  scripts/vm/run-e2e.sh`) passed all 45 `test-all.sh` checks and all 21
-  reconciliation cases on a fresh Debian 13 guest; the instance was destroyed.
-  The separate pristine-clone bootstrap acceptance (`scripts/dev-vm/test-regression.sh
-  bootstrap --ref v0.5.0`) passed all 89 checks and destroyed its clone;
-  `pneuma-dev-base` was never altered.
+- Checkpoint 1 (governance and baseline): the approved design is committed as
+  `5b0f564`, the roadmap schedules v0.5.2 after completed v0.5.1 and before
+  v0.6, and this tracker is the sole active tracker. On `5b0f564`, `cargo fmt
+  --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo
+  test --all-features` (191 library tests, 9 binary tests, and all integration
+  tests), `cargo build --workspace --release`, and markdown-link validation
+  passed. `bash -n` passed. The three ignored OCI tests remain skipped because
+  `podman` is not installed; `shellcheck` and `shfmt` are unavailable locally.
+  Checkpoint 2 is the first pending implementation checkpoint.
