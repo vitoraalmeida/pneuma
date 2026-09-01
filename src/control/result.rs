@@ -1,3 +1,6 @@
+use std::path::PathBuf;
+
+use crate::adapters::diagnostics::DoctorReport;
 use crate::domain::application::{ApplicationName, ApplicationSummary};
 use crate::domain::deployment::DeploymentHistory;
 use crate::domain::system::System;
@@ -46,5 +49,13 @@ pub enum CommandResult {
     Reconciled {
         application_name: ApplicationName,
         result: ReconciliationResult,
+    },
+    Doctor(DoctorReport),
+    DatabaseBackedUp {
+        path: PathBuf,
+    },
+    DatabaseRestored {
+        path: PathBuf,
+        pre_restore_path: PathBuf,
     },
 }

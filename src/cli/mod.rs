@@ -10,9 +10,6 @@ mod reconciliation;
 mod shared;
 mod system;
 
-use std::path::Path;
-
-use pneuma::adapters::database::{self, DatabaseError, DatabaseLock, LockMode};
 use pneuma::control::ControlExecutor;
 
 use error::CliError;
@@ -20,44 +17,29 @@ use shared::log_verbose;
 
 pub(crate) use args::{Command, Invocation, parse_invocation};
 
-// Routes commands so diagnostics, backup, restore, and SSH CI avoid unnecessary database work.
+// Routes parsed commands into the interface-neutral control boundary.
 pub(crate) fn run(invocation: Invocation) -> Result<(), CliError> {
     let Invocation { verbose, command } = invocation;
 
-    if matches!(
-        command,
-        Command::Version
-            | Command::Doctor
-            | Command::DatabaseBackup { .. }
-            | Command::DatabaseRestore { .. }
-    ) {
-        let database_path = database::configured_path();
-
-        if matches!(command, Command::Version) {
-            run_version();
-            return Ok(());
-        }
-        if let Command::DatabaseRestore { path } = command {
-            // Restore takes the exclusive database-wide lock itself.
-            return doctor::run_database_restore(&database_path, &path);
-        }
-
-        let _lock = shared_database_lock(&database_path)?;
-        if let Command::DatabaseBackup { path } = command {
-            return doctor::run_database_backup(&database_path, &path);
-        }
-
-        let connection = doctor::open_doctor_connection(&database_path)?;
-        return doctor::run_doctor(&connection, verbose);
+    if matches!(command, Command::Version) {
+        run_version();
+        return Ok(());
     }
 
     if matches!(command, Command::CiDispatch) {
         return ci::run_ci_dispatch(&ControlExecutor::from_environment(), verbose);
     }
 
-    let database_path = database::configured_path();
-    log_verbose(verbose, format!("database: {}", database_path.display()));
     let executor = ControlExecutor::from_environment();
+    if !matches!(
+        command,
+        Command::Doctor | Command::DatabaseBackup { .. } | Command::DatabaseRestore { .. }
+    ) {
+        log_verbose(
+            verbose,
+            format!("database: {}", executor.host().database_path.display()),
+        );
+    }
 
     match command {
         Command::SystemCreate { name, description } => {
@@ -110,24 +92,10 @@ pub(crate) fn run(invocation: Invocation) -> Result<(), CliError> {
         Command::Rollback { application_name } => {
             deployment::run_rollback(&executor, verbose, &application_name)
         }
-        Command::CiDispatch => unreachable!(),
-        Command::Doctor
-        | Command::Version
-        | Command::DatabaseBackup { .. }
-        | Command::DatabaseRestore { .. } => unreachable!(),
-    }
-}
-
-// Acquires the shared database-wide lock held for as long as the command uses the database.
-fn shared_database_lock(database_path: &Path) -> Result<DatabaseLock, CliError> {
-    match DatabaseLock::try_acquire(database_path, LockMode::Shared) {
-        Ok(Some(lock)) => Ok(lock),
-        Ok(None) => Err(CliError::Database {
-            source: DatabaseError::DatabaseBusy {
-                path: database_path.to_path_buf(),
-            },
-        }),
-        Err(source) => Err(CliError::Database { source }),
+        Command::Doctor => doctor::run_doctor(&executor, verbose),
+        Command::DatabaseBackup { path } => doctor::run_database_backup(&executor, &path),
+        Command::DatabaseRestore { path } => doctor::run_database_restore(&executor, &path),
+        Command::CiDispatch | Command::Version => unreachable!(),
     }
 }
 

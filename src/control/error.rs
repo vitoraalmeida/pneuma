@@ -1,6 +1,7 @@
 use thiserror::Error;
 
 use crate::adapters::database::DatabaseError;
+use crate::adapters::diagnostics::DoctorReport;
 use crate::adapters::stores::application_store::ApplicationStoreError;
 use crate::adapters::stores::deployment_store::DeploymentStoreError;
 use crate::domain::release::InvalidOciArtifact;
@@ -65,4 +66,10 @@ pub enum ControlError {
     VisibilitySet { source: ExposureChangeError },
     #[error(transparent)]
     Reconcile { source: ReconciliationReadError },
+    #[error("{source}")]
+    DoctorConnection {
+        #[source]
+        source: DatabaseError,
+        report: DoctorReport,
+    },
 }

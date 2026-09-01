@@ -1,6 +1,7 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
+use pneuma::adapters::diagnostics::{CheckOutcome, DoctorCheck, DoctorReport};
 use pneuma::domain::application::{ApplicationName, ApplicationSummary};
 use pneuma::domain::deployment::{DeploymentHistory, DeploymentLifecycle};
 use pneuma::domain::exposure::Visibility;
@@ -233,11 +234,116 @@ pub(crate) fn system_details(details: &SystemDetails) -> String {
     output
 }
 
-pub(crate) fn doctor_connection_failure(database_path: &Path) -> String {
+pub(crate) fn doctor_report(report: &DoctorReport) -> String {
+    let mut lines: Vec<String> = report.checks.iter().map(render_doctor_check).collect();
+    lines.push(String::new());
+    lines.push(if report.is_healthy() {
+        "All checks passed!".to_owned()
+    } else {
+        "Some checks failed. Please review the output above.".to_owned()
+    });
+    lines.join("\n")
+}
+
+pub(crate) fn database_backup(path: &Path) -> String {
+    format!("Database backup: {}", path.display())
+}
+
+pub(crate) fn database_restore(path: &Path, pre_restore_path: &Path) -> String {
     format!(
-        "✗ Database connection: FAILED (unable to open database at {})\n\nSome checks failed. Please review the output above.",
-        database_path.display()
+        "Database restored from {}\nPre-restore backup: {}",
+        path.display(),
+        pre_restore_path.display()
     )
+}
+
+fn render_doctor_check(check: &DoctorCheck) -> String {
+    match check {
+        DoctorCheck::DatabaseConnection(outcome) => {
+            format_doctor_outcome("Database connection", outcome, "OK")
+        }
+        DoctorCheck::DatabaseSchema(outcome) => match outcome {
+            CheckOutcome::Passed { detail } => format!("✓ Database schema: current ({detail})"),
+            CheckOutcome::Failed { detail } | CheckOutcome::Unavailable { detail } => {
+                format!("✗ Database schema: FAILED ({detail})")
+            }
+        },
+        DoctorCheck::WorkspaceDirectory { path, exists } => format!(
+            "{} Workspace directory: {} ({})",
+            if *exists { "✓" } else { "✗" },
+            path.display(),
+            if *exists { "exists" } else { "does not exist" }
+        ),
+        DoctorCheck::CaddyManagedDirectory { path, exists } => format!(
+            "{} Caddy managed directory: {} ({})",
+            if *exists { "✓" } else { "✗" },
+            path.display(),
+            if *exists { "exists" } else { "does not exist" }
+        ),
+        DoctorCheck::Caddyfile { path, exists } => format!(
+            "{} Caddyfile: {} ({})",
+            if *exists { "✓" } else { "✗" },
+            path.display(),
+            if *exists { "exists" } else { "does not exist" }
+        ),
+        DoctorCheck::CaddyConfiguration(outcome) => {
+            format_doctor_outcome("Caddy configuration", outcome, "valid")
+        }
+        DoctorCheck::Git(outcome) => format_command_availability("Git", outcome),
+        DoctorCheck::Podman(outcome) => format_command_availability("Podman", outcome),
+        DoctorCheck::ActiveOciImage { image, outcome } => match outcome {
+            CheckOutcome::Passed { .. } => format!("✓ Active OCI image: {image} (pullable)"),
+            CheckOutcome::Failed { detail } | CheckOutcome::Unavailable { detail } => {
+                format!("✗ Active OCI image: {image} (FAILED: {detail})")
+            }
+        },
+        DoctorCheck::ActiveOciImages(outcome) => match outcome {
+            CheckOutcome::Passed { .. } => unreachable!(),
+            CheckOutcome::Failed { detail } | CheckOutcome::Unavailable { detail } => {
+                format!("✗ Active OCI images: FAILED ({detail})")
+            }
+        },
+        DoctorCheck::ActiveLocalImage => "- Active local image: skipped".to_owned(),
+        DoctorCheck::DiskSpace { path, outcome } => match outcome {
+            CheckOutcome::Passed { .. } => {
+                format!("✓ Disk space: {} (at least 1 GiB free)", path.display())
+            }
+            CheckOutcome::Failed { .. } => {
+                format!("✗ Disk space: {} (less than 1 GiB free)", path.display())
+            }
+            CheckOutcome::Unavailable { .. } => {
+                format!("✗ Disk space: {} (unable to inspect)", path.display())
+            }
+        },
+        DoctorCheck::PodmanRootless(outcome) => {
+            format_doctor_outcome("Podman rootless", outcome, "OK")
+        }
+        DoctorCheck::PodmanQuadletUserGenerator { path } => match path {
+            Some(path) => format!("✓ Podman Quadlet user generator: {}", path.display()),
+            None => {
+                "✗ Podman Quadlet user generator: not found (install Podman >= 4.4 or Debian 13)"
+                    .to_owned()
+            }
+        },
+        DoctorCheck::Caddy(outcome) => format_command_availability("Caddy", outcome),
+    }
+}
+
+fn format_doctor_outcome(name: &str, outcome: &CheckOutcome, success: &str) -> String {
+    match outcome {
+        CheckOutcome::Passed { .. } => format!("✓ {name}: {success}"),
+        CheckOutcome::Failed { detail } | CheckOutcome::Unavailable { detail } => {
+            format!("✗ {name}: FAILED ({detail})")
+        }
+    }
+}
+
+fn format_command_availability(name: &str, outcome: &CheckOutcome) -> String {
+    match outcome {
+        CheckOutcome::Passed { detail } => format!("✓ {name}: {detail}"),
+        CheckOutcome::Failed { .. } => format!("✗ {name}: command failed"),
+        CheckOutcome::Unavailable { detail } => format!("✗ {name}: not found ({detail})"),
+    }
 }
 
 #[cfg(test)]
@@ -250,9 +356,12 @@ mod tests {
     }
 
     #[test]
-    fn doctor_failure_names_the_database_path() {
-        let rendered = doctor_connection_failure(Path::new("/tmp/pneuma.sqlite3"));
-        assert!(rendered.contains("/tmp/pneuma.sqlite3"));
-        assert!(rendered.contains("Some checks failed"));
+    fn database_restore_names_both_paths() {
+        let rendered = database_restore(
+            Path::new("/tmp/restore.sqlite3"),
+            Path::new("/tmp/pre-restore.sqlite3"),
+        );
+        assert!(rendered.contains("/tmp/restore.sqlite3"));
+        assert!(rendered.contains("/tmp/pre-restore.sqlite3"));
     }
 }

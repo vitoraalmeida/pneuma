@@ -50,7 +50,7 @@ progress renderer. No daemon, HTTP, or TUI is implemented.
      commands as the interactive CLI.
    - Result: interactive and CI deployments share one execution path, proved by
      disposable-host functional E2E.
-7. [ ] Diagnostics and database slice
+7. [x] Diagnostics and database slice
    - Convert doctor to a typed report; route doctor, backup, and restore
      through control; remove CLI-owned lock/connection lifetime and remaining
      terminal output outside the interface layer.
@@ -183,3 +183,17 @@ progress renderer. No daemon, HTTP, or TUI is implemented.
   `scripts/dev-vm/test-regression.sh e2e`: all 45 checks passed, including
   branch deployment and restricted CI dispatch; the disposable clone was
   destroyed afterwards and `pneuma-dev-base` was never altered.
+- Checkpoint 7 (diagnostics and database slice): `Command::Doctor`,
+  `DatabaseBackup`, and `DatabaseRestore` now execute through `ControlExecutor`;
+  doctor returns a typed `DoctorReport`, including a typed database-open failure
+  report, while the CLI owns verbose and report rendering. Backup reuses the
+  executor-owned connection under the shared lock; restore retains its exclusive
+  lock path and returns typed source and pre-restore paths. Diagnostic adapters,
+  control, use cases, and configuration no longer write to the terminal. New
+  `tests/control_diagnostics_database.rs` executes diagnostics, backup, restore,
+  and database-open failure directly through the library; CLI backup/restore
+  output remains covered. `cargo fmt --check`, `cargo clippy --all-targets
+  --all-features -- -D warnings`, `cargo test --all-features`, and `cargo build
+  --workspace --release`, markdown-link validation, and shell syntax checks all
+  passed; the three ignored OCI tests remain environment-dependent. `shellcheck`
+  and `shfmt` were unavailable locally, and no shell files changed.

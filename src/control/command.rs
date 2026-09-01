@@ -1,5 +1,7 @@
 /// Interface-neutral command vocabulary. The CLI maps parsed arguments onto
 /// these commands; later adapters issue the same commands without Clap.
+use std::path::PathBuf;
+
 use crate::domain::exposure::Visibility;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,5 +49,12 @@ pub enum Command {
     },
     Reconcile {
         application_name: String,
+    },
+    Doctor,
+    DatabaseBackup {
+        path: PathBuf,
+    },
+    DatabaseRestore {
+        path: PathBuf,
     },
 }

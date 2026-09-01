@@ -19,6 +19,7 @@ pub use self::host::HostConfiguration;
 pub use self::result::CommandResult;
 
 use crate::adapters::database::{self, DatabaseError, DatabaseLock, LockMode};
+use crate::adapters::diagnostics;
 use crate::domain::application::ApplicationName;
 use crate::domain::release::OciArtifact;
 use crate::domain::system::SystemName;
@@ -57,9 +58,28 @@ impl ControlExecutor {
         command: Command,
         events: &mut dyn FnMut(deployment::DeploymentEvent),
     ) -> Result<CommandResult, ControlError> {
+        if let Command::DatabaseRestore { path } = command {
+            let pre_restore_path = database::restore_and_verify(&self.host.database_path, &path)
+                .map_err(|source| ControlError::Database { source })?;
+            return Ok(CommandResult::DatabaseRestored {
+                path,
+                pre_restore_path,
+            });
+        }
+
         let _lock = self.acquire_shared_database_lock()?;
-        let mut connection = database::open(&self.host.database_path)
-            .map_err(|source| ControlError::Database { source })?;
+        let mut connection = match database::open(&self.host.database_path) {
+            Ok(connection) => connection,
+            Err(source) if matches!(command, Command::Doctor) => {
+                return Err(ControlError::DoctorConnection {
+                    source,
+                    report: diagnostics::DoctorReport::database_connection_failure(
+                        &self.host.database_path,
+                    ),
+                });
+            }
+            Err(source) => return Err(ControlError::Database { source }),
+        };
 
         match command {
             Command::SystemCreate { name, description } => {
@@ -261,6 +281,19 @@ impl ControlExecutor {
                     result,
                 })
             }
+            Command::Doctor => Ok(CommandResult::Doctor(diagnostics::run(
+                &connection,
+                &self.host.database_path,
+                &self.host.workspace_path,
+                &self.host.caddy_managed_path,
+                &self.host.caddyfile_path,
+            ))),
+            Command::DatabaseBackup { path } => {
+                database::backup_from_connection(&connection, &path)
+                    .map_err(|source| ControlError::Database { source })?;
+                Ok(CommandResult::DatabaseBackedUp { path })
+            }
+            Command::DatabaseRestore { .. } => unreachable!(),
         }
     }
 

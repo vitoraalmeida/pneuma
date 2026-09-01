@@ -121,6 +121,7 @@ impl CliError {
             ControlError::Rollback { source } => CliError::Rollback { source },
             ControlError::VisibilitySet { source } => CliError::VisibilitySet { source },
             ControlError::Reconcile { source } => CliError::Reconcile { source },
+            ControlError::DoctorConnection { source, .. } => CliError::Database { source },
         }
     }
 

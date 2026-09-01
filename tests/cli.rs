@@ -439,6 +439,10 @@ fn database_backup_and_restore_preserve_catalog_state() {
         .output()
         .unwrap();
     assert_command_succeeded(&backup_output);
+    assert_eq!(
+        String::from_utf8(backup_output.stdout).unwrap(),
+        format!("Database backup: {}\n", backup.display())
+    );
     let connection = database::open(&environment.database_path).unwrap();
     connection.execute("DELETE FROM applications", []).unwrap();
     drop(connection);
@@ -449,6 +453,14 @@ fn database_backup_and_restore_preserve_catalog_state() {
         .output()
         .unwrap();
     assert_command_succeeded(&restore_output);
+    assert!(
+        String::from_utf8(restore_output.stdout)
+            .unwrap()
+            .starts_with(&format!(
+                "Database restored from {}\nPre-restore backup: ",
+                backup.display()
+            ))
+    );
     let connection = database::open(&environment.database_path).unwrap();
     let count: i64 = connection
         .query_row("SELECT COUNT(*) FROM applications", [], |row| row.get(0))
