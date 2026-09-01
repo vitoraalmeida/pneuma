@@ -4,6 +4,8 @@ use clap::{Parser, Subcommand, ValueEnum};
 use pneuma::control::Command as ControlCommand;
 use pneuma::domain::exposure::Visibility;
 
+use super::error::CliError;
+
 #[derive(Parser)]
 #[command(
     name = "pneuma",
@@ -147,9 +149,11 @@ enum CiCommands {
     Dispatch,
 }
 
-impl From<Commands> for InvocationTarget {
-    fn from(cmd: Commands) -> Self {
-        match cmd {
+impl TryFrom<Commands> for InvocationTarget {
+    type Error = CliError;
+
+    fn try_from(cmd: Commands) -> Result<Self, Self::Error> {
+        Ok(match cmd {
             Commands::System { command } => match command {
                 SystemCommands::Create { name, description } => {
                     Self::Control(ControlCommand::SystemCreate { name, description })
@@ -185,15 +189,19 @@ impl From<Commands> for InvocationTarget {
                     image,
                     branch,
                 } => match (image, branch) {
-                    (_, Some(branch)) => Self::Control(ControlCommand::DeployBranch {
-                        application_name,
-                        branch,
-                    }),
                     (Some(image_reference), None) => Self::Control(ControlCommand::DeployImage {
                         application_name,
                         image_reference,
                     }),
-                    (None, None) => Self::MissingDeployOption,
+                    (None, Some(branch)) => Self::Control(ControlCommand::DeployBranch {
+                        application_name,
+                        branch,
+                    }),
+                    (None, None) => return Err(CliError::MissingDeployOption),
+                    // Clap enforces the --image/--branch conflict before normalization runs.
+                    (Some(_), Some(_)) => {
+                        unreachable!("clap rejects --image and --branch as conflicting options")
+                    }
                 },
                 AppCommands::Visibility { command } => match command {
                     VisibilityCommands::Set {
@@ -223,8 +231,10 @@ impl From<Commands> for InvocationTarget {
             Commands::Reconcile { application_name } => {
                 Self::Control(ControlCommand::Reconcile { application_name })
             }
-            Commands::Ci { .. } => Self::CiDispatch,
-        }
+            Commands::Ci {
+                command: CiCommands::Dispatch,
+            } => Self::CiDispatch,
+        })
     }
 }
 
@@ -240,21 +250,27 @@ pub(crate) enum InvocationTarget {
     Control(ControlCommand),
     Version,
     CiDispatch,
-    MissingDeployOption,
 }
 
 // Parses process arguments into the normalized invocation consumed by dispatch.
-pub(crate) fn parse_invocation() -> Invocation {
+pub(crate) fn parse_invocation() -> Result<Invocation, CliError> {
     let cli = Cli::parse();
-    Invocation {
+    Ok(Invocation {
         verbose: cli.verbose,
-        target: cli.command.into(),
-    }
+        target: InvocationTarget::try_from(cli.command)?,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // try_parse_from keeps the argument grammar under test without exiting the process.
+    fn parse(arguments: &[&str]) -> Result<InvocationTarget, CliError> {
+        let cli = Cli::try_parse_from(std::iter::once("pneuma").chain(arguments.iter().copied()))
+            .expect("tested grammar must parse");
+        InvocationTarget::try_from(cli.command)
+    }
 
     #[test]
     fn ordinary_commands_map_directly_to_control() {
@@ -321,21 +337,22 @@ mod tests {
 
         for (parsed, expected) in cases {
             assert_eq!(
-                InvocationTarget::from(parsed),
+                InvocationTarget::try_from(parsed).expect("command input must normalize"),
                 InvocationTarget::Control(expected)
             );
         }
     }
 
     #[test]
-    fn deploy_options_select_a_control_command_or_the_existing_usage_error() {
-        let image = InvocationTarget::from(Commands::App {
+    fn image_and_branch_deploy_options_map_directly_to_control() {
+        let image = InvocationTarget::try_from(Commands::App {
             command: AppCommands::Deploy {
                 application_name: "portal".to_owned(),
                 image: Some("registry.example/portal@sha256:abc".to_owned()),
                 branch: None,
             },
-        });
+        })
+        .expect("image deploy input must normalize");
         assert_eq!(
             image,
             InvocationTarget::Control(ControlCommand::DeployImage {
@@ -344,13 +361,14 @@ mod tests {
             })
         );
 
-        let branch = InvocationTarget::from(Commands::App {
+        let branch = InvocationTarget::try_from(Commands::App {
             command: AppCommands::Deploy {
                 application_name: "portal".to_owned(),
                 image: None,
                 branch: Some("main".to_owned()),
             },
-        });
+        })
+        .expect("branch deploy input must normalize");
         assert_eq!(
             branch,
             InvocationTarget::Control(ControlCommand::DeployBranch {
@@ -358,27 +376,81 @@ mod tests {
                 branch: "main".to_owned(),
             })
         );
+    }
 
-        let missing = InvocationTarget::from(Commands::App {
-            command: AppCommands::Deploy {
+    #[test]
+    fn grammar_normalizes_a_verbose_image_deploy() {
+        let reference = "registry.example/portal@sha256:abc";
+        let target = parse(&["--verbose", "app", "deploy", "portal", "--image", reference])
+            .expect("image deploy input must normalize");
+
+        assert_eq!(
+            target,
+            InvocationTarget::Control(ControlCommand::DeployImage {
                 application_name: "portal".to_owned(),
-                image: None,
-                branch: None,
-            },
-        });
-        assert_eq!(missing, InvocationTarget::MissingDeployOption);
+                image_reference: reference.to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn grammar_normalizes_a_branch_deploy() {
+        let target = parse(&["app", "deploy", "portal", "--branch", "staging"])
+            .expect("branch deploy input must normalize");
+
+        assert_eq!(
+            target,
+            InvocationTarget::Control(ControlCommand::DeployBranch {
+                application_name: "portal".to_owned(),
+                branch: "staging".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn grammar_rejects_a_deploy_without_a_source_before_dispatch() {
+        let error = parse(&["app", "deploy", "portal"])
+            .expect_err("missing deploy source must fail normalization");
+
+        assert!(matches!(error, CliError::MissingDeployOption));
+        assert_eq!(
+            error.to_string(),
+            "either --image or --branch must be specified"
+        );
+    }
+
+    #[test]
+    fn grammar_rejects_mutually_exclusive_deploy_sources() {
+        let error = Cli::try_parse_from([
+            "pneuma",
+            "app",
+            "deploy",
+            "portal",
+            "--image",
+            "registry.example/portal@sha256:abc",
+            "--branch",
+            "staging",
+        ])
+        .err()
+        .expect("conflicting deploy sources must be rejected by clap");
+
+        assert!(
+            error.to_string().contains("cannot be used with"),
+            "unexpected clap error: {error}"
+        );
     }
 
     #[test]
     fn version_and_ci_remain_adapter_only_targets() {
         assert_eq!(
-            InvocationTarget::from(Commands::Version),
+            InvocationTarget::try_from(Commands::Version).expect("version input must normalize"),
             InvocationTarget::Version
         );
         assert_eq!(
-            InvocationTarget::from(Commands::Ci {
+            InvocationTarget::try_from(Commands::Ci {
                 command: CiCommands::Dispatch,
-            }),
+            })
+            .expect("ci dispatch input must normalize"),
             InvocationTarget::CiDispatch
         );
     }

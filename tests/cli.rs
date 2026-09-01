@@ -2403,6 +2403,40 @@ fn legacy_expose_command_returns_usage() {
 }
 
 #[test]
+fn deploy_without_a_source_option_fails_before_database_or_external_work() {
+    let environment = DeploymentEnvironment::new();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_pneuma"))
+        .env("PNEUMA_DATABASE_PATH", &environment.database_path)
+        .env("PNEUMA_WORKSPACE_PATH", &environment.workspace_path)
+        .env("PATH", executable_path(&environment.fake_bin))
+        .env(
+            "PNEUMA_FAKE_PODMAN_LOG",
+            environment.root.join("podman.log"),
+        )
+        .args(["app", "deploy", &environment.application_name])
+        .output()
+        .unwrap();
+    let _ = fs::remove_dir_all(&environment.root);
+
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("error: either --image or --branch must be specified"),
+        "unexpected stderr: {stderr}"
+    );
+    assert!(
+        !environment.database_path.exists(),
+        "argument normalization must fail before any database work"
+    );
+    assert!(
+        !environment.root.join("podman.log").exists(),
+        "argument normalization must fail before any external command"
+    );
+}
+
+#[test]
 fn deploy_accepts_branch_and_image_mutually_exclusively() {
     let environment = DeploymentEnvironment::new();
     assert_command_succeeded(&environment.import());

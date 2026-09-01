@@ -11,7 +11,7 @@ fn main() -> ExitCode {
     load_host_environment();
     configure_runtime_environment();
 
-    let result = cli::run(cli::parse_invocation());
+    let result = cli::parse_invocation().and_then(cli::run);
 
     match result {
         Ok(()) => ExitCode::SUCCESS,

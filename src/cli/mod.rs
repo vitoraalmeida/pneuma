@@ -25,7 +25,6 @@ pub(crate) fn run(invocation: Invocation) -> Result<(), CliError> {
         InvocationTarget::CiDispatch => {
             return ci::run_ci_dispatch(&ControlExecutor::from_environment(), verbose);
         }
-        InvocationTarget::MissingDeployOption => return Err(CliError::MissingDeployOption),
         InvocationTarget::Control(command) => command,
     };
 

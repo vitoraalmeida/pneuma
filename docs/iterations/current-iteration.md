@@ -21,7 +21,7 @@ progress behavior remain unchanged.
      baseline with the required Rust CI gates.
    - Result: the first implementation checkpoint has an unambiguous, green
      behavioral baseline.
-2. [ ] Fallible argument normalization
+2. [x] Fallible argument normalization
    - Reject an interactive deploy request without a source during argument
      normalization, before dispatch or any side effect.
    - Cover global `--verbose` and deploy-source grammar with
@@ -73,4 +73,14 @@ progress behavior remain unchanged.
   test --all-features` (191 library tests, 13 CLI unit tests, and 74 binary CLI
   regressions), and `cargo build --workspace --release` passed. The three OCI
   tests remain ignored because they require configured rootless Podman.
-  Checkpoint 2 is the first pending implementation checkpoint.
+   Checkpoint 2 is the first pending implementation checkpoint.
+- Checkpoint 2 (fallible argument normalization): `InvocationTarget::try_from`
+  rejects a missing deploy source as `CliError::MissingDeployOption` before
+  dispatch, and the `MissingDeployOption` target variant was removed. Grammar
+  tests through `Cli::try_parse_from` cover global `--verbose`, image and branch
+  sources, the missing-source error, and Clap's conflicting-source rejection; a
+  binary regression proves exit 2 with the established error text, no database
+  creation, and no external command. `cargo fmt --check`, Clippy with warnings
+  denied, all-feature tests (191 library tests, 17 CLI unit tests, 75 binary CLI
+  regressions; the three OCI tests remain ignored without rootless Podman), and
+  the release build passed. Checkpoint 3 is the next implementation checkpoint.
