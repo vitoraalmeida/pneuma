@@ -344,6 +344,8 @@ impl Scenario {
         ControlExecutor::new(HostConfiguration::new(
             self.root.join("database.sqlite3"),
             self.root.join("checkouts"),
+            self.root.join("caddy"),
+            self.root.join("Caddyfile"),
         ))
     }
 

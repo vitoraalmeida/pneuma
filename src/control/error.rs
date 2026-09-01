@@ -7,6 +7,8 @@ use crate::domain::system::InvalidSystemName;
 use crate::use_cases::application::{
     ApplicationLookupError, RemoteImportError, RuntimeLifecycleError,
 };
+use crate::use_cases::exposure::ExposureChangeError;
+use crate::use_cases::reconciliation::ReconciliationReadError;
 use crate::use_cases::system::ShowError;
 
 /// Typed failure of one executed command. Messages stay command-specific so
@@ -49,4 +51,8 @@ pub enum ControlError {
     RuntimeStop { source: RuntimeLifecycleError },
     #[error(transparent)]
     RuntimeStart { source: RuntimeLifecycleError },
+    #[error(transparent)]
+    VisibilitySet { source: ExposureChangeError },
+    #[error(transparent)]
+    Reconcile { source: ReconciliationReadError },
 }

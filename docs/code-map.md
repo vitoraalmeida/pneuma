@@ -19,7 +19,8 @@ Every command starts the same way:
    dispatch) or it routes through the interface-neutral control boundary
    (`src/control/::ControlExecutor`, which owns the database-wide lock and
    connection lifetime per command — currently the `system` family, the
-   catalog/query commands, and runtime lifecycle status/start/stop), then
+   catalog/query commands, runtime lifecycle status/start/stop, and exposure
+   and reconciliation commands), then
    dispatches to one capability handler.
 4. Handlers resolve application names through `src/cli/shared.rs::resolve_application`
    (→ `src/use_cases/application/lookup.rs::find_application_by_name`) and
@@ -232,9 +233,10 @@ Domain rules: newest succeeded non-active deployment, provenance preserved
 
 Command: `pneuma app visibility set <app> public|internal`
 
-Start: `src/cli/exposure.rs::run_visibility_set`
-
-Happy path: `src/use_cases/exposure/mod.rs::change_exposure`
+Start: `src/cli/exposure.rs::run_visibility_set` →
+`src/control/::ControlExecutor` (`Command::VisibilitySet`, with Caddy paths
+from the host configuration) →
+`src/use_cases/exposure/mod.rs::change_exposure`
 1. same-visibility short-circuit
 2. `begin_change` — CAS intent reservation before any Caddy effect
 3. `make_public`: require domain, active successful runtime observed Running →
@@ -259,7 +261,9 @@ Failure/recovery: compensate Caddy first, then record a diagnostic with
 
 Command: `pneuma reconcile <app>`
 
-Start: `src/cli/reconciliation.rs::run_reconcile`
+Start: `src/cli/reconciliation.rs::run_reconcile` →
+`src/control/::ControlExecutor` (`Command::Reconcile`, with Caddy paths from
+the host configuration)
 
 Pipeline (`src/use_cases/reconciliation/mod.rs::reconcile_application`):
 1. application lock

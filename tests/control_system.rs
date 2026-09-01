@@ -14,6 +14,8 @@ fn creates_lists_and_shows_systems_through_the_boundary() {
     let executor = ControlExecutor::new(HostConfiguration::new(
         root.join("pneuma.sqlite3"),
         root.join("checkouts"),
+        root.join("caddy"),
+        root.join("Caddyfile"),
     ));
 
     let created = executor
@@ -63,6 +65,8 @@ fn showing_a_missing_system_is_a_typed_not_found_error() {
     let executor = ControlExecutor::new(HostConfiguration::new(
         root.join("pneuma.sqlite3"),
         root.join("checkouts"),
+        root.join("caddy"),
+        root.join("Caddyfile"),
     ));
 
     let error = executor
@@ -87,6 +91,8 @@ fn invalid_system_names_are_rejected_as_typed_input_errors() {
     let executor = ControlExecutor::new(HostConfiguration::new(
         root.join("pneuma.sqlite3"),
         root.join("checkouts"),
+        root.join("caddy"),
+        root.join("Caddyfile"),
     ));
 
     let error = executor
@@ -114,6 +120,8 @@ fn a_conflicting_database_holder_is_a_typed_busy_error() {
     let executor = ControlExecutor::new(HostConfiguration::new(
         database_path.clone(),
         root.join("checkouts"),
+        root.join("caddy"),
+        root.join("Caddyfile"),
     ));
 
     let _exclusive = DatabaseLock::try_acquire(&database_path, LockMode::Exclusive)

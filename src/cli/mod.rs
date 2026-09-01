@@ -89,6 +89,13 @@ pub(crate) fn run(invocation: Invocation) -> Result<(), CliError> {
         Command::Start { application_name } => {
             application::run_start(&executor, verbose, &application_name)
         }
+        Command::VisibilitySet {
+            application_name,
+            visibility,
+        } => exposure::run_visibility_set(&executor, verbose, &application_name, visibility),
+        Command::Reconcile { application_name } => {
+            reconciliation::run_reconcile(&executor, verbose, &application_name)
+        }
         other => {
             let _lock = shared_database_lock(&database_path)?;
             let mut connection =
@@ -109,18 +116,6 @@ pub(crate) fn run(invocation: Invocation) -> Result<(), CliError> {
                 Command::Rollback { application_name } => {
                     deployment::run_rollback(&mut connection, verbose, &application_name)
                 }
-                Command::VisibilitySet {
-                    application_name,
-                    visibility,
-                } => exposure::run_visibility_set(
-                    &mut connection,
-                    verbose,
-                    &application_name,
-                    visibility,
-                ),
-                Command::Reconcile { application_name } => {
-                    reconciliation::run_reconcile(&mut connection, verbose, &application_name)
-                }
                 Command::SystemCreate { .. }
                 | Command::SystemList
                 | Command::SystemShow { .. }
@@ -130,6 +125,8 @@ pub(crate) fn run(invocation: Invocation) -> Result<(), CliError> {
                 | Command::Status { .. }
                 | Command::Stop { .. }
                 | Command::Start { .. }
+                | Command::VisibilitySet { .. }
+                | Command::Reconcile { .. }
                 | Command::Doctor
                 | Command::Version
                 | Command::DatabaseBackup { .. }

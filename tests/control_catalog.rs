@@ -15,6 +15,8 @@ fn imports_and_lists_applications_through_the_boundary() {
     let executor = ControlExecutor::new(HostConfiguration::new(
         root.join("pneuma.sqlite3"),
         workspace.clone(),
+        root.join("caddy"),
+        root.join("Caddyfile"),
     ));
     let repository = TestRepository::new(&root, "valid");
     let url = format!("file://{}", repository.path.display());
@@ -66,6 +68,8 @@ fn deployment_history_is_listed_per_application_through_the_boundary() {
     let executor = ControlExecutor::new(HostConfiguration::new(
         root.join("pneuma.sqlite3"),
         root.join("checkouts"),
+        root.join("caddy"),
+        root.join("Caddyfile"),
     ));
     let repository = TestRepository::new(&root, "valid");
     let url = format!("file://{}", repository.path.display());
@@ -101,6 +105,8 @@ fn listing_deployments_of_a_missing_application_is_a_typed_not_found_error() {
     let executor = ControlExecutor::new(HostConfiguration::new(
         root.join("pneuma.sqlite3"),
         root.join("checkouts"),
+        root.join("caddy"),
+        root.join("Caddyfile"),
     ));
 
     let error = executor
@@ -125,6 +131,8 @@ fn a_local_import_path_is_rejected_without_persisting_an_application() {
     let executor = ControlExecutor::new(HostConfiguration::new(
         root.join("pneuma.sqlite3"),
         root.join("checkouts"),
+        root.join("caddy"),
+        root.join("Caddyfile"),
     ));
 
     let error = executor

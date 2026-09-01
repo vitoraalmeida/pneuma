@@ -33,7 +33,7 @@ progress renderer. No daemon, HTTP, or TUI is implemented.
      effects and per-Application locking.
    - Result: stateful host operations execute interface-neutrally without
      weakening lock or transaction invariants.
-4. [ ] Exposure and reconciliation slice
+4. [x] Exposure and reconciliation slice
    - Route visibility changes and reconciliation through control with
      control-owned Caddy path configuration.
    - Result: all ordinary application management except deployment uses the
@@ -136,3 +136,20 @@ progress renderer. No daemon, HTTP, or TUI is implemented.
   `cargo clippy --all-targets --all-features -- -D warnings`,
   `cargo test --all-features`, and `cargo build --workspace --release` all
   passed; the three ignored OCI tests remain environment-dependent.
+- Checkpoint 4 (exposure and reconciliation slice): `HostConfiguration` now
+  owns `PNEUMA_CADDY_MANAGED_PATH` and `PNEUMA_CADDYFILE_PATH`;
+  `Command::VisibilitySet` and `Command::Reconcile` execute through
+  `ControlExecutor` with typed `ExposureChanged` and `Reconciled` results. The
+  CLI renders only; messages and exit-code classes are unchanged, including the
+  reconcile invalid-name path mapping onto the existing
+  `ReconciliationReadError::ApplicationNotFound` vocabulary. The per-Application
+  lock, CAS exposure reservations, and Caddy compensation ordering remain owned
+  by the use cases. New `tests/control_exposure.rs` executes missing-application
+  lookup, domain-required rejection, a full internal→public materialization
+  (typed result, canonical fragment, fake `caddy` validate/reload, external
+  health `curl`, persisted `public`/`active` state), and missing/undeployed
+  reconcile errors through the library without Clap or terminal output.
+  `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D
+  warnings`, `cargo test --all-features`, and `cargo build --workspace
+  --release` all passed; the three ignored OCI tests remain
+  environment-dependent.

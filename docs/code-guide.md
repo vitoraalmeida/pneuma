@@ -45,10 +45,10 @@ Every normal command follows the same skeleton before reaching its flow:
 3. `src/cli/mod.rs::run` opens the SQLite connection (except version, doctor,
    backup/restore, and CI dispatch) and dispatches to one capability handler.
    Commands that execute through the control boundary (`src/control/`,
-   currently the `system` family, the catalog/query commands, and runtime
-   lifecycle status/start/stop) skip the CLI-owned connection: the
-   `ControlExecutor` acquires the shared database-wide lock and opens one
-   connection per command.
+   currently the `system` family, the catalog/query commands, runtime
+   lifecycle status/start/stop, and exposure/reconciliation) skip the
+   CLI-owned connection: the `ControlExecutor` acquires the shared
+   database-wide lock and opens one connection per command.
 4. Handlers in `src/cli/{system,application,deployment,exposure,reconciliation}.rs`
    validate CLI input, resolve names through `shared::resolve_application`,
    call exactly one use-case entry point, and render with `output.rs`.
@@ -135,12 +135,13 @@ Identical to Flow 3 after source resolution; only the front differs.
 
 | Layer | Where |
 |---|---|
-| CLI entry | `cli/exposure.rs::run_visibility_set` (assembles Caddy paths) |
+| CLI entry | `cli/exposure.rs::run_visibility_set` |
+| Control boundary | `control/mod.rs::ControlExecutor` — `Command::VisibilitySet`; the host configuration owns the Caddy managed path and Caddyfile path |
 | Use cases | `exposure/mod.rs::change_exposure`: same-visibility short-circuit → CAS intent reservation **before** any Caddy effect → `make_public` / `make_internal` with restore compensation on later failure |
 | Domain rules | `domain/exposure.rs`: `ExposureIntent::new` (public requires a `DomainName`), `ExposureMaterializationState` state machine (Applying/Active/Removing), `ConfirmedRoute` evidence |
 | Stores | `exposure_store`: `begin_exposure_change` CAS on expected visibility (Stale ⇒ conflict, never overwrite), completion primitives conditioned on the reservation state (INV-DB-004) |
 | External adapters | `caddy_exposure`: canonical fragment bytes, `materialize_caddy_fragment`, `observe_caddy_fragment`, `remove_caddy_fragment`, `restore_*` compensations, reload after each change |
-| Tests | `tests/caddy_exposure.rs` (13 fake-caddy scenarios incl. removal-of-absent and restore), exposure store CAS tests inside `exposure_store.rs`, visibility E2E scenarios in `tests/cli.rs` |
+| Tests | `tests/control_exposure.rs` (library boundary without Clap: missing application, domain-required, full internal→public materialization, missing/undeployed reconcile errors); `tests/caddy_exposure.rs` (13 fake-caddy scenarios incl. removal-of-absent and restore), exposure store CAS tests inside `exposure_store.rs`, visibility E2E scenarios in `tests/cli.rs` |
 
 ## Flow 7: Start/Stop/Status — `pneuma app start|stop|status <app>`
 
@@ -165,6 +166,7 @@ application lock → recover branch → load → observe → decide (pure) → e
 | Layer | Where |
 |---|---|
 | CLI entry | `cli/reconciliation.rs::run_reconcile` |
+| Control boundary | `control/mod.rs::ControlExecutor` — `Command::Reconcile`; the host configuration owns the Caddy managed path and Caddyfile path |
 | Use cases | `reconciliation/mod.rs::reconcile_application` (ordering + compensation only); `recover.rs` (interrupted-deployment recovery), `load.rs` (persisted facts), `observe.rs` (external facts + boundary-rendered canonical expectations), `execute.rs` (decision translation, identity repair, rematerialization confirmation, exposure reserve/materialize/remove/failure recording) |
 | Domain rules | `domain/reconciliation/decision.rs::decide` — pure function, no infrastructure imports; answers "what should happen?" over desired/persisted/observed facts with conservative precedence (stopped-in-sync → runtime identity repair → rematerialization → exposure classification → manual intervention) |
 | Stores | read-side loads across application/deployment/runtime/exposure stores; writes are CAS-guarded (runtime identity repair, exposure reservations/completions) |

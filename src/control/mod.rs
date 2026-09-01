@@ -19,8 +19,10 @@ pub use self::host::HostConfiguration;
 pub use self::result::CommandResult;
 
 use crate::adapters::database::{self, DatabaseError, DatabaseLock, LockMode};
+use crate::domain::application::ApplicationName;
 use crate::domain::system::SystemName;
-use crate::use_cases::{application, deployment, system};
+use crate::use_cases::reconciliation::ReconciliationReadError;
+use crate::use_cases::{application, deployment, exposure, reconciliation, system};
 
 /// Executes commands against the configured host without presentation concerns.
 pub struct ControlExecutor {
@@ -132,6 +134,43 @@ impl ControlExecutor {
                 Ok(CommandResult::ApplicationStarted {
                     application_name: resolved.name,
                     observation,
+                })
+            }
+            Command::VisibilitySet {
+                application_name,
+                visibility,
+            } => {
+                let resolved = application::resolve_application(&connection, &application_name)
+                    .map_err(|source| ControlError::ApplicationLookup { source })?;
+                let change = exposure::change_exposure(
+                    &mut connection,
+                    &resolved.id,
+                    visibility,
+                    &self.host.caddy_managed_path,
+                    &self.host.caddyfile_path,
+                )
+                .map_err(|source| ControlError::VisibilitySet { source })?;
+                Ok(CommandResult::ExposureChanged {
+                    application_name: resolved.name,
+                    change,
+                })
+            }
+            Command::Reconcile { application_name } => {
+                let application_name = ApplicationName::new(&application_name).map_err(|_| {
+                    ControlError::Reconcile {
+                        source: ReconciliationReadError::ApplicationNotFound { application_name },
+                    }
+                })?;
+                let result = reconciliation::reconcile_application(
+                    &mut connection,
+                    &application_name,
+                    &self.host.caddy_managed_path,
+                    &self.host.caddyfile_path,
+                )
+                .map_err(|source| ControlError::Reconcile { source })?;
+                Ok(CommandResult::Reconciled {
+                    application_name,
+                    result,
                 })
             }
         }

@@ -111,6 +111,8 @@ impl CliError {
             | ControlError::RuntimeStart { source } => CliError::ApplicationRuntime {
                 source: Box::new(source),
             },
+            ControlError::VisibilitySet { source } => CliError::VisibilitySet { source },
+            ControlError::Reconcile { source } => CliError::Reconcile { source },
         }
     }
 
