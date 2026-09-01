@@ -1,6 +1,6 @@
 # Current Iteration
 
-**Status:** em andamento
+**Status:** concluída
 
 **Base:** `e7ade02` (`chore(release): v0.5.0`)
 
@@ -59,9 +59,11 @@ progress renderer. No daemon, HTTP, or TUI is implemented.
    - Add a CLI-only renderer thread with animated TTY progress, stable verbose
      lines, and deterministic non-TTY output.
    - Result: progress animation exists entirely in the interface layer.
-9. [ ] Operational regression and closure
+9. [x] Operational regression and closure
    - Synchronize implemented documentation, remove temporary structure, and run
      full CI plus the complete disposable-host regression.
+   - Result: living documentation reflects the control boundary; QEMU E2E,
+     reconciliation, bootstrap, and CI evidence all passed.
 
 ## Acceptance Criteria
 
@@ -206,3 +208,17 @@ progress renderer. No daemon, HTTP, or TUI is implemented.
   `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D
   warnings`, `cargo test --all-features`, and `cargo build --workspace --release`
   all passed; the three ignored OCI tests remain environment-dependent.
+- Checkpoint 9 (closure): living documentation now records the control boundary,
+  typed event delivery, and CLI-only renderer; no temporary direct CLI execution
+  structure remains. On `1d247ad`, `cargo fmt --check`, `cargo clippy
+  --all-targets --all-features -- -D warnings`, `cargo test --all-features`, and
+  `cargo build --workspace --release` all passed, as did markdown-link validation
+  and shell syntax checks. The three ignored OCI tests remain skipped because
+  this host has no configured rootless Podman; `shellcheck` and `shfmt` were
+  unavailable locally, and no shell files changed. The cloud-image QEMU suite
+  (`PNEUMA_VM_ACCEL=kvm PNEUMA_VM_CPUS=4 PNEUMA_VM_RECONCILIATION=1
+  scripts/vm/run-e2e.sh`) passed all 45 `test-all.sh` checks and all 21
+  reconciliation cases on a fresh Debian 13 guest; the instance was destroyed.
+  The separate pristine-clone bootstrap acceptance (`scripts/dev-vm/test-regression.sh
+  bootstrap --ref v0.5.0`) passed all 89 checks and destroyed its clone;
+  `pneuma-dev-base` was never altered.
