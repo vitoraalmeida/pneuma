@@ -16,7 +16,7 @@ progress behavior remain unchanged.
 
 ## Checkpoints
 
-1. [ ] Governance and baseline
+1. [x] Governance and baseline
    - Confirm the approved committed design and record the v0.5.2 behavioral
      baseline with the required Rust CI gates.
    - Result: the first implementation checkpoint has an unambiguous, green
@@ -63,4 +63,11 @@ progress behavior remain unchanged.
 
 ## Validation Evidence
 
-- Pending.
+- Checkpoint 1 (governance and baseline): the approved design is committed as
+  `32a3894`, the roadmap schedules v0.5.3 after completed v0.5.2 and before
+  v0.6, and this tracker is the sole active tracker. On `32a3894`, `cargo fmt
+  --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo
+  test --all-features` (191 library tests, 13 CLI unit tests, and 74 binary CLI
+  regressions), and `cargo build --workspace --release` passed. The three OCI
+  tests remain ignored because they require configured rootless Podman.
+  Checkpoint 2 is the first pending implementation checkpoint.
