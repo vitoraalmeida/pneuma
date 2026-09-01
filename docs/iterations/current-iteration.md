@@ -1,6 +1,6 @@
 # Current Iteration
 
-**Status:** em andamento
+**Status:** concluida
 
 **Base:** `5a41884` (`docs: close CLI adapter consolidation iteration`)
 
@@ -36,7 +36,7 @@ progress behavior remain unchanged.
      the redundant list-rendering trim and copy from dispatch.
    - Result: final command text is owned by output functions while dispatch
      retains rendering policy and control flow.
-5. [ ] Operational regression and closure
+5. [x] Operational regression and closure
    - Synchronize implemented documentation and run the required regression
      ladder before closing the iteration.
    - Result: living documentation reflects the precise CLI adapter while the
@@ -107,3 +107,17 @@ progress behavior remain unchanged.
   warnings denied, all-feature tests (191 library tests, 21 CLI unit tests, 75
   binary CLI regressions; the three OCI tests remain ignored without rootless
   Podman), and the release build passed. Checkpoint 5 is the next checkpoint.
+- Checkpoint 5 (operational regression and closure): the code guide's shared
+  invocation path now documents the fallible argument normalization and the
+  missing-deploy-source rejection; no other living documentation described the
+  changed internals, and no public behavior changed. On final code commit
+  `a23b684`, `cargo fmt --check`, `cargo clippy --all-targets --all-features
+  -- -D warnings`, `cargo test --all-features` (191 library tests, 21 CLI unit
+  tests, and 75 binary CLI regressions), `cargo build --workspace --release`,
+  and markdown-link validation passed. `scripts/vm/run-e2e.sh` passed on a
+  fresh raw-QEMU Debian 13 guest with 45 full-battery checks passed, 0 failed,
+  0 skipped; `PNEUMA_VM_RECONCILIATION=1 scripts/vm/run-e2e.sh` passed with the
+  same battery plus 21 reconciliation cases, 0 failed, 0 skipped; both
+  disposable instances were destroyed on exit. The three host OCI tests remain
+  ignored because this host has no `podman`; the same Podman functionality is
+  exercised inside the E2E guests. The iteration is concluded.
