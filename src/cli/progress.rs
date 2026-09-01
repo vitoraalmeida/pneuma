@@ -95,7 +95,7 @@ fn render_stable_event(
             Some((input_kind, input)) => {
                 if verbose {
                     log_verbose(
-                        true,
+                        verbose,
                         format!(
                             "deployment input: application {application_name}, {input_kind} {input}"
                         ),
