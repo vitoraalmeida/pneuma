@@ -80,21 +80,21 @@ pub(crate) fn run(invocation: Invocation) -> Result<(), CliError> {
         Command::Deployments { application_name } => {
             deployment::run_deployments(&executor, verbose, &application_name)
         }
+        Command::Status { application_name } => {
+            application::run_status(&executor, verbose, &application_name)
+        }
+        Command::Stop { application_name } => {
+            application::run_stop(&executor, verbose, &application_name)
+        }
+        Command::Start { application_name } => {
+            application::run_start(&executor, verbose, &application_name)
+        }
         other => {
             let _lock = shared_database_lock(&database_path)?;
             let mut connection =
                 database::open(&database_path).map_err(|source| CliError::Database { source })?;
 
             match other {
-                Command::Status { application_name } => {
-                    application::run_status(&mut connection, verbose, &application_name)
-                }
-                Command::Stop { application_name } => {
-                    application::run_stop(&mut connection, verbose, &application_name)
-                }
-                Command::Start { application_name } => {
-                    application::run_start(&mut connection, verbose, &application_name)
-                }
                 Command::Deploy {
                     application_name,
                     image_reference,
@@ -127,6 +127,9 @@ pub(crate) fn run(invocation: Invocation) -> Result<(), CliError> {
                 | Command::Import { .. }
                 | Command::List
                 | Command::Deployments { .. }
+                | Command::Status { .. }
+                | Command::Stop { .. }
+                | Command::Start { .. }
                 | Command::Doctor
                 | Command::Version
                 | Command::DatabaseBackup { .. }

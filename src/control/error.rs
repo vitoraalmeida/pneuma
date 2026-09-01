@@ -4,7 +4,9 @@ use crate::adapters::database::DatabaseError;
 use crate::adapters::stores::application_store::ApplicationStoreError;
 use crate::adapters::stores::deployment_store::DeploymentStoreError;
 use crate::domain::system::InvalidSystemName;
-use crate::use_cases::application::{ApplicationLookupError, RemoteImportError};
+use crate::use_cases::application::{
+    ApplicationLookupError, RemoteImportError, RuntimeLifecycleError,
+};
 use crate::use_cases::system::ShowError;
 
 /// Typed failure of one executed command. Messages stay command-specific so
@@ -41,4 +43,10 @@ pub enum ControlError {
         #[source]
         source: DeploymentStoreError,
     },
+    #[error(transparent)]
+    RuntimeStatus { source: RuntimeLifecycleError },
+    #[error(transparent)]
+    RuntimeStop { source: RuntimeLifecycleError },
+    #[error(transparent)]
+    RuntimeStart { source: RuntimeLifecycleError },
 }

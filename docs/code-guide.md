@@ -45,7 +45,8 @@ Every normal command follows the same skeleton before reaching its flow:
 3. `src/cli/mod.rs::run` opens the SQLite connection (except version, doctor,
    backup/restore, and CI dispatch) and dispatches to one capability handler.
    Commands that execute through the control boundary (`src/control/`,
-   currently the `system` family) skip the CLI-owned connection: the
+   currently the `system` family, the catalog/query commands, and runtime
+   lifecycle status/start/stop) skip the CLI-owned connection: the
    `ControlExecutor` acquires the shared database-wide lock and opens one
    connection per command.
 4. Handlers in `src/cli/{system,application,deployment,exposure,reconciliation}.rs`
@@ -82,7 +83,8 @@ holds it exclusively, and `version` stays lock-free.
 
 | Layer | Where |
 |---|---|
-| CLI entry | `cli/application.rs::run_import` (resolves `PNEUMA_WORKSPACE_PATH`) |
+| CLI entry | `cli/application.rs::run_import` |
+| Control boundary | `control/mod.rs::ControlExecutor` — `Command::ImportApplication`; the host configuration owns `PNEUMA_WORKSPACE_PATH` |
 | Use cases | `application/remote_import.rs::import_remote_application` → `application/import.rs::import_application` |
 | Domain rules | `domain/manifest.rs::ImportSpecification` (validated use-case input); value objects built at the boundary (`ApplicationName`, `RelativeManifestPath`, delivery/runtime specifications); re-import returns the existing application unchanged |
 | Boundary adapter | `adapters/manifest.rs` — private TOML structs, `load_manifest_at` = parse + validate + convert in one step (INV-MAN-001); `adapters/git_source.rs::clone_repository` / `cleanup_checkout` (always attempted) |
@@ -145,11 +147,12 @@ Identical to Flow 3 after source resolution; only the front differs.
 | Layer | Where |
 |---|---|
 | CLI entry | `cli/application.rs::run_start` / `run_stop` / `run_status` |
+| Control boundary | `control/mod.rs::ControlExecutor` — `Command::ApplicationStart` / `ApplicationStop` / `ApplicationStatus` return typed `RuntimeObservation`s; the per-Application lock stays inside the use case |
 | Use cases | `application/runtime.rs`: `report_application_status` (observe + persist observation, never changes intent), `stop_application` / `start_application` both funnel into the shared `transition_application` controller |
 | Domain rules | `domain/application.rs::DesiredRuntimeState`; `domain/runtime.rs`: `ObservedRuntimeState` (unknown Podman states preserved as `Unknown`), `ContainerId`, loopback-only `ExpectedRuntimeEndpoint`; intent is persisted before any external effect |
 | Stores | `application_store::set_desired_runtime_state` (under the Application lock), `runtime_store` (active-runtime load, observation writes, hydratable tombstones `state='removed'`) |
 | External adapters | `local_runtime::start_container` / `stop_container` / `observe_container`; `systemd_quadlet::unit_name` on the missing-container recreation path (Quadlet recreates containers under a stable name) |
-| Tests | lifecycle E2E scenarios in `tests/cli.rs` (idempotent stop/start, stop after container removal, start after removal recreating via Quadlet), runtime hydration/tombstone tests inside `runtime_store.rs` and `tests/deployment_register_runtime.rs`, VO boundaries in `tests/domain_values.rs` |
+| Tests | `tests/control_lifecycle.rs` (library boundary without Clap: observation, direct stop, supervised start recovery, missing/undeployed errors); lifecycle E2E scenarios in `tests/cli.rs` (idempotent stop/start, stop after container removal, start after removal recreating via Quadlet), runtime hydration/tombstone tests inside `runtime_store.rs` and `tests/deployment_register_runtime.rs`, VO boundaries in `tests/domain_values.rs` |
 
 ## Flow 8: Reconcile — `pneuma reconcile <app>`
 

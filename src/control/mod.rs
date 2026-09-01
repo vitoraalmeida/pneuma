@@ -98,6 +98,42 @@ impl ControlExecutor {
                     deployments,
                 })
             }
+            Command::ApplicationStatus { application_name } => {
+                let resolved = application::resolve_application(&connection, &application_name)
+                    .map_err(|source| ControlError::ApplicationLookup { source })?;
+                let observation = application::report_application_status(
+                    &mut connection,
+                    &resolved.id,
+                    &resolved.name,
+                )
+                .map_err(|source| ControlError::RuntimeStatus { source })?;
+                Ok(CommandResult::ApplicationStatus {
+                    application_name: resolved.name,
+                    observation,
+                })
+            }
+            Command::ApplicationStop { application_name } => {
+                let resolved = application::resolve_application(&connection, &application_name)
+                    .map_err(|source| ControlError::ApplicationLookup { source })?;
+                let observation =
+                    application::stop_application(&mut connection, &resolved.id, &resolved.name)
+                        .map_err(|source| ControlError::RuntimeStop { source })?;
+                Ok(CommandResult::ApplicationStopped {
+                    application_name: resolved.name,
+                    observation,
+                })
+            }
+            Command::ApplicationStart { application_name } => {
+                let resolved = application::resolve_application(&connection, &application_name)
+                    .map_err(|source| ControlError::ApplicationLookup { source })?;
+                let observation =
+                    application::start_application(&mut connection, &resolved.id, &resolved.name)
+                        .map_err(|source| ControlError::RuntimeStart { source })?;
+                Ok(CommandResult::ApplicationStarted {
+                    application_name: resolved.name,
+                    observation,
+                })
+            }
         }
     }
 

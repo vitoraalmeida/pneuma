@@ -28,7 +28,7 @@ progress renderer. No daemon, HTTP, or TUI is implemented.
      move workspace configuration and application-name resolution out of CLI.
    - Result: catalog commands prove configured paths and typed collections
      behind the boundary.
-3. [ ] Runtime lifecycle slice
+3. [x] Runtime lifecycle slice
    - Route status, start, and stop through control with existing observation
      effects and per-Application locking.
    - Result: stateful host operations execute interface-neutrally without
@@ -119,3 +119,20 @@ progress renderer. No daemon, HTTP, or TUI is implemented.
   --all-features -- -D warnings`, `cargo test --all-features`, and
   `cargo build --workspace --release` all passed; the three ignored OCI tests
   remain environment-dependent.
+- Checkpoint 3 (runtime lifecycle slice): `Command::ApplicationStatus`,
+  `ApplicationStop`, and `ApplicationStart` execute through `ControlExecutor`
+  with typed `ApplicationStatus`/`ApplicationStopped`/`ApplicationStarted`
+  results carrying the use-case `RuntimeObservation`; application resolution
+  happens inside the boundary. The per-Application kernel lock and
+  intent-before-effect ordering remain owned by
+  `use_cases/application/runtime.rs`, so lock and transaction invariants are
+  unchanged. CLI status/stop/start map arguments and render observations only;
+  messages and exit-code classes are unchanged (`RuntimeStatus`, `RuntimeStop`,
+  and `RuntimeStart` map onto the existing `CliError::ApplicationRuntime`
+  vocabulary). New `tests/control_lifecycle.rs` executes observation,
+  direct-container stop, supervised start recovery of a recreated container,
+  missing-application lookup errors, and undeployed `NotDeployed` errors
+  through the library without Clap or terminal output. `cargo fmt --check`,
+  `cargo clippy --all-targets --all-features -- -D warnings`,
+  `cargo test --all-features`, and `cargo build --workspace --release` all
+  passed; the three ignored OCI tests remain environment-dependent.

@@ -106,6 +106,11 @@ impl CliError {
                 ApplicationLookupError::Store { source } => CliError::ApplicationLookup { source },
             },
             ControlError::ListDeployments { source } => CliError::ListDeployments { source },
+            ControlError::RuntimeStatus { source }
+            | ControlError::RuntimeStop { source }
+            | ControlError::RuntimeStart { source } => CliError::ApplicationRuntime {
+                source: Box::new(source),
+            },
         }
     }
 

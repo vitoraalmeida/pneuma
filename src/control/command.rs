@@ -19,4 +19,13 @@ pub enum Command {
     ListDeployments {
         application_name: String,
     },
+    ApplicationStatus {
+        application_name: String,
+    },
+    ApplicationStop {
+        application_name: String,
+    },
+    ApplicationStart {
+        application_name: String,
+    },
 }

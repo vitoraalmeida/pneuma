@@ -1,11 +1,8 @@
 use pneuma::control::{Command, CommandResult, ControlExecutor};
-use pneuma::use_cases::application::{
-    report_application_status, start_application, stop_application,
-};
 
 use super::error::CliError;
 use super::output;
-use super::shared::{log_verbose, resolve_application};
+use super::shared::log_verbose;
 
 // Imports a remote repository through the boundary and renders its summary.
 pub(crate) fn run_import(
@@ -46,9 +43,9 @@ pub(crate) fn run_list(executor: &ControlExecutor, verbose: bool) -> Result<(), 
     Ok(())
 }
 
-// Queries runtime status through the use case, which may inspect external runtime state.
+// Queries runtime status through the boundary and renders its observation.
 pub(crate) fn run_status(
-    connection: &mut rusqlite::Connection,
+    executor: &ControlExecutor,
     verbose: bool,
     application_name: &str,
 ) -> Result<(), CliError> {
@@ -56,23 +53,30 @@ pub(crate) fn run_status(
         verbose,
         format!("resolve application by name: {application_name}"),
     );
-    let application = resolve_application(connection, application_name)?;
     log_verbose(
         verbose,
-        format!("report status of application {}", application.name),
+        format!("report status of application {application_name}"),
     );
-    let observation = report_application_status(connection, &application.id, &application.name)
-        .map_err(|source| CliError::ApplicationRuntime {
-            source: Box::new(source),
-        })?;
-    println!("Application: {}", application.name);
+    let result = executor
+        .execute(Command::ApplicationStatus {
+            application_name: application_name.to_owned(),
+        })
+        .map_err(CliError::from_control)?;
+    let CommandResult::ApplicationStatus {
+        application_name,
+        observation,
+    } = result
+    else {
+        unreachable!("ApplicationStatus yields ApplicationStatus");
+    };
+    println!("Application: {application_name}");
     println!("{}", output::runtime_status(&observation));
     Ok(())
 }
 
-// Requests a runtime stop through the use case and reports its resulting observation.
+// Requests a runtime stop through the boundary and renders its resulting observation.
 pub(crate) fn run_stop(
-    connection: &mut rusqlite::Connection,
+    executor: &ControlExecutor,
     verbose: bool,
     application_name: &str,
 ) -> Result<(), CliError> {
@@ -80,22 +84,27 @@ pub(crate) fn run_stop(
         verbose,
         format!("resolve application by name: {application_name}"),
     );
-    let application = resolve_application(connection, application_name)?;
-    log_verbose(verbose, format!("stop application {}", application.name));
-    let observation =
-        stop_application(connection, &application.id, &application.name).map_err(|source| {
-            CliError::ApplicationRuntime {
-                source: Box::new(source),
-            }
-        })?;
-    println!("Stopped {}", application.name);
+    log_verbose(verbose, format!("stop application {application_name}"));
+    let result = executor
+        .execute(Command::ApplicationStop {
+            application_name: application_name.to_owned(),
+        })
+        .map_err(CliError::from_control)?;
+    let CommandResult::ApplicationStopped {
+        application_name,
+        observation,
+    } = result
+    else {
+        unreachable!("ApplicationStop yields ApplicationStopped");
+    };
+    println!("Stopped {application_name}");
     println!("{}", output::lifecycle_outcome(&observation));
     Ok(())
 }
 
-// Requests a runtime start through the use case and reports its resulting observation.
+// Requests a runtime start through the boundary and renders its resulting observation.
 pub(crate) fn run_start(
-    connection: &mut rusqlite::Connection,
+    executor: &ControlExecutor,
     verbose: bool,
     application_name: &str,
 ) -> Result<(), CliError> {
@@ -103,15 +112,20 @@ pub(crate) fn run_start(
         verbose,
         format!("resolve application by name: {application_name}"),
     );
-    let application = resolve_application(connection, application_name)?;
-    log_verbose(verbose, format!("start application {}", application.name));
-    let observation =
-        start_application(connection, &application.id, &application.name).map_err(|source| {
-            CliError::ApplicationRuntime {
-                source: Box::new(source),
-            }
-        })?;
-    println!("Started {}", application.name);
+    log_verbose(verbose, format!("start application {application_name}"));
+    let result = executor
+        .execute(Command::ApplicationStart {
+            application_name: application_name.to_owned(),
+        })
+        .map_err(CliError::from_control)?;
+    let CommandResult::ApplicationStarted {
+        application_name,
+        observation,
+    } = result
+    else {
+        unreachable!("ApplicationStart yields ApplicationStarted");
+    };
+    println!("Started {application_name}");
     println!("{}", output::lifecycle_outcome(&observation));
     Ok(())
 }

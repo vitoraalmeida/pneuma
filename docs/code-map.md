@@ -18,7 +18,8 @@ Every command starts the same way:
    command needs none (`version`, `doctor`, database backup/restore, CI
    dispatch) or it routes through the interface-neutral control boundary
    (`src/control/::ControlExecutor`, which owns the database-wide lock and
-   connection lifetime per command — currently the `system` family), then
+   connection lifetime per command — currently the `system` family, the
+   catalog/query commands, and runtime lifecycle status/start/stop), then
    dispatches to one capability handler.
 4. Handlers resolve application names through `src/cli/shared.rs::resolve_application`
    (→ `src/use_cases/application/lookup.rs::find_application_by_name`) and
@@ -65,9 +66,9 @@ no partial specification becomes visible.
 
 Command: `pneuma app start <app>`
 
-Start: `src/cli/application.rs::run_start`
-
-Happy path: `src/use_cases/application/runtime.rs::start_application` → shared
+Start: `src/cli/application.rs::run_start` → `src/control/::ControlExecutor`
+(`Command::ApplicationStart`) →
+`src/use_cases/application/runtime.rs::start_application` → shared
 controller `transition_application`: persist desired state first
 (`set_desired_state`, CAS) → observe → supervised unit start.
 
@@ -86,8 +87,9 @@ status and reconciliation still observe it after an interrupted control.
 
 ## Application stop
 
-Same controller with `RuntimeCommand::Stop`
-(`src/use_cases/application/runtime.rs::stop_application`).
+Same controller with `RuntimeCommand::Stop`, routed through the control
+boundary (`Command::ApplicationStop` →
+`src/use_cases/application/runtime.rs::stop_application`).
 
 Important branch: Quadlet removes the container on ExecStop;
 `missing_container_satisfies_stop_intent` records that as a completed stop.
@@ -282,13 +284,13 @@ with conservative precedence; ambiguous materializations stay untouched.
 
 Read-only flows; none of them mutate operator intent:
 
-- status: `src/cli/application.rs::run_status` →
-  `runtime.rs::report_application_status` — observe Podman, persist the
-  observation only
-- application list: `run_list` → `list_applications` +
-  `application_is_deployed`
-- deployment history: `src/cli/deployment.rs::run_deployments` →
-  `deployment/query.rs::list_deployments`
+- status: `src/cli/application.rs::run_status` → `src/control/::ControlExecutor`
+  (`Command::ApplicationStatus`) → `runtime.rs::report_application_status` —
+  observe Podman, persist the observation only
+- application list: `run_list` → control (`Command::ListApplications`) →
+  `list_applications` + `application_is_deployed`
+- deployment history: `src/cli/deployment.rs::run_deployments` → control
+  (`Command::ListDeployments`) → `deployment/query.rs::list_deployments`
 - systems: `src/cli/system.rs` → `src/control/::ControlExecutor` →
   `use_cases/system/{create,list,show}.rs`
 - host diagnostics: `src/cli/doctor.rs::run_doctor`; version needs no database
