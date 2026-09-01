@@ -50,6 +50,36 @@ pub(crate) fn runtime_status(observation: &RuntimeObservation) -> String {
     )
 }
 
+pub(crate) fn application_status(
+    application_name: &ApplicationName,
+    observation: &RuntimeObservation,
+) -> String {
+    format!(
+        "Application: {application_name}\n{}",
+        runtime_status(observation)
+    )
+}
+
+pub(crate) fn application_stopped(
+    application_name: &ApplicationName,
+    observation: &RuntimeObservation,
+) -> String {
+    format!(
+        "Stopped {application_name}\n{}",
+        lifecycle_outcome(observation)
+    )
+}
+
+pub(crate) fn application_started(
+    application_name: &ApplicationName,
+    observation: &RuntimeObservation,
+) -> String {
+    format!(
+        "Started {application_name}\n{}",
+        lifecycle_outcome(observation)
+    )
+}
+
 pub(crate) fn lifecycle_outcome(observation: &RuntimeObservation) -> String {
     format!(
         "Desired state: {:?}\nObserved state: {:?}",
@@ -349,6 +379,66 @@ fn format_command_availability(name: &str, outcome: &CheckOutcome) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pneuma::domain::application::{ApplicationName, DesiredRuntimeState};
+    use pneuma::domain::identity::RuntimeInstanceId;
+    use pneuma::domain::runtime::{ContainerId, ObservedRuntimeState};
+
+    fn observation(
+        desired_runtime_state: DesiredRuntimeState,
+        observed_runtime_state: ObservedRuntimeState,
+    ) -> RuntimeObservation {
+        RuntimeObservation {
+            desired_runtime_state,
+            observed_runtime_state,
+            runtime_id: RuntimeInstanceId::new("0f8d3a2c41b64d7e9a0c5b6e1f2d3a4b").unwrap(),
+            container_id: ContainerId::from("container-1".to_owned()),
+            observed_endpoint: None,
+        }
+    }
+
+    fn application_name() -> ApplicationName {
+        ApplicationName::new("portal").unwrap()
+    }
+
+    #[test]
+    fn application_status_renders_heading_with_runtime_fields() {
+        let rendered = application_status(
+            &application_name(),
+            &observation(DesiredRuntimeState::Running, ObservedRuntimeState::Running),
+        );
+        assert_eq!(
+            rendered,
+            "Application: portal\n\
+             Desired state: Running\n\
+             Observed state: Running\n\
+             Runtime: 0f8d3a2c41b64d7e9a0c5b6e1f2d3a4b\n\
+             Container: container-1"
+        );
+    }
+
+    #[test]
+    fn application_stopped_renders_heading_with_lifecycle_states() {
+        let rendered = application_stopped(
+            &application_name(),
+            &observation(DesiredRuntimeState::Stopped, ObservedRuntimeState::Stopped),
+        );
+        assert_eq!(
+            rendered,
+            "Stopped portal\nDesired state: Stopped\nObserved state: Stopped"
+        );
+    }
+
+    #[test]
+    fn application_started_renders_heading_with_lifecycle_states() {
+        let rendered = application_started(
+            &application_name(),
+            &observation(DesiredRuntimeState::Running, ObservedRuntimeState::Running),
+        );
+        assert_eq!(
+            rendered,
+            "Started portal\nDesired state: Running\nObserved state: Running"
+        );
+    }
 
     #[test]
     fn empty_system_list_renders_no_output() {

@@ -31,7 +31,7 @@ progress behavior remain unchanged.
    - Give deployment command classification one CLI owner while retaining the
      shared interactive and CI execution path.
    - Result: no deployment output or event sequence changes.
-4. [ ] Rendering organization
+4. [x] Rendering organization
    - Move application status and lifecycle result text into `output.rs`; remove
      the redundant list-rendering trim and copy from dispatch.
    - Result: final command text is owned by output functions while dispatch
@@ -97,3 +97,13 @@ progress behavior remain unchanged.
   tests, 18 CLI unit tests, 75 binary CLI regressions; the three OCI tests
   remain ignored without rootless Podman), and the release build passed.
   Checkpoint 4 is the next implementation checkpoint.
+- Checkpoint 4 (rendering organization): application status, stopped, and
+  started result text moved into `application_status`, `application_stopped`,
+  and `application_started` output functions, so dispatch keeps only rendering
+  policy and control flow; the redundant `application_list` trim-and-copy was
+  removed. Exact-string unit tests cover the three moved renderers, the
+  unhealthy-doctor regression is retained, and binary lifecycle tests now
+  assert stop and start output verbatim. `cargo fmt --check`, Clippy with
+  warnings denied, all-feature tests (191 library tests, 21 CLI unit tests, 75
+  binary CLI regressions; the three OCI tests remain ignored without rootless
+  Podman), and the release build passed. Checkpoint 5 is the next checkpoint.

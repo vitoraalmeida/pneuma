@@ -901,7 +901,13 @@ fn stop_and_start_are_idempotent_and_persist_desired_and_observed_states() {
     assert_command_succeeded(&environment.import());
     environment.deploy_current_revision();
 
-    assert_command_succeeded(&environment.run_lifecycle("stop"));
+    let stopped = environment.run_lifecycle("stop");
+    assert_command_succeeded(&stopped);
+    assert_eq!(
+        String::from_utf8_lossy(&stopped.stdout),
+        format!("Stopped {}\n", environment.application_name)
+            + "Desired state: Stopped\nObserved state: Stopped\n"
+    );
     assert_command_succeeded(&environment.run_lifecycle("stop"));
     let connection = database::open(&environment.database_path).unwrap();
     let (desired, observed): (String, String) = current_runtime_states(&connection);
@@ -911,7 +917,13 @@ fn stop_and_start_are_idempotent_and_persist_desired_and_observed_states() {
         ("stopped".to_owned(), "stopped".to_owned())
     );
 
-    assert_command_succeeded(&environment.run_lifecycle("start"));
+    let started = environment.run_lifecycle("start");
+    assert_command_succeeded(&started);
+    assert_eq!(
+        String::from_utf8_lossy(&started.stdout),
+        format!("Started {}\n", environment.application_name)
+            + "Desired state: Running\nObserved state: Running\n"
+    );
     assert_command_succeeded(&environment.run_lifecycle("start"));
     let connection = database::open(&environment.database_path).unwrap();
     let (desired, observed): (String, String) = current_runtime_states(&connection);

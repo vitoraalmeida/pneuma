@@ -119,7 +119,7 @@ fn render_command_result(result: CommandResult, verbose: bool) -> Result<(), Cli
             println!("{}", output::imported_application(&application));
         }
         CommandResult::Applications(entries) => {
-            print_nonempty(output::application_list(&entries).trim_end().to_owned());
+            print_nonempty(output::application_list(&entries));
         }
         CommandResult::ApplicationDeployments {
             application_name,
@@ -137,24 +137,24 @@ fn render_command_result(result: CommandResult, verbose: bool) -> Result<(), Cli
         CommandResult::ApplicationStatus {
             application_name,
             observation,
-        } => {
-            println!("Application: {application_name}");
-            println!("{}", output::runtime_status(&observation));
-        }
+        } => println!(
+            "{}",
+            output::application_status(&application_name, &observation)
+        ),
         CommandResult::ApplicationStopped {
             application_name,
             observation,
-        } => {
-            println!("Stopped {application_name}");
-            println!("{}", output::lifecycle_outcome(&observation));
-        }
+        } => println!(
+            "{}",
+            output::application_stopped(&application_name, &observation)
+        ),
         CommandResult::ApplicationStarted {
             application_name,
             observation,
-        } => {
-            println!("Started {application_name}");
-            println!("{}", output::lifecycle_outcome(&observation));
-        }
+        } => println!(
+            "{}",
+            output::application_started(&application_name, &observation)
+        ),
         CommandResult::ApplicationDeployed {
             application_name,
             deployment,
