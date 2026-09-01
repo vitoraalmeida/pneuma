@@ -1,6 +1,6 @@
 # Current Iteration
 
-**Status:** em andamento
+**Status:** concluida
 
 **Base:** `5b0f564` (`docs: approve CLI adapter consolidation design`)
 
@@ -40,7 +40,7 @@ unchanged.
      deployment routing; prove the existing interactive and CI contracts.
    - Result: all deployment entry points share one CLI execution path without
      changing event, progress, or SSH behavior.
-5. [ ] Operational regression and closure
+5. [x] Operational regression and closure
    - Synchronize implemented documentation and run the required regression
      ladder before closing the iteration.
    - Result: living documentation reflects the consolidated adapter and the
@@ -114,3 +114,15 @@ unchanged.
   --all-features`, `cargo build --workspace --release`, and markdown-link
   validation passed. The three OCI tests remain ignored because this host has
   no `podman`. Checkpoint 5 is the first pending implementation checkpoint.
+- Checkpoint 5 (operational regression and closure): living documentation now
+  maps parsed CLI input, unified execution and rendering, CI dispatch, v0.5.2
+  completion, and the raw-QEMU disposable E2E path to the implemented code.
+  On final code commit `0165fab`, `cargo fmt --check`, `cargo clippy
+  --all-targets --all-features -- -D warnings`, `cargo test --all-features`
+  (191 library tests, 13 CLI unit tests, and 74 binary CLI regressions),
+  `cargo build --workspace --release`, markdown-link validation, and `bash -n`
+  passed. `PNEUMA_VM_RECONCILIATION=1 scripts/vm/run-e2e.sh` passed on a fresh
+  raw-QEMU Debian 13 guest with 45 full-battery checks and 21 reconciliation
+  cases passed, no failures or skips; the disposable overlay was destroyed.
+  The three host OCI tests remain ignored because `podman` is unavailable;
+  `shellcheck` and `shfmt` are unavailable locally. The iteration is concluded.
