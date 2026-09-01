@@ -8,8 +8,8 @@ Each category answers a different question.
 |---|---|---|
 | Current system truth | How does Pneuma work today? | [`architecture/`](architecture/), [`getting-started.md`](getting-started.md), [`operations/`](operations/) |
 | Architectural rationale | Why was this choice made? | [`decisions/`](decisions/) |
-| Approved design | What approved design fixed recent architecture scope? | [`designs/interface-neutral-execution.md`](designs/interface-neutral-execution.md) (implementation complete); [`designs/greenfield-architecture-simplification.md`](designs/greenfield-architecture-simplification.md) (concluded) |
-| Active planning | What is being implemented now? | [`iterations/current-iteration.md`](iterations/current-iteration.md) records v0.5.1 interface-neutral execution closure; [`iterations/next-iteration.md`](iterations/next-iteration.md) queues v0.6 planning |
+| Approved design | What approved design fixed recent architecture scope? | [`designs/cli-adapter-consolidation.md`](designs/cli-adapter-consolidation.md) (implementation complete); [`designs/interface-neutral-execution.md`](designs/interface-neutral-execution.md) (implementation complete); [`designs/greenfield-architecture-simplification.md`](designs/greenfield-architecture-simplification.md) (concluded) |
+| Active planning | What is being implemented now? | [`iterations/current-iteration.md`](iterations/current-iteration.md) records v0.5.2 CLI adapter consolidation closure; [`iterations/next-iteration.md`](iterations/next-iteration.md) queues v0.6 planning |
 | Product evolution | Where is Pneuma going? | [`roadmap.md`](roadmap.md) |
 | Released history | What changed in releases? | [`../CHANGELOG.md`](../CHANGELOG.md) |
 
@@ -61,8 +61,8 @@ Experienced readers can jump directly to a task:
 |---|---|---|
 | Production host | Bootstrap, application operation, and non-destructive smoke tests only | [`getting-started.md`](getting-started.md) |
 | Development VM | Disposable Debian 13 provisioning and manual regression | [`operations/dev-vm-tutorial.md`](operations/dev-vm-tutorial.md) |
-| Automated VM regression | One-command disposable regression, fixture-cycle E2E, and reconciliation catalog | [`../scripts/dev-vm/test-regression.sh`](../scripts/dev-vm/test-regression.sh) (standard path), [`../scripts/dev-vm/e2e.sh`](../scripts/dev-vm/e2e.sh), [`../scripts/dev-vm/test-all.sh`](../scripts/dev-vm/test-all.sh), [`../scripts/dev-vm/reconciliation-e2e.sh`](../scripts/dev-vm/reconciliation-e2e.sh) |
-| Portable disposable VM E2E | Raw-QEMU Debian 13 harness, one command locally and on GitHub Actions (manual and `main`) | [`operations/dev-vm-tutorial.md`](operations/dev-vm-tutorial.md) (section 10), [`../scripts/vm/run-e2e.sh`](../scripts/vm/run-e2e.sh), [`../.github/workflows/e2e.yml`](../.github/workflows/e2e.yml) |
+| Automated VM regression | Standard raw-QEMU Debian 13 E2E and reconciliation catalog | [`../scripts/vm/run-e2e.sh`](../scripts/vm/run-e2e.sh), [`operations/dev-vm-tutorial.md`](operations/dev-vm-tutorial.md) (section 10), [`../.github/workflows/e2e.yml`](../.github/workflows/e2e.yml) |
+| Legacy libvirt development tooling | Manual fixture-cycle development only; not a required regression path | [`../scripts/dev-vm/`](../scripts/dev-vm/) |
 
 Do not run reset, restore, bootstrap acceptance, or E2E scripts on production.
 
@@ -90,8 +90,9 @@ product direction (`roadmap.md`).
 | [`architecture/invariants.md`](architecture/invariants.md) | Living | Compact inventory of durable guarantees with their owner layers |
 | [`architecture/security-model.md`](architecture/security-model.md) | Living | Assets, actors, trust boundaries, threats with their controls and residual risks, attack chains, and security posture |
 | [`decisions/`](decisions/) | Historical records | Retrospective architectural decision records |
+| [`designs/cli-adapter-consolidation.md`](designs/cli-adapter-consolidation.md) | Approved design (implementation complete) | CLI adapter consolidation scope, fixed decisions, and checkpoint order |
 | [`designs/interface-neutral-execution.md`](designs/interface-neutral-execution.md) | Approved design (implementation complete) | Interface-neutral execution scope, fixed decisions, and checkpoint order |
 | [`designs/greenfield-architecture-simplification.md`](designs/greenfield-architecture-simplification.md) | Concluded design (implemented in v0.5.0) | Greenfield architecture reset scope, fixed decisions, and checkpoint order |
-| [`iterations/current-iteration.md`](iterations/current-iteration.md) | Closure tracker | Interface-neutral execution tracker (v0.5.1) |
-| [`iterations/next-iteration.md`](iterations/next-iteration.md) | Queued planning | v0.6 observed state planning reminder, queued behind v0.5.1 |
+| [`iterations/current-iteration.md`](iterations/current-iteration.md) | Closure tracker | CLI adapter consolidation tracker (v0.5.2) |
+| [`iterations/next-iteration.md`](iterations/next-iteration.md) | Queued planning | v0.6 observed state planning reminder, queued behind v0.5.2 |
 | [`roadmap.md`](roadmap.md) | Living | v0.1 → v1.0 evolution and direction |

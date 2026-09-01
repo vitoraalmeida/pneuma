@@ -175,23 +175,22 @@ daemon, HTTP server, or TUI was added.
 
 ### v0.5.2 - CLI Adapter Consolidation
 
-**Status:** planned; approved design
-[`designs/cli-adapter-consolidation.md`](designs/cli-adapter-consolidation.md)
-(2026-09-01).
+**Status:** completed on 2026-09-01. Approved design:
+[`designs/cli-adapter-consolidation.md`](designs/cli-adapter-consolidation.md).
 
-The CLI adapter will remove its duplicated command vocabulary and repetitive
+The CLI adapter removed its duplicated command vocabulary and repetitive
 per-command execution handlers, retaining all established command syntax,
 output, progress, error, and exit-code behavior.
 
 - [x] Approved design; activate the execution tracker after the design commit.
-- [ ] Map parsed interactive input directly to control commands.
-- [ ] Consolidate control execution, result rendering, deployment progress, and
+- [x] Map parsed interactive input directly to control commands.
+- [x] Consolidate control execution, result rendering, deployment progress, and
   restricted CI routing.
 
 ## v0.6 - Observed State / Host Observation
 
 **Status:** planned; not started. No approved design yet. Queued behind
-v0.5.1.
+v0.5.2.
 
 Objective: stop depending predominantly on the state Pneuma itself recorded and
 start explicitly observing the real state of the host. This version establishes
@@ -383,6 +382,9 @@ v0.5    Architecture Simplification "a smaller current architecture"
    │
    ▼
 v0.5.1  Interface-Neutral Execution "one boundary, many interfaces"
+   │
+   ▼
+v0.5.2  CLI Adapter Consolidation   "one adapter path"
    │
    ▼
 v0.6    Observed State            "what is really happening?"

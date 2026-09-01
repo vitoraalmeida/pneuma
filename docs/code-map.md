@@ -13,15 +13,17 @@ Every command starts the same way:
 1. `src/main.rs::main` loads `/etc/pneuma/environment`
    (`load_host_environment`) and derives uid-scoped runtime variables
    (`configure_runtime_environment`).
-2. `src/cli/args.rs` parses the Clap tree into the normalized `Command`.
-3. `src/cli/mod.rs::run` maps every stateful parsed command to
+2. `src/cli/args.rs` parses the Clap tree into an adapter-only target or a
+   normalized `Command`.
+3. `src/cli/mod.rs::run` routes every stateful parsed command to
    `src/control/::ControlExecutor`, which captures host configuration, acquires
    the database-wide lock, and owns the connection lifetime for one command.
    `version` is the only command that bypasses the executor.
-4. Capability handlers construct typed control commands, render typed results
-   through `src/cli/output.rs`, and turn `ControlError`s into classified
-   `CliError`s in `src/cli/error.rs`. Deployment handlers additionally render
-   semantic events, using an animated TTY-only renderer or deterministic text.
+4. `src/cli/mod.rs::execute_control_command` executes typed commands, renders
+   typed results through `src/cli/output.rs`, and turns `ControlError`s into
+   classified `CliError`s in `src/cli/error.rs`. Deployment commands additionally
+   render semantic events, using an animated TTY-only renderer or deterministic
+   text.
 
 Every mutation of an existing Application holds its per-application `flock`
 (`src/adapters/application_lock.rs::ApplicationLock::try_acquire_for_connection`)
@@ -35,8 +37,8 @@ lock-free.
 
 Command: `pneuma app import <repository>`
 
-Start:
-`src/cli/application.rs::run_import`
+Start: `src/cli/mod.rs::execute_control_command`
+(`Command::ImportApplication`)
 
 Happy path:
 - `src/use_cases/application/remote_import.rs::import_remote_application` —
@@ -63,7 +65,7 @@ no partial specification becomes visible.
 
 Command: `pneuma app start <app>`
 
-Start: `src/cli/application.rs::run_start` → `src/control/::ControlExecutor`
+Start: `src/cli/mod.rs::execute_control_command` → `src/control/::ControlExecutor`
 (`Command::ApplicationStart`) →
 `src/use_cases/application/runtime.rs::start_application` → shared
 controller `transition_application`: persist desired state first
@@ -96,7 +98,7 @@ Everything else matches **Application start**.
 
 Command: `pneuma app deploy <app> --branch <b>`
 
-Start: `src/cli/deployment.rs::run_deploy_branch` → `ControlExecutor`
+Start: `src/cli/mod.rs::execute_control_command` → `ControlExecutor`
 (`Command::DeployBranch`)
 
 Resolution: `src/use_cases/deployment/deploy.rs::deploy_branch`
@@ -119,7 +121,7 @@ no default branch, and no delivery configuration before any external effect.
 
 Command: `pneuma app deploy <app> --image <ref>`
 
-Start: `src/cli/deployment.rs::run_deploy_oci` → `ControlExecutor`
+Start: `src/cli/mod.rs::execute_control_command` → `ControlExecutor`
 (`Command::DeployImage`), which parses `OciArtifact` and builds
 `PublicDeploymentConfiguration` from host configuration before any effect.
 
@@ -212,7 +214,7 @@ see below.
 
 Command: `pneuma deployment rollback <app>`
 
-Start: `src/cli/deployment.rs::run_rollback` → `ControlExecutor`
+Start: `src/cli/mod.rs::execute_control_command` → `ControlExecutor`
 (`Command::Rollback`)
 
 Happy path: `src/use_cases/deployment/rollback.rs::rollback_deployment`
@@ -231,7 +233,7 @@ Domain rules: newest succeeded non-active deployment, provenance preserved
 
 Command: `pneuma app visibility set <app> public|internal`
 
-Start: `src/cli/exposure.rs::run_visibility_set` →
+Start: `src/cli/mod.rs::execute_control_command` →
 `src/control/::ControlExecutor` (`Command::VisibilitySet`, with Caddy paths
 from the host configuration) →
 `src/use_cases/exposure/mod.rs::change_exposure`
@@ -259,7 +261,7 @@ Failure/recovery: compensate Caddy first, then record a diagnostic with
 
 Command: `pneuma reconcile <app>`
 
-Start: `src/cli/reconciliation.rs::run_reconcile` →
+Start: `src/cli/mod.rs::execute_control_command` →
 `src/control/::ControlExecutor` (`Command::Reconcile`, with Caddy paths from
 the host configuration)
 
@@ -286,16 +288,16 @@ with conservative precedence; ambiguous materializations stay untouched.
 
 Read-only flows; none of them mutate operator intent:
 
-- status: `src/cli/application.rs::run_status` → `src/control/::ControlExecutor`
+- status: `src/cli/mod.rs::execute_control_command` → `src/control/::ControlExecutor`
   (`Command::ApplicationStatus`) → `runtime.rs::report_application_status` —
   observe Podman, persist the observation only
-- application list: `run_list` → control (`Command::ListApplications`) →
+- application list: `execute_control_command` → control (`Command::ListApplications`) →
   `list_applications` + `application_is_deployed`
-- deployment history: `src/cli/deployment.rs::run_deployments` → control
+- deployment history: `execute_control_command` → control
   (`Command::ListDeployments`) → `deployment/query.rs::list_deployments`
-- systems: `src/cli/system.rs` → `src/control/::ControlExecutor` →
+- systems: `execute_control_command` → `src/control/::ControlExecutor` →
   `use_cases/system/{create,list,show}.rs`
-- host diagnostics: `src/cli/doctor.rs::run_doctor` → control
+- host diagnostics: `execute_control_command` → control
   (`Command::Doctor`); database backup/restore use their corresponding control
   commands; version alone needs no database (`src/cli/mod.rs::run_version`)
 
