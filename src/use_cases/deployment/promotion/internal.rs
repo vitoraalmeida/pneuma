@@ -8,6 +8,7 @@ use std::error::Error;
 use rusqlite::{Connection, TransactionBehavior};
 use thiserror::Error;
 
+use super::super::progress::{DeploymentStep, EventReporter};
 use super::super::transition::{TransitionDeploymentError, fail_deployment};
 use crate::adapters::health_check_internal::{HealthCheckResult, check_internal_health};
 use crate::adapters::stores::PersistenceOutcome;
@@ -89,12 +90,24 @@ pub fn promote_internal_candidate(
     runtime_id: &RuntimeInstanceId,
     health_check: &HealthCheckSpecification,
 ) -> Result<PromotedCandidate, PromoteInternalCandidateError> {
+    let mut events = EventReporter::disabled();
+    promote_internal_candidate_reporting(connection, runtime_id, health_check, &mut events)
+}
+
+// Health-checks and promotes an internal candidate while reporting each blocking phase.
+pub(crate) fn promote_internal_candidate_reporting(
+    connection: &mut Connection,
+    runtime_id: &RuntimeInstanceId,
+    health_check: &HealthCheckSpecification,
+    events: &mut EventReporter<'_>,
+) -> Result<PromotedCandidate, PromoteInternalCandidateError> {
     let target = load_target(connection, runtime_id)?;
     if let Some(promoted) = target.completed_promotion() {
         return Ok(promoted);
     }
     ensure_internal_promotable(&target)?;
 
+    events.started(DeploymentStep::InternalHealthCheck);
     let health = check_internal_health(target.endpoint.socket_addr(), health_check)
         .map_err(|source| PromoteInternalCandidateError::HealthCheck { source })?;
     match health {
@@ -111,7 +124,9 @@ pub fn promote_internal_candidate(
             return Err(PromoteInternalCandidateError::CandidateUnhealthy { result: health });
         }
     }
+    events.completed(DeploymentStep::InternalHealthCheck);
 
+    events.started(DeploymentStep::PromoteCandidate);
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let target = load_target(&transaction, runtime_id)?;
     if let Some(promoted) = target.completed_promotion() {
@@ -147,6 +162,7 @@ pub fn promote_internal_candidate(
     }
     let finished_at = deployment_store::load_finished_at(&transaction, &target.deployment_id)?;
     transaction.commit()?;
+    events.completed(DeploymentStep::PromoteCandidate);
 
     Ok(PromotedCandidate {
         runtime_id: target.runtime_id,

@@ -5,6 +5,7 @@
 mod internal;
 mod public;
 
+pub(crate) use self::internal::promote_internal_candidate_reporting;
 pub use self::internal::{PromoteInternalCandidateError, promote_internal_candidate};
 pub(crate) use self::public::{
     PromotePublicCandidateError, begin_public_exposure, promote_public_candidate,

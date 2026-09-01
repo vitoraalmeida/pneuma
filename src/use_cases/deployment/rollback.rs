@@ -2,8 +2,9 @@ use rusqlite::Connection;
 use std::error::Error;
 use thiserror::Error;
 
-use super::execute::{DeploymentResult, PublicDeploymentConfiguration, deploy_release};
+use super::execute::{DeploymentResult, PublicDeploymentConfiguration, deploy_release_reporting};
 use super::failure::DeployReleaseError;
+use super::progress::{DeploymentEvent, DeploymentStep, EventReporter};
 use crate::adapters::application_lock::{ApplicationLock, ApplicationLockError};
 use crate::adapters::oci_image::{PullImageError, pull_image};
 use crate::adapters::stores::application_store;
@@ -44,6 +45,37 @@ pub fn rollback_deployment(
     application_id: &ApplicationId,
     public_configuration: Option<&PublicDeploymentConfiguration>,
 ) -> Result<DeploymentResult, RollbackError> {
+    let mut events = EventReporter::disabled();
+    rollback_deployment_reporting(
+        connection,
+        application_id,
+        public_configuration,
+        &mut events,
+    )
+}
+
+// Reuses a historical immutable artifact while forwarding semantic workflow events to the caller.
+pub fn rollback_deployment_with_events(
+    connection: &mut Connection,
+    application_id: &ApplicationId,
+    public_configuration: Option<&PublicDeploymentConfiguration>,
+    events: &mut dyn FnMut(DeploymentEvent),
+) -> Result<DeploymentResult, RollbackError> {
+    let mut events = EventReporter::enabled(events);
+    rollback_deployment_reporting(
+        connection,
+        application_id,
+        public_configuration,
+        &mut events,
+    )
+}
+
+fn rollback_deployment_reporting(
+    connection: &mut Connection,
+    application_id: &ApplicationId,
+    public_configuration: Option<&PublicDeploymentConfiguration>,
+    events: &mut EventReporter<'_>,
+) -> Result<DeploymentResult, RollbackError> {
     let Some(_lock) = ApplicationLock::try_acquire_for_connection(connection, application_id)
         .map_err(|source| RollbackError::ApplicationLock { source })?
     else {
@@ -63,14 +95,17 @@ pub fn rollback_deployment(
         });
     }
     let target = previous_release(connection, application_id)?;
+    events.started(DeploymentStep::PullImage);
     pull_image(&target.release.artifact).map_err(|source| RollbackError::PullImage { source })?;
-    deploy_release(
+    events.completed(DeploymentStep::PullImage);
+    deploy_release_reporting(
         connection,
         application_id,
         &target.release,
         DeploymentType::Rollback,
         target.source_revision.as_ref(),
         public_configuration,
+        events,
     )
     .map_err(|source| RollbackError::DeployRelease { source })
 }

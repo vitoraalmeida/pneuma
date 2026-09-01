@@ -18,6 +18,7 @@ use thiserror::Error;
 
 use super::cleanup::CandidateResources;
 use super::failure::FailedExecution;
+use super::progress::{DeploymentStep, EventReporter};
 use super::transition::advance_deployment;
 use crate::adapters::local_runtime::{observe_container, resolve_container_id};
 use crate::adapters::port_allocator::{consume_port_reservation, reserve_port};
@@ -29,8 +30,8 @@ use crate::domain::deployment::{DeploymentEvent, DeploymentFailureCode, Deployme
 use crate::domain::identity::{ApplicationId, DeploymentId, RuntimeInstanceId};
 use crate::domain::release::OciArtifact;
 use crate::domain::runtime::{
-    ContainerId, ContainerPort, ExpectedRuntimeEndpoint, HostPort, ObservedRuntimeState,
-    RuntimeInstance, RuntimeRegistration, RuntimeSpecification,
+    ContainerId, ContainerPort, ExpectedRuntimeEndpoint, ObservedRuntimeState, RuntimeInstance,
+    RuntimeRegistration, RuntimeSpecification,
 };
 
 // Returns the observed candidate identity needed by verification and cleanup orchestration.
@@ -39,7 +40,6 @@ pub(crate) struct StartedCandidate {
     pub(crate) runtime: RuntimeInstance,
     pub(crate) container_name: String,
     pub(crate) unit_name: String,
-    pub(crate) port: HostPort,
 }
 
 impl StartedCandidate {
@@ -85,6 +85,7 @@ enum RuntimeObservationFailure {
 // Materializes a candidate in ordered external steps, retaining resources for compensation on failure.
 pub(crate) fn start_candidate(
     input: CandidateStartInput<'_>,
+    events: &mut EventReporter<'_>,
 ) -> Result<StartedCandidate, FailedExecution> {
     let CandidateStartInput {
         connection,
@@ -103,6 +104,7 @@ pub(crate) fn start_candidate(
         )
     })?;
 
+    events.started(DeploymentStep::ReservePort);
     let host_port = reserve_port(connection, application_id, deployment_id).map_err(|source| {
         FailedExecution::needing_persistence(
             DeploymentFailureCode::RuntimePortAllocation,
@@ -110,8 +112,10 @@ pub(crate) fn start_candidate(
             CandidateResources::empty(),
         )
     })?;
+    events.completed(DeploymentStep::ReservePort);
     let mut resources = CandidateResources::empty().with_port();
 
+    events.started(DeploymentStep::CreateUnit);
     let unit = write_unit(
         application_name,
         deployment_id,
@@ -126,8 +130,10 @@ pub(crate) fn start_candidate(
             resources.clone(),
         )
     })?;
+    events.completed(DeploymentStep::CreateUnit);
     resources = resources.with_unit(&unit);
 
+    events.started(DeploymentStep::ReloadSystemd);
     daemon_reload().map_err(|source| {
         FailedExecution::needing_persistence(
             DeploymentFailureCode::RuntimeUnitReload,
@@ -135,7 +141,9 @@ pub(crate) fn start_candidate(
             resources.clone(),
         )
     })?;
+    events.completed(DeploymentStep::ReloadSystemd);
 
+    events.started(DeploymentStep::StartContainer);
     start(&unit).map_err(|source| {
         FailedExecution::needing_persistence(
             DeploymentFailureCode::RuntimeStart,
@@ -143,8 +151,10 @@ pub(crate) fn start_candidate(
             resources.clone(),
         )
     })?;
+    events.completed(DeploymentStep::StartContainer);
 
     let name = container_name(application_name, deployment_id);
+    events.started(DeploymentStep::ResolveContainer);
     let container_id = resolve_container_id(&name).map_err(|source| {
         FailedExecution::needing_persistence(
             DeploymentFailureCode::RuntimeResolution,
@@ -152,8 +162,10 @@ pub(crate) fn start_candidate(
             resources.clone(),
         )
     })?;
+    events.completed(DeploymentStep::ResolveContainer);
     resources = resources.with_container_mut(&container_id);
 
+    events.started(DeploymentStep::ObserveContainer);
     let observation =
         observe_container(&container_id, runtime.container_port()).map_err(|source| {
             FailedExecution::needing_persistence(
@@ -187,7 +199,9 @@ pub(crate) fn start_candidate(
             resources.clone(),
         )
     })?;
+    events.completed(DeploymentStep::ObserveContainer);
 
+    events.started(DeploymentStep::RegisterCandidate);
     let runtime = register_candidate_runtime(
         connection,
         deployment_id,
@@ -202,6 +216,7 @@ pub(crate) fn start_candidate(
             resources.clone(),
         )
     })?;
+    events.completed(DeploymentStep::RegisterCandidate);
     resources = resources.with_runtime_mut(&runtime.id);
 
     consume_port_reservation(connection, application_id, deployment_id, host_port).map_err(
@@ -228,7 +243,6 @@ pub(crate) fn start_candidate(
         runtime,
         container_name: name,
         unit_name: unit,
-        port: host_port,
     })
 }
 
@@ -512,14 +526,17 @@ exit 0
         let application_name = ApplicationName::new("app").unwrap();
         let artifact = artifact();
         let runtime = runtime();
-        start_candidate(CandidateStartInput {
-            connection: &mut scenario.connection,
-            deployment_id: &deployment_id,
-            application_id,
-            application_name: &application_name,
-            artifact: &artifact,
-            runtime: &runtime,
-        })
+        start_candidate(
+            CandidateStartInput {
+                connection: &mut scenario.connection,
+                deployment_id: &deployment_id,
+                application_id,
+                application_name: &application_name,
+                artifact: &artifact,
+                runtime: &runtime,
+            },
+            &mut EventReporter::disabled(),
+        )
     }
 
     fn artifact() -> OciArtifact {

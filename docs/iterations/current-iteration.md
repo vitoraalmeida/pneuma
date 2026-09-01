@@ -38,7 +38,7 @@ progress renderer. No daemon, HTTP, or TUI is implemented.
      control-owned Caddy path configuration.
    - Result: all ordinary application management except deployment uses the
      boundary.
-5. [ ] Semantic deployment events
+5. [x] Semantic deployment events
    - Replace presentation-bearing deployment progress with closed semantic
      events, matched start/completion boundaries, typed failure codes, and
      typed retirement warnings; add event-capable rollback.
@@ -152,4 +152,19 @@ progress renderer. No daemon, HTTP, or TUI is implemented.
   `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D
   warnings`, `cargo test --all-features`, and `cargo build --workspace
   --release` all passed; the three ignored OCI tests remain
-  environment-dependent.
+   environment-dependent.
+- Checkpoint 5 (semantic deployment events): replaced the presentation-bearing
+  progress API with closed `DeploymentEvent`/`DeploymentStep` enums, including
+  typed `DeploymentFailureCode` evidence and `RetirementWarning` variants.
+  Branch resolution, image resolution and pulling, candidate materialization,
+  health checks, promotion, cleanup, and prior-runtime retirement now emit
+  matched boundaries around their real operations; rollback has the same
+  event-capable path. Deployment use cases no longer write retirement warnings
+  to the terminal; the CLI renders event labels and preserves non-verbose
+  retirement warnings. Deployment integration tests assert complete OCI and
+  branch event sequences, typed failure/warning events, and verbose rollback
+  events. `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D
+  warnings`, `cargo test --all-features`, and `cargo build --workspace --release`
+  all passed; markdown-link validation and shell syntax checks passed. The three
+  ignored OCI tests remain environment-dependent; `shellcheck` and `shfmt` were
+  unavailable locally, and no shell files changed.

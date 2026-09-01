@@ -15,7 +15,7 @@ use pneuma::domain::deployment::DeploymentStatus;
 use pneuma::domain::release::OciArtifact;
 use pneuma::use_cases::application::import_application;
 use pneuma::use_cases::deployment::{
-    DeployOciError, DeploymentProgress, DeploymentStep, deploy_oci, deploy_oci_with_progress,
+    DeployOciError, DeploymentEvent, DeploymentStep, deploy_oci, deploy_oci_with_events,
 };
 
 #[test]
@@ -88,7 +88,7 @@ fn rejects_an_unpinned_oci_reference_at_the_validation_boundary() {
 }
 
 #[test]
-fn deploys_with_progress_events_in_the_same_semantic_order_and_the_same_result() {
+fn deploys_with_semantic_events_in_the_same_order_and_the_same_result() {
     let database_path = temporary_database_path();
     let mut connection = database::open(&database_path).unwrap();
     let application = import_application(
@@ -108,10 +108,10 @@ fn deploys_with_progress_events_in_the_same_semantic_order_and_the_same_result()
     let server = thread::spawn(move || respond_once(&listener));
     let events = Rc::new(RefCell::new(Vec::new()));
     let sink = Rc::clone(&events);
-    let mut report = move |event: DeploymentProgress| sink.borrow_mut().push(event);
+    let mut report = move |event: DeploymentEvent| sink.borrow_mut().push(event);
 
     let deployed = environment.run(|| {
-        deploy_oci_with_progress(
+        deploy_oci_with_events(
             &mut connection,
             &application.id,
             &artifact,
@@ -159,9 +159,9 @@ fn rejects_a_mismatched_repository_identically_while_reporting_nothing() {
     let artifact = OciArtifact::parse(&reference).unwrap();
     let events = Rc::new(RefCell::new(Vec::new()));
     let sink = Rc::clone(&events);
-    let mut report = move |event: DeploymentProgress| sink.borrow_mut().push(event);
+    let mut report = move |event: DeploymentEvent| sink.borrow_mut().push(event);
 
-    let error = deploy_oci_with_progress(
+    let error = deploy_oci_with_events(
         &mut connection,
         &application.id,
         &artifact,
@@ -297,7 +297,7 @@ fn fixture_path(name: &str) -> PathBuf {
         .join(name)
 }
 
-// Semantic progress shape: step boundaries and persisted state transitions without detail text.
+// Semantic event shape: operation boundaries and persisted state transitions.
 #[derive(Debug, PartialEq, Eq)]
 enum EventShape {
     Started(DeploymentStep),
@@ -306,32 +306,48 @@ enum EventShape {
     FailurePersisted,
 }
 
-fn event_shape(event: &DeploymentProgress) -> EventShape {
+fn event_shape(event: &DeploymentEvent) -> EventShape {
     match event {
-        DeploymentProgress::StepStarted { step, .. } => EventShape::Started(*step),
-        DeploymentProgress::StepCompleted { step, .. } => EventShape::Completed(*step),
-        DeploymentProgress::StateChanged { status, .. } => EventShape::StateChanged(*status),
-        DeploymentProgress::FailurePersisted { .. } => EventShape::FailurePersisted,
+        DeploymentEvent::StepStarted { step } => EventShape::Started(*step),
+        DeploymentEvent::StepCompleted { step } => EventShape::Completed(*step),
+        DeploymentEvent::StateChanged { status, .. } => EventShape::StateChanged(*status),
+        DeploymentEvent::FailurePersisted { .. } => EventShape::FailurePersisted,
+        DeploymentEvent::RetirementWarning { .. } => {
+            panic!("a first deployment has no retirement warning")
+        }
     }
 }
 
-// The milestone order every internal deployment reports, regardless of reporting being enabled.
+// The operation order every internal deployment reports, regardless of event collection.
 fn internal_deployment_progress_sequence() -> Vec<EventShape> {
     vec![
+        EventShape::Started(DeploymentStep::PullImage),
+        EventShape::Completed(DeploymentStep::PullImage),
         EventShape::Started(DeploymentStep::LoadSpecification),
         EventShape::Completed(DeploymentStep::LoadSpecification),
         EventShape::Started(DeploymentStep::CreateDeployment),
         EventShape::Completed(DeploymentStep::CreateDeployment),
         EventShape::StateChanged(DeploymentStatus::Pending),
         EventShape::StateChanged(DeploymentStatus::Starting),
-        EventShape::Started(DeploymentStep::CreateContainer),
-        EventShape::Completed(DeploymentStep::CreateContainer),
+        EventShape::Started(DeploymentStep::ReservePort),
+        EventShape::Completed(DeploymentStep::ReservePort),
+        EventShape::Started(DeploymentStep::CreateUnit),
+        EventShape::Completed(DeploymentStep::CreateUnit),
+        EventShape::Started(DeploymentStep::ReloadSystemd),
+        EventShape::Completed(DeploymentStep::ReloadSystemd),
+        EventShape::Started(DeploymentStep::StartContainer),
         EventShape::Completed(DeploymentStep::StartContainer),
+        EventShape::Started(DeploymentStep::ResolveContainer),
+        EventShape::Completed(DeploymentStep::ResolveContainer),
+        EventShape::Started(DeploymentStep::ObserveContainer),
         EventShape::Completed(DeploymentStep::ObserveContainer),
+        EventShape::Started(DeploymentStep::RegisterCandidate),
         EventShape::Completed(DeploymentStep::RegisterCandidate),
         EventShape::StateChanged(DeploymentStatus::Verifying),
-        EventShape::Started(DeploymentStep::HealthCheckAndPromotion),
-        EventShape::Completed(DeploymentStep::HealthCheckAndPromotion),
+        EventShape::Started(DeploymentStep::InternalHealthCheck),
+        EventShape::Completed(DeploymentStep::InternalHealthCheck),
+        EventShape::Started(DeploymentStep::PromoteCandidate),
+        EventShape::Completed(DeploymentStep::PromoteCandidate),
         EventShape::StateChanged(DeploymentStatus::Succeeded),
     ]
 }

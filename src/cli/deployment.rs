@@ -3,8 +3,9 @@ use rusqlite::Connection;
 use pneuma::control::{Command, CommandResult, ControlExecutor};
 use pneuma::domain::release::OciArtifact;
 use pneuma::use_cases::deployment::{
-    DeployBranchError, DeployOciError, PublicDeploymentConfiguration, deploy_branch,
-    deploy_branch_with_progress, deploy_oci, deploy_oci_with_progress, rollback_deployment,
+    DeployBranchError, DeployOciError, DeploymentEvent, DeploymentStep,
+    PublicDeploymentConfiguration, RetirementWarning, deploy_branch_with_events,
+    deploy_oci_with_events, rollback_deployment_with_events,
 };
 
 use super::error::CliError;
@@ -90,25 +91,15 @@ pub(crate) fn run_deploy_oci(
     } else {
         eprintln!("Deploying {}...", application.name);
     }
-    let deployed = if verbose {
-        let mut progress = |event| eprintln!("{event}");
-        deploy_oci_with_progress(
-            connection,
-            &application.id,
-            &artifact,
-            None,
-            Some(&public_configuration),
-            &mut progress,
-        )
-    } else {
-        deploy_oci(
-            connection,
-            &application.id,
-            &artifact,
-            None,
-            Some(&public_configuration),
-        )
-    }
+    let mut events = |event| render_deployment_event_if_visible(&event, verbose);
+    let deployed = deploy_oci_with_events(
+        connection,
+        &application.id,
+        &artifact,
+        None,
+        Some(&public_configuration),
+        &mut events,
+    )
     .map_err(|source: DeployOciError| CliError::DeployOci {
         source: Box::new(source),
     })?;
@@ -153,23 +144,14 @@ pub(crate) fn run_deploy_branch(
     } else {
         eprintln!("Deploying {}...", application.name);
     }
-    let deployed = if verbose {
-        let mut progress = |event| eprintln!("{event}");
-        deploy_branch_with_progress(
-            connection,
-            &application.id,
-            Some(branch),
-            Some(&public_configuration),
-            &mut progress,
-        )
-    } else {
-        deploy_branch(
-            connection,
-            &application.id,
-            Some(branch),
-            Some(&public_configuration),
-        )
-    }
+    let mut events = |event| render_deployment_event_if_visible(&event, verbose);
+    let deployed = deploy_branch_with_events(
+        connection,
+        &application.id,
+        Some(branch),
+        Some(&public_configuration),
+        &mut events,
+    )
     .map_err(|source: DeployBranchError| CliError::DeployBranch {
         source: Box::new(source),
     })?;
@@ -193,11 +175,82 @@ pub(crate) fn run_rollback(
         format!("rolling back application {}", application.name),
     );
     let public_configuration = public_deployment_configuration();
-    let rolled_back = rollback_deployment(connection, &application.id, Some(&public_configuration))
-        .map_err(|source| CliError::Rollback { source })?;
+    let mut events = |event| render_deployment_event_if_visible(&event, verbose);
+    let rolled_back = rollback_deployment_with_events(
+        connection,
+        &application.id,
+        Some(&public_configuration),
+        &mut events,
+    )
+    .map_err(|source| CliError::Rollback { source })?;
     println!(
         "{}",
         output::rollback_result(&application.name, &rolled_back)
     );
     Ok(())
+}
+
+fn render_deployment_event_if_visible(event: &DeploymentEvent, verbose: bool) {
+    if verbose || matches!(event, DeploymentEvent::RetirementWarning { .. }) {
+        eprintln!("{}", render_deployment_event(event));
+    }
+}
+
+// Renders use-case events with the CLI's stable text vocabulary.
+fn render_deployment_event(event: &DeploymentEvent) -> String {
+    match event {
+        DeploymentEvent::StepStarted { step } => {
+            format!("{}: started", deployment_step_label(*step))
+        }
+        DeploymentEvent::StepCompleted { step } => {
+            format!("{}: completed", deployment_step_label(*step))
+        }
+        DeploymentEvent::StateChanged {
+            deployment_id,
+            status,
+        } => format!("deployment {deployment_id}: state changed to {status:?}"),
+        DeploymentEvent::FailurePersisted {
+            deployment_id,
+            code,
+        } => format!(
+            "deployment {deployment_id}: state changed to Failed; failure persisted ({code})"
+        ),
+        DeploymentEvent::RetirementWarning {
+            runtime_id,
+            warning,
+        } => match warning {
+            RetirementWarning::UnitRetirementFailed { diagnostic } => {
+                format!("warning: previous runtime {runtime_id} could not be retired: {diagnostic}")
+            }
+            RetirementWarning::ContainerRemovalUnproven { diagnostic } => format!(
+                "warning: previous runtime {runtime_id} unit was retired but its container removal could not be proven: {diagnostic}"
+            ),
+            RetirementWarning::PersistenceFailed => format!(
+                "warning: previous runtime {runtime_id} was retired but could not be marked removed"
+            ),
+        },
+    }
+}
+
+fn deployment_step_label(step: DeploymentStep) -> &'static str {
+    match step {
+        DeploymentStep::ResolveBranch => "resolve branch",
+        DeploymentStep::ResolveImageDigest => "resolve image digest",
+        DeploymentStep::PullImage => "pull image",
+        DeploymentStep::LoadSpecification => "load application specification",
+        DeploymentStep::CreateDeployment => "create deployment",
+        DeploymentStep::ReservePort => "reserve runtime port",
+        DeploymentStep::CreateUnit => "create candidate unit",
+        DeploymentStep::ReloadSystemd => "reload systemd user manager",
+        DeploymentStep::StartContainer => "start candidate container",
+        DeploymentStep::ResolveContainer => "resolve candidate container",
+        DeploymentStep::ObserveContainer => "observe candidate container",
+        DeploymentStep::RegisterCandidate => "register candidate runtime",
+        DeploymentStep::InternalHealthCheck => "internal health check",
+        DeploymentStep::ApplyPublicRoute => "apply public route",
+        DeploymentStep::ExternalHealthCheck => "external health check",
+        DeploymentStep::PromoteCandidate => "health check and promotion",
+        DeploymentStep::CleanupCandidate => "clean up candidate",
+        DeploymentStep::RetirePreviousRuntime => "retire previous runtime",
+    }
 }

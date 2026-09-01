@@ -24,7 +24,7 @@
 //! - [`transition`] exposes the lifecycle commands (`advance_deployment`, `fail_deployment`);
 //! - [`create`] records pending deployments;
 //! - [`query`] lists deployment history;
-//! - [`progress`] defines the shared progress vocabulary.
+//! - [`progress`] defines the shared workflow-event vocabulary.
 
 mod activation;
 mod candidate;
@@ -46,13 +46,13 @@ pub use self::create::{
     CreateDeploymentError, create_deployment, create_deployment_with_source_revision,
 };
 pub use self::deploy::{
-    DeployBranchError, DeployOciError, deploy_branch, deploy_branch_with_progress, deploy_oci,
-    deploy_oci_with_progress,
+    DeployBranchError, DeployOciError, deploy_branch, deploy_branch_with_events, deploy_oci,
+    deploy_oci_with_events,
 };
 pub use self::execute::{DeploymentResult, PublicDeploymentConfiguration};
 pub use self::failure::DeployReleaseError;
-pub use self::progress::{DeploymentProgress, DeploymentStep};
+pub use self::progress::{DeploymentEvent, DeploymentStep, RetirementWarning};
 pub use self::promotion::{PromoteInternalCandidateError, promote_internal_candidate};
 pub use self::query::list_deployments;
-pub use self::rollback::{RollbackError, rollback_deployment};
+pub use self::rollback::{RollbackError, rollback_deployment, rollback_deployment_with_events};
 pub use self::transition::{TransitionDeploymentError, advance_deployment, fail_deployment};

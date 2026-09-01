@@ -9,6 +9,8 @@ use crate::domain::application::ApplicationName;
 use crate::domain::identity::{ApplicationId, DeploymentId, RuntimeInstanceId};
 use crate::domain::runtime::{ContainerId, PreviousRuntime, RuntimeState};
 
+use super::progress::{DeploymentStep, EventReporter, RetirementWarning};
+
 #[derive(Debug, Clone)]
 // Tracks only resources proven to belong to a candidate for safe compensation.
 pub(crate) struct CandidateResources {
@@ -112,6 +114,7 @@ pub(crate) fn retire_previous_runtime(
     connection: &Connection,
     application_name: &ApplicationName,
     previous: Option<&PreviousRuntime>,
+    events: &mut EventReporter<'_>,
 ) {
     // The Quadlet generator enables the unit for boot start itself by applying the
     // [Install] section of the .container file, so no `systemctl enable` is needed.
@@ -119,6 +122,7 @@ pub(crate) fn retire_previous_runtime(
         return;
     };
     let previous_unit = unit_name(application_name, &previous.deployment_id);
+    events.started(DeploymentStep::RetirePreviousRuntime);
     let retirement = (|| -> Result<(), QuadletError> {
         stop(&previous_unit)?;
         remove_unit(&previous_unit)?;
@@ -126,16 +130,20 @@ pub(crate) fn retire_previous_runtime(
         Ok(())
     })();
     if let Err(source) = retirement {
-        eprintln!(
-            "warning: previous runtime {} could not be retired: {source}",
-            previous.runtime_id
+        events.retirement_warning(
+            &previous.runtime_id,
+            RetirementWarning::UnitRetirementFailed {
+                diagnostic: source.to_string(),
+            },
         );
         return;
     }
     if let Err(source) = prove_container_removed(&previous.external_runtime_id) {
-        eprintln!(
-            "warning: previous runtime {} unit was retired but its container removal could not be proven: {source}",
-            previous.runtime_id
+        events.retirement_warning(
+            &previous.runtime_id,
+            RetirementWarning::ContainerRemovalUnproven {
+                diagnostic: source.to_string(),
+            },
         );
         return;
     }
@@ -143,11 +151,10 @@ pub(crate) fn retire_previous_runtime(
         runtime_store::mark_runtime_removed(connection, &previous.runtime_id),
         Ok(crate::adapters::stores::PersistenceOutcome::Updated)
     ) {
-        eprintln!(
-            "warning: previous runtime {} was retired but could not be marked removed",
-            previous.runtime_id
-        );
+        events.retirement_warning(&previous.runtime_id, RetirementWarning::PersistenceFailed);
+        return;
     }
+    events.completed(DeploymentStep::RetirePreviousRuntime);
 }
 
 // Proves a container is gone before any caller confirms its destruction: absence is

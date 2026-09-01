@@ -17,7 +17,7 @@ use rusqlite::Connection;
 
 use super::cleanup::CandidateResources;
 use super::failure::FailedExecution;
-use super::progress::{DeploymentStep, ProgressReporter};
+use super::progress::{DeploymentStep, EventReporter};
 use super::promotion::{
     PromotePublicCandidateError, begin_public_exposure, promote_public_candidate,
     record_public_exposure_failure,
@@ -58,7 +58,7 @@ pub(crate) struct PublicActivationInput<'a> {
 // durable code directly.
 pub(crate) fn activate_public_candidate(
     input: PublicActivationInput<'_>,
-    progress: &mut ProgressReporter<'_>,
+    events: &mut EventReporter<'_>,
 ) -> Result<PromotedCandidate, FailedExecution> {
     let PublicActivationInput {
         connection,
@@ -70,21 +70,18 @@ pub(crate) fn activate_public_candidate(
         unit_name,
     } = input;
 
-    let runtime_id = runtime.id.as_str();
-    let deployment_id = runtime.deployment_id.as_str();
     let resources =
         CandidateResources::with_container_and_runtime(&runtime.external_runtime_id, &runtime.id)
             .with_unit(unit_name)
             .with_port();
 
     verify_internal_health(
-        runtime_id,
         runtime.expected_endpoint.socket_addr(),
         health_check,
         &resources,
-        progress,
+        events,
     )?;
-    mark_activating(connection, &runtime.deployment_id, &resources, progress)?;
+    mark_activating(connection, &runtime.deployment_id, &resources, events)?;
 
     let route = materialize_public_route(
         connection,
@@ -93,7 +90,7 @@ pub(crate) fn activate_public_candidate(
         managed_caddy_directory,
         caddyfile_path,
         &resources,
-        progress,
+        events,
     )?;
     verify_external_health_or_rollback(
         connection,
@@ -102,13 +99,10 @@ pub(crate) fn activate_public_candidate(
         &route,
         caddyfile_path,
         &resources,
-        progress,
+        events,
     )?;
 
-    progress.started(
-        DeploymentStep::PromoteCandidate,
-        format!("runtime {runtime_id}"),
-    );
+    events.started(DeploymentStep::PromoteCandidate);
     let promoted = promote_public_runtime_or_rollback(
         connection,
         application_id,
@@ -118,31 +112,20 @@ pub(crate) fn activate_public_candidate(
         caddyfile_path,
         &resources,
     )?;
-    progress.completed(
-        DeploymentStep::PromoteCandidate,
-        format!("runtime {runtime_id} promoted to Current"),
-    );
-    progress.state_changed(deployment_id, DeploymentStatus::Succeeded);
+    events.completed(DeploymentStep::PromoteCandidate);
+    events.state_changed(&runtime.deployment_id, DeploymentStatus::Succeeded);
 
     Ok(promoted)
 }
 
 // Verifies candidate health over its loopback endpoint before any public effect occurs.
 fn verify_internal_health(
-    runtime_id: &str,
     socket_addr: SocketAddr,
     health_check: &HealthCheckSpecification,
     resources: &CandidateResources,
-    progress: &mut ProgressReporter<'_>,
+    events: &mut EventReporter<'_>,
 ) -> Result<(), FailedExecution> {
-    progress.started(
-        DeploymentStep::InternalHealthCheck,
-        format!(
-            "runtime {runtime_id}, path {}, expected status {}",
-            health_check.path().as_str(),
-            health_check.expected_status().get()
-        ),
-    );
+    events.started(DeploymentStep::InternalHealthCheck);
 
     let internal_health = check_internal_health(socket_addr, health_check).map_err(|source| {
         failed_activation(DeploymentFailureCode::HealthCheck, source, resources)
@@ -158,10 +141,7 @@ fn verify_internal_health(
         ));
     }
 
-    progress.completed(
-        DeploymentStep::InternalHealthCheck,
-        format!("runtime {runtime_id} is healthy"),
-    );
+    events.completed(DeploymentStep::InternalHealthCheck);
     Ok(())
 }
 
@@ -170,7 +150,7 @@ fn mark_activating(
     connection: &Connection,
     deployment_id: &DeploymentId,
     resources: &CandidateResources,
-    progress: &mut ProgressReporter<'_>,
+    events: &mut EventReporter<'_>,
 ) -> Result<(), FailedExecution> {
     advance_deployment(connection, deployment_id, DeploymentEvent::Verified).map_err(|source| {
         failed_activation(
@@ -180,7 +160,7 @@ fn mark_activating(
         )
     })?;
 
-    progress.state_changed(deployment_id.as_str(), DeploymentStatus::Activating);
+    events.state_changed(deployment_id, DeploymentStatus::Activating);
     wait_for_test_gate("deployment.activating")
         .map_err(|source| failed_activation(DeploymentFailureCode::TestGate, source, resources))?;
     Ok(())
@@ -203,7 +183,7 @@ fn materialize_public_route(
     managed_caddy_directory: &Path,
     caddyfile_path: &Path,
     resources: &CandidateResources,
-    progress: &mut ProgressReporter<'_>,
+    events: &mut EventReporter<'_>,
 ) -> Result<MaterializedPublicRoute, FailedExecution> {
     let exposure = begin_public_exposure(connection, &runtime.id).map_err(|source| {
         failed_activation(
@@ -214,10 +194,7 @@ fn materialize_public_route(
     })?;
 
     let endpoint = runtime.expected_endpoint;
-    progress.started(
-        DeploymentStep::ApplyPublicRoute,
-        format!("{} -> {}", exposure.domain, endpoint.socket_addr()),
-    );
+    events.started(DeploymentStep::ApplyPublicRoute);
     let configuration_version =
         ExposureConfigurationVersion::new(&canonical_fragment_contents(&exposure.domain, endpoint))
             .map_err(|source| {
@@ -234,10 +211,7 @@ fn materialize_public_route(
     .map_err(|source| {
         record_materialization_failure(connection, application_id, source, resources)
     })?;
-    progress.completed(
-        DeploymentStep::ApplyPublicRoute,
-        format!("fragment {}", fragment.path.display()),
-    );
+    events.completed(DeploymentStep::ApplyPublicRoute);
 
     Ok(MaterializedPublicRoute {
         fragment,
@@ -317,17 +291,14 @@ fn verify_external_health_or_rollback(
     route: &MaterializedPublicRoute,
     caddyfile_path: &Path,
     resources: &CandidateResources,
-    progress: &mut ProgressReporter<'_>,
+    events: &mut EventReporter<'_>,
 ) -> Result<(), FailedExecution> {
     let MaterializedPublicRoute {
         fragment: materialized,
         domain,
         ..
     } = route;
-    progress.started(
-        DeploymentStep::ExternalHealthCheck,
-        format!("https://{domain}{}", health_check.path().as_str()),
-    );
+    events.started(DeploymentStep::ExternalHealthCheck);
 
     if let Err(source) =
         check_external_health(domain, health_check.path(), health_check.expected_status())
@@ -352,10 +323,7 @@ fn verify_external_health_or_rollback(
         ));
     }
 
-    progress.completed(
-        DeploymentStep::ExternalHealthCheck,
-        format!("{domain} returned expected status"),
-    );
+    events.completed(DeploymentStep::ExternalHealthCheck);
     Ok(())
 }
 
@@ -551,7 +519,7 @@ mod tests {
                 caddyfile_path: &caddyfile_path,
                 unit_name: "unit-1",
             },
-            &mut ProgressReporter::disabled(),
+            &mut EventReporter::disabled(),
         )
         .map(|_| ())
     }
