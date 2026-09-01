@@ -6,6 +6,7 @@ mod doctor;
 mod error;
 mod exposure;
 mod output;
+mod progress;
 mod reconciliation;
 mod shared;
 mod system;

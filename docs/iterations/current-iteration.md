@@ -55,7 +55,7 @@ progress renderer. No daemon, HTTP, or TUI is implemented.
      through control; remove CLI-owned lock/connection lifetime and remaining
      terminal output outside the interface layer.
    - Result: every stateful command executes through the boundary.
-8. [ ] Concurrent CLI renderer
+8. [x] Concurrent CLI renderer
    - Add a CLI-only renderer thread with animated TTY progress, stable verbose
      lines, and deterministic non-TTY output.
    - Result: progress animation exists entirely in the interface layer.
@@ -197,3 +197,12 @@ progress renderer. No daemon, HTTP, or TUI is implemented.
   --workspace --release`, markdown-link validation, and shell syntax checks all
   passed; the three ignored OCI tests remain environment-dependent. `shellcheck`
   and `shfmt` were unavailable locally, and no shell files changed.
+- Checkpoint 8 (concurrent CLI renderer): non-verbose deployment and rollback
+  event callbacks now feed a CLI-only `std` channel and renderer thread when
+  stderr is a TTY. The renderer animates the active semantic step, clears it
+  before final output or warnings, and never affects command execution when its
+  receiver is unavailable. Verbose output remains synchronous and non-TTY
+  output retains the existing deterministic text without cursor controls.
+  `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D
+  warnings`, `cargo test --all-features`, and `cargo build --workspace --release`
+  all passed; the three ignored OCI tests remain environment-dependent.
