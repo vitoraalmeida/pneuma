@@ -160,21 +160,33 @@ upgraded.
 
 ### v0.5.1 - Interface-Neutral Execution
 
-**Status:** in progress; approved design
-[`designs/interface-neutral-execution.md`](designs/interface-neutral-execution.md)
-(2026-08-31).
+**Status:** completed on 2026-08-31.
 
-Command execution moves out of the CLI into a synchronous, interface-neutral
-control boundary so the CLI becomes one adapter among possible future
-interfaces (TUI, local HTTP). No daemon, HTTP server, or TUI is implemented.
+Command execution moved out of the CLI into a synchronous, interface-neutral
+control boundary. The CLI is one adapter among possible future interfaces; no
+daemon, HTTP server, or TUI was added.
 
-- [x] Approved design, active tracker, and recorded baseline.
 - [x] Control boundary for every stateful command, migrated one command family
   at a time with unchanged CLI behavior.
 - [x] Semantic deployment events with matched start/completion boundaries,
   typed failure codes, and typed retirement warnings.
 - [x] Animated TTY progress rendered entirely in the CLI, with deterministic
   non-TTY output.
+
+### v0.5.2 - CLI Adapter Consolidation
+
+**Status:** planned; approved design
+[`designs/cli-adapter-consolidation.md`](designs/cli-adapter-consolidation.md)
+(2026-09-01).
+
+The CLI adapter will remove its duplicated command vocabulary and repetitive
+per-command execution handlers, retaining all established command syntax,
+output, progress, error, and exit-code behavior.
+
+- [x] Approved design; activate the execution tracker after the design commit.
+- [ ] Map parsed interactive input directly to control commands.
+- [ ] Consolidate control execution, result rendering, deployment progress, and
+  restricted CI routing.
 
 ## v0.6 - Observed State / Host Observation
 
