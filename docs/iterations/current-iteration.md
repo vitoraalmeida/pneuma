@@ -176,7 +176,26 @@ authoritative target for observable corrections.
       doctor, system, exit-code class, and cross-cutting scenarios remain
       residual for the catalog and database modules. No scenario, assertion,
       or helper was rewritten and nothing was duplicated.
-15. [ ] Catalog and database modules
+15. [x] Catalog and database modules
+     - Move import/list/system/deployment-history catalog tests into
+       `tests/cli/catalog.rs`, and backup/restore/database-lock tests into
+       `tests/cli/database.rs`.
+     - Result: the nine catalog scenarios (idempotent import and list,
+       manifest errors, local-path rejection without application creation,
+       temporary-checkout cleanup after clone failure, manifest-path import,
+       missing-required-system usage failure, remote import idempotency,
+       reimport reporting the deployed state, and the system create/list/
+       show round trip) moved verbatim into `catalog.rs`; the six database
+       scenarios (unusable database location at the lock boundary, backup and
+       restore preserving the catalog, incompatible-backup rejection,
+       restore conflicting with a shared lock, normal commands conflicting
+       with an exclusive restore lock, and the closed-database guard for fake
+       external commands) moved verbatim into `database.rs`. The
+       deployment-history listings had already moved with the deployment
+       module. `tests/cli/main.rs` remains the module declarations plus the
+       genuinely cross-cutting residuals: the three doctor scenarios and the
+       exit-code class scenarios (2/3/5). No helper or fake implementation is
+       duplicated.
 16. [ ] Operational regression and closure
 
 ## Acceptance Criteria
@@ -440,3 +459,29 @@ authoritative target for observable corrections.
   all-feature tests (3 OCI tests remain ignored without rootless Podman), and
   the release build passed. Checkpoint 15 is the next implementation
   checkpoint.
+- Checkpoint 15 (catalog and database modules): the nine catalog scenarios
+  (idempotent import and list, manifest errors, local-path rejection without
+  application creation, temporary-checkout cleanup after clone failure,
+  manifest-path import, missing-required-system usage failure, remote import
+  idempotency, reimport reporting the deployed state, and the system
+  create/list/show round trip) moved mechanically from `tests/cli/main.rs` to
+  `tests/cli/catalog.rs`, and the six database scenarios (unusable database
+  location surfacing at the lock boundary, backup and restore preserving
+  catalog state, incompatible-backup rejection without replacing the live
+  database, restore conflicting with a held shared lock, normal commands
+  conflicting with a held exclusive lock, and the closed-database guard for
+  the fake external commands) moved to `tests/cli/database.rs`; the
+  deployment-history listings had already moved with the deployment module.
+  `main.rs` remains the module declarations plus the genuinely cross-cutting
+  residuals — the three doctor scenarios and the exit-code class scenarios
+  (usage 2, unknown application 3, external failure 5) — with `thread`,
+  `Ipv4Addr`/`TcpListener`, `database`, `DatabaseLock`/`LockMode`,
+  `create_repository_from_fixture`, `fixture_path`, `initialize_repository`,
+  `respond_once`, and `run_pneuma_env` pruned because no residual test uses
+  them. No scenario, assertion, or helper was rewritten and nothing was
+  duplicated. Focused tests (`cargo test --test cli catalog::`, 9 passed;
+  `cargo test --test cli database::`, 6 passed), the full `cli` target
+  (84/84), `cargo fmt --check`, Clippy with warnings denied, all-feature
+  tests (3 OCI tests remain ignored without rootless Podman), and the release
+  build passed. Checkpoint 16 (operational regression and closure) is the
+  next checkpoint.
