@@ -2590,6 +2590,7 @@ fn a_second_deploy_is_rejected_while_the_first_is_starting() {
 
     let second = environment.deploy(port, false);
     assert!(!second.status.success());
+    assert_eq!(second.status.code(), Some(4));
     let stderr = String::from_utf8_lossy(&second.stderr);
     assert!(
         stderr.contains("already has an operation in progress"),
@@ -2617,6 +2618,37 @@ fn a_second_deploy_is_rejected_while_the_first_is_starting() {
         .unwrap();
     assert_eq!(deployment_count, 1);
     assert_eq!(runtime_count, 1);
+}
+
+#[test]
+fn deploy_fails_with_exit_1_when_the_application_lock_cannot_be_opened() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    let connection = database::open(&environment.database_path).unwrap();
+    let application_id: String = connection
+        .query_row("SELECT id FROM applications", [], |row| row.get(0))
+        .unwrap();
+    drop(connection);
+    let lock_path = std::path::PathBuf::from(format!(
+        "{}.{}.lock",
+        environment.database_path.display(),
+        application_id
+    ));
+    // A directory at the lock path makes every open attempt fail deterministically.
+    fs::create_dir(&lock_path).unwrap();
+
+    let output = environment.deploy(30000, false);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("failed to open application lock"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(lock_path.to_string_lossy().as_ref()),
+        "{stderr}"
+    );
 }
 
 #[test]

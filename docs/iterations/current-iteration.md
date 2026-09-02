@@ -50,9 +50,15 @@ authoritative target for observable corrections.
      is exactly `command failed`, and `ActiveOciImages(Passed)` renders
      `✓ Active OCI images: <detail>` instead of panicking; check ordering,
      health calculation, summary, stderr error, and exit 1 are unchanged.
-5. [ ] Lock failure classification
+5. [x] Lock failure classification
    - Distinguish lock infrastructure failure (exit 1) from real contention
      (exit 4).
+   - Result: every `ApplicationLockError::Open`/`Acquire` wrapper in deploy,
+     branch deploy, rollback, runtime lifecycle, and visibility classification
+     is `Failure`, every `ApplicationBusy` wrapper stays `Conflict`, and
+     `ReconciliationReadError::OperationLock` is `Failure` since reconciliation
+     reports contention as a successful `Deferred`; error wording and source
+     chains are unchanged.
 6. [ ] Nested deployment classification
    - Classify deployment failures by typed semantic cause.
 7. [ ] Remaining classification audit
@@ -152,3 +158,18 @@ authoritative target for observable corrections.
   Focused tests, `cargo fmt --check`, Clippy with warnings denied,
   all-feature tests, markdown-link validation, and the release build passed.
   Checkpoint 5 is the next implementation checkpoint.
+- Checkpoint 5 (lock failure classification): the CLI classifiers now split
+  lock wrappers — `ApplicationLock` (open/acquire) wrappers for deploy,
+  branch deploy, rollback, runtime lifecycle, and visibility change classify
+  as `Failure` (exit 1) while `ApplicationBusy` wrappers remain `Conflict`
+  (exit 4); `ReconciliationReadError::OperationLock` moved to `Failure`
+  because reconciliation already reports contention as a successful
+  `Deferred` result. Messages and source chains are unchanged. Unit tests
+  cover every CLI-visible lock wrapper (open and acquire) with matching
+  `ApplicationBusy` cases; the binary regression
+  `deploy_fails_with_exit_1_when_the_application_lock_cannot_be_opened`
+  creates a directory at the lock sidecar path so open fails deterministically
+  with the lock-path diagnostic, and the existing contention regression now
+  also asserts exit 4. Focused tests, `cargo fmt --check`, Clippy with
+  warnings denied, all-feature tests, and the release build passed.
+  Checkpoint 6 is the next implementation checkpoint.

@@ -164,9 +164,10 @@ fn classify_deploy_branch(source: &DeployBranchError) -> CliErrorClass {
             CliErrorClass::External
         }
         DeployBranchError::DeployOci { source } => classify_deploy_oci(source),
-        DeployBranchError::ApplicationLock { .. } | DeployBranchError::ApplicationBusy { .. } => {
-            CliErrorClass::Conflict
-        }
+        // Lock open/acquire failures are infrastructure failures; only the
+        // dedicated busy variants represent real contention.
+        DeployBranchError::ApplicationLock { .. } => CliErrorClass::Failure,
+        DeployBranchError::ApplicationBusy { .. } => CliErrorClass::Conflict,
         _ => CliErrorClass::Failure,
     }
 }
@@ -175,9 +176,8 @@ fn classify_deploy_oci(source: &DeployOciError) -> CliErrorClass {
     match source {
         DeployOciError::RepositoryMismatch { .. } => CliErrorClass::Usage,
         DeployOciError::PullImage { .. } => CliErrorClass::External,
-        DeployOciError::ApplicationLock { .. } | DeployOciError::ApplicationBusy { .. } => {
-            CliErrorClass::Conflict
-        }
+        DeployOciError::ApplicationLock { .. } => CliErrorClass::Failure,
+        DeployOciError::ApplicationBusy { .. } => CliErrorClass::Conflict,
         _ => CliErrorClass::Failure,
     }
 }
@@ -202,8 +202,8 @@ fn classify_runtime_lifecycle(source: &RuntimeLifecycleError) -> CliErrorClass {
         RuntimeLifecycleError::NotDeployed { .. }
         | RuntimeLifecycleError::ContainerMissing { .. } => CliErrorClass::NotFound,
         RuntimeLifecycleError::RuntimeChanged { .. }
-        | RuntimeLifecycleError::ApplicationLock { .. }
         | RuntimeLifecycleError::ApplicationBusy { .. } => CliErrorClass::Conflict,
+        RuntimeLifecycleError::ApplicationLock { .. } => CliErrorClass::Failure,
         RuntimeLifecycleError::Observe { .. }
         | RuntimeLifecycleError::Control { .. }
         | RuntimeLifecycleError::Supervision { .. } => CliErrorClass::External,
@@ -216,9 +216,8 @@ fn classify_rollback(source: &RollbackError) -> CliErrorClass {
         RollbackError::ApplicationNotFound { .. } => CliErrorClass::NotFound,
         RollbackError::NoPreviousDeployment { .. } => CliErrorClass::Conflict,
         RollbackError::PullImage { .. } => CliErrorClass::External,
-        RollbackError::ApplicationLock { .. } | RollbackError::ApplicationBusy { .. } => {
-            CliErrorClass::Conflict
-        }
+        RollbackError::ApplicationLock { .. } => CliErrorClass::Failure,
+        RollbackError::ApplicationBusy { .. } => CliErrorClass::Conflict,
         _ => CliErrorClass::Failure,
     }
 }
@@ -229,8 +228,8 @@ fn classify_exposure_change(source: &ExposureChangeError) -> CliErrorClass {
         | ExposureChangeError::NoActiveRuntime { .. } => CliErrorClass::NotFound,
         ExposureChangeError::ExposureChanged { .. }
         | ExposureChangeError::RuntimeNotRunning { .. }
-        | ExposureChangeError::ApplicationLock { .. }
         | ExposureChangeError::ApplicationBusy { .. } => CliErrorClass::Conflict,
+        ExposureChangeError::ApplicationLock { .. } => CliErrorClass::Failure,
         ExposureChangeError::InvalidVisibility { .. } => CliErrorClass::Usage,
         ExposureChangeError::ObserveFailed { .. }
         | ExposureChangeError::MaterializeFailed { .. }
@@ -243,7 +242,9 @@ fn classify_exposure_change(source: &ExposureChangeError) -> CliErrorClass {
 fn classify_reconciliation_read(source: &ReconciliationReadError) -> CliErrorClass {
     match source {
         ReconciliationReadError::ApplicationNotFound { .. } => CliErrorClass::NotFound,
-        ReconciliationReadError::OperationLock { .. } => CliErrorClass::Conflict,
+        // Reconciliation reports real contention as a successful `Deferred`
+        // result, so this wrapper can only be a lock infrastructure failure.
+        ReconciliationReadError::OperationLock { .. } => CliErrorClass::Failure,
         ReconciliationReadError::ObserveContainer { .. }
         | ReconciliationReadError::ObserveNamedContainer { .. }
         | ReconciliationReadError::ObserveQuadlet { .. }
@@ -554,7 +555,7 @@ mod tests {
                 CliErrorClass::NotFound,
             ),
             (
-                "reconcile: operation lock failure",
+                "reconcile: operation lock open failure",
                 CliError::Reconcile {
                     source: ReconciliationReadError::OperationLock {
                         source: pneuma::adapters::application_lock::ApplicationLockError::Open {
@@ -563,7 +564,7 @@ mod tests {
                         },
                     },
                 },
-                CliErrorClass::Conflict,
+                CliErrorClass::Failure,
             ),
             (
                 "reconcile: container observation failure",
@@ -690,6 +691,131 @@ mod tests {
         assert_eq!(CliErrorClass::NotFound.exit_code(), 3);
         assert_eq!(CliErrorClass::Conflict.exit_code(), 4);
         assert_eq!(CliErrorClass::External.exit_code(), 5);
+    }
+
+    // Every CLI-visible wrapper of `ApplicationLockError` is infrastructure
+    // failure, while every matching `ApplicationBusy` wrapper is real
+    // contention. The reconciliation `OperationLock` wrapper is a failure too,
+    // because reconciliation reports contention as a successful `Deferred`.
+    #[test]
+    fn lock_wrappers_classify_as_failures_and_busy_wrappers_as_conflicts() {
+        use pneuma::adapters::application_lock::ApplicationLockError;
+
+        let open = || ApplicationLockError::Open {
+            path: "/tmp/lock".into(),
+            source: io::Error::other("is a directory"),
+        };
+        let acquire = || ApplicationLockError::Acquire {
+            path: "/tmp/lock".into(),
+            source: io::Error::other("unknown error"),
+        };
+        let busy = "portal".to_owned();
+
+        let cases: Vec<(&str, CliError, CliErrorClass)> = vec![
+            (
+                "deploy image: lock open failure",
+                CliError::DeployOci {
+                    source: Box::new(DeployOciError::ApplicationLock { source: open() }),
+                },
+                CliErrorClass::Failure,
+            ),
+            (
+                "deploy image: lock acquire failure",
+                CliError::DeployOci {
+                    source: Box::new(DeployOciError::ApplicationLock { source: acquire() }),
+                },
+                CliErrorClass::Failure,
+            ),
+            (
+                "deploy image: real contention",
+                CliError::DeployOci {
+                    source: Box::new(DeployOciError::ApplicationBusy {
+                        application_id: busy.clone(),
+                    }),
+                },
+                CliErrorClass::Conflict,
+            ),
+            (
+                "deploy branch: lock open failure",
+                CliError::DeployBranch {
+                    source: Box::new(DeployBranchError::ApplicationLock { source: open() }),
+                },
+                CliErrorClass::Failure,
+            ),
+            (
+                "deploy branch: real contention",
+                CliError::DeployBranch {
+                    source: Box::new(DeployBranchError::ApplicationBusy {
+                        application_id: busy.clone(),
+                    }),
+                },
+                CliErrorClass::Conflict,
+            ),
+            (
+                "rollback: lock open failure",
+                CliError::Rollback {
+                    source: RollbackError::ApplicationLock { source: open() },
+                },
+                CliErrorClass::Failure,
+            ),
+            (
+                "rollback: real contention",
+                CliError::Rollback {
+                    source: RollbackError::ApplicationBusy {
+                        application_id: busy.clone(),
+                    },
+                },
+                CliErrorClass::Conflict,
+            ),
+            (
+                "app runtime: lock open failure",
+                CliError::ApplicationRuntime {
+                    source: Box::new(RuntimeLifecycleError::ApplicationLock { source: open() }),
+                },
+                CliErrorClass::Failure,
+            ),
+            (
+                "app runtime: real contention",
+                CliError::ApplicationRuntime {
+                    source: Box::new(RuntimeLifecycleError::ApplicationBusy {
+                        application_id: busy.clone(),
+                    }),
+                },
+                CliErrorClass::Conflict,
+            ),
+            (
+                "visibility: lock open failure",
+                CliError::VisibilitySet {
+                    source: ExposureChangeError::ApplicationLock { source: open() },
+                },
+                CliErrorClass::Failure,
+            ),
+            (
+                "visibility: real contention",
+                CliError::VisibilitySet {
+                    source: ExposureChangeError::ApplicationBusy {
+                        application_id: busy.clone(),
+                    },
+                },
+                CliErrorClass::Conflict,
+            ),
+            (
+                "reconcile: lock acquire failure",
+                CliError::Reconcile {
+                    source: ReconciliationReadError::OperationLock { source: acquire() },
+                },
+                CliErrorClass::Failure,
+            ),
+        ];
+
+        for (description, error, expected) in cases {
+            assert_eq!(error.class(), expected, "{description}");
+            assert_eq!(
+                error.class().exit_code(),
+                expected.exit_code(),
+                "{description}"
+            );
+        }
     }
 
     #[test]
