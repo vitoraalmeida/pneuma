@@ -1,6 +1,6 @@
 # Current Iteration
 
-**Status:** em andamento
+**Status:** concluida
 
 **Base:** `6227c0e` (`Change events configuration`)
 
@@ -196,7 +196,15 @@ authoritative target for observable corrections.
        genuinely cross-cutting residuals: the three doctor scenarios and the
        exit-code class scenarios (2/3/5). No helper or fake implementation is
        duplicated.
-16. [ ] Operational regression and closure
+16. [x] Operational regression and closure
+     - Verify every design finding has implementation and test evidence, run
+       the full gate set plus markdown-link validation, record the
+       environment-dependent checks honestly, and close the iteration.
+     - Result: all sixteen checkpoints are complete; the review checklist
+       holds (no domain enum `Debug` in stable CLI text, exhaustive error
+       matches, observational event delivery, atomic fail-fast startup, total
+       doctor rendering, one harness-heavy `cli` Cargo target with seven
+       capability modules).
 
 ## Acceptance Criteria
 
@@ -485,3 +493,29 @@ authoritative target for observable corrections.
   tests (3 OCI tests remain ignored without rootless Podman), and the release
   build passed. Checkpoint 16 (operational regression and closure) is the
   next checkpoint.
+- Checkpoint 16 (operational regression and closure): closure review on the
+  final code commit `50273b2` — every design finding has implementation and
+  test evidence through checkpoints 2-15; the approved behavior table is
+  fully realized; no unapproved CLI syntax or wording changed;
+  `grep '{:?}' src/cli` finds no domain enum `Debug` formatting; error
+  classification matches are exhaustive with no string matching or
+  downcasting; event delivery remains observational through the best-effort
+  renderer; host startup is atomic and fail-fast; doctor rendering is total
+  (the two remaining `unreachable!` sites — the clap-guarded
+  `--image`/`--branch` conflict and the separately-rendered
+  `DeploymentRequested` variant — are outside the approved doctor-rendering
+  scope); and the integration suite remains one `cli` Cargo target with
+  `support`, `catalog`, `database`, `deployment`, `exposure`, `lifecycle`,
+  and `reconciliation` modules. Gates on `50273b2`: `cargo fmt --check`,
+  `cargo clippy --all-targets --all-features -- -D warnings`,
+  `cargo test --all-features` (499 passed, 0 failed across all targets),
+  `cargo build --workspace --release`, `python3
+  scripts/check-markdown-links.py`, and `git diff --check` all passed.
+  Environment checks: the three `tests/oci_image.rs` tests are recorded SKIP
+  because rootless Podman is not configured on this host; the disposable VM
+  battery `PNEUMA_VM_RECONCILIATION=1 scripts/vm/run-e2e.sh` passed with 45
+  battery checks and 21 reconciliation drift-catalog checks (R1-R7, E1-E6,
+  I1-I4, C1-C4), 0 failed, 0 skipped, and the disposable instance was
+  destroyed on exit (no instance directory and no QEMU process remain). The
+  iteration is concluded; roadmap release completion and v0.6 remain subject
+  to explicit user approval.
