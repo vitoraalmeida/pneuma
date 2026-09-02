@@ -105,8 +105,20 @@ authoritative target for observable corrections.
      the exact `error: SSH_ORIGINAL_COMMAND not set` line, and every
      version/dispatch scenario asserts the configured database path is never
      created.
-10. [ ] Shared CLI test support
+10. [x] Shared CLI test support
    - Extract the deployment harness into `tests/cli/support.rs`.
+   - Result: `DeploymentEnvironment` (with its `OciFailure` enum, constructors,
+     and deploy/lifecycle/reconcile helpers), the fake `podman`/`systemctl`/
+     `caddy`/`curl` installers, the Git and one-shot HTTP helpers, and the
+     common process assertions moved to `tests/cli/support.rs` with `pub(super)`
+     visibility only where sibling modules need access; fake command
+     implementations and `git`/`read_request`/`unique_suffix` stay private.
+     Exposure helpers (`run_visibility_command*`, `assert_exposure_state`) and
+     `current_runtime_states` remain local to their future capability modules.
+     Because Rust resolves child modules of a test-crate root in its own
+     directory, the target root moved mechanically from `tests/cli.rs` to
+     `tests/cli/main.rs`; the target name `cli`, all 84 tests, and every
+     assertion are unchanged.
 11. [ ] Reconciliation test module
 12. [ ] Lifecycle test module
 13. [ ] Exposure test module
@@ -281,3 +293,20 @@ authoritative target for observable corrections.
   passed), `cargo fmt --check`, Clippy with warnings denied, all-feature tests
   (3 OCI tests remain ignored without rootless Podman), and the release build
   passed. Checkpoint 10 is the next implementation checkpoint.
+- Checkpoint 10 (shared CLI test support): the deployment harness moved to
+  `tests/cli/support.rs` — `DeploymentEnvironment` and `OciFailure`, the fake
+  executable installers (private), Git (`git`, `initialize_repository`,
+  `create_repository_from_fixture`, `fixture_path`), one-shot HTTP
+  (`respond_once`, private `read_request`), process helpers (`run_pneuma`,
+  `run_pneuma_env`, `executable_path`, `make_executable`, `wait_for_file`,
+  `wait_for_child`), common assertions (`assert_command_succeeded`,
+  `assert_identifier_line`), and `temporary_database_path`/
+  `temporary_workspace_path`/`unique_suffix`. Items used by test bodies use
+  `pub(super)`; nothing is duplicated. Since a test-crate root cannot resolve
+  children in a same-named subdirectory, `tests/cli.rs` became
+  `tests/cli/main.rs` — the `cli` target name, the 84 tests, and all assertions
+  are unchanged, and `cargo test --test cli` passes. Focused tests (84/84 in
+  the `cli` target), `cargo fmt --check`, Clippy with warnings denied,
+  all-feature tests (3 OCI tests remain ignored without rootless Podman), and
+  the release build passed. Checkpoint 11 is the next implementation
+  checkpoint.
