@@ -142,7 +142,11 @@ optional observer; event delivery cannot change command execution.
 
 **CLI** (`src/main.rs` and `src/cli/`) owns process bootstrap, argument parsing,
 mapping arguments onto control commands, output rendering (including TTY-only
-deployment animation), and exit-code classification. It holds no domain rules,
+deployment animation), and exit-code classification. Process bootstrap
+(`src/host_environment.rs`) validates and applies the host environment file
+strictly and fail-fast — a missing file boots, any other read or parse failure
+exits 1 with one contextual `error:` line before argument parsing — and derives
+the uid-scoped runtime environment. The CLI holds no domain rules,
 database connection, or lock and never bypasses control to reach use cases or
 persistence.
 

@@ -463,9 +463,18 @@ manifest requires re-registering under a new name or manual reconfiguration.
 
 | Variable | Default | Description |
 |---|---|---|
+| `PNEUMA_HOST_ENVIRONMENT_FILE` | `/etc/pneuma/environment` | Host environment file read at startup. |
 | `PNEUMA_DATABASE_PATH` | `/var/lib/pneuma/database/pneuma.sqlite3` | SQLite database location. |
 | `PNEUMA_WORKSPACE_PATH` | `/var/lib/pneuma/checkouts` | Temporary Git checkout directory. |
 | `PNEUMA_CADDY_MANAGED_PATH` | `/etc/caddy/applications` | Managed Caddy fragment directory. |
 | `PNEUMA_CADDYFILE_PATH` | `/etc/caddy/Caddyfile` | Main Caddyfile location. |
 | `PNEUMA_RUNTIME_PORT_RANGE` | `30000-39999` | Loopback runtime port range. |
 | `PNEUMA_QUADLET_DIR` | `$HOME/.config/containers/systemd` | Quadlet unit directory. |
+
+The host environment file is optional; when present it must be readable, valid
+UTF-8, and fully valid, otherwise startup fails with a single `error:` line
+before any command runs. Blank lines and `#` comments are ignored; every other
+line must be `NAME=VALUE` (the first `=` separates, additional `=` characters
+and inline `#` belong to the value), values may be empty, and duplicate names
+are rejected. Caller-supplied variables override file values. After startup,
+either `HOME` or `PNEUMA_QUADLET_DIR` must be set to a nonempty value.

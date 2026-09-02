@@ -18,6 +18,7 @@ Deeper reference material lives in [`architecture/architecture.md`](architecture
 
 ```text
 src/main.rs                  process bootstrap and composition root only
+src/host_environment.rs      host environment file validation, application, and uid-scoped runtime derivation
 src/config.rs                documented PNEUMA_* path variables, path resolution, verbose logging
 src/cli/                     argument tree, dispatch, output, progress, error classes
 src/control/                 interface-neutral execution boundary (`ControlExecutor`, typed commands/results/errors)
@@ -36,10 +37,16 @@ filesystem work, and internal TCP health checks.
 
 Every normal command follows the same skeleton before reaching its flow:
 
-1. `src/main.rs` loads host configuration from `/etc/pneuma/environment`
-   (never overriding caller-supplied variables), derives the uid-scoped runtime
-   environment (`XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`, default
-   `PNEUMA_QUADLET_DIR`), then composes `cli::parse_invocation()` with
+1. `src/main.rs` calls `src/host_environment.rs::configure_startup_environment`,
+   which reads the host environment file (path from `PNEUMA_HOST_ENVIRONMENT_FILE`,
+   default `/etc/pneuma/environment`), fails startup with one contextual
+   `error:` line and exit 1 before argument parsing when the file is unreadable,
+   not valid UTF-8, or contains a malformed entry, an invalid variable name, a
+   NUL byte, or a duplicate variable, applies its entries (never overriding
+   caller-supplied variables), derives the uid-scoped runtime environment
+   (`XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`, default `PNEUMA_QUADLET_DIR`),
+   and requires a nonempty `HOME` or `PNEUMA_QUADLET_DIR`. It then composes
+   `cli::parse_invocation()` with
    `cli::run` through `and_then`, so a normalization failure never reaches
    dispatch.
 2. `src/cli/args.rs` owns the Clap tree and translates it fallibly into the

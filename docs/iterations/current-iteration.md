@@ -81,9 +81,20 @@ authoritative target for observable corrections.
      values) are `Failure`, and a non-loopback observed endpoint is
      `External`. Messages, source chains, and the numeric class definitions
      are unchanged.
-8. [ ] Strict host environment contract
+8. [x] Strict host environment contract
    - Fail fast on unreadable, malformed, duplicate, invalid UTF-8, or
      invalid-variable host environment files.
+   - Result: `src/host_environment.rs` owns startup configuration — the file
+     path comes from `PNEUMA_HOST_ENVIRONMENT_FILE` (default
+     `/etc/pneuma/environment`), only `NotFound` is ignored, bytes are
+     validated as UTF-8, entries must be `NAME=VALUE` with valid variable
+     names and no NUL bytes, duplicates are rejected with both line numbers,
+     and the whole file validates before any assignment; caller environment
+     values win, XDG/D-Bus derivation is unchanged, a nonempty `HOME` or
+     `PNEUMA_QUADLET_DIR` is required, and an empty `HOME` no longer derives a
+     bogus Quadlet directory. Startup failures exit 1 with empty stdout and
+     one contextual `error:` line before argument parsing, creating no
+     database and running no external command.
 9. [ ] Invocation boundary coverage
    - Cover adapter-only commands in a dedicated test target.
 10. [ ] Shared CLI test support
@@ -230,3 +241,24 @@ authoritative target for observable corrections.
   `cargo fmt --check`, Clippy with warnings denied, all-feature tests (3 OCI
   tests remain ignored without rootless Podman), and the release build
   passed. Checkpoint 8 is the next implementation checkpoint.
+- Checkpoint 8 (strict host environment contract): bootstrap moved to
+  `src/host_environment.rs::configure_startup_environment`; the host
+  environment file is read through `PNEUMA_HOST_ENVIRONMENT_FILE` (default
+  `/etc/pneuma/environment`), only `NotFound` is tolerated, and unreadable
+  files, invalid UTF-8, missing separators, empty or invalid variable names,
+  NUL bytes in values, and duplicate variables each fail startup with one
+  contextual `error:` line, exit 1, empty stdout, no database creation, no
+  external command, and before argument parsing. The whole file validates
+  before any entry is applied, caller values override file values, XDG/D-Bus
+  derivation is unchanged, a nonempty `HOME` or `PNEUMA_QUADLET_DIR` is
+  required after derivation, and an empty `HOME` no longer derives a bogus
+  Quadlet directory. Coverage: five parse unit tests plus binary regressions
+  for a missing file booting normally, an unreadable path (directory), invalid
+  UTF-8, valid entries applying the file-provided `PNEUMA_DATABASE_PATH`,
+  caller precedence, malformed lines with the line number, invalid names, NUL
+  bytes, duplicates with both line numbers, no partial application after a
+  late parse failure, and the HOME/Quadlet requirement. Focused tests
+  (`--lib host_environment`, `--test host_environment`), `cargo fmt --check`,
+  Clippy with warnings denied, all-feature tests (3 OCI tests remain ignored
+  without rootless Podman), and the release build passed. Checkpoint 9 is the
+  next implementation checkpoint.

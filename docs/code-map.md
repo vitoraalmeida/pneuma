@@ -10,9 +10,12 @@ tables and test maps in [`code-guide.md`](code-guide.md), domain vocabulary in
 
 Every command starts the same way:
 
-1. `src/main.rs::main` loads `/etc/pneuma/environment`
-   (`load_host_environment`) and derives uid-scoped runtime variables
-   (`configure_runtime_environment`).
+1. `src/main.rs::main` validates and applies the host environment file
+   (`src/host_environment.rs::configure_startup_environment`; path from
+   `PNEUMA_HOST_ENVIRONMENT_FILE`, default `/etc/pneuma/environment`; a missing
+   file boots, any other read or parse failure exits 1 with one `error:` line
+   before argument parsing) and derives uid-scoped runtime variables
+   (`XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`, default `PNEUMA_QUADLET_DIR`).
 2. `src/cli/args.rs` parses the Clap tree into an adapter-only target or a
    normalized `Command`.
 3. `src/cli/mod.rs::run` routes every stateful parsed command to
