@@ -143,7 +143,20 @@ authoritative target for observable corrections.
       which only those tests used; `rusqlite::OptionalExtension` left
       `main.rs` with them since no residual test uses it. No scenario,
       assertion, or helper was rewritten and nothing was duplicated.
-13. [ ] Exposure test module
+13. [x] Exposure test module
+    - Move visibility, compensation, invalid visibility, and legacy `expose`
+      scenarios into `tests/cli/exposure.rs`; keep exposure helpers local.
+    - Result: the nine exposure scenarios (public/internal visibility toggle,
+      idempotent internal set without a domain, public intent persisted as
+      failed without an active runtime, domain-required rejection before
+      external effects, non-loopback observed endpoint as external, failed
+      public health restoring the previous fragment, lost completion CAS
+      restoration, legacy `expose` usage, and unknown-visibility rejection)
+      moved verbatim into the new module together with the
+      `run_visibility_command*` family and `assert_exposure_state`, which no
+      residual test uses; `Output` left `main.rs` with them since nothing
+      residual needs it. No scenario, assertion, or helper was rewritten and
+      nothing was duplicated.
 14. [ ] Deployment test module
 15. [ ] Catalog and database modules
 16. [ ] Operational regression and closure
@@ -369,3 +382,20 @@ authoritative target for observable corrections.
   warnings denied, all-feature tests (3 OCI tests remain ignored without
   rootless Podman), and the release build passed. Checkpoint 13 is the next
   implementation checkpoint.
+- Checkpoint 13 (exposure test module): all nine exposure scenarios moved
+  mechanically from `tests/cli/main.rs` to `tests/cli/exposure.rs` — the
+  public/internal visibility toggle, idempotent internal set without a domain,
+  public intent persisted as failed without an active runtime, domain-required
+  rejection before external effects, non-loopback observed endpoint as an
+  external failure, failed public health restoring the previous fragment,
+  lost public completion CAS restoring the fragment, the legacy `expose`
+  usage error, and the unknown-visibility rejection — together with the
+  `run_visibility_command`, `run_visibility_command_with_curl_status`,
+  `run_visibility_command_with_podman_port`, `run_visibility_command_with_options`,
+  and `assert_exposure_state` helpers, which no residual test uses; `Output`
+  was pruned from `main.rs` because nothing residual needs it. No scenario,
+  assertion, or helper was rewritten and nothing was duplicated. Focused
+  tests (`cargo test --test cli exposure::`, 9 passed), the full `cli` target
+  (84/84), `cargo fmt --check`, Clippy with warnings denied, all-feature tests
+  (3 OCI tests remain ignored without rootless Podman), and the release build
+  passed. Checkpoint 14 is the next implementation checkpoint.
