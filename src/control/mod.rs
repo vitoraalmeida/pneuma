@@ -26,6 +26,9 @@ use crate::domain::system::SystemName;
 use crate::use_cases::reconciliation::ReconciliationReadError;
 use crate::use_cases::{application, deployment, exposure, reconciliation, system};
 
+// The observer installed by callers that do not consume deployment events.
+fn ignore_events(_: deployment::DeploymentEvent) {}
+
 /// Executes commands against the configured host without presentation concerns.
 pub struct ControlExecutor {
     host: HostConfiguration,
@@ -47,16 +50,20 @@ impl ControlExecutor {
     }
 
     // Executes one command, acquiring and releasing the database-wide lock around it.
+    //
+    // Non-deployment command arms never receive or emit deployment events. If a
+    // deployment command is executed through this convenience method, its events
+    // are delivered to `ignore_events` and discarded. Callers that consume progress
+    // use `execute_with_events` directly.
     pub fn execute(&self, command: Command) -> Result<CommandResult, ControlError> {
-        let mut ignore_events = |_| {};
         self.execute_with_events(command, &mut ignore_events)
     }
 
-    // Executes one command while forwarding semantic deployment events to an observer.
+    // Executes one command while forwarding semantic deployment events to the observer.
     pub fn execute_with_events(
         &self,
         command: Command,
-        events: &mut dyn FnMut(deployment::DeploymentEvent),
+        observer: &mut dyn FnMut(deployment::DeploymentEvent),
     ) -> Result<CommandResult, ControlError> {
         if let Command::DatabaseRestore { path } = command {
             let pre_restore_path = database::restore_and_verify(&self.host.database_path, &path)
@@ -175,7 +182,7 @@ impl ControlExecutor {
                     .map_err(|source| ControlError::ApplicationLookup { source })?;
                 let artifact = OciArtifact::parse(&image_reference)
                     .map_err(|source| ControlError::InvalidOciArtifact { source })?;
-                events(deployment::DeploymentEvent::DeploymentRequested {
+                observer(deployment::DeploymentEvent::DeploymentRequested {
                     application_name: resolved.name.clone(),
                 });
                 let public_configuration = deployment::PublicDeploymentConfiguration {
@@ -188,7 +195,7 @@ impl ControlExecutor {
                     &artifact,
                     None,
                     Some(&public_configuration),
-                    events,
+                    observer,
                 )
                 .map_err(|source| ControlError::DeployOci { source })?;
                 Ok(CommandResult::ApplicationDeployed {
@@ -202,7 +209,7 @@ impl ControlExecutor {
             } => {
                 let resolved = application::resolve_application(&connection, &application_name)
                     .map_err(|source| ControlError::ApplicationLookup { source })?;
-                events(deployment::DeploymentEvent::DeploymentRequested {
+                observer(deployment::DeploymentEvent::DeploymentRequested {
                     application_name: resolved.name.clone(),
                 });
                 let public_configuration = deployment::PublicDeploymentConfiguration {
@@ -214,7 +221,7 @@ impl ControlExecutor {
                     &resolved.id,
                     Some(&branch),
                     Some(&public_configuration),
-                    events,
+                    observer,
                 )
                 .map_err(|source| ControlError::DeployBranch { source })?;
                 Ok(CommandResult::ApplicationDeployed {
@@ -225,7 +232,7 @@ impl ControlExecutor {
             Command::Rollback { application_name } => {
                 let resolved = application::resolve_application(&connection, &application_name)
                     .map_err(|source| ControlError::ApplicationLookup { source })?;
-                events(deployment::DeploymentEvent::DeploymentRequested {
+                observer(deployment::DeploymentEvent::DeploymentRequested {
                     application_name: resolved.name.clone(),
                 });
                 let public_configuration = deployment::PublicDeploymentConfiguration {
@@ -236,7 +243,7 @@ impl ControlExecutor {
                     &mut connection,
                     &resolved.id,
                     Some(&public_configuration),
-                    events,
+                    observer,
                 )
                 .map_err(|source| ControlError::Rollback { source })?;
                 Ok(CommandResult::ApplicationRolledBack {

@@ -69,10 +69,10 @@ impl<'a> EventReporter<'a> {
         Self { callback: None }
     }
 
-    // Wraps the caller callback used to report synchronous orchestration events.
-    pub(crate) fn enabled(callback: &'a mut dyn FnMut(DeploymentEvent)) -> Self {
+    // Wraps the caller observer used to report synchronous orchestration events.
+    pub(crate) fn enabled(observer: &'a mut dyn FnMut(DeploymentEvent)) -> Self {
         Self {
-            callback: Some(callback),
+            callback: Some(observer),
         }
     }
 

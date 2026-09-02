@@ -59,9 +59,9 @@ pub fn rollback_deployment_with_events(
     connection: &mut Connection,
     application_id: &ApplicationId,
     public_configuration: Option<&PublicDeploymentConfiguration>,
-    events: &mut dyn FnMut(DeploymentEvent),
+    observer: &mut dyn FnMut(DeploymentEvent),
 ) -> Result<DeploymentResult, RollbackError> {
-    let mut events = EventReporter::enabled(events);
+    let mut events = EventReporter::enabled(observer);
     rollback_deployment_reporting(
         connection,
         application_id,

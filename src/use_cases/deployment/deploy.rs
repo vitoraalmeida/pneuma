@@ -135,9 +135,9 @@ pub fn deploy_branch_with_events(
     application_id: &ApplicationId,
     branch: Option<&str>,
     public_configuration: Option<&PublicDeploymentConfiguration>,
-    events: &mut dyn FnMut(DeploymentEvent),
+    observer: &mut dyn FnMut(DeploymentEvent),
 ) -> Result<DeploymentResult, DeployBranchError> {
-    let mut events = EventReporter::enabled(events);
+    let mut events = EventReporter::enabled(observer);
     deploy_branch_reporting(
         connection,
         application_id,
@@ -279,9 +279,9 @@ pub fn deploy_oci_with_events(
     artifact: &OciArtifact,
     source_commit: Option<&CommitSha>,
     public_configuration: Option<&PublicDeploymentConfiguration>,
-    events: &mut dyn FnMut(DeploymentEvent),
+    observer: &mut dyn FnMut(DeploymentEvent),
 ) -> Result<DeploymentResult, DeployOciError> {
-    let mut events = EventReporter::enabled(events);
+    let mut events = EventReporter::enabled(observer);
     deploy_oci_reporting(
         connection,
         application_id,
