@@ -4,15 +4,20 @@ use pneuma::adapters::database::DatabaseError;
 use pneuma::adapters::stores::application_store::ApplicationStoreError;
 use pneuma::adapters::stores::deployment_store::DeploymentStoreError;
 use pneuma::control::ControlError;
+use pneuma::domain::deployment::DeploymentFailureCode;
 use pneuma::domain::release::InvalidOciArtifact;
 use pneuma::domain::system::InvalidSystemName;
 use pneuma::use_cases::application::{
     ApplicationLookupError, ImportError, RemoteImportError, RuntimeLifecycleError,
 };
 use pneuma::use_cases::ci::CiDispatchError;
-use pneuma::use_cases::deployment::{DeployBranchError, DeployOciError, RollbackError};
+use pneuma::use_cases::deployment::{
+    CandidateCleanupError, CreateDeploymentError, DeployBranchError, DeployOciError,
+    DeployReleaseError, RollbackError, TransitionDeploymentError,
+};
 use pneuma::use_cases::exposure::ExposureChangeError;
 use pneuma::use_cases::reconciliation::ReconciliationReadError;
+use pneuma::use_cases::release::CreateReleaseError;
 
 /// Presentation-level class of a CLI failure, mapped to one process exit code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -176,9 +181,109 @@ fn classify_deploy_oci(source: &DeployOciError) -> CliErrorClass {
     match source {
         DeployOciError::RepositoryMismatch { .. } => CliErrorClass::Usage,
         DeployOciError::PullImage { .. } => CliErrorClass::External,
+        DeployOciError::CreateRelease { source } => classify_create_release(source),
+        DeployOciError::DeployRelease { source } => classify_deploy_release(source),
         DeployOciError::ApplicationLock { .. } => CliErrorClass::Failure,
         DeployOciError::ApplicationBusy { .. } => CliErrorClass::Conflict,
+        // Missing and unloadable delivery configuration is reclassified by the
+        // remaining classification audit checkpoint.
         _ => CliErrorClass::Failure,
+    }
+}
+
+// Classifies a nested release workflow failure by its typed cause.
+fn classify_create_release(source: &CreateReleaseError) -> CliErrorClass {
+    match source {
+        CreateReleaseError::ApplicationNotFound { .. } => CliErrorClass::NotFound,
+        CreateReleaseError::ApplicationBusy { .. } => CliErrorClass::Conflict,
+        CreateReleaseError::ApplicationLock { .. } => CliErrorClass::Failure,
+        CreateReleaseError::ApplicationStore { .. }
+        | CreateReleaseError::ReleaseStore { .. }
+        | CreateReleaseError::Persistence { .. } => CliErrorClass::Failure,
+    }
+}
+
+// Classifies a nested deployment-record failure by its typed cause.
+fn classify_create_deployment(source: &CreateDeploymentError) -> CliErrorClass {
+    match source {
+        CreateDeploymentError::ApplicationNotFound { .. }
+        | CreateDeploymentError::ReleaseNotFound { .. } => CliErrorClass::NotFound,
+        CreateDeploymentError::ActiveDeployment { .. }
+        | CreateDeploymentError::AlreadyActive { .. }
+        | CreateDeploymentError::ApplicationBusy { .. } => CliErrorClass::Conflict,
+        CreateDeploymentError::ApplicationLock { .. }
+        | CreateDeploymentError::Persistence { .. } => CliErrorClass::Failure,
+    }
+}
+
+// Classifies a nested release execution failure: missing resources are absent,
+// state divergences are conflicts, and each persisted failure stage carries its
+// own external or generic semantics.
+fn classify_deploy_release(source: &DeployReleaseError) -> CliErrorClass {
+    match source {
+        DeployReleaseError::ApplicationNotFound { .. } => CliErrorClass::NotFound,
+        DeployReleaseError::PublicApplication { .. } => CliErrorClass::Conflict,
+        DeployReleaseError::LoadApplication { .. } => CliErrorClass::Failure,
+        DeployReleaseError::CreateDeployment { source } => classify_create_deployment(source),
+        DeployReleaseError::DeploymentFailed { code, .. } => {
+            classify_deployment_failure_code(*code)
+        }
+        DeployReleaseError::RecordFailure { source, .. } => classify_transition_deployment(source),
+        DeployReleaseError::Cleanup { source, .. } => classify_candidate_cleanup(source),
+    }
+}
+
+// Maps each persisted failure stage onto its semantic exit class: stages that
+// surfaced through Podman, systemd, Caddy, or a health probe are external, and
+// every orchestration or persistence stage remains a generic failure.
+fn classify_deployment_failure_code(code: DeploymentFailureCode) -> CliErrorClass {
+    match code {
+        DeploymentFailureCode::RuntimeUnitCreation
+        | DeploymentFailureCode::RuntimeUnitReload
+        | DeploymentFailureCode::RuntimeStart
+        | DeploymentFailureCode::RuntimeResolution
+        | DeploymentFailureCode::RuntimeObservation
+        | DeploymentFailureCode::HealthCheck
+        | DeploymentFailureCode::CaddyMaterialization
+        | DeploymentFailureCode::ExternalHealthCheck => CliErrorClass::External,
+        DeploymentFailureCode::TestGate
+        | DeploymentFailureCode::RuntimeReconciliation
+        | DeploymentFailureCode::PublicConfigurationMissing
+        | DeploymentFailureCode::RuntimePortAllocation
+        | DeploymentFailureCode::RuntimeRegistration
+        | DeploymentFailureCode::RuntimePortPersistence
+        | DeploymentFailureCode::DeploymentTransition
+        | DeploymentFailureCode::ExposurePreparation
+        | DeploymentFailureCode::CandidatePromotion
+        | DeploymentFailureCode::OperationInterrupted => CliErrorClass::Failure,
+    }
+}
+
+// Classifies a failure-recording divergence by its typed transition cause.
+fn classify_transition_deployment(source: &TransitionDeploymentError) -> CliErrorClass {
+    match source {
+        TransitionDeploymentError::DeploymentNotFound { .. } => CliErrorClass::NotFound,
+        TransitionDeploymentError::Conflict { .. }
+        | TransitionDeploymentError::CannotFail { .. }
+        | TransitionDeploymentError::InvalidTransition { .. } => CliErrorClass::Conflict,
+        TransitionDeploymentError::InvalidPersistedStatus { .. }
+        | TransitionDeploymentError::InvalidPersistedType { .. }
+        | TransitionDeploymentError::InvalidFailure { .. }
+        | TransitionDeploymentError::Persistence { .. } => CliErrorClass::Failure,
+    }
+}
+
+// Classifies candidate cleanup divergence: systemd and Podman effects are
+// external, runtime divergence is a conflict, and local persistence is failure.
+fn classify_candidate_cleanup(source: &CandidateCleanupError) -> CliErrorClass {
+    match source {
+        CandidateCleanupError::Supervision { .. }
+        | CandidateCleanupError::RemoveContainer { .. }
+        | CandidateCleanupError::ContainerNotRemoved { .. } => CliErrorClass::External,
+        CandidateCleanupError::RuntimeChanged { .. } => CliErrorClass::Conflict,
+        CandidateCleanupError::ReleasePort { .. } | CandidateCleanupError::Persistence { .. } => {
+            CliErrorClass::Failure
+        }
     }
 }
 
@@ -218,7 +323,8 @@ fn classify_rollback(source: &RollbackError) -> CliErrorClass {
         RollbackError::PullImage { .. } => CliErrorClass::External,
         RollbackError::ApplicationLock { .. } => CliErrorClass::Failure,
         RollbackError::ApplicationBusy { .. } => CliErrorClass::Conflict,
-        _ => CliErrorClass::Failure,
+        RollbackError::LoadTarget { .. } => CliErrorClass::Failure,
+        RollbackError::DeployRelease { source } => classify_deploy_release(source),
     }
 }
 
@@ -818,6 +924,341 @@ mod tests {
         }
     }
 
+    // Every persisted deployment failure stage has one semantic exit class:
+    // stages surfaced by Podman, systemd, Caddy, or a health probe are external
+    // integrations, and every orchestration or persistence stage is generic.
+    #[test]
+    fn deployment_failure_codes_classify_external_stages_and_generic_failures() {
+        let external_codes = [
+            DeploymentFailureCode::RuntimeUnitCreation,
+            DeploymentFailureCode::RuntimeUnitReload,
+            DeploymentFailureCode::RuntimeStart,
+            DeploymentFailureCode::RuntimeResolution,
+            DeploymentFailureCode::RuntimeObservation,
+            DeploymentFailureCode::HealthCheck,
+            DeploymentFailureCode::CaddyMaterialization,
+            DeploymentFailureCode::ExternalHealthCheck,
+        ];
+        let generic_codes = [
+            DeploymentFailureCode::TestGate,
+            DeploymentFailureCode::RuntimeReconciliation,
+            DeploymentFailureCode::PublicConfigurationMissing,
+            DeploymentFailureCode::RuntimePortAllocation,
+            DeploymentFailureCode::RuntimeRegistration,
+            DeploymentFailureCode::RuntimePortPersistence,
+            DeploymentFailureCode::DeploymentTransition,
+            DeploymentFailureCode::ExposurePreparation,
+            DeploymentFailureCode::CandidatePromotion,
+            DeploymentFailureCode::OperationInterrupted,
+        ];
+
+        for code in external_codes {
+            assert_eq!(
+                classify_deployment_failure_code(code),
+                CliErrorClass::External,
+                "{}",
+                code.as_str()
+            );
+        }
+        for code in generic_codes {
+            assert_eq!(
+                classify_deployment_failure_code(code),
+                CliErrorClass::Failure,
+                "{}",
+                code.as_str()
+            );
+        }
+    }
+
+    // Nested deployment errors delegate to the semantic classifiers of their
+    // typed causes instead of collapsing into one generic failure class.
+    #[test]
+    fn nested_deployment_errors_classify_semantically() {
+        use pneuma::adapters::port_allocator::PortAllocationError;
+        use pneuma::adapters::systemd_quadlet::QuadletError;
+        use pneuma::domain::deployment::{Deployment, DeploymentLifecycle, DeploymentType};
+        use pneuma::domain::identity::RuntimeInstanceId;
+
+        let runtime_id = RuntimeInstanceId::new("11111111111111111111111111111111").unwrap();
+
+        // Nested external failures surface through every deployment entry point.
+        let cases: Vec<(&str, CliError, CliErrorClass)> = vec![
+            (
+                "deploy image: nested systemd start failure",
+                CliError::DeployOci {
+                    source: Box::new(DeployOciError::DeployRelease {
+                        source: DeployReleaseError::DeploymentFailed {
+                            deployment_id: "deployment-1".to_owned(),
+                            code: DeploymentFailureCode::RuntimeStart,
+                            source: Box::new(io::Error::other("container start failed")),
+                        },
+                    }),
+                },
+                CliErrorClass::External,
+            ),
+            (
+                "deploy branch: nested health check failure",
+                CliError::DeployBranch {
+                    source: Box::new(DeployBranchError::DeployOci {
+                        source: DeployOciError::DeployRelease {
+                            source: DeployReleaseError::DeploymentFailed {
+                                deployment_id: "deployment-1".to_owned(),
+                                code: DeploymentFailureCode::HealthCheck,
+                                source: Box::new(io::Error::other("unhealthy candidate")),
+                            },
+                        },
+                    }),
+                },
+                CliErrorClass::External,
+            ),
+            (
+                "rollback: nested caddy materialization failure",
+                CliError::Rollback {
+                    source: RollbackError::DeployRelease {
+                        source: DeployReleaseError::DeploymentFailed {
+                            deployment_id: "deployment-1".to_owned(),
+                            code: DeploymentFailureCode::CaddyMaterialization,
+                            source: Box::new(io::Error::other("reload rejected")),
+                        },
+                    },
+                },
+                CliErrorClass::External,
+            ),
+            (
+                "deploy image: nested missing application",
+                CliError::DeployOci {
+                    source: Box::new(DeployOciError::DeployRelease {
+                        source: DeployReleaseError::ApplicationNotFound {
+                            application_id: "portal".to_owned(),
+                        },
+                    }),
+                },
+                CliErrorClass::NotFound,
+            ),
+            (
+                "deploy image: nested missing release",
+                CliError::DeployOci {
+                    source: Box::new(DeployOciError::DeployRelease {
+                        source: DeployReleaseError::CreateDeployment {
+                            source: CreateDeploymentError::ReleaseNotFound {
+                                release_id: "release-1".to_owned(),
+                            },
+                        },
+                    }),
+                },
+                CliErrorClass::NotFound,
+            ),
+            (
+                "deploy image: nested active deployment conflict",
+                CliError::DeployOci {
+                    source: Box::new(DeployOciError::DeployRelease {
+                        source: DeployReleaseError::CreateDeployment {
+                            source: CreateDeploymentError::ActiveDeployment {
+                                deployment: Box::new(Deployment {
+                                    id: pneuma::domain::identity::DeploymentId::new(
+                                        "22222222222222222222222222222222",
+                                    )
+                                    .unwrap(),
+                                    application_id: pneuma::domain::identity::ApplicationId::new(
+                                        "11111111111111111111111111111111",
+                                    )
+                                    .unwrap(),
+                                    release_id: pneuma::domain::identity::ReleaseId::new(
+                                        "55555555555555555555555555555555",
+                                    )
+                                    .unwrap(),
+                                    deployment_type: DeploymentType::Deploy,
+                                    lifecycle: DeploymentLifecycle::Pending,
+                                    source_revision: None,
+                                    requested_at: "now".to_owned(),
+                                    started_at: None,
+                                }),
+                            },
+                        },
+                    }),
+                },
+                CliErrorClass::Conflict,
+            ),
+            (
+                "deploy image: nested release operation contention",
+                CliError::DeployOci {
+                    source: Box::new(DeployOciError::CreateRelease {
+                        source: CreateReleaseError::ApplicationBusy {
+                            application_id: "portal".to_owned(),
+                        },
+                    }),
+                },
+                CliErrorClass::Conflict,
+            ),
+            (
+                "deploy image: cleanup divergence from systemd supervision",
+                CliError::DeployOci {
+                    source: Box::new(DeployOciError::DeployRelease {
+                        source: DeployReleaseError::Cleanup {
+                            deployment_id: "deployment-1".to_owned(),
+                            failure: "container start failed".to_owned(),
+                            source: Box::new(CandidateCleanupError::Supervision {
+                                source: QuadletError::Execute {
+                                    operation: "reloading",
+                                    source: io::Error::other("no systemctl"),
+                                },
+                            }),
+                        },
+                    }),
+                },
+                CliErrorClass::External,
+            ),
+            (
+                "deploy image: cleanup divergence from podman removal",
+                CliError::DeployOci {
+                    source: Box::new(DeployOciError::DeployRelease {
+                        source: DeployReleaseError::Cleanup {
+                            deployment_id: "deployment-1".to_owned(),
+                            failure: "container start failed".to_owned(),
+                            source: Box::new(CandidateCleanupError::RemoveContainer {
+                                source: podman_error(),
+                            }),
+                        },
+                    }),
+                },
+                CliErrorClass::External,
+            ),
+            (
+                "deploy image: cleanup divergence from a lingering container",
+                CliError::DeployOci {
+                    source: Box::new(DeployOciError::DeployRelease {
+                        source: DeployReleaseError::Cleanup {
+                            deployment_id: "deployment-1".to_owned(),
+                            failure: "container start failed".to_owned(),
+                            source: Box::new(CandidateCleanupError::ContainerNotRemoved {
+                                container_id: "abc123".to_owned(),
+                            }),
+                        },
+                    }),
+                },
+                CliErrorClass::External,
+            ),
+            (
+                "deploy image: cleanup divergence from runtime change",
+                CliError::DeployOci {
+                    source: Box::new(DeployOciError::DeployRelease {
+                        source: DeployReleaseError::Cleanup {
+                            deployment_id: "deployment-1".to_owned(),
+                            failure: "container start failed".to_owned(),
+                            source: Box::new(CandidateCleanupError::RuntimeChanged {
+                                runtime_id: runtime_id.clone(),
+                            }),
+                        },
+                    }),
+                },
+                CliErrorClass::Conflict,
+            ),
+            (
+                "deploy image: cleanup divergence from port release",
+                CliError::DeployOci {
+                    source: Box::new(DeployOciError::DeployRelease {
+                        source: DeployReleaseError::Cleanup {
+                            deployment_id: "deployment-1".to_owned(),
+                            failure: "container start failed".to_owned(),
+                            source: Box::new(CandidateCleanupError::ReleasePort {
+                                source: PortAllocationError::Exhausted {
+                                    start: 30000,
+                                    end: 39999,
+                                },
+                            }),
+                        },
+                    }),
+                },
+                CliErrorClass::Failure,
+            ),
+            (
+                "deploy image: cleanup divergence from persistence",
+                CliError::DeployOci {
+                    source: Box::new(DeployOciError::DeployRelease {
+                        source: DeployReleaseError::Cleanup {
+                            deployment_id: "deployment-1".to_owned(),
+                            failure: "container start failed".to_owned(),
+                            source: Box::new(CandidateCleanupError::Persistence {
+                                source: sqlite_error(),
+                            }),
+                        },
+                    }),
+                },
+                CliErrorClass::Failure,
+            ),
+            (
+                "deploy image: failure recording divergence from persistence",
+                CliError::DeployOci {
+                    source: Box::new(DeployOciError::DeployRelease {
+                        source: DeployReleaseError::RecordFailure {
+                            deployment_id: "deployment-1".to_owned(),
+                            failure: "container start failed".to_owned(),
+                            source: TransitionDeploymentError::Persistence {
+                                source: sqlite_error(),
+                            },
+                        },
+                    }),
+                },
+                CliErrorClass::Failure,
+            ),
+            (
+                "deploy image: failure recording divergence from state conflict",
+                CliError::DeployOci {
+                    source: Box::new(DeployOciError::DeployRelease {
+                        source: DeployReleaseError::RecordFailure {
+                            deployment_id: "deployment-1".to_owned(),
+                            failure: "container start failed".to_owned(),
+                            source: TransitionDeploymentError::CannotFail {
+                                deployment_id: "deployment-1".to_owned(),
+                                actual: pneuma::domain::deployment::DeploymentStatus::Succeeded,
+                            },
+                        },
+                    }),
+                },
+                CliErrorClass::Conflict,
+            ),
+        ];
+
+        for (description, error, expected) in cases {
+            assert_eq!(error.class(), expected, "{description}");
+            assert_eq!(
+                error.class().exit_code(),
+                expected.exit_code(),
+                "{description}"
+            );
+        }
+    }
+
+    // The full transparent wrapper chain stays intact: the original cause of a
+    // nested deployment failure remains reachable through `source()`.
+    #[test]
+    fn nested_deployment_failures_preserve_their_source_chain() {
+        let error = CliError::DeployBranch {
+            source: Box::new(DeployBranchError::DeployOci {
+                source: DeployOciError::DeployRelease {
+                    source: DeployReleaseError::DeploymentFailed {
+                        deployment_id: "deployment-1".to_owned(),
+                        code: DeploymentFailureCode::RuntimeStart,
+                        source: Box::new(io::Error::other("container start failed")),
+                    },
+                },
+            }),
+        };
+
+        let mut cause = error
+            .source()
+            .expect("a nested deployment failure must keep its cause");
+        loop {
+            match cause.downcast_ref::<io::Error>() {
+                Some(original) => {
+                    assert_eq!(original.to_string(), "container start failed");
+                    return;
+                }
+                None => cause = cause.source().expect("the chain must reach the cause"),
+            }
+        }
+    }
+
     #[test]
     fn transparent_cli_errors_forward_their_source_chain() {
         // Transparent CLI variants forward Display and the source chain to the inner
@@ -908,11 +1349,11 @@ mod tests {
             }
         }
 
-        // Application not found.
+        // Application not found: nested absence classifies as missing.
         let error = deploy_failure(DeployReleaseError::ApplicationNotFound {
             application_id: "portal".to_owned(),
         });
-        assert_eq!(error.class(), CliErrorClass::Failure);
+        assert_eq!(error.class(), CliErrorClass::NotFound);
         assert!(
             error
                 .to_string()
@@ -933,12 +1374,13 @@ mod tests {
         );
 
         // Ordinary deployment failure: id, semantic code, and original cause stay visible.
+        // A systemd start stage is an external integration failure.
         let error = deploy_failure(DeployReleaseError::DeploymentFailed {
             deployment_id: "deployment-1".to_owned(),
             code: DeploymentFailureCode::RuntimeStart,
             source: Box::new(io::Error::other("container start failed")),
         });
-        assert_eq!(error.class(), CliErrorClass::Failure);
+        assert_eq!(error.class(), CliErrorClass::External);
         let message = error.to_string();
         assert!(message.contains("deployment-1"), "{message}");
         assert!(message.contains("runtime_start_failed"), "{message}");
@@ -949,7 +1391,7 @@ mod tests {
         assert!(cause.downcast_ref::<io::Error>().is_some());
 
         // Cleanup divergence: the divergence is reported and the original failure
-        // text is preserved alongside it.
+        // text is preserved alongside it; a runtime divergence is a conflict.
         let error = deploy_failure(DeployReleaseError::Cleanup {
             deployment_id: "deployment-1".to_owned(),
             failure: "container start failed".to_owned(),
@@ -957,7 +1399,7 @@ mod tests {
                 runtime_id: RuntimeInstanceId::new("11111111111111111111111111111111").unwrap(),
             }),
         });
-        assert_eq!(error.class(), CliErrorClass::Failure);
+        assert_eq!(error.class(), CliErrorClass::Conflict);
         let message = error.to_string();
         assert!(message.contains("could not be cleaned up"), "{message}");
         assert!(message.contains("container start failed"), "{message}");
@@ -973,7 +1415,8 @@ mod tests {
                 ))
         );
 
-        // Failure-recording divergence: same preservation guarantees.
+        // Failure-recording divergence: same preservation guarantees; a missing
+        // deployment row classifies as missing.
         let error = deploy_failure(DeployReleaseError::RecordFailure {
             deployment_id: "deployment-1".to_owned(),
             failure: "container start failed".to_owned(),
@@ -981,7 +1424,7 @@ mod tests {
                 deployment_id: "deployment-1".to_owned(),
             },
         });
-        assert_eq!(error.class(), CliErrorClass::Failure);
+        assert_eq!(error.class(), CliErrorClass::NotFound);
         let message = error.to_string();
         assert!(message.contains("could not be recorded"), "{message}");
         assert!(message.contains("container start failed"), "{message}");

@@ -86,7 +86,9 @@ fn deploy_fails_when_systemctl_start_fails() {
     let output = environment.deploy_with_start_failure(30000);
 
     assert!(!output.status.success());
-    assert_eq!(output.status.code(), Some(1));
+    // A systemd start stage is an external integration failure, which the CLI
+    // reports with the external exit code.
+    assert_eq!(output.status.code(), Some(5));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("runtime_start_failed"),

@@ -59,8 +59,18 @@ authoritative target for observable corrections.
      `ReconciliationReadError::OperationLock` is `Failure` since reconciliation
      reports contention as a successful `Deferred`; error wording and source
      chains are unchanged.
-6. [ ] Nested deployment classification
+6. [x] Nested deployment classification
    - Classify deployment failures by typed semantic cause.
+   - Result: the CLI classifiers gained `classify_create_release`,
+     `classify_create_deployment`, `classify_deploy_release`,
+     `classify_deployment_failure_code`, `classify_candidate_cleanup`, and
+     `classify_transition_deployment`; nested OCI, branch, and rollback errors
+     delegate through them, nested missing resources are `NotFound`, nested
+     state conflicts are `Conflict`, cleanup systemd/Podman divergence is
+     `External`, cleanup persistence is `Failure`, and every
+     `DeploymentFailureCode` maps to either `External` (exit 5) or generic
+     `Failure` (exit 1) with no string matching or downcasting. Messages and
+     source chains are unchanged.
 7. [ ] Remaining classification audit
    - Complete exhaustive CLI error semantics.
 8. [ ] Strict host environment contract
@@ -173,3 +183,19 @@ authoritative target for observable corrections.
   also asserts exit 4. Focused tests, `cargo fmt --check`, Clippy with
   warnings denied, all-feature tests, and the release build passed.
   Checkpoint 6 is the next implementation checkpoint.
+- Checkpoint 6 (nested deployment classification): `cli::error` classifies
+  nested deployment failures through typed helpers — release creation,
+  deployment creation, release execution, transition divergence, and candidate
+  cleanup each map to their semantic class, and all 18 `DeploymentFailureCode`
+  stages split into 8 external codes (exit 5) and 10 generic codes (exit 1).
+  Nested missing resources are `NotFound`, nested state conflicts are
+  `Conflict`, and the nested-`DeploymentFailed` source chain stays reachable.
+  Binary regressions prove exit 5 with the persisted code for a fake `systemctl`
+  start failure, a failing internal TCP health check, a rejecting fake `caddy`
+  (new `PNEUMA_FAKE_CADDY_FAILURE` hook), and a 500 external health check; the
+  stale exit-1 expectation in `deploy_fails_when_systemctl_start_fails` was
+  corrected to exit 5 per the approved behavior table. Focused tests (error
+  unit tests, the full `cli` target, `deployment_execute_release`), `cargo fmt
+  --check`, Clippy with warnings denied, all-feature tests (3 OCI tests remain
+  ignored without rootless Podman), and the release build passed. Checkpoint 7
+  is the next implementation checkpoint.

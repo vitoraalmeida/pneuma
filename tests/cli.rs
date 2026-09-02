@@ -2652,6 +2652,75 @@ fn deploy_fails_with_exit_1_when_the_application_lock_cannot_be_opened() {
 }
 
 #[test]
+fn deploy_fails_with_exit_5_when_systemd_cannot_start_the_container() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    let failure_marker = environment.root.join("systemctl-start-failure");
+    fs::write(&failure_marker, "fail").unwrap();
+
+    let output = environment
+        .deploy_command(30000)
+        .env("PNEUMA_FAKE_SYSTEMCTL_START_FAILURE", &failure_marker)
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(5));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("runtime_start_failed"), "{stderr}");
+}
+
+#[test]
+fn deploy_fails_with_exit_5_when_the_internal_health_check_fails() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+
+    // No listener serves the candidate endpoint, so verification cannot confirm health.
+    let output = environment.deploy(30000, false);
+
+    assert_eq!(output.status.code(), Some(5));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("health_check_failed"), "{stderr}");
+}
+
+#[test]
+fn deploy_fails_with_exit_5_when_caddy_rejects_the_public_route() {
+    let environment = DeploymentEnvironment::public();
+    assert_command_succeeded(&environment.import());
+    let failure_marker = environment.root.join("caddy-failure");
+    fs::write(&failure_marker, "fail").unwrap();
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || respond_once(&listener, 200));
+
+    let output = environment
+        .deploy_command(port)
+        .env("PNEUMA_FAKE_CADDY_FAILURE", &failure_marker)
+        .output()
+        .unwrap();
+    server.join().unwrap();
+
+    assert_eq!(output.status.code(), Some(5));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("caddy_materialization_failed"), "{stderr}");
+}
+
+#[test]
+fn deploy_fails_with_exit_5_when_the_external_health_check_fails() {
+    let environment = DeploymentEnvironment::public();
+    assert_command_succeeded(&environment.import());
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || respond_once(&listener, 200));
+
+    let output = environment.deploy_with_external_status(port, false, 500);
+    server.join().unwrap();
+
+    assert_eq!(output.status.code(), Some(5));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("external_health_check_failed"), "{stderr}");
+}
+
+#[test]
 fn deployments_source_is_dash_for_oci_releases() {
     let environment = DeploymentEnvironment::new();
     assert_command_succeeded(&environment.import());
@@ -3486,7 +3555,22 @@ fn install_fake_caddy_and_curl(fake_bin: &Path) {
     for (name, script) in [
         (
             "caddy",
-            "#!/bin/sh\nset -eu\nif [ -n \"${PNEUMA_ASSERT_CLOSED_DATABASE:-}\" ] && [ -f \"${PNEUMA_ASSERT_CLOSED_DATABASE}-journal\" ]; then\n    printf 'sqlite write transaction was open during a caddy effect\\n' >&2\n    exit 90\nfi\ncase \"$1\" in validate) printf 'valid configuration\\n' ;; reload) printf 'reload complete\\n' ;; *) exit 1 ;; esac\n",
+            r#"#!/bin/sh
+set -eu
+if [ -n "${PNEUMA_ASSERT_CLOSED_DATABASE:-}" ] && [ -f "${PNEUMA_ASSERT_CLOSED_DATABASE}-journal" ]; then
+    printf 'sqlite write transaction was open during a caddy effect\n' >&2
+    exit 90
+fi
+if [ -f "${PNEUMA_FAKE_CADDY_FAILURE:-}" ]; then
+    printf 'caddy failure injected\n' >&2
+    exit 1
+fi
+case "$1" in
+    validate) printf 'valid configuration\n' ;;
+    reload) printf 'reload complete\n' ;;
+    *) exit 1 ;;
+esac
+"#,
         ),
         (
             "curl",
