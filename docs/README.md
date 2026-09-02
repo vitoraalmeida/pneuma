@@ -8,8 +8,8 @@ Each category answers a different question.
 |---|---|---|
 | Current system truth | How does Pneuma work today? | [`architecture/`](architecture/), [`getting-started.md`](getting-started.md), [`operations/`](operations/) |
 | Architectural rationale | Why was this choice made? | [`decisions/`](decisions/) |
-| Approved design | What approved design fixed recent architecture scope? | [`designs/cli-adapter-integrity.md`](designs/cli-adapter-integrity.md) (active); [`designs/cli-adapter-consolidation.md`](designs/cli-adapter-consolidation.md) (implementation complete); [`designs/interface-neutral-execution.md`](designs/interface-neutral-execution.md) (implementation complete); [`designs/greenfield-architecture-simplification.md`](designs/greenfield-architecture-simplification.md) (concluded) |
-| Active planning | What is being implemented now? | [`iterations/current-iteration.md`](iterations/current-iteration.md) tracks v0.5.3 CLI adapter integrity; [`iterations/next-iteration.md`](iterations/next-iteration.md) queues v0.6 planning |
+| Approved design | What approved design fixed recent architecture scope? | [`designs/cli-operational-robustness.md`](designs/cli-operational-robustness.md) (active); [`designs/cli-adapter-integrity.md`](designs/cli-adapter-integrity.md) (implementation complete); [`designs/cli-adapter-consolidation.md`](designs/cli-adapter-consolidation.md) (implementation complete); [`designs/interface-neutral-execution.md`](designs/interface-neutral-execution.md) (implementation complete); [`designs/greenfield-architecture-simplification.md`](designs/greenfield-architecture-simplification.md) (concluded) |
+| Active planning | What is being implemented now? | [`iterations/current-iteration.md`](iterations/current-iteration.md) tracks v0.5.4 CLI operational robustness; [`iterations/next-iteration.md`](iterations/next-iteration.md) queues v0.6 planning |
 | Product evolution | Where is Pneuma going? | [`roadmap.md`](roadmap.md) |
 | Released history | What changed in releases? | [`../CHANGELOG.md`](../CHANGELOG.md) |
 
@@ -90,10 +90,11 @@ product direction (`roadmap.md`).
 | [`architecture/invariants.md`](architecture/invariants.md) | Living | Compact inventory of durable guarantees with their owner layers |
 | [`architecture/security-model.md`](architecture/security-model.md) | Living | Assets, actors, trust boundaries, threats with their controls and residual risks, attack chains, and security posture |
 | [`decisions/`](decisions/) | Historical records | Retrospective architectural decision records |
-| [`designs/cli-adapter-integrity.md`](designs/cli-adapter-integrity.md) | Approved design (active) | CLI adapter integrity scope, fixed decisions, and checkpoint order |
+| [`designs/cli-operational-robustness.md`](designs/cli-operational-robustness.md) | Approved design (active) | CLI operational robustness scope, fixed decisions, and checkpoint order |
+| [`designs/cli-adapter-integrity.md`](designs/cli-adapter-integrity.md) | Approved design (implementation complete) | CLI adapter integrity scope, fixed decisions, and checkpoint order |
 | [`designs/cli-adapter-consolidation.md`](designs/cli-adapter-consolidation.md) | Approved design (implementation complete) | CLI adapter consolidation scope, fixed decisions, and checkpoint order |
 | [`designs/interface-neutral-execution.md`](designs/interface-neutral-execution.md) | Approved design (implementation complete) | Interface-neutral execution scope, fixed decisions, and checkpoint order |
 | [`designs/greenfield-architecture-simplification.md`](designs/greenfield-architecture-simplification.md) | Concluded design (implemented in v0.5.0) | Greenfield architecture reset scope, fixed decisions, and checkpoint order |
-| [`iterations/current-iteration.md`](iterations/current-iteration.md) | Active tracker | CLI adapter integrity tracker (v0.5.3) |
-| [`iterations/next-iteration.md`](iterations/next-iteration.md) | Queued planning | v0.6 observed state planning reminder, queued behind v0.5.3 |
+| [`iterations/current-iteration.md`](iterations/current-iteration.md) | Active tracker | CLI operational robustness tracker (v0.5.4) |
+| [`iterations/next-iteration.md`](iterations/next-iteration.md) | Queued planning | v0.6 observed state planning reminder, queued behind v0.5.4 |
 | [`roadmap.md`](roadmap.md) | Living | v0.1 → v1.0 evolution and direction |

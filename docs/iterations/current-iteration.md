@@ -1,64 +1,76 @@
 # Current Iteration
 
-**Status:** concluida
+**Status:** em andamento
 
-**Base:** `5a41884` (`docs: close CLI adapter consolidation iteration`)
+**Base:** `6227c0e` (`Change events configuration`)
 
 **Approved design:**
-[`../designs/cli-adapter-integrity.md`](../designs/cli-adapter-integrity.md)
-(approved 2026-09-01)
+[`../designs/cli-operational-robustness.md`](../designs/cli-operational-robustness.md)
+(approved 2026-09-02)
 
-## Iteration - CLI Adapter Integrity
+## Iteration - CLI Operational Robustness (v0.5.4)
 
-Objective: correct remaining CLI adapter imprecision after v0.5.2. This is a
-structural refactor: CLI syntax, text output, exit-code classes, CI grammar, and
-progress behavior remain unchanged.
+Objective: correct all identified CLI robustness, error-classification,
+presentation, bootstrap, and test-organization issues found in the
+post-v0.5.3 review. The approved behavior-change table in the design is the
+authoritative target for observable corrections.
 
 ## Checkpoints
 
 1. [x] Governance and baseline
-   - Confirm the approved committed design and record the v0.5.2 behavioral
-     baseline with the required Rust CI gates.
-   - Result: the first implementation checkpoint has an unambiguous, green
-     behavioral baseline.
-2. [x] Fallible argument normalization
-   - Reject an interactive deploy request without a source during argument
-     normalization, before dispatch or any side effect.
-   - Cover global `--verbose` and deploy-source grammar with
-     `Cli::try_parse_from`, preserving Clap's conflicting-source rejection.
-   - Result: no invalid-input variant exists in `InvocationTarget`.
-3. [x] Execution organization
-   - Give deployment command classification one CLI owner while retaining the
-     shared interactive and CI execution path.
-   - Result: no deployment output or event sequence changes.
-4. [x] Rendering organization
-   - Move application status and lifecycle result text into `output.rs`; remove
-     the redundant list-rendering trim and copy from dispatch.
-   - Result: final command text is owned by output functions while dispatch
-     retains rendering policy and control flow.
-5. [x] Operational regression and closure
-   - Synchronize implemented documentation and run the required regression
-     ladder before closing the iteration.
-   - Result: living documentation reflects the precise CLI adapter while the
-     public contract remains proven.
+   - Confirm the approved committed design, the v0.5.4 roadmap entry, the
+     docs index, and the queued v0.6 planning reminder; establish the
+     behavioral baseline with the required Rust CI gates.
+   - Result: the approved design is committed, exactly one active tracker
+     exists, and the baseline is green at `6227c0e`.
+2. [ ] Observer and progress isolation
+   - Make progress output best effort; a failed stderr write cannot unwind
+     through deployment execution.
+3. [ ] Explicit presentation vocabulary
+   - Remove stable CLI dependence on domain enum `Debug` formatting.
+4. [ ] Total doctor rendering
+   - Preserve captured doctor diagnostics and render every publicly
+     constructible outcome without panic.
+5. [ ] Lock failure classification
+   - Distinguish lock infrastructure failure (exit 1) from real contention
+     (exit 4).
+6. [ ] Nested deployment classification
+   - Classify deployment failures by typed semantic cause.
+7. [ ] Remaining classification audit
+   - Complete exhaustive CLI error semantics.
+8. [ ] Strict host environment contract
+   - Fail fast on unreadable, malformed, duplicate, invalid UTF-8, or
+     invalid-variable host environment files.
+9. [ ] Invocation boundary coverage
+   - Cover adapter-only commands in a dedicated test target.
+10. [ ] Shared CLI test support
+   - Extract the deployment harness into `tests/cli/support.rs`.
+11. [ ] Reconciliation test module
+12. [ ] Lifecycle test module
+13. [ ] Exposure test module
+14. [ ] Deployment test module
+15. [ ] Catalog and database modules
+16. [ ] Operational regression and closure
 
 ## Acceptance Criteria
 
-- Missing deploy source fails before CLI dispatch, control, SQLite, or external
-  commands, with unchanged visible error text and exit class.
-- Image and branch deployment preserve their direct mappings and conflicting
-  source options retain Clap rejection.
-- One classifier covers image deployment, branch deployment, and rollback;
-  interactive and CI branch deployment retain their event-capable path.
-- Application status, start, and stop output remain unchanged and are formatted
-  by `output.rs`.
-- Existing CLI syntax, stdout, non-TTY stderr, verbose output, TTY animation,
-  error wording, and exit-code classes remain unchanged.
+- Every scenario in the design's corrected behavior table behaves exactly as
+  corrected; all other successful stdout/stderr bytes remain unchanged.
+- Renderer I/O cannot unwind through control execution; both TTY and non-TTY
+  progress contracts are tested.
+- Stable CLI text does not depend on domain enum `Debug` formatting.
+- Doctor rendering is total and preserves captured diagnostics.
+- Lock open/acquire failures exit 1 while real contention remains exit 4.
+- A malformed or unreadable host environment file fails startup atomically
+  with one contextual `error:` line; a missing file continues to boot.
+- CLI integration tests are organized into capability modules with shared
+  support and no duplicated harness.
 - Each code checkpoint passes `cargo fmt --check`,
   `cargo clippy --all-targets --all-features -- -D warnings`,
   `cargo test --all-features`, and `cargo build --workspace --release`.
 - Environment-dependent OCI and disposable-host checks record their actual
-  PASS/FAIL/SKIP state and are never called green when unavailable.
+  PASS/FAIL/SKIP state with reasons and are never called green when
+  unavailable.
 
 ## Blockers
 
@@ -66,58 +78,13 @@ progress behavior remain unchanged.
 
 ## Validation Evidence
 
-- Checkpoint 1 (governance and baseline): the approved design is committed as
-  `32a3894`, the roadmap schedules v0.5.3 after completed v0.5.2 and before
-  v0.6, and this tracker is the sole active tracker. On `32a3894`, `cargo fmt
-  --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo
-  test --all-features` (191 library tests, 13 CLI unit tests, and 74 binary CLI
-  regressions), and `cargo build --workspace --release` passed. The three OCI
-  tests remain ignored because they require configured rootless Podman.
-   Checkpoint 2 is the first pending implementation checkpoint.
-- Checkpoint 2 (fallible argument normalization): `InvocationTarget::try_from`
-  rejects a missing deploy source as `CliError::MissingDeployOption` before
-  dispatch, and the `MissingDeployOption` target variant was removed. Grammar
-  tests through `Cli::try_parse_from` cover global `--verbose`, image and branch
-  sources, the missing-source error, and Clap's conflicting-source rejection; a
-  binary regression proves exit 2 with the established error text, no database
-  creation, and no external command. `cargo fmt --check`, Clippy with warnings
-  denied, all-feature tests (191 library tests, 17 CLI unit tests, 75 binary CLI
-  regressions; the three OCI tests remain ignored without rootless Podman), and
-  the release build passed. Checkpoint 3 is the next implementation checkpoint.
-- Checkpoint 3 (execution organization): one private `deployment_request`
-  classifier in `cli/mod.rs` now solely decides event-capable execution and
-  feeds the progress renderer, removing the duplicated match and its
-  `unreachable!` arm. `execute_control_command` remains the shared interactive
-  and CI path, CI still routes validated branch input to
-  `Command::DeployBranch`, and child-module visibility was tightened to
-  `pub(super)`/private. A unit test covers image, branch, rollback, and ordinary
-  classification; interactive image deployment, branch conflict, rollback, CI
-  branch deployment, verbose output, and progress coverage are retained. `cargo
-  fmt --check`, Clippy with warnings denied, all-feature tests (191 library
-  tests, 18 CLI unit tests, 75 binary CLI regressions; the three OCI tests
-  remain ignored without rootless Podman), and the release build passed.
-  Checkpoint 4 is the next implementation checkpoint.
-- Checkpoint 4 (rendering organization): application status, stopped, and
-  started result text moved into `application_status`, `application_stopped`,
-  and `application_started` output functions, so dispatch keeps only rendering
-  policy and control flow; the redundant `application_list` trim-and-copy was
-  removed. Exact-string unit tests cover the three moved renderers, the
-  unhealthy-doctor regression is retained, and binary lifecycle tests now
-  assert stop and start output verbatim. `cargo fmt --check`, Clippy with
-  warnings denied, all-feature tests (191 library tests, 21 CLI unit tests, 75
-  binary CLI regressions; the three OCI tests remain ignored without rootless
-  Podman), and the release build passed. Checkpoint 5 is the next checkpoint.
-- Checkpoint 5 (operational regression and closure): the code guide's shared
-  invocation path now documents the fallible argument normalization and the
-  missing-deploy-source rejection; no other living documentation described the
-  changed internals, and no public behavior changed. On final code commit
-  `a23b684`, `cargo fmt --check`, `cargo clippy --all-targets --all-features
-  -- -D warnings`, `cargo test --all-features` (191 library tests, 21 CLI unit
-  tests, and 75 binary CLI regressions), `cargo build --workspace --release`,
-  and markdown-link validation passed. `scripts/vm/run-e2e.sh` passed on a
-  fresh raw-QEMU Debian 13 guest with 45 full-battery checks passed, 0 failed,
-  0 skipped; `PNEUMA_VM_RECONCILIATION=1 scripts/vm/run-e2e.sh` passed with the
-  same battery plus 21 reconciliation cases, 0 failed, 0 skipped; both
-  disposable instances were destroyed on exit. The three host OCI tests remain
-  ignored because this host has no `podman`; the same Podman functionality is
-  exercised inside the E2E guests. The iteration is concluded.
+- Checkpoint 1 (governance and baseline): the approved design is committed in
+  this checkpoint, the roadmap marks v0.5.3 completed and schedules v0.5.4
+  before v0.6, and this tracker is the sole active tracker. The observer seam
+  refactor committed as `6227c0e` is retained as the baseline with its
+  ownership recorded in the design. Baseline gates on `6227c0e`: `cargo fmt
+  --check`, `cargo clippy --all-targets --all-features -- -D warnings`,
+  `cargo test --all-features`, and `cargo build --workspace --release` all
+  passed, plus markdown-link validation. The three OCI tests remain ignored
+  on this host because rootless Podman is not configured. Checkpoint 2 is the
+  first pending implementation checkpoint.

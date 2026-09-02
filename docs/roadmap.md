@@ -189,20 +189,37 @@ output, progress, error, and exit-code behavior.
 
 ### v0.5.3 - CLI Adapter Integrity
 
-**Status:** in progress. Approved design:
+**Status:** completed on 2026-09-02. Approved design:
 [`designs/cli-adapter-integrity.md`](designs/cli-adapter-integrity.md).
 
-This maintenance iteration corrects internal CLI adapter imprecision without
+This maintenance iteration corrected internal CLI adapter imprecision without
 changing the released CLI or operational contract.
 
-- [ ] Reject missing interactive deploy sources during argument normalization.
-- [ ] Consolidate deployment classification and remaining lifecycle rendering
+- [x] Reject missing interactive deploy sources during argument normalization.
+- [x] Consolidate deployment classification and remaining lifecycle rendering
   ownership within the CLI adapter.
+
+### v0.5.4 - CLI Operational Robustness
+
+**Status:** in progress. Approved design:
+[`designs/cli-operational-robustness.md`](designs/cli-operational-robustness.md).
+
+This maintenance iteration corrects all CLI robustness, error-classification,
+presentation, bootstrap, and test-organization issues found in the post-v0.5.3
+review. Approved observable corrections are enumerated in the design's
+behavior-change table.
+
+- [ ] Make progress output best effort and presentation labels explicit.
+- [ ] Preserve doctor diagnostics and total rendering.
+- [ ] Complete the semantic error-classification audit (locks, nested
+  deployments, remaining scenarios).
+- [ ] Validate the host environment contract before startup.
+- [ ] Reorganize CLI integration tests into capability modules.
 
 ## v0.6 - Observed State / Host Observation
 
 **Status:** planned; not started. No approved design yet. Queued behind
-v0.5.2.
+v0.5.4.
 
 Objective: stop depending predominantly on the state Pneuma itself recorded and
 start explicitly observing the real state of the host. This version establishes
@@ -400,8 +417,11 @@ v0.5.2  CLI Adapter Consolidation   "one adapter path"
    │
    ▼
 v0.5.3  CLI Adapter Integrity       "precise adapter boundaries"
-   │
-   ▼
+    │
+    ▼
+v0.5.4  CLI Operational Robustness  "a CLI that fails honestly"
+    │
+    ▼
 v0.6    Observed State            "what is really happening?"
    │
    ▼
