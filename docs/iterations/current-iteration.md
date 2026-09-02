@@ -23,9 +23,16 @@ authoritative target for observable corrections.
      behavioral baseline with the required Rust CI gates.
    - Result: the approved design is committed, exactly one active tracker
      exists, and the baseline is green at `6227c0e`.
-2. [ ] Observer and progress isolation
+2. [x] Observer and progress isolation
    - Make progress output best effort; a failed stderr write cannot unwind
      through deployment execution.
+   - Result: `write_stderr_line` gives `log_verbose` and stable progress
+     locked-stderr best-effort writes; the animated renderer writes through a
+     sink with ignored errors, so presentation failures cannot abort a
+     deployment. A binary regression proves deployment succeeds and persists
+     when stderr rejects writes (read-only `/dev/null`), and a Linux PTY unit
+     test proves the TTY path emits `Deploying`, multiple spinner frames, and
+     the clear-line control bytes; stable and verbose text remain unchanged.
 3. [ ] Explicit presentation vocabulary
    - Remove stable CLI dependence on domain enum `Debug` formatting.
 4. [ ] Total doctor rendering
@@ -88,3 +95,19 @@ authoritative target for observable corrections.
   passed, plus markdown-link validation. The three OCI tests remain ignored
   on this host because rootless Podman is not configured. Checkpoint 2 is the
   first pending implementation checkpoint.
+- Checkpoint 2 (observer and progress isolation): stderr line writes in the
+  CLI progress path are now best effort through `cli::shared::write_stderr_line`
+  (locked stderr, ignored errors); `log_verbose` routes through it, and the
+  animated renderer renders into a `Write` sink with ignored `writeln!` errors
+  while keeping spinner frames, timing, event ordering, TTY selection, and
+  final output unchanged. The binary regression
+  `deployment_continues_when_non_tty_stderr_rejects_progress_writes` proves a
+  deployment succeeds and persists `desired_runtime_state` when child stderr
+  is a read-only `/dev/null` (EBADF writes), and
+  `animated_tty_progress_emits_lifecycle_text_frames_and_clear_bytes` proves
+  the TTY path over a `libc::openpty` PTY. Focused tests passed (progress
+  unit tests, the new binary regression, verbose lifecycle stderr,
+  deployment_from_oci, deployment_from_revision, control_deployment), then
+  `cargo fmt --check`, Clippy with warnings denied, all-feature tests, and
+  the release build passed. Checkpoint 3 is the next implementation
+  checkpoint.

@@ -353,6 +353,37 @@ fn deploys_an_internal_application_and_prints_its_identity() {
 }
 
 #[test]
+fn deployment_continues_when_non_tty_stderr_rejects_progress_writes() {
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || respond_once(&listener, 200));
+
+    let read_only_null = fs::File::open("/dev/null").unwrap();
+    let mut command = environment.deploy_command(port);
+    command.stderr(Stdio::from(read_only_null));
+    let output = command.output().unwrap();
+    server.join().unwrap();
+
+    assert_command_succeeded(&output);
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .starts_with("Deployed another-site\n")
+    );
+    let connection = database::open(&environment.database_path).unwrap();
+    let desired_state: String = connection
+        .query_row(
+            "SELECT desired_runtime_state FROM applications",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(desired_state, "running");
+}
+
+#[test]
 fn verbose_deploy_reports_lifecycle_steps_on_stderr() {
     let environment = DeploymentEnvironment::new();
     assert_command_succeeded(&environment.import());

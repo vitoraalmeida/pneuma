@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use pneuma::use_cases::deployment::{DeploymentEvent, DeploymentStep, RetirementWarning};
 
-use super::shared::log_verbose;
+use super::shared::{log_verbose, write_stderr_line};
 
 // Renders deployment events without making control execution depend on terminal behavior.
 pub(super) struct DeploymentProgressRenderer {
@@ -101,7 +101,7 @@ fn render_stable_event(
                         ),
                     );
                 } else {
-                    eprintln!("Deploying {application_name}...");
+                    write_stderr_line(format!("Deploying {application_name}..."));
                 }
             }
             None => log_verbose(
@@ -112,11 +112,19 @@ fn render_stable_event(
         return;
     }
     if verbose || matches!(event, DeploymentEvent::RetirementWarning { .. }) {
-        eprintln!("{}", render_deployment_event(&event));
+        write_stderr_line(render_deployment_event(&event));
     }
 }
 
 fn render_animated_progress(receiver: mpsc::Receiver<DeploymentEvent>, show_request: bool) {
+    render_animated_progress_into(receiver, show_request, &mut io::stderr());
+}
+
+fn render_animated_progress_into<W: Write>(
+    receiver: mpsc::Receiver<DeploymentEvent>,
+    show_request: bool,
+    sink: &mut W,
+) {
     let frames = ['-', '\\', '|', '/'];
     let mut frame = 0;
     let mut current_step = None;
@@ -125,51 +133,49 @@ fn render_animated_progress(receiver: mpsc::Receiver<DeploymentEvent>, show_requ
     loop {
         match receiver.recv_timeout(Duration::from_millis(100)) {
             Ok(DeploymentEvent::DeploymentRequested { application_name }) if show_request => {
-                eprintln!("Deploying {application_name}...");
+                let _ = writeln!(sink, "Deploying {application_name}...");
             }
             Ok(DeploymentEvent::StepStarted { step }) => {
-                clear_progress(&mut visible);
+                clear_progress(sink, &mut visible);
                 current_step = Some(step);
             }
             Ok(DeploymentEvent::StepCompleted { step }) => {
                 if current_step == Some(step) {
-                    clear_progress(&mut visible);
+                    clear_progress(sink, &mut visible);
                     current_step = None;
                 }
             }
             Ok(event @ DeploymentEvent::RetirementWarning { .. }) => {
-                clear_progress(&mut visible);
-                eprintln!("{}", render_deployment_event(&event));
+                clear_progress(sink, &mut visible);
+                let _ = writeln!(sink, "{}", render_deployment_event(&event));
             }
             Ok(_) => {}
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if let Some(step) = current_step {
-                    render_spinner(frames[frame], step);
+                    render_spinner(sink, frames[frame], step);
                     frame = (frame + 1) % frames.len();
                     visible = true;
                 }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                clear_progress(&mut visible);
+                clear_progress(sink, &mut visible);
                 return;
             }
         }
     }
 }
 
-fn render_spinner(frame: char, step: DeploymentStep) {
-    let mut stderr = io::stderr().lock();
-    let _ = write!(stderr, "\r{frame} {}...", deployment_step_label(step));
-    let _ = stderr.flush();
+fn render_spinner<W: Write>(sink: &mut W, frame: char, step: DeploymentStep) {
+    let _ = write!(sink, "\r{frame} {}...", deployment_step_label(step));
+    let _ = sink.flush();
 }
 
-fn clear_progress(visible: &mut bool) {
+fn clear_progress<W: Write>(sink: &mut W, visible: &mut bool) {
     if !*visible {
         return;
     }
-    let mut stderr = io::stderr().lock();
-    let _ = write!(stderr, "\r\x1b[2K");
-    let _ = stderr.flush();
+    let _ = write!(sink, "\r\x1b[2K");
+    let _ = sink.flush();
     *visible = false;
 }
 
@@ -238,6 +244,7 @@ fn deployment_step_label(step: DeploymentStep) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{deployment_step_label, render_deployment_event};
+    use pneuma::domain::application::ApplicationName;
     use pneuma::use_cases::deployment::{DeploymentEvent, DeploymentStep};
 
     #[test]
@@ -259,6 +266,80 @@ mod tests {
         assert_eq!(
             deployment_step_label(DeploymentStep::RetirePreviousRuntime),
             "retire previous runtime"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn animated_tty_progress_emits_lifecycle_text_frames_and_clear_bytes() {
+        use std::fs::File;
+        use std::io::Read;
+        use std::os::fd::FromRawFd;
+        use std::sync::mpsc;
+        use std::thread;
+        use std::time::Duration;
+
+        let mut master: libc::c_int = -1;
+        let mut slave: libc::c_int = -1;
+        let opened = unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(opened, 0);
+
+        let mut sink = unsafe { File::from_raw_fd(slave) };
+        let (sender, receiver) = mpsc::channel();
+        let renderer = thread::spawn(move || {
+            super::render_animated_progress_into(receiver, true, &mut sink);
+        });
+        sender
+            .send(DeploymentEvent::DeploymentRequested {
+                application_name: ApplicationName::new("another-site").unwrap(),
+            })
+            .unwrap();
+        sender
+            .send(DeploymentEvent::StepStarted {
+                step: DeploymentStep::PullImage,
+            })
+            .unwrap();
+        thread::sleep(Duration::from_millis(350));
+        sender
+            .send(DeploymentEvent::StepCompleted {
+                step: DeploymentStep::PullImage,
+            })
+            .unwrap();
+        drop(sender);
+        renderer.join().unwrap();
+
+        let mut bytes = Vec::new();
+        let mut reader = unsafe { File::from_raw_fd(master) };
+        let mut chunk = [0u8; 1024];
+        loop {
+            match reader.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => bytes.extend_from_slice(&chunk[..read]),
+            }
+        }
+        let output = String::from_utf8_lossy(&bytes);
+
+        // A PTY translates line feeds with ONLCR, so assert the text without
+        // assuming the exact newline bytes.
+        assert!(
+            output.contains("Deploying another-site..."),
+            "unexpected TTY output: {output:?}"
+        );
+        assert!(
+            output.matches("pull image...").count() >= 2,
+            "expected at least two spinner frames: {output:?}"
+        );
+        assert!(
+            output.contains("\r\x1b[2K"),
+            "expected final clear-line control bytes: {output:?}"
         );
     }
 }
