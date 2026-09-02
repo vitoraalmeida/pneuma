@@ -312,6 +312,69 @@ fn reports_usage_for_an_unknown_command() {
 }
 
 #[test]
+fn doctor_reports_captured_diagnostics_for_a_failed_command() {
+    let database_path = temporary_database_path();
+    let fake_bin = temporary_workspace_path().join("bin");
+    fs::create_dir_all(&fake_bin).unwrap();
+    fs::write(
+        fake_bin.join("git"),
+        "#!/bin/sh\necho 'fatal: bad object' >&2\nexit 128\n",
+    )
+    .unwrap();
+    make_executable(&fake_bin.join("git"));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_pneuma"))
+        .env("PNEUMA_DATABASE_PATH", &database_path)
+        .env("PATH", executable_path(&fake_bin))
+        .args([OsStr::new("doctor")])
+        .output()
+        .unwrap();
+    let _ = fs::remove_file(&database_path);
+    let _ = fs::remove_dir_all(fake_bin.parent().unwrap());
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("✗ Git: command failed (fatal: bad object)"),
+        "unexpected stdout: {stdout}"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("one or more diagnostic checks failed"),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn doctor_keeps_the_generic_line_when_a_failed_command_has_no_detail() {
+    let database_path = temporary_database_path();
+    let fake_bin = temporary_workspace_path().join("bin");
+    fs::create_dir_all(&fake_bin).unwrap();
+    fs::write(fake_bin.join("git"), "#!/bin/sh\nexit 1\n").unwrap();
+    make_executable(&fake_bin.join("git"));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_pneuma"))
+        .env("PNEUMA_DATABASE_PATH", &database_path)
+        .env("PATH", executable_path(&fake_bin))
+        .args([OsStr::new("doctor")])
+        .output()
+        .unwrap();
+    let _ = fs::remove_file(&database_path);
+    let _ = fs::remove_dir_all(fake_bin.parent().unwrap());
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("✗ Git: command failed\n"),
+        "unexpected stdout: {stdout}"
+    );
+    assert!(
+        !stdout.contains("✗ Git: command failed ("),
+        "unexpected stdout: {stdout}"
+    );
+}
+
+#[test]
 fn deploys_an_internal_application_and_prints_its_identity() {
     let environment = DeploymentEnvironment::new();
     let import = environment.import();
@@ -3404,6 +3467,12 @@ fn install_fake_caddy_and_curl(fake_bin: &Path) {
         permissions.set_mode(0o755);
         fs::set_permissions(executable, permissions).unwrap();
     }
+}
+
+fn make_executable(path: &Path) {
+    let mut permissions = fs::metadata(path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).unwrap();
 }
 
 fn executable_path(fake_bin: &Path) -> OsString {

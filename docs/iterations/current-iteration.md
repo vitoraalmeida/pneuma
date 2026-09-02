@@ -42,9 +42,14 @@ authoritative target for observable corrections.
      lifecycle text, and verbose visibility logs reuse them. No `{:?}`
      formatting remains in the CLI, and stable text is byte-for-byte
      unchanged.
-4. [ ] Total doctor rendering
+4. [x] Total doctor rendering
    - Preserve captured doctor diagnostics and render every publicly
      constructible outcome without panic.
+   - Result: failed Git/Podman/Caddy checks render
+     `command failed (<detail>)` with the generic line retained when detail
+     is exactly `command failed`, and `ActiveOciImages(Passed)` renders
+     `✓ Active OCI images: <detail>` instead of panicking; check ordering,
+     health calculation, summary, stderr error, and exit 1 are unchanged.
 5. [ ] Lock failure classification
    - Distinguish lock infrastructure failure (exit 1) from real contention
      (exit 4).
@@ -133,3 +138,17 @@ authoritative target for observable corrections.
   `lists_deployments_for_a_deployed_application`) passed, then `cargo fmt
   --check`, Clippy with warnings denied, all-feature tests, and the release
   build passed. Checkpoint 4 is the next implementation checkpoint.
+- Checkpoint 4 (total doctor rendering): `format_command_availability` now
+  renders failed Git/Podman/Caddy checks as `command failed (<detail>)`,
+  keeping the generic line when the captured detail is exactly `command
+  failed`; unavailable-command wording is unchanged. The
+  `ActiveOciImages(Passed)` `unreachable!` panic was replaced by
+  `✓ Active OCI images: <detail>`. A unit test renders every publicly
+  constructible doctor outcome without panicking and asserts the exact
+  detailed, generic, and collective-success lines; binary regressions with a
+  failing fake `git` prove the detailed stdout line plus unchanged stderr
+  error and exit 1, and the generic fallback when the command reports no
+  detail. `architecture.md` now documents the detailed doctor failure lines.
+  Focused tests, `cargo fmt --check`, Clippy with warnings denied,
+  all-feature tests, markdown-link validation, and the release build passed.
+  Checkpoint 5 is the next implementation checkpoint.

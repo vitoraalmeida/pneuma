@@ -377,7 +377,7 @@ fn render_doctor_check(check: &DoctorCheck) -> String {
             }
         },
         DoctorCheck::ActiveOciImages(outcome) => match outcome {
-            CheckOutcome::Passed { .. } => unreachable!(),
+            CheckOutcome::Passed { detail } => format!("✓ Active OCI images: {detail}"),
             CheckOutcome::Failed { detail } | CheckOutcome::Unavailable { detail } => {
                 format!("✗ Active OCI images: FAILED ({detail})")
             }
@@ -420,7 +420,10 @@ fn format_doctor_outcome(name: &str, outcome: &CheckOutcome, success: &str) -> S
 fn format_command_availability(name: &str, outcome: &CheckOutcome) -> String {
     match outcome {
         CheckOutcome::Passed { detail } => format!("✓ {name}: {detail}"),
-        CheckOutcome::Failed { .. } => format!("✗ {name}: command failed"),
+        CheckOutcome::Failed { detail } if detail == "command failed" => {
+            format!("✗ {name}: command failed")
+        }
+        CheckOutcome::Failed { detail } => format!("✗ {name}: command failed ({detail})"),
         CheckOutcome::Unavailable { detail } => format!("✗ {name}: not found ({detail})"),
     }
 }
@@ -434,6 +437,7 @@ mod tests {
     use pneuma::domain::identity::{ApplicationId, DeploymentId, ReleaseId, RuntimeInstanceId};
     use pneuma::domain::release::{OciArtifact, Release};
     use pneuma::domain::runtime::{ContainerId, ObservedRuntimeState};
+    use std::path::PathBuf;
 
     fn observation(
         desired_runtime_state: DesiredRuntimeState,
@@ -645,6 +649,113 @@ mod tests {
             rendered,
             "Started portal\nDesired state: Running\nObserved state: Running"
         );
+    }
+
+    #[test]
+    fn doctor_renders_every_publicly_constructible_outcome_without_panicking() {
+        let report = DoctorReport {
+            checks: vec![
+                DoctorCheck::DatabaseConnection(CheckOutcome::Passed {
+                    detail: "OK".to_owned(),
+                }),
+                DoctorCheck::DatabaseSchema(CheckOutcome::Passed {
+                    detail: "current".to_owned(),
+                }),
+                DoctorCheck::WorkspaceDirectory {
+                    path: PathBuf::from("/tmp/workspace"),
+                    exists: true,
+                },
+                DoctorCheck::CaddyManagedDirectory {
+                    path: PathBuf::from("/tmp/caddy"),
+                    exists: false,
+                },
+                DoctorCheck::Caddyfile {
+                    path: PathBuf::from("/tmp/Caddyfile"),
+                    exists: true,
+                },
+                DoctorCheck::CaddyConfiguration(CheckOutcome::Failed {
+                    detail: "unknown directive".to_owned(),
+                }),
+                DoctorCheck::Git(CheckOutcome::Failed {
+                    detail: "command failed".to_owned(),
+                }),
+                DoctorCheck::Podman(CheckOutcome::Failed {
+                    detail: "cgroups v4 is not supported".to_owned(),
+                }),
+                DoctorCheck::ActiveOciImage {
+                    image: "registry.example/team/service".to_owned(),
+                    outcome: CheckOutcome::Unavailable {
+                        detail: "registry unreachable".to_owned(),
+                    },
+                },
+                DoctorCheck::ActiveOciImages(CheckOutcome::Passed {
+                    detail: "all pullable".to_owned(),
+                }),
+                DoctorCheck::ActiveLocalImage,
+                DoctorCheck::DiskSpace {
+                    path: PathBuf::from("/tmp"),
+                    outcome: CheckOutcome::Passed {
+                        detail: "at least 1 GiB free".to_owned(),
+                    },
+                },
+                DoctorCheck::PodmanRootless(CheckOutcome::Unavailable {
+                    detail: "no podman".to_owned(),
+                }),
+                DoctorCheck::PodmanQuadletUserGenerator { path: None },
+                DoctorCheck::Caddy(CheckOutcome::Passed {
+                    detail: "v2.10.0".to_owned(),
+                }),
+            ],
+        };
+
+        let rendered = doctor_report(&report);
+        let lines: Vec<&str> = rendered.lines().collect();
+        let line = |needle: &str| {
+            lines
+                .iter()
+                .copied()
+                .find(|line| line.contains(needle))
+                .unwrap_or_else(|| panic!("missing line containing {needle:?}: {rendered:?}"))
+                .to_owned()
+        };
+
+        assert_eq!(line("Database connection"), "✓ Database connection: OK");
+        assert_eq!(
+            line("Caddy managed directory"),
+            "✗ Caddy managed directory: /tmp/caddy (does not exist)"
+        );
+        assert_eq!(
+            line("Caddy configuration"),
+            "✗ Caddy configuration: FAILED (unknown directive)"
+        );
+        assert_eq!(line("Git:"), "✗ Git: command failed");
+        assert_eq!(
+            line("Podman:"),
+            "✗ Podman: command failed (cgroups v4 is not supported)"
+        );
+        assert_eq!(
+            line("Active OCI image:"),
+            "✗ Active OCI image: registry.example/team/service (FAILED: registry unreachable)"
+        );
+        assert_eq!(
+            line("Active OCI images:"),
+            "✓ Active OCI images: all pullable"
+        );
+        assert_eq!(line("Active local image"), "- Active local image: skipped");
+        assert_eq!(
+            line("Disk space"),
+            "✓ Disk space: /tmp (at least 1 GiB free)"
+        );
+        assert_eq!(
+            line("Podman rootless"),
+            "✗ Podman rootless: FAILED (no podman)"
+        );
+        assert_eq!(
+            line("Podman Quadlet user generator"),
+            "✗ Podman Quadlet user generator: not found (install Podman >= 4.4 or Debian 13)"
+        );
+        assert_eq!(line("Caddy:"), "✓ Caddy: v2.10.0");
+        assert!(rendered.ends_with("Some checks failed. Please review the output above."));
     }
 
     #[test]

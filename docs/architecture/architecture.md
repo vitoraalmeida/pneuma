@@ -746,5 +746,8 @@ for its observed state.
 - `pneuma doctor` checks the database and its schema ledger, configured paths,
   Caddy configuration, Git/Podman/Caddy availability, rootless Podman, the
   Quadlet user generator, disk capacity, and that active OCI images remain
-  pullable. It does not establish that an individual Application is healthy.
+  pullable. A failed Git/Podman/Caddy availability check prints the captured
+  command output as `command failed (<detail>)`, falling back to the generic
+  `command failed` line when no detail was captured. It does not establish
+  that an individual Application is healthy.
 - `pneuma version` prints the package version without opening the database.
