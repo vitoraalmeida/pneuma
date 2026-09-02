@@ -144,14 +144,27 @@ impl CliError {
             Self::VisibilitySet { source } => classify_exposure_change(source),
             Self::SystemShow { source } => match source {
                 pneuma::use_cases::system::ShowError::NotFound { .. } => CliErrorClass::NotFound,
-                _ => CliErrorClass::Failure,
+                pneuma::use_cases::system::ShowError::ApplicationStore { .. }
+                | pneuma::use_cases::system::ShowError::Persistence { .. } => {
+                    CliErrorClass::Failure
+                }
             },
             Self::CiDispatch { .. } => CliErrorClass::Usage,
             Self::Reconcile { source } => classify_reconciliation_read(source),
             Self::Database { source } => match source {
                 // Database-wide lock contention is a caller-visible conflict.
                 DatabaseError::DatabaseBusy { .. } => CliErrorClass::Conflict,
-                _ => CliErrorClass::Failure,
+                DatabaseError::Open { .. }
+                | DatabaseError::Configure { .. }
+                | DatabaseError::Initialize { .. }
+                | DatabaseError::IncompatibleSchema { .. }
+                | DatabaseError::BackupDestinationExists { .. }
+                | DatabaseError::BackupDestinationParent { .. }
+                | DatabaseError::Backup { .. }
+                | DatabaseError::RestoreSource { .. }
+                | DatabaseError::RestoreIntegrity { .. }
+                | DatabaseError::DatabaseLock { .. }
+                | DatabaseError::RestoreReplace { .. } => CliErrorClass::Failure,
             },
             Self::List { .. }
             | Self::ApplicationLookup { .. }
@@ -173,7 +186,12 @@ fn classify_deploy_branch(source: &DeployBranchError) -> CliErrorClass {
         // dedicated busy variants represent real contention.
         DeployBranchError::ApplicationLock { .. } => CliErrorClass::Failure,
         DeployBranchError::ApplicationBusy { .. } => CliErrorClass::Conflict,
-        _ => CliErrorClass::Failure,
+        // Missing persisted source or delivery configuration means the
+        // application's recorded state does not allow branch deployment.
+        DeployBranchError::NoSourceConfiguration { .. }
+        | DeployBranchError::NoDeliveryConfiguration { .. } => CliErrorClass::Conflict,
+        DeployBranchError::NoDefaultBranch { .. } => CliErrorClass::Usage,
+        DeployBranchError::SourceConfiguration { .. } => CliErrorClass::Failure,
     }
 }
 
@@ -185,9 +203,8 @@ fn classify_deploy_oci(source: &DeployOciError) -> CliErrorClass {
         DeployOciError::DeployRelease { source } => classify_deploy_release(source),
         DeployOciError::ApplicationLock { .. } => CliErrorClass::Failure,
         DeployOciError::ApplicationBusy { .. } => CliErrorClass::Conflict,
-        // Missing and unloadable delivery configuration is reclassified by the
-        // remaining classification audit checkpoint.
-        _ => CliErrorClass::Failure,
+        DeployOciError::NoDeliveryConfiguration { .. } => CliErrorClass::Conflict,
+        DeployOciError::DeliveryConfiguration { .. } => CliErrorClass::Failure,
     }
 }
 
@@ -296,8 +313,9 @@ fn classify_remote_import(source: &RemoteImportError) -> CliErrorClass {
         RemoteImportError::Clone { .. } => CliErrorClass::External,
         RemoteImportError::Workspace { .. } => CliErrorClass::Failure,
         RemoteImportError::Import { source } => match source {
-            ImportError::Manifest { .. } => CliErrorClass::Usage,
-            _ => CliErrorClass::Failure,
+            ImportError::Manifest { .. } | ImportError::SystemRequired => CliErrorClass::Usage,
+            ImportError::ApplicationNotFound { .. } => CliErrorClass::NotFound,
+            ImportError::Persistence { .. } => CliErrorClass::Failure,
         },
     }
 }
@@ -312,7 +330,11 @@ fn classify_runtime_lifecycle(source: &RuntimeLifecycleError) -> CliErrorClass {
         RuntimeLifecycleError::Observe { .. }
         | RuntimeLifecycleError::Control { .. }
         | RuntimeLifecycleError::Supervision { .. } => CliErrorClass::External,
-        _ => CliErrorClass::Failure,
+        // Invalid persisted values, store access, and direct persistence are
+        // generic failures, not caller-visible conflicts.
+        RuntimeLifecycleError::InvalidDesiredState { .. }
+        | RuntimeLifecycleError::ApplicationStore { .. }
+        | RuntimeLifecycleError::Persistence { .. } => CliErrorClass::Failure,
     }
 }
 
@@ -332,16 +354,29 @@ fn classify_exposure_change(source: &ExposureChangeError) -> CliErrorClass {
     match source {
         ExposureChangeError::ApplicationNotFound { .. }
         | ExposureChangeError::NoActiveRuntime { .. } => CliErrorClass::NotFound,
+        // A public exposure without a domain is a recorded-state rejection,
+        // not rejected command input.
+        ExposureChangeError::DomainRequired { .. } => CliErrorClass::Conflict,
         ExposureChangeError::ExposureChanged { .. }
         | ExposureChangeError::RuntimeNotRunning { .. }
         | ExposureChangeError::ApplicationBusy { .. } => CliErrorClass::Conflict,
         ExposureChangeError::ApplicationLock { .. } => CliErrorClass::Failure,
-        ExposureChangeError::InvalidVisibility { .. } => CliErrorClass::Usage,
+        // Invalid persisted visibility and other invalid persisted exposure
+        // values are database-integrity failures, not rejected command input.
+        ExposureChangeError::InvalidVisibility { .. } => CliErrorClass::Failure,
         ExposureChangeError::ObserveFailed { .. }
+        | ExposureChangeError::InvalidObservedEndpoint { .. }
         | ExposureChangeError::MaterializeFailed { .. }
         | ExposureChangeError::RemoveFragmentFailed { .. }
         | ExposureChangeError::ExternalHealthFailed { .. } => CliErrorClass::External,
-        _ => CliErrorClass::Failure,
+        ExposureChangeError::InvalidMaterializationState { .. }
+        | ExposureChangeError::InvalidExposure { .. }
+        | ExposureChangeError::InvalidConfigurationVersion
+        | ExposureChangeError::InvalidDiagnostic
+        | ExposureChangeError::Store { .. }
+        | ExposureChangeError::RuntimeStore { .. }
+        | ExposureChangeError::ApplicationStore { .. }
+        | ExposureChangeError::Persistence { .. } => CliErrorClass::Failure,
     }
 }
 
@@ -355,7 +390,15 @@ fn classify_reconciliation_read(source: &ReconciliationReadError) -> CliErrorCla
         | ReconciliationReadError::ObserveNamedContainer { .. }
         | ReconciliationReadError::ObserveQuadlet { .. }
         | ReconciliationReadError::ObserveCaddy { .. } => CliErrorClass::External,
-        _ => CliErrorClass::Failure,
+        // Unconverged recorded state keeps its generic classification: it is
+        // neither store corruption nor caller-visible contention.
+        ReconciliationReadError::Application { .. }
+        | ReconciliationReadError::Deployment { .. }
+        | ReconciliationReadError::Release { .. }
+        | ReconciliationReadError::Runtime { .. }
+        | ReconciliationReadError::Exposure { .. }
+        | ReconciliationReadError::InvalidExpectedPort { .. }
+        | ReconciliationReadError::NotConverged { .. } => CliErrorClass::Failure,
     }
 }
 
@@ -395,7 +438,18 @@ mod tests {
                         source: ImportError::SystemRequired,
                     },
                 },
-                CliErrorClass::Failure,
+                CliErrorClass::Usage,
+            ),
+            (
+                "import: nested application absence",
+                CliError::Import {
+                    source: RemoteImportError::Import {
+                        source: ImportError::ApplicationNotFound {
+                            application_id: "app-1".to_owned(),
+                        },
+                    },
+                },
+                CliErrorClass::NotFound,
             ),
             (
                 "import: git clone failure",
@@ -464,6 +518,15 @@ mod tests {
                 },
                 CliErrorClass::Failure,
             ),
+            (
+                "app runtime: invalid persisted desired state",
+                CliError::ApplicationRuntime {
+                    source: Box::new(RuntimeLifecycleError::InvalidDesiredState {
+                        state: "paused".to_owned(),
+                    }),
+                },
+                CliErrorClass::Failure,
+            ),
             // OCI deployment family.
             (
                 "deploy image: repository policy mismatch",
@@ -494,7 +557,43 @@ mod tests {
                 },
                 CliErrorClass::Failure,
             ),
+            (
+                "deploy image: missing delivery configuration",
+                CliError::DeployOci {
+                    source: Box::new(DeployOciError::NoDeliveryConfiguration {
+                        application_id: "app-1".to_owned(),
+                    }),
+                },
+                CliErrorClass::Conflict,
+            ),
             // Branch deployment family, including nested OCI layering.
+            (
+                "deploy branch: missing source configuration",
+                CliError::DeployBranch {
+                    source: Box::new(DeployBranchError::NoSourceConfiguration {
+                        application_id: "app-1".to_owned(),
+                    }),
+                },
+                CliErrorClass::Conflict,
+            ),
+            (
+                "deploy branch: missing delivery configuration",
+                CliError::DeployBranch {
+                    source: Box::new(DeployBranchError::NoDeliveryConfiguration {
+                        application_id: "app-1".to_owned(),
+                    }),
+                },
+                CliErrorClass::Conflict,
+            ),
+            (
+                "deploy branch: missing default branch",
+                CliError::DeployBranch {
+                    source: Box::new(DeployBranchError::NoDefaultBranch {
+                        application_id: "app-1".to_owned(),
+                    }),
+                },
+                CliErrorClass::Usage,
+            ),
             (
                 "deploy branch: branch resolution failure",
                 CliError::DeployBranch {
@@ -588,13 +687,40 @@ mod tests {
                 CliErrorClass::NotFound,
             ),
             (
-                "visibility: rejected visibility input",
+                "visibility: persisted invalid visibility",
                 CliError::VisibilitySet {
                     source: ExposureChangeError::InvalidVisibility {
                         visibility: "maybe".to_owned(),
                     },
                 },
-                CliErrorClass::Usage,
+                CliErrorClass::Failure,
+            ),
+            (
+                "visibility: exposure domain required",
+                CliError::VisibilitySet {
+                    source: ExposureChangeError::DomainRequired {
+                        application_id: "app-1".to_owned(),
+                    },
+                },
+                CliErrorClass::Conflict,
+            ),
+            (
+                "visibility: non-loopback observed endpoint",
+                CliError::VisibilitySet {
+                    source: ExposureChangeError::InvalidObservedEndpoint {
+                        container_id: "abc123".to_owned(),
+                    },
+                },
+                CliErrorClass::External,
+            ),
+            (
+                "visibility: invalid persisted materialization state",
+                CliError::VisibilitySet {
+                    source: ExposureChangeError::InvalidMaterializationState {
+                        state: "maybe".to_owned(),
+                    },
+                },
+                CliErrorClass::Failure,
             ),
             (
                 "visibility: concurrent exposure change",
@@ -631,6 +757,15 @@ mod tests {
                 CliError::SystemShow {
                     source: ShowError::Persistence {
                         source: sqlite_error(),
+                    },
+                },
+                CliErrorClass::Failure,
+            ),
+            (
+                "system show: application store failure",
+                CliError::SystemShow {
+                    source: ShowError::ApplicationStore {
+                        source: store_error(),
                     },
                 },
                 CliErrorClass::Failure,
@@ -680,6 +815,15 @@ mod tests {
                     },
                 },
                 CliErrorClass::External,
+            ),
+            (
+                "reconcile: unconverged recorded state",
+                CliError::Reconcile {
+                    source: ReconciliationReadError::NotConverged {
+                        reason: "application has no active runtime".to_owned(),
+                    },
+                },
+                CliErrorClass::Failure,
             ),
             // Database family (open, backup, and restore share one variant).
             (

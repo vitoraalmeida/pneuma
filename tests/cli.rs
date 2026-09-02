@@ -229,6 +229,53 @@ fn imports_from_a_remote_git_url_with_a_manifest_path() {
 }
 
 #[test]
+fn import_without_a_required_system_fails_with_usage_exit_code() {
+    let database_path = temporary_database_path();
+    let workspace = temporary_workspace_path();
+    let repository_path = workspace.join("remote");
+    fs::create_dir_all(&repository_path).unwrap();
+    fs::write(
+        repository_path.join("pneuma.toml"),
+        concat!(
+            "schema_version = 3\n",
+            "\n",
+            "[application]\n",
+            "name = \"systemless-site\"\n",
+            "\n",
+            "[delivery]\n",
+            "type = \"oci\"\n",
+            "image = \"registry.example/team/service\"\n",
+            "\n",
+            "[runtime]\n",
+            "container_port = 8080\n",
+            "healthcheck_path = \"/healthz\"\n",
+            "expected_status = 200\n",
+            "\n",
+            "[exposure]\n",
+            "default_visibility = \"internal\"\n",
+        ),
+    )
+    .unwrap();
+    initialize_repository(&repository_path);
+    let url = format!("file://{}", repository_path.display());
+
+    let output = run_pneuma_env(
+        &database_path,
+        Some(&workspace),
+        &[OsStr::new("app"), OsStr::new("import"), OsStr::new(&url)],
+    );
+    let _ = fs::remove_dir_all(&workspace);
+    let _ = fs::remove_file(&database_path);
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("system is required"),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn remote_import_is_idempotent() {
     let database_path = temporary_database_path();
     let workspace = temporary_workspace_path();
@@ -2309,7 +2356,25 @@ fn run_visibility_command_with_curl_status(
     visibility: &str,
     curl_status: u16,
 ) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_pneuma"))
+    run_visibility_command_with_options(environment, visibility, curl_status, None)
+}
+
+fn run_visibility_command_with_podman_port(
+    environment: &DeploymentEnvironment,
+    visibility: &str,
+    podman_port: &str,
+) -> Output {
+    run_visibility_command_with_options(environment, visibility, 200, Some(podman_port))
+}
+
+fn run_visibility_command_with_options(
+    environment: &DeploymentEnvironment,
+    visibility: &str,
+    curl_status: u16,
+    podman_port: Option<&str>,
+) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_pneuma"));
+    command
         .env("PNEUMA_DATABASE_PATH", &environment.database_path)
         .env("PNEUMA_WORKSPACE_PATH", &environment.workspace_path)
         .env(
@@ -2321,7 +2386,11 @@ fn run_visibility_command_with_curl_status(
         .env("PNEUMA_FAKE_PORT", "30000")
         .env("PNEUMA_FAKE_CURL_LOG", environment.root.join("curl.log"))
         .env("PNEUMA_FAKE_CURL_STATUS", curl_status.to_string())
-        .env("PNEUMA_ASSERT_CLOSED_DATABASE", &environment.database_path)
+        .env("PNEUMA_ASSERT_CLOSED_DATABASE", &environment.database_path);
+    if let Some(podman_port) = podman_port {
+        command.env("PNEUMA_FAKE_PODMAN_PORT", podman_port);
+    }
+    command
         .args([
             "app",
             "visibility",
@@ -2410,7 +2479,11 @@ fn public_visibility_without_a_domain_is_rejected_before_external_effects() {
     assert_command_succeeded(&environment.import());
 
     let public = run_visibility_command(&environment, "public");
-    assert!(!public.status.success());
+    assert_eq!(
+        public.status.code(),
+        Some(4),
+        "a required exposure domain is a recorded-state conflict"
+    );
     assert!(
         String::from_utf8_lossy(&public.stderr).contains("requires a domain"),
         "unexpected stderr: {}",
@@ -2419,6 +2492,26 @@ fn public_visibility_without_a_domain_is_rejected_before_external_effects() {
 
     assert_exposure_state(&environment, "internal", "not_materialized", None);
     assert!(!environment.managed_caddy_directory.exists());
+}
+
+#[test]
+fn public_visibility_fails_as_external_when_the_observed_endpoint_is_not_loopback() {
+    let environment = DeploymentEnvironment::public();
+    assert_command_succeeded(&environment.import());
+    environment.deploy_current_revision();
+    assert_command_succeeded(&run_visibility_command(&environment, "internal"));
+
+    let public = run_visibility_command_with_podman_port(&environment, "public", "10.0.0.2:31000");
+    assert_eq!(
+        public.status.code(),
+        Some(5),
+        "a non-loopback observed endpoint is an external integration failure"
+    );
+    assert!(
+        String::from_utf8_lossy(&public.stderr).contains("failed to observe runtime"),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&public.stderr)
+    );
 }
 
 #[test]
@@ -3476,7 +3569,11 @@ case "$1" in
         fi
         ;;
     port)
-        printf '127.0.0.1:%s\n' "$PNEUMA_FAKE_PORT"
+        if [ -n "${PNEUMA_FAKE_PODMAN_PORT:-}" ]; then
+            printf '%s\n' "$PNEUMA_FAKE_PODMAN_PORT"
+        else
+            printf '127.0.0.1:%s\n' "$PNEUMA_FAKE_PORT"
+        fi
         ;;
     start)
         if [ -n "${PNEUMA_FAKE_CONTAINER_STATE:-}" ]; then

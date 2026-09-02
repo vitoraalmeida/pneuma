@@ -71,8 +71,16 @@ authoritative target for observable corrections.
      `DeploymentFailureCode` maps to either `External` (exit 5) or generic
      `Failure` (exit 1) with no string matching or downcasting. Messages and
      source chains are unchanged.
-7. [ ] Remaining classification audit
+7. [x] Remaining classification audit
    - Complete exhaustive CLI error semantics.
+   - Result: every remaining wildcard match in `cli::error` was replaced with
+     exhaustive typed matches; the approved mappings now hold —
+     `ImportError::SystemRequired` and a missing default branch are `Usage`,
+     missing source/delivery configuration and a required exposure domain are
+     `Conflict`, persisted invalid visibility (and other invalid persisted
+     values) are `Failure`, and a non-loopback observed endpoint is
+     `External`. Messages, source chains, and the numeric class definitions
+     are unchanged.
 8. [ ] Strict host environment contract
    - Fail fast on unreadable, malformed, duplicate, invalid UTF-8, or
      invalid-variable host environment files.
@@ -199,3 +207,26 @@ authoritative target for observable corrections.
   --check`, Clippy with warnings denied, all-feature tests (3 OCI tests remain
   ignored without rootless Podman), and the release build passed. Checkpoint 7
   is the next implementation checkpoint.
+- Checkpoint 7 (remaining classification audit): `cli::error` classifications
+  are now exhaustive — `classify_deploy_branch`, `classify_deploy_oci`,
+  `classify_remote_import`, `classify_runtime_lifecycle`,
+  `classify_exposure_change`, `classify_reconciliation_read`, and the
+  `SystemShow` and `DatabaseError` matches enumerate every variant with the
+  approved semantics: import missing required system (exit 2), missing
+  default branch (exit 2), missing source/delivery configuration (exit 4),
+  exposure domain required (exit 4), persisted invalid visibility and other
+  invalid persisted values (exit 1), non-loopback observed endpoint (exit 5),
+  and stores/persistence/lock infrastructure (exit 1). Unconverged
+  reconciliation state keeps its generic `Failure` class. Messages, source
+  chains, and the 1–5 class definitions are unchanged. Unit coverage gained
+  ten representative cases including every corrected mapping; binary
+  regressions prove exit 2 with the `system is required` diagnostic for a
+  manifest import without a system, exit 4 for public exposure without a
+  domain, and exit 5 for a non-loopback observed endpoint via a new
+  `PNEUMA_FAKE_PODMAN_PORT` hook; the persisted-invalid-visibility scenario
+  is unreachable at the binary level because the schema CHECK constraint
+  forbids it, so it is covered by unit classification. Focused tests (error
+  unit tests, the full `cli` target, control_exposure, application_import),
+  `cargo fmt --check`, Clippy with warnings denied, all-feature tests (3 OCI
+  tests remain ignored without rootless Podman), and the release build
+  passed. Checkpoint 8 is the next implementation checkpoint.

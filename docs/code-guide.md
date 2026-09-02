@@ -55,7 +55,16 @@ Every normal command follows the same skeleton before reaching its flow:
    path.
 5. Failures map to `CliError` variants in `error.rs`; `CliError::class()`
    assigns stable exit codes (1 failure, 2 usage, 3 not-found, 4 conflict,
-   5 external).
+   5 external). Representative examples: rejected command input (missing
+   deploy option, invalid artifact reference or system name, missing
+   default branch, a manifest import without a required system) exits 2;
+   absent applications, releases, runtimes, systems, and nested deployment
+   records exit 3; real application contention, active-deployment
+   conflicts, missing source or delivery configuration, and a required
+   public exposure domain exit 4; Git, OCI, Podman, systemd, Caddy, and
+   health-check failures — including non-loopback observed endpoints —
+   exit 5; stores, persistence, invalid persisted values, and lock
+   infrastructure failures exit 1.
 
 One coordination mechanism applies to every existing-Application mutation:
 `adapters/application_lock.rs::ApplicationLock::try_acquire_for_connection` is a
