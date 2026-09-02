@@ -119,7 +119,15 @@ authoritative target for observable corrections.
      directory, the target root moved mechanically from `tests/cli.rs` to
      `tests/cli/main.rs`; the target name `cli`, all 84 tests, and every
      assertion are unchanged.
-11. [ ] Reconciliation test module
+11. [x] Reconciliation test module
+    - Move all reconciliation scenarios into `tests/cli/reconciliation.rs`.
+    - Result: the seventeen reconcile scenarios (no-op, deferred, runtime
+      repair/rematerialization/health-failure/divergence, and public and
+      internal exposure reconciliation) moved verbatim into the new module
+      with only import adjustments; `PermissionsExt` and `ApplicationLock`
+      left `tests/cli/main.rs` with them since no residual test uses them.
+      No scenario, assertion, or helper was rewritten and nothing was
+      duplicated.
 12. [ ] Lifecycle test module
 13. [ ] Exposure test module
 14. [ ] Deployment test module
@@ -310,3 +318,22 @@ authoritative target for observable corrections.
   all-feature tests (3 OCI tests remain ignored without rootless Podman), and
   the release build passed. Checkpoint 11 is the next implementation
   checkpoint.
+- Checkpoint 11 (reconciliation test module): all seventeen reconcile
+  scenarios moved mechanically from `tests/cli/main.rs` to
+  `tests/cli/reconciliation.rs` (no-op for stopped intent, converged running,
+  deferred before external observation, confirmed container recreation
+  repair, quadlet rematerialization, divergent rematerialization refusal,
+  rematerialized health failure, lost runtime confirmation, canonical quadlet
+  restart, divergent recreated container, missing public Caddy fragment,
+  failed public exposure via external health and via Caddy rejection, lost
+  public confirmation, internal fragment removal, lost removal completion
+  CAS, and diverged exposure intent) without rewriting any scenario; the
+  module imports `fs`, `Ipv4Addr`/`TcpListener`, `PermissionsExt`, `thread`,
+  `ApplicationLock`, `database`, and support's `DeploymentEnvironment`,
+  `assert_command_succeeded`, and `respond_once` — the latter two imports and
+  `PermissionsExt`/`ApplicationLock` were pruned from `main.rs` because no
+  residual test uses them. Focused tests (`cargo test --test cli
+  reconciliation::`, 17 passed), the full `cli` target (84/84), `cargo fmt
+  --check`, Clippy with warnings denied, all-feature tests (3 OCI tests
+  remain ignored without rootless Podman), and the release build passed.
+  Checkpoint 12 is the next implementation checkpoint.
