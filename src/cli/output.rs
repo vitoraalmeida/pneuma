@@ -2,10 +2,13 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use pneuma::adapters::diagnostics::{CheckOutcome, DoctorCheck, DoctorReport};
-use pneuma::domain::application::{ApplicationName, ApplicationSummary};
-use pneuma::domain::deployment::{DeploymentHistory, DeploymentLifecycle};
+use pneuma::domain::application::{ApplicationName, ApplicationSummary, DesiredRuntimeState};
+use pneuma::domain::deployment::{
+    DeploymentHistory, DeploymentLifecycle, DeploymentStatus, DeploymentType,
+};
 use pneuma::domain::exposure::Visibility;
 use pneuma::domain::git::CommitSha;
+use pneuma::domain::runtime::ObservedRuntimeState;
 use pneuma::domain::system::System;
 use pneuma::use_cases::application::{ApplicationCatalogEntry, RuntimeObservation};
 use pneuma::use_cases::deployment::DeploymentResult;
@@ -14,6 +17,51 @@ use pneuma::use_cases::reconciliation::ReconciliationResult;
 use pneuma::use_cases::system::SystemDetails;
 
 // Renders command results as presentation strings so handlers stay orchestration-only.
+
+pub(crate) fn desired_runtime_state_label(state: DesiredRuntimeState) -> &'static str {
+    match state {
+        DesiredRuntimeState::Running => "Running",
+        DesiredRuntimeState::Stopped => "Stopped",
+    }
+}
+
+pub(crate) fn observed_runtime_state_label(state: &ObservedRuntimeState) -> String {
+    match state {
+        ObservedRuntimeState::Missing => "Missing".to_owned(),
+        ObservedRuntimeState::Created => "Created".to_owned(),
+        ObservedRuntimeState::Starting => "Starting".to_owned(),
+        ObservedRuntimeState::Running => "Running".to_owned(),
+        ObservedRuntimeState::Stopping => "Stopping".to_owned(),
+        ObservedRuntimeState::Stopped => "Stopped".to_owned(),
+        ObservedRuntimeState::Failed => "Failed".to_owned(),
+        ObservedRuntimeState::Unknown { status } => format!("Unknown {{ status: {status:?} }}"),
+    }
+}
+
+pub(crate) fn deployment_type_label(deployment_type: DeploymentType) -> &'static str {
+    match deployment_type {
+        DeploymentType::Deploy => "Deploy",
+        DeploymentType::Rollback => "Rollback",
+    }
+}
+
+pub(crate) fn deployment_status_label(status: DeploymentStatus) -> &'static str {
+    match status {
+        DeploymentStatus::Pending => "Pending",
+        DeploymentStatus::Starting => "Starting",
+        DeploymentStatus::Verifying => "Verifying",
+        DeploymentStatus::Activating => "Activating",
+        DeploymentStatus::Succeeded => "Succeeded",
+        DeploymentStatus::Failed => "Failed",
+    }
+}
+
+pub(crate) fn visibility_label(visibility: Visibility) -> &'static str {
+    match visibility {
+        Visibility::Public => "Public",
+        Visibility::Internal => "Internal",
+    }
+}
 
 pub(crate) fn imported_application(application: &ApplicationSummary) -> String {
     let mut output = format!("Imported {}\nStatus: Registered", application.name);
@@ -42,9 +90,9 @@ pub(crate) fn application_list(entries: &[ApplicationCatalogEntry]) -> String {
 
 pub(crate) fn runtime_status(observation: &RuntimeObservation) -> String {
     format!(
-        "Desired state: {:?}\nObserved state: {:?}\nRuntime: {}\nContainer: {}",
-        observation.desired_runtime_state,
-        observation.observed_runtime_state,
+        "Desired state: {}\nObserved state: {}\nRuntime: {}\nContainer: {}",
+        desired_runtime_state_label(observation.desired_runtime_state),
+        observed_runtime_state_label(&observation.observed_runtime_state),
         observation.runtime_id,
         observation.container_id
     )
@@ -82,8 +130,9 @@ pub(crate) fn application_started(
 
 pub(crate) fn lifecycle_outcome(observation: &RuntimeObservation) -> String {
     format!(
-        "Desired state: {:?}\nObserved state: {:?}",
-        observation.desired_runtime_state, observation.observed_runtime_state
+        "Desired state: {}\nObserved state: {}",
+        desired_runtime_state_label(observation.desired_runtime_state),
+        observed_runtime_state_label(&observation.observed_runtime_state)
     )
 }
 
@@ -120,12 +169,12 @@ pub(crate) fn deployment_history(
         };
         let _ = writeln!(
             output,
-            "{}\t{:?}\t{}\t{}\t{:?}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             deployment.deployment.id,
-            deployment.deployment.deployment_type,
+            deployment_type_label(deployment.deployment.deployment_type),
             deployment.release.artifact.digest(),
             source,
-            deployment.deployment.status(),
+            deployment_status_label(deployment.deployment.status()),
             deployment.deployment.started_at.as_deref().unwrap_or("-"),
             finished_at,
             if deployment.is_active { "yes" } else { "no" },
@@ -178,16 +227,16 @@ pub(crate) fn visibility_change(
     application_name: &pneuma::domain::application::ApplicationName,
     change: &ExposureChange,
 ) -> String {
-    match change.visibility {
-        Visibility::Public => {
-            let mut output = format!("Visibility for {application_name}: Public");
-            if let Some(domain) = &change.domain {
-                let _ = write!(output, "\nDomain: {domain}");
-            }
-            output
+    let mut output = format!(
+        "Visibility for {application_name}: {}",
+        visibility_label(change.visibility)
+    );
+    if change.visibility == Visibility::Public {
+        if let Some(domain) = &change.domain {
+            let _ = write!(output, "\nDomain: {domain}");
         }
-        Visibility::Internal => format!("Visibility for {application_name}: Internal"),
     }
+    output
 }
 
 pub(crate) fn reconciliation_result(
@@ -380,7 +429,10 @@ fn format_command_availability(name: &str, outcome: &CheckOutcome) -> String {
 mod tests {
     use super::*;
     use pneuma::domain::application::{ApplicationName, DesiredRuntimeState};
-    use pneuma::domain::identity::RuntimeInstanceId;
+    use pneuma::domain::deployment::{Deployment, DeploymentFailure, DeploymentFailureCode};
+    use pneuma::domain::git::CommitSha;
+    use pneuma::domain::identity::{ApplicationId, DeploymentId, ReleaseId, RuntimeInstanceId};
+    use pneuma::domain::release::{OciArtifact, Release};
     use pneuma::domain::runtime::{ContainerId, ObservedRuntimeState};
 
     fn observation(
@@ -398,6 +450,161 @@ mod tests {
 
     fn application_name() -> ApplicationName {
         ApplicationName::new("portal").unwrap()
+    }
+
+    #[test]
+    fn labels_every_desired_runtime_state() {
+        assert_eq!(
+            desired_runtime_state_label(DesiredRuntimeState::Running),
+            "Running"
+        );
+        assert_eq!(
+            desired_runtime_state_label(DesiredRuntimeState::Stopped),
+            "Stopped"
+        );
+    }
+
+    #[test]
+    fn labels_every_observed_runtime_state() {
+        assert_eq!(
+            observed_runtime_state_label(&ObservedRuntimeState::Missing),
+            "Missing"
+        );
+        assert_eq!(
+            observed_runtime_state_label(&ObservedRuntimeState::Created),
+            "Created"
+        );
+        assert_eq!(
+            observed_runtime_state_label(&ObservedRuntimeState::Starting),
+            "Starting"
+        );
+        assert_eq!(
+            observed_runtime_state_label(&ObservedRuntimeState::Running),
+            "Running"
+        );
+        assert_eq!(
+            observed_runtime_state_label(&ObservedRuntimeState::Stopping),
+            "Stopping"
+        );
+        assert_eq!(
+            observed_runtime_state_label(&ObservedRuntimeState::Stopped),
+            "Stopped"
+        );
+        assert_eq!(
+            observed_runtime_state_label(&ObservedRuntimeState::Failed),
+            "Failed"
+        );
+    }
+
+    #[test]
+    fn unknown_observed_states_keep_the_structured_debug_representation() {
+        assert_eq!(
+            observed_runtime_state_label(&ObservedRuntimeState::Unknown {
+                status: "weird".to_owned(),
+            }),
+            "Unknown { status: \"weird\" }"
+        );
+    }
+
+    #[test]
+    fn labels_every_deployment_type_and_status() {
+        assert_eq!(deployment_type_label(DeploymentType::Deploy), "Deploy");
+        assert_eq!(deployment_type_label(DeploymentType::Rollback), "Rollback");
+        assert_eq!(
+            deployment_status_label(DeploymentStatus::Pending),
+            "Pending"
+        );
+        assert_eq!(
+            deployment_status_label(DeploymentStatus::Starting),
+            "Starting"
+        );
+        assert_eq!(
+            deployment_status_label(DeploymentStatus::Verifying),
+            "Verifying"
+        );
+        assert_eq!(
+            deployment_status_label(DeploymentStatus::Activating),
+            "Activating"
+        );
+        assert_eq!(
+            deployment_status_label(DeploymentStatus::Succeeded),
+            "Succeeded"
+        );
+        assert_eq!(deployment_status_label(DeploymentStatus::Failed), "Failed");
+    }
+
+    #[test]
+    fn labels_every_visibility() {
+        assert_eq!(visibility_label(Visibility::Public), "Public");
+        assert_eq!(visibility_label(Visibility::Internal), "Internal");
+    }
+
+    #[test]
+    fn deployment_history_renders_explicit_type_and_status_labels() {
+        let id = |suffix: u8| DeploymentId::new(&format!("{}{suffix:x}", "a".repeat(31))).unwrap();
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let sha = CommitSha::new(&"b".repeat(40)).unwrap();
+        let succeeded = DeploymentHistory {
+            deployment: Deployment {
+                id: id(1),
+                application_id: ApplicationId::new(&"c".repeat(32)).unwrap(),
+                release_id: ReleaseId::new(&"d".repeat(32)).unwrap(),
+                deployment_type: DeploymentType::Deploy,
+                lifecycle: DeploymentLifecycle::Succeeded {
+                    finished_at: "2026-09-02T10:00:00Z".to_owned(),
+                },
+                source_revision: Some(sha.clone()),
+                requested_at: "2026-09-02T09:59:00Z".to_owned(),
+                started_at: Some("2026-09-02T09:59:30Z".to_owned()),
+            },
+            release: Release {
+                id: ReleaseId::new(&"d".repeat(32)).unwrap(),
+                application_id: ApplicationId::new(&"c".repeat(32)).unwrap(),
+                artifact: OciArtifact::new("registry.example/team/service", &digest).unwrap(),
+                created_at: "2026-09-02T09:00:00Z".to_owned(),
+            },
+            is_active: true,
+        };
+        let failed = DeploymentHistory {
+            deployment: Deployment {
+                id: id(2),
+                application_id: ApplicationId::new(&"c".repeat(32)).unwrap(),
+                release_id: ReleaseId::new(&"d".repeat(32)).unwrap(),
+                deployment_type: DeploymentType::Rollback,
+                lifecycle: DeploymentLifecycle::Failed {
+                    failure: DeploymentFailure {
+                        code: DeploymentFailureCode::RuntimeStart,
+                        stage: DeploymentStatus::Starting,
+                        message: "start rejected".to_owned(),
+                        finished_at: "2026-09-02T11:00:00Z".to_owned(),
+                    },
+                },
+                source_revision: None,
+                requested_at: "2026-09-02T09:59:00Z".to_owned(),
+                started_at: None,
+            },
+            release: succeeded.release.clone(),
+            is_active: false,
+        };
+
+        let rendered = deployment_history(&application_name(), &[succeeded, failed]);
+        let rows: Vec<&str> = rendered.lines().collect();
+        assert_eq!(rows[0], "Deployments for portal:");
+        assert_eq!(
+            rows[2],
+            format!(
+                "{}\tDeploy\t{digest}\t{}\tSucceeded\t2026-09-02T09:59:30Z\t2026-09-02T10:00:00Z\tyes\t-",
+                id(1),
+                sha.as_str()
+            )
+        );
+        assert_eq!(
+            rows[3],
+            format!(
+                "{}\tRollback\t{digest}\t-\tFailed\t-\t2026-09-02T11:00:00Z\tno\truntime_start_failed:starting:start rejected",
+                id(2)
+            )
+        );
     }
 
     #[test]

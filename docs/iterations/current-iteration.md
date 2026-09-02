@@ -33,8 +33,15 @@ authoritative target for observable corrections.
      when stderr rejects writes (read-only `/dev/null`), and a Linux PTY unit
      test proves the TTY path emits `Deploying`, multiple spinner frames, and
      the clear-line control bytes; stable and verbose text remain unchanged.
-3. [ ] Explicit presentation vocabulary
+3. [x] Explicit presentation vocabulary
    - Remove stable CLI dependence on domain enum `Debug` formatting.
+   - Result: `output.rs` now owns exhaustive label functions for desired
+     runtime state, observed runtime state (keeping the
+     `Unknown { status: "..." }` representation), deployment type, deployment
+     status, and visibility; history rows, progress state changes, status and
+     lifecycle text, and verbose visibility logs reuse them. No `{:?}`
+     formatting remains in the CLI, and stable text is byte-for-byte
+     unchanged.
 4. [ ] Total doctor rendering
    - Preserve captured doctor diagnostics and render every publicly
      constructible outcome without panic.
@@ -111,3 +118,18 @@ authoritative target for observable corrections.
   `cargo fmt --check`, Clippy with warnings denied, all-feature tests, and
   the release build passed. Checkpoint 3 is the next implementation
   checkpoint.
+- Checkpoint 3 (explicit presentation vocabulary): `cli::output` gained
+  `desired_runtime_state_label`, `observed_runtime_state_label` (preserving
+  the exact `Unknown { status: "..." }` form), `deployment_type_label`,
+  `deployment_status_label`, and `visibility_label`. `runtime_status`,
+  `lifecycle_outcome`, and `deployment_history` rows render those labels
+  instead of `Debug`; progress state changes reuse
+  `deployment_status_label`; the verbose visibility log reuses
+  `visibility_label`; `visibility_change` keeps its exact prior bytes.
+  Unit tests cover every variant label, the unknown representation, and
+  exact history rows; `grep '{:?}' src/cli` finds no remaining domain-enum
+  `Debug` formatting. Focused tests (output and progress unit tests,
+  `reports_desired_and_observed_state_after_deployment`,
+  `lists_deployments_for_a_deployed_application`) passed, then `cargo fmt
+  --check`, Clippy with warnings denied, all-feature tests, and the release
+  build passed. Checkpoint 4 is the next implementation checkpoint.

@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use pneuma::use_cases::deployment::{DeploymentEvent, DeploymentStep, RetirementWarning};
 
+use super::output::deployment_status_label;
 use super::shared::{log_verbose, write_stderr_line};
 
 // Renders deployment events without making control execution depend on terminal behavior.
@@ -194,7 +195,10 @@ fn render_deployment_event(event: &DeploymentEvent) -> String {
         DeploymentEvent::StateChanged {
             deployment_id,
             status,
-        } => format!("deployment {deployment_id}: state changed to {status:?}"),
+        } => format!(
+            "deployment {deployment_id}: state changed to {}",
+            deployment_status_label(*status)
+        ),
         DeploymentEvent::FailurePersisted {
             deployment_id,
             code,
@@ -254,6 +258,20 @@ mod tests {
                 step: DeploymentStep::PullImage,
             }),
             "pull image: started"
+        );
+    }
+
+    #[test]
+    fn state_changes_render_the_shared_deployment_status_label() {
+        assert_eq!(
+            render_deployment_event(&DeploymentEvent::StateChanged {
+                deployment_id: pneuma::domain::identity::DeploymentId::new(
+                    "0f8d3a2c41b64d7e9a0c5b6e1f2d3a4b"
+                )
+                .unwrap(),
+                status: pneuma::domain::deployment::DeploymentStatus::Activating,
+            }),
+            "deployment 0f8d3a2c41b64d7e9a0c5b6e1f2d3a4b: state changed to Activating"
         );
     }
 

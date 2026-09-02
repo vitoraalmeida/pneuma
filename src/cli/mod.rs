@@ -243,7 +243,10 @@ fn log_command_start(command: &Command, verbose: bool) {
             );
             log_verbose(
                 verbose,
-                format!("set visibility of application {application_name} to {visibility:?}"),
+                format!(
+                    "set visibility of application {application_name} to {}",
+                    output::visibility_label(*visibility)
+                ),
             );
         }
         Command::Reconcile { application_name } => {
