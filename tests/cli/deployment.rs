@@ -395,7 +395,11 @@ fn restores_the_previous_public_route_when_external_health_fails() {
         .unwrap();
 
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("external_health_check_failed"));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("external_health_check_failed"),
+        "expected an external health-check failure\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert_eq!(fs::read_to_string(fragment_path).unwrap(), first_fragment);
     let connection = database::open(&environment.database_path).unwrap();
     let exposure: (String, String, String) = connection

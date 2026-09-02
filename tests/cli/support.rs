@@ -486,7 +486,12 @@ fn git(repository_path: &Path, arguments: &[&str]) -> String {
 
 pub(super) fn respond_once(listener: &TcpListener, status: u16) {
     listener.set_nonblocking(true).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(2);
+    // The deadline must outlast the CLI's full internal health-check retry budget
+    // (five 2-second attempts separated by 500 milliseconds), including the deploy
+    // work that precedes the first attempt; a shorter deadline closes the listener
+    // before the CLI connects and turns a slow pre-check phase into a spurious
+    // connection-refused failure.
+    let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         match listener.accept() {
             Ok((mut stream, _)) => {
