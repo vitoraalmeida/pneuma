@@ -157,7 +157,25 @@ authoritative target for observable corrections.
       residual test uses; `Output` left `main.rs` with them since nothing
       residual needs it. No scenario, assertion, or helper was rewritten and
       nothing was duplicated.
-14. [ ] Deployment test module
+14. [x] Deployment test module
+    - Move image, branch, CI, progress, OCI, Quadlet, promotion, contention,
+      rollback, and deployment-history scenarios into
+      `tests/cli/deployment.rs`.
+    - Result: the twenty-four deployment scenarios (internal image deploy
+      identity, non-TTY stderr rejection tolerance, verbose lifecycle steps,
+      CI branch dispatch, boot-enabled Quadlet unit, verified OCI release
+      persistence, mutable-tag and repository-allowlist rejections, pull/digest
+      failure atomicity, public route activation, external-health fragment
+      restoration, three deployment-history listings, missing deploy source,
+      branch/image exclusivity, operation contention, unopenable application
+      lock, and the systemd/internal-health/Caddy/external-health external
+      failure quartet) moved verbatim into the new module together with the
+      rollback usage-error scenario; `io::Write`, `Stdio`, `Duration`,
+      `assert_identifier_line`, `wait_for_child`, and `wait_for_file` left
+      `main.rs` with them since no residual test uses them. Import, database,
+      doctor, system, exit-code class, and cross-cutting scenarios remain
+      residual for the catalog and database modules. No scenario, assertion,
+      or helper was rewritten and nothing was duplicated.
 15. [ ] Catalog and database modules
 16. [ ] Operational regression and closure
 
@@ -399,3 +417,26 @@ authoritative target for observable corrections.
   (84/84), `cargo fmt --check`, Clippy with warnings denied, all-feature tests
   (3 OCI tests remain ignored without rootless Podman), and the release build
   passed. Checkpoint 14 is the next implementation checkpoint.
+- Checkpoint 14 (deployment test module): all twenty-four deployment scenarios
+  moved mechanically from `tests/cli/main.rs` to `tests/cli/deployment.rs` —
+  the internal image deploy with identity output, deployment continuing when
+  non-TTY stderr rejects progress writes, verbose lifecycle steps on stderr,
+  CI branch dispatch, boot-enabled Quadlet unit, verified OCI image deploy
+  with release persistence, mutable-tag and repository-allowlist rejections,
+  pull/digest failure atomicity, public application route activation,
+  external-health fragment restoration, deployment history for a deployed
+  application, empty history, missing application, OCI source dashes, missing
+  deploy source, branch/image exclusivity, second-deploy contention,
+  unopenable application lock, and the systemd-start, internal-health,
+  Caddy-rejection, and external-health exit-5 failures — together with the
+  rollback-without-previous-deployment scenario; `io::Write`, `Stdio`,
+  `Duration`, `assert_identifier_line`, `wait_for_child`, and `wait_for_file`
+  were pruned from `main.rs` because no residual test uses them. Import,
+  database, doctor, system, exit-code class, and cross-cutting scenarios
+  remain residual for the catalog and database modules. No scenario,
+  assertion, or helper was rewritten and nothing was duplicated. Focused
+  tests (`cargo test --test cli deployment::`, 24 passed), the full `cli`
+  target (84/84), `cargo fmt --check`, Clippy with warnings denied,
+  all-feature tests (3 OCI tests remain ignored without rootless Podman), and
+  the release build passed. Checkpoint 15 is the next implementation
+  checkpoint.
