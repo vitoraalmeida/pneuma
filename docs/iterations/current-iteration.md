@@ -128,7 +128,21 @@ authoritative target for observable corrections.
       left `tests/cli/main.rs` with them since no residual test uses them.
       No scenario, assertion, or helper was rewritten and nothing was
       duplicated.
-12. [ ] Lifecycle test module
+12. [x] Lifecycle test module
+    - Move status/start/stop and removed-container scenarios into
+      `tests/cli/lifecycle.rs`; move `current_runtime_states` with them.
+    - Result: the thirteen status/start/stop and removed-container scenarios
+      (desired/observed status report, idempotent stop/start persistence,
+      non-deployed and unknown application failures, runtime from a
+      non-succeeded deployment ignored, failed start desired-state retention,
+      removed-container deployment guidance, stop/start cycle after quadlet
+      removal, missing-after-stop preservation, OCI start after container
+      removal, no reconciliation of a recreated stable-name container, no
+      external id CAS attempts, and endpoint/timestamp preservation) moved
+      verbatim into the new module with the `current_runtime_states` helper,
+      which only those tests used; `rusqlite::OptionalExtension` left
+      `main.rs` with them since no residual test uses it. No scenario,
+      assertion, or helper was rewritten and nothing was duplicated.
 13. [ ] Exposure test module
 14. [ ] Deployment test module
 15. [ ] Catalog and database modules
@@ -337,3 +351,21 @@ authoritative target for observable corrections.
   --check`, Clippy with warnings denied, all-feature tests (3 OCI tests
   remain ignored without rootless Podman), and the release build passed.
   Checkpoint 12 is the next implementation checkpoint.
+- Checkpoint 12 (lifecycle test module): all thirteen status/start/stop and
+  removed-container scenarios moved mechanically from `tests/cli/main.rs` to
+  `tests/cli/lifecycle.rs` — desired/observed status reporting, idempotent
+  stop/start persistence, lifecycle failures for non-deployed and unknown
+  applications, ignoring a runtime from a non-succeeded deployment, failed
+  start desired-state retention, removed-container deployment guidance, the
+  stop/start cycle after quadlet container removal, missing-after-stop
+  preservation, starting a verified OCI image after container removal, no
+  reconciliation of a container recreated under the stable name, no external
+  id CAS attempts, and expected-endpoint/timestamp preservation — together
+  with the `current_runtime_states` helper, which only those tests used;
+  `rusqlite::OptionalExtension` was pruned from `main.rs` because no residual
+  test uses it. No scenario, assertion, or helper was rewritten and nothing
+  was duplicated. Focused tests (`cargo test --test cli lifecycle::`, 13
+  passed), the full `cli` target (84/84), `cargo fmt --check`, Clippy with
+  warnings denied, all-feature tests (3 OCI tests remain ignored without
+  rootless Podman), and the release build passed. Checkpoint 13 is the next
+  implementation checkpoint.
