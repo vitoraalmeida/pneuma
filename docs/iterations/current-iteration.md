@@ -95,8 +95,16 @@ authoritative target for observable corrections.
      bogus Quadlet directory. Startup failures exit 1 with empty stdout and
      one contextual `error:` line before argument parsing, creating no
      database and running no external command.
-9. [ ] Invocation boundary coverage
+9. [x] Invocation boundary coverage
    - Cover adapter-only commands in a dedicated test target.
+   - Result: `tests/cli_invocation.rs` owns the adapter-only invocation
+     regressions — the unknown-command usage error moved here from the CLI
+     deployment target, exact-output `pneuma version` and CI-dispatched
+     `version` tests prove both paths print `pneuma <release>` with empty
+     stderr, the missing `SSH_ORIGINAL_COMMAND` dispatch fails with exit 2 and
+     the exact `error: SSH_ORIGINAL_COMMAND not set` line, and every
+     version/dispatch scenario asserts the configured database path is never
+     created.
 10. [ ] Shared CLI test support
    - Extract the deployment harness into `tests/cli/support.rs`.
 11. [ ] Reconciliation test module
@@ -262,3 +270,14 @@ authoritative target for observable corrections.
   Clippy with warnings denied, all-feature tests (3 OCI tests remain ignored
   without rootless Podman), and the release build passed. Checkpoint 9 is the
   next implementation checkpoint.
+- Checkpoint 9 (invocation boundary coverage): the new `cli_invocation` test
+  target owns the adapter-only invocation paths. The unknown-command usage
+  regression moved there unchanged, the direct and CI-dispatched version tests
+  assert the exact `pneuma <CARGO_PKG_VERSION>` stdout with empty stderr and
+  that the configured database path is never created, and the missing
+  `SSH_ORIGINAL_COMMAND` regression asserts exit 2 with exactly
+  `error: SSH_ORIGINAL_COMMAND not set` on stderr, an empty stdout, and no
+  database creation. Focused tests (`cargo test --test cli_invocation`, 4
+  passed), `cargo fmt --check`, Clippy with warnings denied, all-feature tests
+  (3 OCI tests remain ignored without rootless Podman), and the release build
+  passed. Checkpoint 10 is the next implementation checkpoint.

@@ -346,19 +346,6 @@ fn doctor_returns_failure_when_a_check_fails() {
 }
 
 #[test]
-fn reports_usage_for_an_unknown_command() {
-    let output = Command::new(env!("CARGO_BIN_EXE_pneuma"))
-        .args(["unknown"])
-        .output()
-        .unwrap();
-
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("unrecognized subcommand"));
-    assert!(stderr.contains("Usage"));
-}
-
-#[test]
 fn doctor_reports_captured_diagnostics_for_a_failed_command() {
     let database_path = temporary_database_path();
     let fake_bin = temporary_workspace_path().join("bin");
