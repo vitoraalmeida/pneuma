@@ -146,7 +146,7 @@ are rejected before any host change:
 bash bootstrap-vps.sh \
   git@github.com:USER/pneuma.git \
   --ci-public-key ~/.ssh/pneuma-ci.pub \
-  --ref v0.5.0
+  --ref v0.5.4
 ```
 
 Each run (including reruns) resolves `--ref`, performs a **forced** detached
@@ -163,10 +163,10 @@ Without `--ref`, the script compiles the repository's default branch, as before.
 For a routine version update, do not rerun bootstrap. Bootstrap converges the
 entire host (packages, account, Caddy, and environment); a binary-only update
 leaves those host settings unchanged. Run the updater as `root` on the VPS,
-replacing `v0.5.0` with the target immutable tag:
+replacing `v0.5.4` with the target immutable tag:
 
 ```bash
-bash /home/pneuma/pneuma/scripts/update-pneuma.sh --ref v0.5.0
+bash /home/pneuma/pneuma/scripts/update-pneuma.sh --ref v0.5.4
 ```
 
 For the first update from a release that predates this script, copy the updater
@@ -174,7 +174,7 @@ from the development machine and run the copied file as `root`:
 
 ```bash
 scp scripts/update-pneuma.sh root@<host>:/tmp/update-pneuma.sh
-ssh root@<host> 'bash /tmp/update-pneuma.sh --ref v0.5.0'
+ssh root@<host> 'bash /tmp/update-pneuma.sh --ref v0.5.4'
 ```
 
 The updater requires a tag or full commit SHA, rejects branches and abbreviated

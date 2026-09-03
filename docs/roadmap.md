@@ -201,7 +201,7 @@ changing the released CLI or operational contract.
 
 ### v0.5.4 - CLI Operational Robustness
 
-**Status:** in progress. Approved design:
+**Status:** delivered (2026-09-03). Approved design:
 [`designs/cli-operational-robustness.md`](designs/cli-operational-robustness.md).
 
 This maintenance iteration corrects all CLI robustness, error-classification,
@@ -209,12 +209,12 @@ presentation, bootstrap, and test-organization issues found in the post-v0.5.3
 review. Approved observable corrections are enumerated in the design's
 behavior-change table.
 
-- [ ] Make progress output best effort and presentation labels explicit.
-- [ ] Preserve doctor diagnostics and total rendering.
-- [ ] Complete the semantic error-classification audit (locks, nested
+- [x] Make progress output best effort and presentation labels explicit.
+- [x] Preserve doctor diagnostics and total rendering.
+- [x] Complete the semantic error-classification audit (locks, nested
   deployments, remaining scenarios).
-- [ ] Validate the host environment contract before startup.
-- [ ] Reorganize CLI integration tests into capability modules.
+- [x] Validate the host environment contract before startup.
+- [x] Reorganize CLI integration tests into capability modules.
 
 ## v0.6 - Observed State / Host Observation
 

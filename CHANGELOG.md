@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.5.4 - CLI Operational Robustness (2026-09-03)
+
+### Changed
+
+- **Progress output is best effort.** A failed stderr write can no longer
+  unwind through deployment execution: `log_verbose` and the stable progress
+  line use best-effort writes, and the animated TTY renderer writes through a
+  sink that ignores errors, so presentation failures cannot abort a
+  deployment.
+- **Explicit presentation vocabulary.** The CLI no longer renders domain
+  enums with `Debug` formatting; exhaustive label functions in `cli::output`
+  own the text for desired and observed runtime states, deployment type and
+  status, and visibility, keeping stable output byte-for-byte identical.
+- **Total doctor rendering.** Every publicly constructible doctor outcome
+  renders without panicking; failed checks render `command failed (<detail>)`
+  while preserving captured diagnostics and the generic line when no detail
+  exists.
+- **Lock failure classification.** Lock infrastructure failures classify as
+  `Failure` (exit 1) while real contention stays `Conflict` (exit 4) across
+  deploy, branch deploy, rollback, lifecycle, visibility, and reconciliation
+  reads.
+- **Semantic deployment classification.** Nested OCI, branch, and rollback
+  errors classify through typed causes; every `DeploymentFailureCode` maps to
+  `External` (exit 5) or generic `Failure` (exit 1) with no string matching
+  or downcasting, and the remaining wildcard matches in `cli::error` were
+  replaced with exhaustive typed matches.
+- **Strict host environment contract.** Startup reads and validates
+  `/etc/pneuma/environment` — duplicates, invalid variable names, NUL bytes,
+  and malformed lines fail with line numbers — always derives uid-scoped
+  `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`, and requires a nonempty
+  `HOME` or `PNEUMA_QUADLET_DIR`; a missing environment file boots normally.
+
+### Testing
+
+- The monolithic CLI integration suite moved into capability modules
+  (`tests/cli/{main,catalog,database,deployment,exposure,lifecycle,reconciliation}.rs`)
+  with shared support in `tests/cli/support.rs`; all 84 tests and assertions
+  are unchanged, and adapter-only invocation paths gained dedicated coverage.
+
 ## v0.5.0 - Architecture Simplification (2026-08-31)
 
 ### Changed
