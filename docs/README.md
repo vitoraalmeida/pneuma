@@ -9,7 +9,7 @@ Each category answers a different question.
 | Current system truth | How does Pneuma work today? | [`architecture/`](architecture/), [`getting-started.md`](getting-started.md), [`operations/`](operations/) |
 | Architectural rationale | Why was this choice made? | [`decisions/`](decisions/) |
 | Approved design | What approved design fixed recent architecture scope? | [`designs/cli-operational-robustness.md`](designs/cli-operational-robustness.md) (active); [`designs/cli-adapter-integrity.md`](designs/cli-adapter-integrity.md) (implementation complete); [`designs/cli-adapter-consolidation.md`](designs/cli-adapter-consolidation.md) (implementation complete); [`designs/interface-neutral-execution.md`](designs/interface-neutral-execution.md) (implementation complete); [`designs/greenfield-architecture-simplification.md`](designs/greenfield-architecture-simplification.md) (concluded) |
-| Active planning | What is being implemented now? | [`iterations/current-iteration.md`](iterations/current-iteration.md) tracks v0.5.4 CLI operational robustness; [`iterations/next-iteration.md`](iterations/next-iteration.md) queues v0.6 planning |
+| Active planning | What is being implemented now? | [`iterations/current-iteration.md`](iterations/current-iteration.md) tracks the VM E2E post-reboot readiness maintenance checkpoint; [`iterations/next-iteration.md`](iterations/next-iteration.md) queues v0.6 planning |
 | Product evolution | Where is Pneuma going? | [`roadmap.md`](roadmap.md) |
 | Released history | What changed in releases? | [`../CHANGELOG.md`](../CHANGELOG.md) |
 
@@ -95,6 +95,6 @@ product direction (`roadmap.md`).
 | [`designs/cli-adapter-consolidation.md`](designs/cli-adapter-consolidation.md) | Approved design (implementation complete) | CLI adapter consolidation scope, fixed decisions, and checkpoint order |
 | [`designs/interface-neutral-execution.md`](designs/interface-neutral-execution.md) | Approved design (implementation complete) | Interface-neutral execution scope, fixed decisions, and checkpoint order |
 | [`designs/greenfield-architecture-simplification.md`](designs/greenfield-architecture-simplification.md) | Concluded design (implemented in v0.5.0) | Greenfield architecture reset scope, fixed decisions, and checkpoint order |
-| [`iterations/current-iteration.md`](iterations/current-iteration.md) | Active tracker | CLI operational robustness tracker (v0.5.4) |
-| [`iterations/next-iteration.md`](iterations/next-iteration.md) | Queued planning | v0.6 observed state planning reminder, queued behind v0.5.4 |
+| [`iterations/current-iteration.md`](iterations/current-iteration.md) | Active tracker | VM E2E post-reboot readiness maintenance tracker |
+| [`iterations/next-iteration.md`](iterations/next-iteration.md) | Queued planning | v0.6 observed state planning reminder, queued behind the maintenance checkpoint |
 | [`roadmap.md`](roadmap.md) | Living | v0.1 → v1.0 evolution and direction |
