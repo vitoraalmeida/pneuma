@@ -15,8 +15,7 @@ use pneuma::adapters::database;
 use pneuma::domain::deployment::DeploymentStatus;
 use pneuma::use_cases::application::import_application;
 use pneuma::use_cases::deployment::{
-    DeployBranchError, DeploymentProgress, DeploymentStep, deploy_branch,
-    deploy_branch_with_progress,
+    DeployBranchError, DeploymentEvent, DeploymentStep, deploy_branch, deploy_branch_with_events,
 };
 
 #[test]
@@ -141,7 +140,7 @@ fn fails_for_a_missing_branch() {
 }
 
 #[test]
-fn deploys_a_branch_with_the_same_semantic_progress_order_and_result() {
+fn deploys_a_branch_with_the_same_semantic_event_order_and_result() {
     let mut connection = database::open(Path::new(":memory:")).unwrap();
     let repository = GitRepository::new();
     let staging_commit = repository.commit_on_new_branch("staging", "staging contents");
@@ -159,10 +158,10 @@ fn deploys_a_branch_with_the_same_semantic_progress_order_and_result() {
     let server = thread::spawn(move || respond_once(&listener));
     let events = Rc::new(RefCell::new(Vec::new()));
     let sink = Rc::clone(&events);
-    let mut report = move |event: DeploymentProgress| sink.borrow_mut().push(event);
+    let mut report = move |event: DeploymentEvent| sink.borrow_mut().push(event);
 
     let deployed = environment.run(|| {
-        deploy_branch_with_progress(
+        deploy_branch_with_events(
             &mut connection,
             &application.id,
             Some("staging"),
@@ -209,9 +208,9 @@ fn fails_identically_while_reporting_nothing_when_the_branch_is_missing() {
     .unwrap();
     let events = Rc::new(RefCell::new(Vec::new()));
     let sink = Rc::clone(&events);
-    let mut report = move |event: DeploymentProgress| sink.borrow_mut().push(event);
+    let mut report = move |event: DeploymentEvent| sink.borrow_mut().push(event);
 
-    let error = deploy_branch_with_progress(
+    let error = deploy_branch_with_events(
         &mut connection,
         &application.id,
         Some("missing"),
@@ -220,14 +219,19 @@ fn fails_identically_while_reporting_nothing_when_the_branch_is_missing() {
     )
     .unwrap_err();
 
-    // Source resolution stays ahead of every external effect and of any progress event.
+    // Source resolution is the first observable operation and fails before later effects.
     assert!(matches!(
         error,
         DeployBranchError::ResolveBranch {
             source: pneuma::adapters::git_source::ResolveBranchError::BranchNotFound { .. }
         }
     ));
-    assert!(events.borrow().is_empty());
+    assert!(matches!(
+        events.borrow().as_slice(),
+        [DeploymentEvent::StepStarted {
+            step: DeploymentStep::ResolveBranch
+        }]
+    ));
 }
 
 #[test]
@@ -454,7 +458,7 @@ fn fixture_path(name: &str) -> PathBuf {
         .join(name)
 }
 
-// Semantic progress shape: step boundaries and persisted state transitions without detail text.
+// Semantic event shape: operation boundaries and persisted state transitions.
 #[derive(Debug, PartialEq, Eq)]
 enum EventShape {
     Started(DeploymentStep),
@@ -463,32 +467,55 @@ enum EventShape {
     FailurePersisted,
 }
 
-fn event_shape(event: &DeploymentProgress) -> EventShape {
+fn event_shape(event: &DeploymentEvent) -> EventShape {
     match event {
-        DeploymentProgress::StepStarted { step, .. } => EventShape::Started(*step),
-        DeploymentProgress::StepCompleted { step, .. } => EventShape::Completed(*step),
-        DeploymentProgress::StateChanged { status, .. } => EventShape::StateChanged(*status),
-        DeploymentProgress::FailurePersisted { .. } => EventShape::FailurePersisted,
+        DeploymentEvent::DeploymentRequested { .. } => {
+            panic!("use-case deployment events do not include control request events")
+        }
+        DeploymentEvent::StepStarted { step } => EventShape::Started(*step),
+        DeploymentEvent::StepCompleted { step } => EventShape::Completed(*step),
+        DeploymentEvent::StateChanged { status, .. } => EventShape::StateChanged(*status),
+        DeploymentEvent::FailurePersisted { .. } => EventShape::FailurePersisted,
+        DeploymentEvent::RetirementWarning { .. } => {
+            panic!("a first deployment has no retirement warning")
+        }
     }
 }
 
-// The milestone order every internal deployment reports, regardless of reporting being enabled.
+// The operation order every branch deployment reports, including source resolution.
 fn internal_deployment_progress_sequence() -> Vec<EventShape> {
     vec![
+        EventShape::Started(DeploymentStep::ResolveBranch),
+        EventShape::Completed(DeploymentStep::ResolveBranch),
+        EventShape::Started(DeploymentStep::ResolveImageDigest),
+        EventShape::Completed(DeploymentStep::ResolveImageDigest),
+        EventShape::Started(DeploymentStep::PullImage),
+        EventShape::Completed(DeploymentStep::PullImage),
         EventShape::Started(DeploymentStep::LoadSpecification),
         EventShape::Completed(DeploymentStep::LoadSpecification),
         EventShape::Started(DeploymentStep::CreateDeployment),
         EventShape::Completed(DeploymentStep::CreateDeployment),
         EventShape::StateChanged(DeploymentStatus::Pending),
         EventShape::StateChanged(DeploymentStatus::Starting),
-        EventShape::Started(DeploymentStep::CreateContainer),
-        EventShape::Completed(DeploymentStep::CreateContainer),
+        EventShape::Started(DeploymentStep::ReservePort),
+        EventShape::Completed(DeploymentStep::ReservePort),
+        EventShape::Started(DeploymentStep::CreateUnit),
+        EventShape::Completed(DeploymentStep::CreateUnit),
+        EventShape::Started(DeploymentStep::ReloadSystemd),
+        EventShape::Completed(DeploymentStep::ReloadSystemd),
+        EventShape::Started(DeploymentStep::StartContainer),
         EventShape::Completed(DeploymentStep::StartContainer),
+        EventShape::Started(DeploymentStep::ResolveContainer),
+        EventShape::Completed(DeploymentStep::ResolveContainer),
+        EventShape::Started(DeploymentStep::ObserveContainer),
         EventShape::Completed(DeploymentStep::ObserveContainer),
+        EventShape::Started(DeploymentStep::RegisterCandidate),
         EventShape::Completed(DeploymentStep::RegisterCandidate),
         EventShape::StateChanged(DeploymentStatus::Verifying),
-        EventShape::Started(DeploymentStep::HealthCheckAndPromotion),
-        EventShape::Completed(DeploymentStep::HealthCheckAndPromotion),
+        EventShape::Started(DeploymentStep::InternalHealthCheck),
+        EventShape::Completed(DeploymentStep::InternalHealthCheck),
+        EventShape::Started(DeploymentStep::PromoteCandidate),
+        EventShape::Completed(DeploymentStep::PromoteCandidate),
         EventShape::StateChanged(DeploymentStatus::Succeeded),
     ]
 }

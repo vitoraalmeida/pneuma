@@ -144,6 +144,21 @@ impl Drop for DatabaseLock {
 
 // Creates a SQLite-consistent backup without overwriting an existing operator-selected destination.
 pub fn backup(path: &Path, destination: &Path) -> Result<(), DatabaseError> {
+    let connection =
+        Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|source| {
+            DatabaseError::Open {
+                path: path.to_path_buf(),
+                source,
+            }
+        })?;
+    backup_from_connection(&connection, destination)
+}
+
+// Copies an already-open database connection without opening a second connection.
+pub fn backup_from_connection(
+    connection: &Connection,
+    destination: &Path,
+) -> Result<(), DatabaseError> {
     if destination.exists() {
         return Err(DatabaseError::BackupDestinationExists {
             path: destination.to_path_buf(),
@@ -155,13 +170,6 @@ pub fn backup(path: &Path, destination: &Path) -> Result<(), DatabaseError> {
             source,
         })?;
     }
-    let connection =
-        Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|source| {
-            DatabaseError::Open {
-                path: path.to_path_buf(),
-                source,
-            }
-        })?;
     connection
         .backup(DatabaseName::Main, destination, None)
         .map_err(|source| DatabaseError::Backup { source })

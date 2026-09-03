@@ -1,12 +1,12 @@
 # Pneuma Code Guide
 
-**Status:** living document - describes the code layout as implemented in v0.5.0.
+**Status:** living document - describes the current code layout.
 
 This guide is for a new contributor who needs to follow one user-facing flow
 end to end without global searching. It maps each flow through the layers:
 
 ```text
-CLI entry → use case → domain rules → stores → external adapters → tests
+CLI entry → control boundary → use case → domain rules → stores → external adapters → tests
 ```
 
 Deeper reference material lives in [`architecture/architecture.md`](architecture/architecture.md)
@@ -18,8 +18,10 @@ Deeper reference material lives in [`architecture/architecture.md`](architecture
 
 ```text
 src/main.rs                  process bootstrap and composition root only
+src/host_environment.rs      host environment file validation, application, and uid-scoped runtime derivation
 src/config.rs                documented PNEUMA_* path variables, path resolution, verbose logging
-src/cli/                     argument tree, dispatch, handlers, output, error classes
+src/cli/                     argument tree, dispatch, output, progress, error classes
+src/control/                 interface-neutral execution boundary (`ControlExecutor`, typed commands/results/errors)
 src/use_cases/<capability>/  workflow ordering and external-effect orchestration
 src/domain/                  value objects, entities, transitions, pure policy
 src/adapters/stores/         SQLite encoding, CAS primitives, transactions
@@ -35,20 +37,41 @@ filesystem work, and internal TCP health checks.
 
 Every normal command follows the same skeleton before reaching its flow:
 
-1. `src/main.rs` loads host configuration from `/etc/pneuma/environment`
-   (never overriding caller-supplied variables), derives the uid-scoped runtime
-   environment (`XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`, default
-   `PNEUMA_QUADLET_DIR`), then calls `cli::run(cli::parse_invocation())`.
-2. `src/cli/args.rs` owns the Clap tree and translates it into the normalized
-   `Command` enum.
-3. `src/cli/mod.rs::run` opens the SQLite connection (except version, doctor,
-   backup/restore, and CI dispatch) and dispatches to one capability handler.
-4. Handlers in `src/cli/{system,application,deployment,exposure,reconciliation}.rs`
-   validate CLI input, resolve names through `shared::resolve_application`,
-   call exactly one use-case entry point, and render with `output.rs`.
+1. `src/main.rs` calls `src/host_environment.rs::configure_startup_environment`,
+   which reads the host environment file (path from `PNEUMA_HOST_ENVIRONMENT_FILE`,
+   default `/etc/pneuma/environment`), fails startup with one contextual
+   `error:` line and exit 1 before argument parsing when the file is unreadable,
+   not valid UTF-8, or contains a malformed entry, an invalid variable name, a
+   NUL byte, or a duplicate variable, applies its entries (never overriding
+   caller-supplied variables), derives the uid-scoped runtime environment
+   (`XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`, default `PNEUMA_QUADLET_DIR`),
+   and requires a nonempty `HOME` or `PNEUMA_QUADLET_DIR`. It then composes
+   `cli::parse_invocation()` with
+   `cli::run` through `and_then`, so a normalization failure never reaches
+   dispatch.
+2. `src/cli/args.rs` owns the Clap tree and translates it fallibly into the
+   normalized `Command` enum; an `app deploy` request without `--image` or
+   `--branch` fails there as `CliError::MissingDeployOption`.
+3. `src/cli/mod.rs::run` maps every stateful command to `src/control/`.
+   `ControlExecutor` captures host configuration, acquires the shared
+   database-wide lock, opens one connection, executes one typed command, and
+   closes the connection. `version` alone bypasses the executor.
+4. `src/cli/mod.rs::execute_control_command` renders every typed result with
+   `output.rs` and maps `ControlError` to `CliError`. Deployment commands pass
+   semantic events to the CLI-only progress renderer through the same execution
+   path.
 5. Failures map to `CliError` variants in `error.rs`; `CliError::class()`
    assigns stable exit codes (1 failure, 2 usage, 3 not-found, 4 conflict,
-   5 external).
+   5 external). Representative examples: rejected command input (missing
+   deploy option, invalid artifact reference or system name, missing
+   default branch, a manifest import without a required system) exits 2;
+   absent applications, releases, runtimes, systems, and nested deployment
+   records exit 3; real application contention, active-deployment
+   conflicts, missing source or delivery configuration, and a required
+   public exposure domain exit 4; Git, OCI, Podman, systemd, Caddy, and
+   health-check failures — including non-loopback observed endpoints —
+   exit 5; stores, persistence, invalid persisted values, and lock
+   infrastructure failures exit 1.
 
 One coordination mechanism applies to every existing-Application mutation:
 `adapters/application_lock.rs::ApplicationLock::try_acquire_for_connection` is a
@@ -65,18 +88,20 @@ holds it exclusively, and `version` stays lock-free.
 
 | Layer | Where |
 |---|---|
-| CLI entry | `cli/system.rs` (`run_system_create`, `run_system_list`, `run_system_show`) |
+| CLI entry | `cli/args.rs` maps input to `Command`; `cli/mod.rs::execute_control_command` executes and renders it |
+| Control boundary | `control/mod.rs::ControlExecutor` — acquires the shared database-wide lock, opens one connection per command, maps `Command` to `CommandResult`/`ControlError` |
 | Use cases | `use_cases/system/create.rs`, `list.rs`, `show.rs` |
 | Domain rules | `domain/system.rs`: `SystemName` catalog-name validation; `SystemDetails` read model built by `show.rs` |
 | Stores | `stores/system_store.rs` (`create_or_load` is idempotent by name: same id, original description preserved) |
 | External adapters | none — pure persistence flow |
-| Tests | `tests/system_show.rs`; store round-trip and corruption tests inside `system_store.rs`; CLI scenarios in `tests/cli.rs` |
+| Tests | `tests/control_system.rs` (library boundary without Clap); `tests/system_show.rs`; store round-trip and corruption tests inside `system_store.rs`; CLI scenarios in `tests/cli.rs` |
 
 ## Flow 2: Import — `pneuma import <repository>`
 
 | Layer | Where |
 |---|---|
-| CLI entry | `cli/application.rs::run_import` (resolves `PNEUMA_WORKSPACE_PATH`) |
+| CLI entry | `cli/args.rs` maps input to `Command::ImportApplication`; `cli/mod.rs::execute_control_command` executes and renders it |
+| Control boundary | `control/mod.rs::ControlExecutor` — `Command::ImportApplication`; the host configuration owns `PNEUMA_WORKSPACE_PATH` |
 | Use cases | `application/remote_import.rs::import_remote_application` → `application/import.rs::import_application` |
 | Domain rules | `domain/manifest.rs::ImportSpecification` (validated use-case input); value objects built at the boundary (`ApplicationName`, `RelativeManifestPath`, delivery/runtime specifications); re-import returns the existing application unchanged |
 | Boundary adapter | `adapters/manifest.rs` — private TOML structs, `load_manifest_at` = parse + validate + convert in one step (INV-MAN-001); `adapters/git_source.rs::clone_repository` / `cleanup_checkout` (always attempted) |
@@ -91,8 +116,9 @@ The richest workflow; read top-down through `use_cases/deployment/` whose
 
 | Layer | Where |
 |---|---|
-| CLI entry | `cli/deployment.rs::run_deploy` selects OCI vs branch; `run_deploy_oci` parses `OciArtifact::parse` **before** any effect and assembles `PublicDeploymentConfiguration` (Caddy paths) |
-| Use cases | `deployment/deploy.rs::deploy_oci` (Application lock → delivery check → pull → release) → `release/create_release_while_locked` (digest reuse) → `deployment/execute.rs::deploy_release_reporting` (pending deployment → candidate execution → promotion or finalized failure) → `deployment/candidate.rs::start_candidate` (port → unit → start → observe → register) → `promotion/internal.rs::promote_internal_candidate` (internal) or `activation.rs::activate_public_candidate` (public) |
+| CLI entry | `cli/args.rs` maps image input to `Command::DeployImage`; `cli/mod.rs::execute_control_command` renders its semantic events and result |
+| Control boundary | `control/mod.rs::ControlExecutor` parses `OciArtifact`, supplies Caddy paths from `HostConfiguration`, invokes `deploy_oci_with_events`, and returns a typed deployment result |
+| Use cases | `deployment/deploy.rs::deploy_oci_with_events` (Application lock → delivery check → pull → release) → `release/create_release_while_locked` (digest reuse) → `deployment/execute.rs` (pending deployment → candidate execution → promotion or finalized failure) → `deployment/candidate.rs::start_candidate` (port → unit → start → observe → register) → `promotion/internal.rs::promote_internal_candidate` (internal) or `activation.rs::activate_public_candidate` (public) |
 | Domain rules | `domain/release.rs`: `OciArtifact` digest grammar, `DeliverySpecification::permits` repository allow-list (INV-REL-002); `domain/deployment.rs`: single transition table `DeploymentStatus::transition(DeploymentEvent)` (INV-DEP-001); `Visibility` decides internal-vs-public activation path |
 | Stores | `application_store` (deployment specification load), `release_store` (digest-pinned reuse), `deployment_store` (pending insert under partial unique index INV-DB-001, targeted CAS status advance, guarded `activate_deployment` INV-APP-002), `runtime_store` (candidate registration, tombstones), port reservations via `port_allocator` |
 | External adapters | `oci_image::pull_image` (digest verify), `port_allocator::reserve_port`, `systemd_quadlet` (`write_unit`, `daemon_reload`, `start`), `local_runtime` (`resolve_container_id`, `observe_container`), `health_check_internal` (loopback), `caddy_exposure::materialize_caddy_fragment` + external health (public only) |
@@ -105,7 +131,8 @@ Identical to Flow 3 after source resolution; only the front differs.
 
 | Layer | Where |
 |---|---|
-| CLI entry | `cli/deployment.rs::run_deploy_branch` |
+| CLI entry | `cli/args.rs` maps the request to `Command::DeployBranch`; `cli/mod.rs::execute_control_command` renders its semantic events and result |
+| Control boundary | `control/mod.rs::ControlExecutor` supplies Caddy paths from `HostConfiguration`, invokes `deploy_branch_with_events`, and returns a typed deployment result |
 | Use cases | `deployment/deploy.rs::deploy_branch`: load persisted source configuration (`application_store::load_source`, falling back to the manifest default branch) → resolve commit → load delivery configuration → resolve digest → hand the loaded delivery policy to `deploy_artifact_for_delivery` with `source_commit` (the shared validated path behind `deploy_oci`, so the specification is never re-read) |
 | Domain rules | `domain/git.rs::CommitSha` validated hex; resolved commit is recorded directly as an optional `CommitSha` on the deployment (`domain/deployment.rs`) |
 | Stores | `application_store::load_source` / `load_delivery_specification`; everything downstream identical to Flow 3 |
@@ -116,7 +143,8 @@ Identical to Flow 3 after source resolution; only the front differs.
 
 | Layer | Where |
 |---|---|
-| CLI entry | `cli/deployment.rs::run_rollback` |
+| CLI entry | `cli/args.rs` maps the request to `Command::Rollback`; `cli/mod.rs::execute_control_command` renders its semantic events and result |
+| Control boundary | `control/mod.rs::ControlExecutor` supplies Caddy paths from `HostConfiguration`, invokes `rollback_deployment_with_events`, and returns a typed rollback result |
 | Use cases | `deployment/rollback.rs::rollback_deployment`: application existence check → select target → re-pull historical artifact → run the normal release deployment as type `Rollback` |
 | Domain rules | target selection rule "newest succeeded deployment that is not currently active" implemented by `deployment_store::load_rollback_target` and returned as a domain `RollbackTarget` carrying provenance (an optional `CommitSha`) |
 | Stores | `deployment_store` (history query), then the full Flow 3 store set with `DeploymentType::Rollback` |
@@ -127,23 +155,25 @@ Identical to Flow 3 after source resolution; only the front differs.
 
 | Layer | Where |
 |---|---|
-| CLI entry | `cli/exposure.rs::run_visibility_set` (assembles Caddy paths) |
+| CLI entry | `cli/args.rs` maps input to `Command::VisibilitySet`; `cli/mod.rs::execute_control_command` executes and renders it |
+| Control boundary | `control/mod.rs::ControlExecutor` — `Command::VisibilitySet`; the host configuration owns the Caddy managed path and Caddyfile path |
 | Use cases | `exposure/mod.rs::change_exposure`: same-visibility short-circuit → CAS intent reservation **before** any Caddy effect → `make_public` / `make_internal` with restore compensation on later failure |
 | Domain rules | `domain/exposure.rs`: `ExposureIntent::new` (public requires a `DomainName`), `ExposureMaterializationState` state machine (Applying/Active/Removing), `ConfirmedRoute` evidence |
 | Stores | `exposure_store`: `begin_exposure_change` CAS on expected visibility (Stale ⇒ conflict, never overwrite), completion primitives conditioned on the reservation state (INV-DB-004) |
 | External adapters | `caddy_exposure`: canonical fragment bytes, `materialize_caddy_fragment`, `observe_caddy_fragment`, `remove_caddy_fragment`, `restore_*` compensations, reload after each change |
-| Tests | `tests/caddy_exposure.rs` (13 fake-caddy scenarios incl. removal-of-absent and restore), exposure store CAS tests inside `exposure_store.rs`, visibility E2E scenarios in `tests/cli.rs` |
+| Tests | `tests/control_exposure.rs` (library boundary without Clap: missing application, domain-required, full internal→public materialization, missing/undeployed reconcile errors); `tests/caddy_exposure.rs` (13 fake-caddy scenarios incl. removal-of-absent and restore), exposure store CAS tests inside `exposure_store.rs`, visibility E2E scenarios in `tests/cli.rs` |
 
 ## Flow 7: Start/Stop/Status — `pneuma app start|stop|status <app>`
 
 | Layer | Where |
 |---|---|
-| CLI entry | `cli/application.rs::run_start` / `run_stop` / `run_status` |
+| CLI entry | `cli/args.rs` maps input to `Command::ApplicationStart`, `ApplicationStop`, or `ApplicationStatus`; `cli/mod.rs::execute_control_command` executes and renders it |
+| Control boundary | `control/mod.rs::ControlExecutor` — `Command::ApplicationStart` / `ApplicationStop` / `ApplicationStatus` return typed `RuntimeObservation`s; the per-Application lock stays inside the use case |
 | Use cases | `application/runtime.rs`: `report_application_status` (observe + persist observation, never changes intent), `stop_application` / `start_application` both funnel into the shared `transition_application` controller |
 | Domain rules | `domain/application.rs::DesiredRuntimeState`; `domain/runtime.rs`: `ObservedRuntimeState` (unknown Podman states preserved as `Unknown`), `ContainerId`, loopback-only `ExpectedRuntimeEndpoint`; intent is persisted before any external effect |
 | Stores | `application_store::set_desired_runtime_state` (under the Application lock), `runtime_store` (active-runtime load, observation writes, hydratable tombstones `state='removed'`) |
 | External adapters | `local_runtime::start_container` / `stop_container` / `observe_container`; `systemd_quadlet::unit_name` on the missing-container recreation path (Quadlet recreates containers under a stable name) |
-| Tests | lifecycle E2E scenarios in `tests/cli.rs` (idempotent stop/start, stop after container removal, start after removal recreating via Quadlet), runtime hydration/tombstone tests inside `runtime_store.rs` and `tests/deployment_register_runtime.rs`, VO boundaries in `tests/domain_values.rs` |
+| Tests | `tests/control_lifecycle.rs` (library boundary without Clap: observation, direct stop, supervised start recovery, missing/undeployed errors); lifecycle E2E scenarios in `tests/cli.rs` (idempotent stop/start, stop after container removal, start after removal recreating via Quadlet), runtime hydration/tombstone tests inside `runtime_store.rs` and `tests/deployment_register_runtime.rs`, VO boundaries in `tests/domain_values.rs` |
 
 ## Flow 8: Reconcile — `pneuma reconcile <app>`
 
@@ -155,12 +185,23 @@ application lock → recover branch → load → observe → decide (pure) → e
 
 | Layer | Where |
 |---|---|
-| CLI entry | `cli/reconciliation.rs::run_reconcile` |
+| CLI entry | `cli/args.rs` maps input to `Command::Reconcile`; `cli/mod.rs::execute_control_command` executes and renders it |
+| Control boundary | `control/mod.rs::ControlExecutor` — `Command::Reconcile`; the host configuration owns the Caddy managed path and Caddyfile path |
 | Use cases | `reconciliation/mod.rs::reconcile_application` (ordering + compensation only); `recover.rs` (interrupted-deployment recovery), `load.rs` (persisted facts), `observe.rs` (external facts + boundary-rendered canonical expectations), `execute.rs` (decision translation, identity repair, rematerialization confirmation, exposure reserve/materialize/remove/failure recording) |
 | Domain rules | `domain/reconciliation/decision.rs::decide` — pure function, no infrastructure imports; answers "what should happen?" over desired/persisted/observed facts with conservative precedence (stopped-in-sync → runtime identity repair → rematerialization → exposure classification → manual intervention) |
 | Stores | read-side loads across application/deployment/runtime/exposure stores; writes are CAS-guarded (runtime identity repair, exposure reservations/completions) |
 | External adapters | `local_runtime` (container observation), `systemd_quadlet` (`observe_generated_unit`, unit rewrite), `caddy_exposure` (fragment observation/materialization/removal), `health_check_internal` after rematerialization |
 | Tests | in-file decision tests at `src/domain/reconciliation/tests.rs`; `tests/reconciliation.rs` (ownership deferral, blocking deployments, interrupted candidates, proven-route preservation); lost-completion-CAS restore scenarios in `tests/cli.rs` |
+
+## Flow 9: Restricted CI Dispatch — `pneuma ci dispatch`
+
+| Layer | Where |
+|---|---|
+| CLI entry | `cli/ci.rs::run_ci_dispatch` reads `SSH_ORIGINAL_COMMAND`; a validated deploy maps to `Command::DeployBranch` and uses `cli/mod.rs::execute_control_command` |
+| Control boundary | `control/mod.rs::ControlExecutor` executes the same event-capable branch deployment path as the interactive CLI |
+| Use cases | `use_cases/ci/mod.rs::parse_ci_command` accepts only `version` or `deploy <application> <branch-or-tag>` |
+| Domain rules | `domain/application.rs::ApplicationName` validates the application; CI-specific branch validation rejects shell metacharacters |
+| Tests | parser tests in `use_cases/ci/mod.rs`; `tests/cli.rs` proves the restricted branch deployment preserves the non-TTY progress and result contract |
 
 ---
 

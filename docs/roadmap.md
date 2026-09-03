@@ -158,9 +158,68 @@ upgraded.
   pre-restore snapshot.
 - Retirement records success only after observing container absence.
 
+### v0.5.1 - Interface-Neutral Execution
+
+**Status:** completed on 2026-08-31.
+
+Command execution moved out of the CLI into a synchronous, interface-neutral
+control boundary. The CLI is one adapter among possible future interfaces; no
+daemon, HTTP server, or TUI was added.
+
+- [x] Control boundary for every stateful command, migrated one command family
+  at a time with unchanged CLI behavior.
+- [x] Semantic deployment events with matched start/completion boundaries,
+  typed failure codes, and typed retirement warnings.
+- [x] Animated TTY progress rendered entirely in the CLI, with deterministic
+  non-TTY output.
+
+### v0.5.2 - CLI Adapter Consolidation
+
+**Status:** completed on 2026-09-01. Approved design:
+[`designs/cli-adapter-consolidation.md`](designs/cli-adapter-consolidation.md).
+
+The CLI adapter removed its duplicated command vocabulary and repetitive
+per-command execution handlers, retaining all established command syntax,
+output, progress, error, and exit-code behavior.
+
+- [x] Approved design; activate the execution tracker after the design commit.
+- [x] Map parsed interactive input directly to control commands.
+- [x] Consolidate control execution, result rendering, deployment progress, and
+  restricted CI routing.
+
+### v0.5.3 - CLI Adapter Integrity
+
+**Status:** completed on 2026-09-02. Approved design:
+[`designs/cli-adapter-integrity.md`](designs/cli-adapter-integrity.md).
+
+This maintenance iteration corrected internal CLI adapter imprecision without
+changing the released CLI or operational contract.
+
+- [x] Reject missing interactive deploy sources during argument normalization.
+- [x] Consolidate deployment classification and remaining lifecycle rendering
+  ownership within the CLI adapter.
+
+### v0.5.4 - CLI Operational Robustness
+
+**Status:** delivered (2026-09-03). Approved design:
+[`designs/cli-operational-robustness.md`](designs/cli-operational-robustness.md).
+
+This maintenance iteration corrects all CLI robustness, error-classification,
+presentation, bootstrap, and test-organization issues found in the post-v0.5.3
+review. Approved observable corrections are enumerated in the design's
+behavior-change table.
+
+- [x] Make progress output best effort and presentation labels explicit.
+- [x] Preserve doctor diagnostics and total rendering.
+- [x] Complete the semantic error-classification audit (locks, nested
+  deployments, remaining scenarios).
+- [x] Validate the host environment contract before startup.
+- [x] Reorganize CLI integration tests into capability modules.
+
 ## v0.6 - Observed State / Host Observation
 
-**Status:** planned; not started. No approved design yet.
+**Status:** planned; not started. No approved design yet. Queued behind
+v0.5.4.
 
 Objective: stop depending predominantly on the state Pneuma itself recorded and
 start explicitly observing the real state of the host. This version establishes
@@ -351,6 +410,18 @@ v0.4.3  disposable regression automation
 v0.5    Architecture Simplification "a smaller current architecture"
    │
    ▼
+v0.5.1  Interface-Neutral Execution "one boundary, many interfaces"
+   │
+   ▼
+v0.5.2  CLI Adapter Consolidation   "one adapter path"
+   │
+   ▼
+v0.5.3  CLI Adapter Integrity       "precise adapter boundaries"
+    │
+    ▼
+v0.5.4  CLI Operational Robustness  "a CLI that fails honestly"
+    │
+    ▼
 v0.6    Observed State            "what is really happening?"
    │
    ▼

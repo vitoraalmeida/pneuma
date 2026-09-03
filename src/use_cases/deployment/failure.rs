@@ -12,7 +12,7 @@ use thiserror::Error;
 
 use super::cleanup::{CandidateCleanupError, CandidateResources, cleanup_failed_candidate};
 use super::create::CreateDeploymentError;
-use super::progress::{DeploymentStep, ProgressReporter};
+use super::progress::{DeploymentStep, EventReporter};
 use super::promotion::PromoteInternalCandidateError;
 use super::transition::{TransitionDeploymentError, fail_deployment};
 use crate::adapters::stores::application_store::ApplicationStoreError;
@@ -126,13 +126,13 @@ pub(crate) fn finish_failed_deployment(
     connection: &mut Connection,
     deployment_id: &DeploymentId,
     failed: FailedExecution,
-    progress: &mut ProgressReporter<'_>,
+    events: &mut EventReporter<'_>,
 ) -> DeployReleaseError {
     let failure = failed.source.to_string();
     let record_error =
-        persist_failure_if_needed(connection, deployment_id, &failed, &failure, progress);
+        persist_failure_if_needed(connection, deployment_id, &failed, &failure, events);
     let resources = failed.resources;
-    let cleanup_error = cleanup_candidate_if_needed(connection, deployment_id, resources, progress);
+    let cleanup_error = cleanup_candidate_if_needed(connection, deployment_id, resources, events);
 
     resolve_failure_recovery(
         deployment_id,
@@ -151,15 +151,15 @@ fn persist_failure_if_needed(
     deployment_id: &DeploymentId,
     failed: &FailedExecution,
     failure: &str,
-    progress: &mut ProgressReporter<'_>,
+    events: &mut EventReporter<'_>,
 ) -> Option<TransitionDeploymentError> {
     if failed.failure_persisted {
-        progress.failure_persisted(deployment_id.as_str(), failed.code.as_str());
+        events.failure_persisted(deployment_id, failed.code);
         return None;
     }
     match fail_deployment(connection, deployment_id, failed.code, failure) {
         Ok(_) => {
-            progress.failure_persisted(deployment_id.as_str(), failed.code.as_str());
+            events.failure_persisted(deployment_id, failed.code);
             None
         }
         Err(source) => Some(source),
@@ -172,15 +172,12 @@ fn cleanup_candidate_if_needed(
     connection: &Connection,
     deployment_id: &DeploymentId,
     resources: CandidateResources,
-    progress: &mut ProgressReporter<'_>,
+    events: &mut EventReporter<'_>,
 ) -> Option<CandidateCleanupError> {
     if !resources.needs_cleanup() {
         return None;
     }
-    progress.started(
-        DeploymentStep::CleanupCandidate,
-        format!("deployment {deployment_id}"),
-    );
+    events.started(DeploymentStep::CleanupCandidate);
     match cleanup_failed_candidate(
         connection,
         deployment_id,
@@ -189,10 +186,7 @@ fn cleanup_candidate_if_needed(
         resources.runtime_id.as_ref(),
     ) {
         Ok(()) => {
-            progress.completed(
-                DeploymentStep::CleanupCandidate,
-                format!("deployment {deployment_id}"),
-            );
+            events.completed(DeploymentStep::CleanupCandidate);
             None
         }
         Err(source) => Some(source),
@@ -266,9 +260,10 @@ mod tests {
     use std::fmt;
 
     use super::super::cleanup::{CandidateCleanupError, CandidateResources};
+    use super::super::progress::DeploymentEvent;
     use super::super::transition::TransitionDeploymentError;
     use super::{
-        DeployReleaseError, DeploymentFailureCode, FailedExecution, ProgressReporter,
+        DeployReleaseError, DeploymentFailureCode, EventReporter, FailedExecution,
         internal_promotion_failure, persist_failure_if_needed, resolve_failure_recovery,
     };
     use crate::adapters::health_check_internal::{HealthCheckFailure, HealthCheckResult};
@@ -468,7 +463,9 @@ mod tests {
             failure_persisted: true,
             resources: CandidateResources::empty(),
         };
-        let progress = &mut ProgressReporter::disabled();
+        let mut observed_events = Vec::new();
+        let mut collect_event = |event| observed_events.push(event);
+        let events = &mut EventReporter::enabled(&mut collect_event);
 
         // A failure whose stage was already persisted must leave the deployment row alone.
         let recorded = persist_failure_if_needed(
@@ -476,7 +473,7 @@ mod tests {
             &deployment_id(),
             &failed,
             "test failure",
-            progress,
+            events,
         );
         assert!(recorded.is_none(), "no recording divergence is expected");
         let (status, failure_code): (String, Option<String>) = connection
@@ -496,7 +493,7 @@ mod tests {
             &deployment_id(),
             &failed,
             "test failure",
-            progress,
+            events,
         );
         assert!(recorded.is_none(), "no recording divergence is expected");
         let (status, failure_code): (String, Option<String>) = connection
@@ -508,6 +505,19 @@ mod tests {
             .unwrap();
         assert_eq!(status, "failed");
         assert_eq!(failure_code.as_deref(), Some("runtime_start_failed"));
+        assert!(matches!(
+            observed_events.as_slice(),
+            [
+                DeploymentEvent::FailurePersisted {
+                    code: DeploymentFailureCode::RuntimeStart,
+                    ..
+                },
+                DeploymentEvent::FailurePersisted {
+                    code: DeploymentFailureCode::RuntimeStart,
+                    ..
+                }
+            ]
+        ));
     }
 
     #[test]

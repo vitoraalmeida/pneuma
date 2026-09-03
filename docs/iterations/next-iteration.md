@@ -2,7 +2,8 @@
 
 **Status:** planning reminder, not an execution tracker.
 
-**Target:** v0.6 - Observed State / Host Observation.
+**Target:** v0.6 - Observed State / Host Observation. Queued behind the
+concluded v0.5.4 iteration and the current VM E2E maintenance checkpoint.
 
 Do not implement this work until an approved design exists and this tracker is
 promoted to `current-iteration.md`.

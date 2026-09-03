@@ -1,138 +1,160 @@
-use std::fmt;
-
-use crate::domain::deployment::DeploymentStatus;
+use crate::domain::application::ApplicationName;
+use crate::domain::deployment::{DeploymentFailureCode, DeploymentStatus};
+use crate::domain::identity::{DeploymentId, RuntimeInstanceId};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeploymentStep {
+    ResolveBranch,
+    ResolveImageDigest,
+    PullImage,
     LoadSpecification,
     CreateDeployment,
-    CreateContainer,
+    ReservePort,
+    CreateUnit,
+    ReloadSystemd,
     StartContainer,
+    ResolveContainer,
     ObserveContainer,
     RegisterCandidate,
-    HealthCheckAndPromotion,
     InternalHealthCheck,
     ApplyPublicRoute,
     ExternalHealthCheck,
     PromoteCandidate,
     CleanupCandidate,
+    RetirePreviousRuntime,
 }
 
+// Describes a best-effort prior-runtime retirement result without coupling the workflow to a UI.
 #[derive(Debug, PartialEq, Eq)]
-pub enum DeploymentProgress {
+pub enum RetirementWarning {
+    UnitRetirementFailed { diagnostic: String },
+    ContainerRemovalUnproven { diagnostic: String },
+    PersistenceFailed,
+}
+
+// Closed semantic events emitted by the control boundary and deployment workflow.
+#[derive(Debug, PartialEq, Eq)]
+pub enum DeploymentEvent {
+    DeploymentRequested {
+        application_name: ApplicationName,
+    },
     StepStarted {
         step: DeploymentStep,
-        detail: String,
     },
     StepCompleted {
         step: DeploymentStep,
-        detail: String,
     },
     StateChanged {
-        deployment_id: String,
+        deployment_id: DeploymentId,
         status: DeploymentStatus,
     },
     FailurePersisted {
-        deployment_id: String,
-        code: &'static str,
+        deployment_id: DeploymentId,
+        code: DeploymentFailureCode,
+    },
+    RetirementWarning {
+        runtime_id: RuntimeInstanceId,
+        warning: RetirementWarning,
     },
 }
 
-impl fmt::Display for DeploymentStep {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let name = match self {
-            Self::LoadSpecification => "load application specification",
-            Self::CreateDeployment => "create deployment",
-            Self::CreateContainer => "create candidate container",
-            Self::StartContainer => "start candidate container",
-            Self::ObserveContainer => "observe candidate container",
-            Self::RegisterCandidate => "register candidate runtime",
-            Self::HealthCheckAndPromotion => "health check and promotion",
-            Self::InternalHealthCheck => "internal health check",
-            Self::ApplyPublicRoute => "apply public route",
-            Self::ExternalHealthCheck => "external health check",
-            Self::PromoteCandidate => "promote public candidate",
-            Self::CleanupCandidate => "clean up candidate",
-        };
-        formatter.write_str(name)
-    }
+// Delivers optional deployment events without coupling orchestration to a UI.
+pub(crate) struct EventReporter<'a> {
+    callback: Option<&'a mut dyn FnMut(DeploymentEvent)>,
 }
 
-impl fmt::Display for DeploymentProgress {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::StepStarted { step, detail } => {
-                write!(formatter, "{step}: started ({detail})")
-            }
-            Self::StepCompleted { step, detail } => {
-                write!(formatter, "{step}: completed ({detail})")
-            }
-            Self::StateChanged {
-                deployment_id,
-                status,
-            } => write!(
-                formatter,
-                "deployment {deployment_id}: state changed to {status:?}"
-            ),
-            Self::FailurePersisted {
-                deployment_id,
-                code,
-            } => write!(
-                formatter,
-                "deployment {deployment_id}: state changed to Failed; failure persisted ({code})"
-            ),
-        }
-    }
-}
-
-// Delivers optional deployment progress without coupling orchestration to a UI.
-pub(crate) struct ProgressReporter<'a> {
-    callback: Option<&'a mut dyn FnMut(DeploymentProgress)>,
-}
-
-impl<'a> ProgressReporter<'a> {
-    // Creates a no-op reporter for callers that do not request progress events.
+impl<'a> EventReporter<'a> {
+    // Creates a no-op reporter for callers that do not request workflow events.
     pub(crate) fn disabled() -> Self {
         Self { callback: None }
     }
 
-    // Wraps the caller callback used to report synchronous orchestration events.
-    pub(crate) fn enabled(callback: &'a mut dyn FnMut(DeploymentProgress)) -> Self {
+    // Wraps the caller observer used to report synchronous orchestration events.
+    pub(crate) fn enabled(observer: &'a mut dyn FnMut(DeploymentEvent)) -> Self {
         Self {
-            callback: Some(callback),
+            callback: Some(observer),
         }
     }
 
     // Reports the start of a deployment step before its side effects begin.
-    pub(crate) fn started(&mut self, step: DeploymentStep, detail: String) {
-        self.emit(DeploymentProgress::StepStarted { step, detail });
+    pub(crate) fn started(&mut self, step: DeploymentStep) {
+        self.emit(DeploymentEvent::StepStarted { step });
     }
 
     // Invokes the optional callback while keeping disabled reporting side-effect free.
-    fn emit(&mut self, event: DeploymentProgress) {
+    fn emit(&mut self, event: DeploymentEvent) {
         if let Some(callback) = &mut self.callback {
             callback(event);
         }
     }
 
     // Reports successful completion only after the step has finished.
-    pub(crate) fn completed(&mut self, step: DeploymentStep, detail: String) {
-        self.emit(DeploymentProgress::StepCompleted { step, detail });
+    pub(crate) fn completed(&mut self, step: DeploymentStep) {
+        self.emit(DeploymentEvent::StepCompleted { step });
     }
 
     // Reports a persisted deployment-state transition.
-    pub(crate) fn state_changed(&mut self, deployment_id: &str, status: DeploymentStatus) {
-        self.emit(DeploymentProgress::StateChanged {
-            deployment_id: deployment_id.to_owned(),
+    pub(crate) fn state_changed(&mut self, deployment_id: &DeploymentId, status: DeploymentStatus) {
+        self.emit(DeploymentEvent::StateChanged {
+            deployment_id: deployment_id.clone(),
             status,
         });
     }
 
     // Reports that failure evidence has been durably recorded.
-    pub(crate) fn failure_persisted(&mut self, deployment_id: &str, code: &'static str) {
-        self.emit(DeploymentProgress::FailurePersisted {
-            deployment_id: deployment_id.to_owned(),
+    pub(crate) fn failure_persisted(
+        &mut self,
+        deployment_id: &DeploymentId,
+        code: DeploymentFailureCode,
+    ) {
+        self.emit(DeploymentEvent::FailurePersisted {
+            deployment_id: deployment_id.clone(),
             code,
         });
+    }
+
+    // Reports a best-effort predecessor retirement warning while preserving its semantic cause.
+    pub(crate) fn retirement_warning(
+        &mut self,
+        runtime_id: &RuntimeInstanceId,
+        warning: RetirementWarning,
+    ) {
+        self.emit(DeploymentEvent::RetirementWarning {
+            runtime_id: runtime_id.clone(),
+            warning,
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DeploymentEvent, EventReporter, RetirementWarning};
+    use crate::domain::deployment::DeploymentFailureCode;
+    use crate::domain::identity::{DeploymentId, RuntimeInstanceId};
+
+    #[test]
+    fn preserves_typed_failure_codes_and_retirement_warnings() {
+        let deployment_id = DeploymentId::new("11111111111111111111111111111111").unwrap();
+        let runtime_id = RuntimeInstanceId::new("22222222222222222222222222222222").unwrap();
+        let mut observed = Vec::new();
+        let mut collect = |event| observed.push(event);
+        let mut events = EventReporter::enabled(&mut collect);
+
+        events.failure_persisted(&deployment_id, DeploymentFailureCode::RuntimeStart);
+        events.retirement_warning(&runtime_id, RetirementWarning::PersistenceFailed);
+
+        assert!(matches!(
+            observed.as_slice(),
+            [
+                DeploymentEvent::FailurePersisted {
+                    deployment_id: observed_deployment_id,
+                    code: DeploymentFailureCode::RuntimeStart,
+                },
+                DeploymentEvent::RetirementWarning {
+                    runtime_id: observed_runtime_id,
+                    warning: RetirementWarning::PersistenceFailed,
+                }
+            ] if observed_deployment_id == &deployment_id && observed_runtime_id == &runtime_id
+        ));
     }
 }

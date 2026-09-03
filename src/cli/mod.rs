@@ -1,138 +1,343 @@
-mod application;
 mod args;
 mod ci;
-mod deployment;
-mod doctor;
 mod error;
-mod exposure;
 mod output;
-mod reconciliation;
+mod progress;
 mod shared;
-mod system;
 
-use std::path::Path;
-
-use pneuma::adapters::database::{self, DatabaseError, DatabaseLock, LockMode};
+use pneuma::control::{Command, CommandResult, ControlError, ControlExecutor};
 
 use error::CliError;
+use progress::DeploymentProgressRenderer;
 use shared::log_verbose;
 
-pub(crate) use args::{Command, Invocation, parse_invocation};
+pub(crate) use args::{Invocation, InvocationTarget, parse_invocation};
 
-// Routes commands so diagnostics, backup, restore, and SSH CI avoid unnecessary database work.
+// Routes parsed commands into the interface-neutral control boundary.
 pub(crate) fn run(invocation: Invocation) -> Result<(), CliError> {
-    let Invocation { verbose, command } = invocation;
+    let Invocation { verbose, target } = invocation;
 
-    if matches!(
-        command,
-        Command::Version
-            | Command::Doctor
-            | Command::DatabaseBackup { .. }
-            | Command::DatabaseRestore { .. }
-    ) {
-        let database_path = database::configured_path();
-
-        if matches!(command, Command::Version) {
+    let command = match target {
+        InvocationTarget::Version => {
             run_version();
             return Ok(());
         }
-        if let Command::DatabaseRestore { path } = command {
-            // Restore takes the exclusive database-wide lock itself.
-            return doctor::run_database_restore(&database_path, &path);
+        InvocationTarget::CiDispatch => {
+            return ci::run_ci_dispatch(&ControlExecutor::from_environment(), verbose);
         }
+        InvocationTarget::Control(command) => command,
+    };
 
-        let _lock = shared_database_lock(&database_path)?;
-        if let Command::DatabaseBackup { path } = command {
-            return doctor::run_database_backup(&database_path, &path);
-        }
-
-        let connection = doctor::open_doctor_connection(&database_path)?;
-        return doctor::run_doctor(&connection, verbose);
+    let executor = ControlExecutor::from_environment();
+    if !matches!(
+        command,
+        Command::Doctor | Command::DatabaseBackup { .. } | Command::DatabaseRestore { .. }
+    ) {
+        log_verbose(
+            verbose,
+            format!("database: {}", executor.host().database_path.display()),
+        );
     }
 
-    if matches!(command, Command::CiDispatch) {
-        return ci::run_ci_dispatch(verbose);
+    execute_control_command(&executor, command, verbose)
+}
+
+// Executes a control command and attaches CLI-only progress rendering when it deploys.
+fn execute_control_command(
+    executor: &ControlExecutor,
+    command: Command,
+    verbose: bool,
+) -> Result<(), CliError> {
+    log_command_start(&command, verbose);
+
+    match deployment_request(&command) {
+        Some(request) => execute_deployment_with_events(executor, command, request, verbose),
+        None => execute_without_events(executor, command, verbose),
     }
+}
 
-    let database_path = database::configured_path();
-    log_verbose(verbose, format!("database: {}", database_path.display()));
-    let _lock = shared_database_lock(&database_path)?;
-    let mut connection =
-        database::open(&database_path).map_err(|source| CliError::Database { source })?;
+// Classifies the deployment requests that use event-capable execution.
+enum DeploymentRequest {
+    Image(String),
+    Branch(String),
+    Rollback,
+}
 
+fn deployment_request(command: &Command) -> Option<DeploymentRequest> {
     match command {
-        Command::SystemCreate { name, description } => {
-            system::run_system_create(&mut connection, verbose, &name, description.as_deref())
+        Command::DeployImage {
+            image_reference, ..
+        } => Some(DeploymentRequest::Image(image_reference.clone())),
+        Command::DeployBranch { branch, .. } => Some(DeploymentRequest::Branch(branch.clone())),
+        Command::Rollback { .. } => Some(DeploymentRequest::Rollback),
+        _ => None,
+    }
+}
+
+// Runs ordinary commands without constructing a terminal progress renderer.
+fn execute_without_events(
+    executor: &ControlExecutor,
+    command: Command,
+    verbose: bool,
+) -> Result<(), CliError> {
+    match executor.execute(command) {
+        Ok(result) => render_command_result(result, verbose),
+        Err(ControlError::DoctorConnection { source, report }) => {
+            render_doctor_report(&report, verbose);
+            Err(CliError::Database { source })
         }
-        Command::SystemList => system::run_system_list(&connection, verbose),
-        Command::SystemShow { name } => system::run_system_show(&connection, verbose, &name),
-        Command::Import {
-            repository,
-            system_name,
-            manifest_path,
-        } => application::run_import(
-            &mut connection,
-            verbose,
-            &repository,
-            system_name.as_deref(),
-            manifest_path.as_deref(),
-        ),
-        Command::List => application::run_list(&connection, verbose),
-        Command::Deployments { application_name } => {
-            deployment::run_deployments(&connection, verbose, &application_name)
+        Err(source) => Err(CliError::from_control(source)),
+    }
+}
+
+// Runs every deployment command through the same event-capable control invocation.
+fn execute_deployment_with_events(
+    executor: &ControlExecutor,
+    command: Command,
+    request: DeploymentRequest,
+    verbose: bool,
+) -> Result<(), CliError> {
+    let requested_input = match &request {
+        DeploymentRequest::Image(image_reference) => Some(("image", image_reference.as_str())),
+        DeploymentRequest::Branch(branch) => Some(("branch", branch.as_str())),
+        DeploymentRequest::Rollback => None,
+    };
+    let mut renderer = DeploymentProgressRenderer::new(verbose, requested_input);
+    let mut events = |event| renderer.report(event);
+    let result = executor.execute_with_events(command, &mut events);
+    renderer.finish();
+    render_command_result(result.map_err(CliError::from_control)?, verbose)
+}
+
+// Renders every boundary result without relying on the command that produced it.
+fn render_command_result(result: CommandResult, verbose: bool) -> Result<(), CliError> {
+    match result {
+        CommandResult::SystemCreated(system) => println!("{}", output::created_system(&system)),
+        CommandResult::Systems(systems) => print_nonempty(output::system_list(&systems)),
+        CommandResult::SystemDetails(details) => println!("{}", output::system_details(&details)),
+        CommandResult::ApplicationImported(application) => {
+            println!("{}", output::imported_application(&application));
         }
-        Command::Status { application_name } => {
-            application::run_status(&mut connection, verbose, &application_name)
+        CommandResult::Applications(entries) => {
+            print_nonempty(output::application_list(&entries));
         }
-        Command::Stop { application_name } => {
-            application::run_stop(&mut connection, verbose, &application_name)
-        }
-        Command::Start { application_name } => {
-            application::run_start(&mut connection, verbose, &application_name)
-        }
-        Command::Deploy {
+        CommandResult::ApplicationDeployments {
             application_name,
-            image_reference,
-            branch,
-        } => deployment::run_deploy(
-            &mut connection,
-            verbose,
-            &application_name,
-            image_reference,
-            branch,
+            deployments,
+        } => {
+            log_verbose(
+                verbose,
+                format!("list deployments of application {application_name}"),
+            );
+            println!(
+                "{}",
+                output::deployment_history(&application_name, &deployments)
+            );
+        }
+        CommandResult::ApplicationStatus {
+            application_name,
+            observation,
+        } => println!(
+            "{}",
+            output::application_status(&application_name, &observation)
         ),
-        Command::Rollback { application_name } => {
-            deployment::run_rollback(&mut connection, verbose, &application_name)
+        CommandResult::ApplicationStopped {
+            application_name,
+            observation,
+        } => println!(
+            "{}",
+            output::application_stopped(&application_name, &observation)
+        ),
+        CommandResult::ApplicationStarted {
+            application_name,
+            observation,
+        } => println!(
+            "{}",
+            output::application_started(&application_name, &observation)
+        ),
+        CommandResult::ApplicationDeployed {
+            application_name,
+            deployment,
+        } => println!("{}", output::deployed(&application_name, &deployment)),
+        CommandResult::ApplicationRolledBack {
+            application_name,
+            deployment,
+        } => println!(
+            "{}",
+            output::rollback_result(&application_name, &deployment)
+        ),
+        CommandResult::ExposureChanged {
+            application_name,
+            change,
+        } => println!("{}", output::visibility_change(&application_name, &change)),
+        CommandResult::Reconciled {
+            application_name,
+            result,
+        } => println!(
+            "{}",
+            output::reconciliation_result(&application_name, &result)
+        ),
+        CommandResult::Doctor(report) => {
+            render_doctor_report(&report, verbose);
+            if !report.is_healthy() {
+                return Err(CliError::Doctor);
+            }
+        }
+        CommandResult::DatabaseBackedUp { path } => println!("{}", output::database_backup(&path)),
+        CommandResult::DatabaseRestored {
+            path,
+            pre_restore_path,
+        } => println!("{}", output::database_restore(&path, &pre_restore_path)),
+    }
+    Ok(())
+}
+
+fn log_command_start(command: &Command, verbose: bool) {
+    match command {
+        Command::SystemCreate { name, .. } => {
+            log_verbose(verbose, format!("create system: {name}"))
+        }
+        Command::SystemList => log_verbose(verbose, "list registered systems"),
+        Command::SystemShow { name } => log_verbose(verbose, format!("show system: {name}")),
+        Command::ImportApplication { repository, .. } => {
+            log_verbose(verbose, format!("import repository: {repository}"));
+        }
+        Command::ListApplications => log_verbose(verbose, "list registered applications"),
+        Command::ListDeployments { application_name } => {
+            log_verbose(
+                verbose,
+                format!("resolve application by name: {application_name}"),
+            );
+        }
+        Command::ApplicationStatus { application_name } => {
+            log_verbose(
+                verbose,
+                format!("resolve application by name: {application_name}"),
+            );
+            log_verbose(
+                verbose,
+                format!("report status of application {application_name}"),
+            );
+        }
+        Command::ApplicationStop { application_name } => {
+            log_verbose(
+                verbose,
+                format!("resolve application by name: {application_name}"),
+            );
+            log_verbose(verbose, format!("stop application {application_name}"));
+        }
+        Command::ApplicationStart { application_name } => {
+            log_verbose(
+                verbose,
+                format!("resolve application by name: {application_name}"),
+            );
+            log_verbose(verbose, format!("start application {application_name}"));
         }
         Command::VisibilitySet {
             application_name,
             visibility,
-        } => exposure::run_visibility_set(&mut connection, verbose, &application_name, visibility),
-        Command::Reconcile { application_name } => {
-            reconciliation::run_reconcile(&mut connection, verbose, &application_name)
+        } => {
+            log_verbose(
+                verbose,
+                format!("resolve application by name: {application_name}"),
+            );
+            log_verbose(
+                verbose,
+                format!(
+                    "set visibility of application {application_name} to {}",
+                    output::visibility_label(*visibility)
+                ),
+            );
         }
-        Command::Doctor
-        | Command::Version
-        | Command::DatabaseBackup { .. }
-        | Command::DatabaseRestore { .. }
-        | Command::CiDispatch => unreachable!(),
+        Command::Reconcile { application_name } => {
+            log_verbose(
+                verbose,
+                format!("reconcile application: {application_name}"),
+            );
+        }
+        Command::DeployImage {
+            application_name, ..
+        }
+        | Command::DeployBranch {
+            application_name, ..
+        }
+        | Command::Rollback { application_name } => {
+            log_verbose(
+                verbose,
+                format!("resolve application by name: {application_name}"),
+            );
+        }
+        Command::Doctor | Command::DatabaseBackup { .. } | Command::DatabaseRestore { .. } => {}
     }
 }
 
-// Acquires the shared database-wide lock held for as long as the command uses the database.
-fn shared_database_lock(database_path: &Path) -> Result<DatabaseLock, CliError> {
-    match DatabaseLock::try_acquire(database_path, LockMode::Shared) {
-        Ok(Some(lock)) => Ok(lock),
-        Ok(None) => Err(CliError::Database {
-            source: DatabaseError::DatabaseBusy {
-                path: database_path.to_path_buf(),
-            },
-        }),
-        Err(source) => Err(CliError::Database { source }),
+fn print_nonempty(rendered: String) {
+    if !rendered.is_empty() {
+        println!("{rendered}");
     }
+}
+
+fn render_doctor_report(report: &pneuma::adapters::diagnostics::DoctorReport, verbose: bool) {
+    for check in &report.checks {
+        if let Some(label) = check.verbose_label() {
+            log_verbose(verbose, label);
+        }
+    }
+    println!("{}", output::doctor_report(report));
 }
 
 // Prints version information without requiring host configuration or database access.
-pub(crate) fn run_version() {
+fn run_version() {
     println!("pneuma {}", env!("CARGO_PKG_VERSION"));
+}
+
+#[cfg(test)]
+mod tests {
+    use pneuma::adapters::diagnostics::DoctorReport;
+    use pneuma::control::{Command, CommandResult};
+
+    use super::{CliError, DeploymentRequest, deployment_request, render_command_result};
+
+    #[test]
+    fn deployment_classification_selects_event_capable_execution() {
+        let image = Command::DeployImage {
+            application_name: "portal".to_owned(),
+            image_reference: "registry.example/portal@sha256:abc".to_owned(),
+        };
+        let branch = Command::DeployBranch {
+            application_name: "portal".to_owned(),
+            branch: "main".to_owned(),
+        };
+        let rollback = Command::Rollback {
+            application_name: "portal".to_owned(),
+        };
+        let ordinary = Command::ApplicationStatus {
+            application_name: "portal".to_owned(),
+        };
+
+        assert!(matches!(
+            deployment_request(&image),
+            Some(DeploymentRequest::Image(reference))
+                if reference == "registry.example/portal@sha256:abc"
+        ));
+        assert!(matches!(
+            deployment_request(&branch),
+            Some(DeploymentRequest::Branch(branch)) if branch == "main"
+        ));
+        assert!(matches!(
+            deployment_request(&rollback),
+            Some(DeploymentRequest::Rollback)
+        ));
+        assert!(deployment_request(&ordinary).is_none());
+    }
+
+    #[test]
+    fn unhealthy_doctor_result_keeps_the_diagnostic_failure_class() {
+        let report = DoctorReport::database_connection_failure(std::path::Path::new("/missing"));
+
+        let error = render_command_result(CommandResult::Doctor(report), false)
+            .expect_err("an unhealthy doctor report must fail the command");
+
+        assert!(matches!(error, CliError::Doctor));
+    }
 }

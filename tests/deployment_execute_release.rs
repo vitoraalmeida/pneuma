@@ -86,7 +86,9 @@ fn deploy_fails_when_systemctl_start_fails() {
     let output = environment.deploy_with_start_failure(30000);
 
     assert!(!output.status.success());
-    assert_eq!(output.status.code(), Some(1));
+    // A systemd start stage is an external integration failure, which the CLI
+    // reports with the external exit code.
+    assert_eq!(output.status.code(), Some(5));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("runtime_start_failed"),
@@ -836,10 +838,13 @@ fn rollback_executes_a_new_deployment_from_historical_provenance() {
     let rollback_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let rollback_port = rollback_listener.local_addr().unwrap().port();
     let rollback_server = thread::spawn(move || respond_until_timeout(&rollback_listener, 200));
-    let output = environment.rollback(rollback_port);
+    let output = environment.rollback(rollback_port, true);
     rollback_server.join().unwrap();
 
     assert_command_succeeded(&output);
+    let rollback_stderr = String::from_utf8(output.stderr.clone()).unwrap();
+    assert!(rollback_stderr.contains("pull image: started"));
+    assert!(rollback_stderr.contains("retire previous runtime: completed"));
     let rollback_deployment_id = extract_deployment_id(&output);
     let rollback_runtime_id = extract_runtime_id(&output);
 
@@ -1202,8 +1207,9 @@ impl DeploymentEnvironment {
             .unwrap()
     }
 
-    fn rollback(&self, port: u16) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_pneuma"))
+    fn rollback(&self, port: u16, verbose: bool) -> Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_pneuma"));
+        command
             .env("PNEUMA_DATABASE_PATH", &self.database_path)
             .env("PNEUMA_WORKSPACE_PATH", &self.workspace_path)
             .env("PNEUMA_CADDY_MANAGED_PATH", &self.managed_caddy_directory)
@@ -1222,7 +1228,11 @@ impl DeploymentEnvironment {
             .env(
                 "PNEUMA_FAKE_PODMAN_RM_IGNORED",
                 self.root.join("podman-rm-ignored"),
-            )
+            );
+        if verbose {
+            command.arg("--verbose");
+        }
+        command
             .args(["deployment", "rollback", &self.application_name])
             .output()
             .unwrap()

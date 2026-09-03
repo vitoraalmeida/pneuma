@@ -146,7 +146,7 @@ are rejected before any host change:
 bash bootstrap-vps.sh \
   git@github.com:USER/pneuma.git \
   --ci-public-key ~/.ssh/pneuma-ci.pub \
-  --ref v0.5.0
+  --ref v0.5.4
 ```
 
 Each run (including reruns) resolves `--ref`, performs a **forced** detached
@@ -163,10 +163,10 @@ Without `--ref`, the script compiles the repository's default branch, as before.
 For a routine version update, do not rerun bootstrap. Bootstrap converges the
 entire host (packages, account, Caddy, and environment); a binary-only update
 leaves those host settings unchanged. Run the updater as `root` on the VPS,
-replacing `v0.5.0` with the target immutable tag:
+replacing `v0.5.4` with the target immutable tag:
 
 ```bash
-bash /home/pneuma/pneuma/scripts/update-pneuma.sh --ref v0.5.0
+bash /home/pneuma/pneuma/scripts/update-pneuma.sh --ref v0.5.4
 ```
 
 For the first update from a release that predates this script, copy the updater
@@ -174,7 +174,7 @@ from the development machine and run the copied file as `root`:
 
 ```bash
 scp scripts/update-pneuma.sh root@<host>:/tmp/update-pneuma.sh
-ssh root@<host> 'bash /tmp/update-pneuma.sh --ref v0.5.0'
+ssh root@<host> 'bash /tmp/update-pneuma.sh --ref v0.5.4'
 ```
 
 The updater requires a tag or full commit SHA, rejects branches and abbreviated
@@ -463,9 +463,18 @@ manifest requires re-registering under a new name or manual reconfiguration.
 
 | Variable | Default | Description |
 |---|---|---|
+| `PNEUMA_HOST_ENVIRONMENT_FILE` | `/etc/pneuma/environment` | Host environment file read at startup. |
 | `PNEUMA_DATABASE_PATH` | `/var/lib/pneuma/database/pneuma.sqlite3` | SQLite database location. |
 | `PNEUMA_WORKSPACE_PATH` | `/var/lib/pneuma/checkouts` | Temporary Git checkout directory. |
 | `PNEUMA_CADDY_MANAGED_PATH` | `/etc/caddy/applications` | Managed Caddy fragment directory. |
 | `PNEUMA_CADDYFILE_PATH` | `/etc/caddy/Caddyfile` | Main Caddyfile location. |
 | `PNEUMA_RUNTIME_PORT_RANGE` | `30000-39999` | Loopback runtime port range. |
 | `PNEUMA_QUADLET_DIR` | `$HOME/.config/containers/systemd` | Quadlet unit directory. |
+
+The host environment file is optional; when present it must be readable, valid
+UTF-8, and fully valid, otherwise startup fails with a single `error:` line
+before any command runs. Blank lines and `#` comments are ignored; every other
+line must be `NAME=VALUE` (the first `=` separates, additional `=` characters
+and inline `#` belong to the value), values may be empty, and duplicate names
+are rejected. Caller-supplied variables override file values. After startup,
+either `HOME` or `PNEUMA_QUADLET_DIR` must be set to a nonempty value.

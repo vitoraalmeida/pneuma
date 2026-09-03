@@ -1,6 +1,8 @@
 pub mod adapters;
 pub mod config;
+pub mod control;
 pub mod domain;
+pub mod host_environment;
 pub mod use_cases;
 
 #[cfg(test)]

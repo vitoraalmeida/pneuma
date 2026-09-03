@@ -194,16 +194,61 @@ echo "  OK: boot ID changed from $BOOT_ID_BEFORE to $BOOT_ID_AFTER"
 echo
 echo "==> Step 9: Verify apps after reboot..."
 PNEUMA_UID=$(remote_ssh "$SSH_HOST" 'id -u pneuma')
-if ! remote_ssh "$SSH_HOST" "systemctl is-active --quiet user@$PNEUMA_UID.service"; then
-	echo "  ERROR: pneuma user manager is not active after reboot"
+
+# SSH returns before guest boot finishes, so readiness is waited for, not
+# assumed: a slow guest must pass, and a genuinely broken boot must fail with
+# diagnostics instead of a bare inactive answer.
+report_reboot_diagnostics() {
+	echo "  Diagnostics:"
+	remote_ssh "$SSH_HOST" "systemctl status user@$PNEUMA_UID.service --no-pager -l 2>&1 | tail -n 15" || true
+	remote_ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && systemctl --user list-units '\''pneuma-*.service'\'' --all --no-legend"' || true
+	remote_ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && ls -la ~/.config/containers/systemd/"' || true
+	remote_ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && journalctl --user -b --no-pager -n 40 2>&1 | tail -n 40"' || true
+	remote_ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && podman ps -a --format '\''{{.Names}} {{.Status}}'\''"' || true
+}
+
+echo "  Waiting for the pneuma user manager..."
+USER_MANAGER_ACTIVE=false
+for _ in $(seq 1 30); do
+	if remote_ssh "$SSH_HOST" "systemctl is-active --quiet user@$PNEUMA_UID.service"; then
+		USER_MANAGER_ACTIVE=true
+		break
+	fi
+	sleep 2
+done
+if [[ "$USER_MANAGER_ACTIVE" != true ]]; then
+	echo "  ERROR: pneuma user manager did not become active within 60 seconds after reboot"
+	report_reboot_diagnostics
 	exit 1
 fi
-if ! remote_ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && systemctl --user list-units --type=service --state=active '\''pneuma-healthy-http-*.service'\'' --no-legend | grep -q ."'; then
-	echo "  ERROR: healthy-http Quadlet service is not active after reboot"
+
+echo "  Waiting for the healthy-http Quadlet service..."
+QUADLET_SERVICE_ACTIVE=false
+for _ in $(seq 1 60); do
+	if remote_ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && systemctl --user list-units --type=service --state=active '\''pneuma-healthy-http-*.service'\'' --no-legend | grep -q ."'; then
+		QUADLET_SERVICE_ACTIVE=true
+		break
+	fi
+	sleep 2
+done
+if [[ "$QUADLET_SERVICE_ACTIVE" != true ]]; then
+	echo "  ERROR: healthy-http Quadlet service did not become active within 120 seconds after reboot"
+	report_reboot_diagnostics
 	exit 1
 fi
-if ! remote_ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && podman ps --format '\''{{.Names}}'\'' --filter '\''name=^pneuma-healthy-http-'\'' | grep -q ."'; then
-	echo "  ERROR: healthy-http container is not active after reboot"
+
+echo "  Waiting for the healthy-http container..."
+CONTAINER_ACTIVE=false
+for _ in $(seq 1 30); do
+	if remote_ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && podman ps --format '\''{{.Names}}'\'' --filter '\''name=^pneuma-healthy-http-'\'' | grep -q ."'; then
+		CONTAINER_ACTIVE=true
+		break
+	fi
+	sleep 2
+done
+if [[ "$CONTAINER_ACTIVE" != true ]]; then
+	echo "  ERROR: healthy-http container did not become active within 60 seconds after reboot"
+	report_reboot_diagnostics
 	exit 1
 fi
 if ! remote_ssh "$SSH_HOST" 'runuser -u pneuma -- bash -lc "cd \$HOME && pneuma reconcile healthy-http"' | grep -Eq "Result: (no-op|repaired)"; then

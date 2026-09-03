@@ -313,70 +313,33 @@ There are three distinct environments. Do not substitute one for another:
 
 | Environment | Objective | Destructive operations |
 |---|---|---|
-| Bootstrap clone | Prove clean Debian 13 bootstrap and rerun by immutable SHA/tag | Only `pneuma-dev-base-test` |
-| E2E clone | Prove registry, local TLS, CI dispatcher, rollback, reboot, and restore | Only `pneuma-dev-base-test` |
+| Raw-QEMU E2E | Prove registry, local TLS, CI dispatcher, rollback, reboot, restore, and reconciliation on a fresh Debian 13 guest | Only the qcow2 overlay under `.tmp/pneuma-vm/instance/` |
+| Legacy libvirt VM | Manual fixture-cycle development only | Not a required regression path |
 | Production VPS | Non-destructive smoke testing of real DNS, TLS, and reachability | Never reset, E2E, or restore |
 
-`scripts/dev-vm/test-regression.sh` automates the whole disposable lifecycle
-and is the standard path for final regression. It clones the immutable
-`pneuma-dev-base` as `pneuma-dev-base-test` through `qemu:///system`, pins a
-static DHCP lease so the address survives the in-suite reboot, boots and waits
-for SSH, provisions the host, installs the binary and the restricted CI key,
-runs the requested suites, and always destroys the clone including its storage
-— whether the suites pass or fail (`--keep-on-fail` preserves a failed clone
-for debugging).
+`scripts/vm/run-e2e.sh` is the standard path for final disposable regression.
+It verifies the Debian 13 genericcloud base image, creates a fresh raw-QEMU
+qcow2 overlay and cloud-init seed, provisions the guest, builds and syncs the
+binary, creates a restricted CI key inside the instance directory, runs the
+battery, and destroys the instance on exit whether it passes or fails.
 
 ```bash
-bash scripts/dev-vm/test-regression.sh all   # default: full regression
-bash scripts/dev-vm/test-regression.sh e2e             # functional battery only
-bash scripts/dev-vm/test-regression.sh reconciliation  # drift catalog only
-bash scripts/dev-vm/test-regression.sh bootstrap       # bootstrap acceptance only
+PNEUMA_VM_RECONCILIATION=1 scripts/vm/run-e2e.sh
 ```
 
-Options:
+`PNEUMA_VM_RECONCILIATION=1` appends the full drift catalog after the normal
+`test-all.sh` battery. Set `PNEUMA_VM_KEEP=1` only to preserve an instance for
+debugging; the next normal run removes any prior instance to preserve the
+fresh-guest guarantee.
 
-| Option | Effect |
-|---|---|
-| `--keep-on-fail` | Preserve the failed clone (and its IP) for debugging; passing clones are always destroyed |
-| `--ci-key <path>` | Restricted CI dispatcher private key (default `~/.ssh/pneuma-ci-test`) |
-| `--source-url <url>` | Bootstrap suite source repository (default: origin rewritten to HTTPS) |
-| `--ref <ref>` | Immutable ref for `test-bootstrap-vps.sh` (default: current HEAD SHA) |
+Prerequisites are the outer-host QEMU/cloud-init tools, `cargo`, `git`, and
+SSH/SCP. The harness needs no libvirt template, DHCP lease, host SSH key, or
+pre-existing CI key. Per-instance root and CI keys stay under
+`.tmp/pneuma-vm/instance/` and are destroyed with the overlay.
 
-Each run writes its logs under `/tmp/pneuma-regression-<timestamp>/`; the
-batteries keep their own detailed logs in sibling directories.
-
-Prerequisites: `pneuma-dev-base` present and shut off, no existing
-`pneuma-dev-base-test`, libvirt with the default NAT network, host toolchain
-(cargo) for suites that sync the binary, and Internet access from the VM.
-
-The `all` suite uses two sequential clones:
-
-1. A **shared clone** runs `test-all.sh`, then a verified reset
-   (`reset-fixtures.sh` plus an empty-application assertion and registry
-   restart), then `reconciliation-e2e.sh`.
-2. A **pristine clone** runs `test-bootstrap-vps.sh` with the current HEAD SHA;
-   provisioning is deliberately skipped because exercising clean-host
-   bootstrap is the point of this suite.
-
-Root access to a fresh clone is resolved automatically: a provisioning SSH key
-(`PNEUMA_VM_PROVISION_KEY`, then `~/.ssh/pneuma-e2e-final`, otherwise one is
-generated under `~/.ssh/pneuma-provision`) loaded into a run-local ssh-agent.
-Only when no key works does it use the root password through `sshpass`, taking
-it from the environment — never from any file:
-
-```bash
-PNEUMA_VM_ROOT_PASSWORD='...' bash scripts/dev-vm/test-regression.sh all
-```
-
-The password is used once to install that public key; it is never written to
-repository files, tracker entries, or logs.
-
-The batteries still require `0 FAIL / 0 SKIP`. Each battery runs inside its
-own session (`setsid`) with detached stdin, so terminal accidents (Ctrl+S,
-Ctrl+Z) in the invoking shell cannot suspend it. Individual suites run alone on
-their own fresh clone when iterating on one area — for example, rerunning only
-`bootstrap` after an unrelated transient failure. The VPS remains reserved for
-non-destructive smoke tests of real DNS and TLS.
+`scripts/dev-vm/test-regression.sh` remains available for legacy development
+work, but must not be used for disposable end-to-end validation. The VPS remains
+reserved for non-destructive smoke tests of real DNS and TLS.
 
 ## 7. Local DNS and Caddy
 
@@ -435,7 +398,7 @@ The `scripts/dev-vm/e2e.sh` battery already covers the main cycle (import,
 digest deployment, upgrade, rollback, and reboot). Upgrade/rollback and reboot
 were validated on the VM: Quadlet (through `[Install] WantedBy=default.target`)
 restores applications at boot with linger enabled, without explicit `systemctl
-enable`. With v0.5.0 as the current release, the Git → OCI flow is covered by
+enable`. With v0.5.4 as the current release, the Git → OCI flow is covered by
 `test-branch-deploy.sh` (Git repo with `main`/`staging`, import by `file://` URL,
 and deployment through `--branch`) and `e2e.sh` imports fixtures through local
 Git repositories; `reconciliation-e2e.sh` covers the drift catalog. The VPS is
@@ -443,8 +406,9 @@ used only for final public-integration smoke tests (real DNS and TLS).
 
 ## 10. Portable Raw-QEMU Disposable VM (`scripts/vm/`)
 
-Sections 1–9 describe the persistent libvirt development VM. The `scripts/vm/`
-harness is a second, fully disposable path to the same Debian 13 guest model:
+Sections 1–9 describe legacy persistent libvirt development tooling. The
+`scripts/vm/` harness is the standard fully disposable path to the same Debian
+13 guest model:
 a raw `qemu-system-x86_64` launcher that needs no persistent daemon and runs
 identically on a developer Linux host and a GitHub Actions runner
 (`.github/workflows/e2e.yml`). The guest is the integration target; the outer
@@ -483,9 +447,8 @@ The same entry point runs in CI:
 
 - **Manual:** the `E2E` workflow (`.github/workflows/e2e.yml`) via
   `workflow_dispatch` on a standard hosted runner.
-- **Automatic on `main`:** the same workflow also runs on every push to
-  `main`. Pull requests keep the fast `CI` workflow (docs, shell, Rust) and
-  never boot a VM.
+- **Automatic:** the same workflow runs for pull requests targeting `main` and
+  every push to `main`; non-main pushes run the smaller raw-QEMU smoke path.
 
 Both modes require no GitHub secrets: every SSH key is generated inside the
 run and dies with the instance, and failure artifacts contain only text logs
@@ -500,8 +463,8 @@ run and dies with the instance, and failure artifacts contain only text logs
   fixture-cycle automation (section 6.4).
 - `scripts/dev-vm/test-all.sh` — full disposable regression battery (section 6.5).
 - `scripts/dev-vm/reconciliation-e2e.sh` — drift-catalog regression (section 6.5).
-- `scripts/dev-vm/test-regression.sh` — disposable-lifecycle orchestrator for
-  final regression (section 6.5).
+- `scripts/dev-vm/test-regression.sh` — legacy libvirt disposable-lifecycle
+  orchestrator; not a final-regression requirement.
 - `scripts/bootstrap-vps.sh`, `scripts/test-bootstrap-vps.sh` — production
   bootstrap and its acceptance test.
 - `scripts/dev-vm/fixtures/` — five deterministic fixtures for E2E scenarios

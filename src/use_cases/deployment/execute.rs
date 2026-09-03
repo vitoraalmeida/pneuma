@@ -9,8 +9,8 @@ use super::create::create_deployment_with_source_revision_while_locked;
 use super::failure::{
     DeployReleaseError, FailedExecution, finish_failed_deployment, internal_promotion_failure,
 };
-use super::progress::{DeploymentStep, ProgressReporter};
-use super::promotion::promote_internal_candidate;
+use super::progress::{DeploymentStep, EventReporter};
+use super::promotion::promote_internal_candidate_reporting;
 use crate::adapters::stores::application_store;
 use crate::adapters::test_gate::wait_for_test_gate;
 use crate::domain::application::ApplicationDeploymentSpecification;
@@ -38,27 +38,6 @@ pub struct PublicDeploymentConfiguration {
     pub caddyfile_path: PathBuf,
 }
 
-// Deploys a release without progress callbacks while preserving the full execution workflow.
-pub(crate) fn deploy_release(
-    connection: &mut Connection,
-    application_id: &ApplicationId,
-    release: &Release,
-    deployment_type: DeploymentType,
-    source_revision: Option<&CommitSha>,
-    public_configuration: Option<&PublicDeploymentConfiguration>,
-) -> Result<DeploymentResult, DeployReleaseError> {
-    let mut progress = ProgressReporter::disabled();
-    deploy_release_reporting(
-        connection,
-        application_id,
-        release,
-        deployment_type,
-        source_revision,
-        public_configuration,
-        &mut progress,
-    )
-}
-
 // Creates the durable deployment record before external effects, then routes failures through
 // one finalizer that records failure and cleans up candidate resources. Callers supply the
 // reporter they want: disabled for silent execution, enabled for lifecycle milestones.
@@ -69,30 +48,18 @@ pub(crate) fn deploy_release_reporting(
     deployment_type: DeploymentType,
     source_revision: Option<&CommitSha>,
     public_configuration: Option<&PublicDeploymentConfiguration>,
-    progress: &mut ProgressReporter<'_>,
+    events: &mut EventReporter<'_>,
 ) -> Result<DeploymentResult, DeployReleaseError> {
-    progress.started(
-        DeploymentStep::LoadSpecification,
-        format!("application {application_id}"),
-    );
+    events.started(DeploymentStep::LoadSpecification);
     let specification = load_specification(connection, application_id)?;
-    progress.completed(
-        DeploymentStep::LoadSpecification,
-        format!(
-            "application {}, visibility {}",
-            specification.application_name, specification.visibility
-        ),
-    );
+    events.completed(DeploymentStep::LoadSpecification);
     if specification.visibility == Visibility::Public && public_configuration.is_none() {
         return Err(DeployReleaseError::PublicApplication {
             application_id: application_id.to_string(),
         });
     }
 
-    progress.started(
-        DeploymentStep::CreateDeployment,
-        format!("release {}", release.id),
-    );
+    events.started(DeploymentStep::CreateDeployment);
     let deployment = create_deployment_with_source_revision_while_locked(
         connection,
         application_id,
@@ -101,11 +68,8 @@ pub(crate) fn deploy_release_reporting(
         source_revision,
     )
     .map_err(|source| DeployReleaseError::CreateDeployment { source })?;
-    progress.completed(
-        DeploymentStep::CreateDeployment,
-        format!("deployment {}", deployment.id),
-    );
-    progress.state_changed(deployment.id.as_str(), DeploymentStatus::Pending);
+    events.completed(DeploymentStep::CreateDeployment);
+    events.state_changed(&deployment.id, DeploymentStatus::Pending);
 
     let execution = execute_deployment(
         connection,
@@ -113,7 +77,7 @@ pub(crate) fn deploy_release_reporting(
         &specification,
         &release.artifact,
         public_configuration,
-        progress,
+        events,
     );
     match execution {
         Ok(execution) => Ok(DeploymentResult {
@@ -128,7 +92,7 @@ pub(crate) fn deploy_release_reporting(
             connection,
             &deployment.id,
             failed,
-            progress,
+            events,
         )),
     }
 }
@@ -160,7 +124,7 @@ fn execute_deployment(
     specification: &ApplicationDeploymentSpecification,
     artifact: &OciArtifact,
     public_configuration: Option<&PublicDeploymentConfiguration>,
-    progress: &mut ProgressReporter<'_>,
+    events: &mut EventReporter<'_>,
 ) -> Result<CompletedDeploymentExecution, FailedExecution> {
     wait_for_test_gate("deployment.pending").map_err(|source| {
         FailedExecution::needing_persistence(
@@ -169,11 +133,7 @@ fn execute_deployment(
             CandidateResources::empty(),
         )
     })?;
-    progress.state_changed(deployment_id.as_str(), DeploymentStatus::Starting);
-    progress.started(
-        DeploymentStep::CreateContainer,
-        format!("image {}", artifact.reference()),
-    );
+    events.state_changed(deployment_id, DeploymentStatus::Starting);
 
     let input = CandidateStartInput {
         connection,
@@ -184,34 +144,10 @@ fn execute_deployment(
         runtime: &specification.runtime,
     };
 
-    let candidate = start_candidate(input)?;
-
-    progress.completed(
-        DeploymentStep::CreateContainer,
-        format!(
-            "unit {}, endpoint 127.0.0.1:{}",
-            candidate.unit_name,
-            candidate.port.get()
-        ),
-    );
-    progress.completed(
-        DeploymentStep::StartContainer,
-        format!("container {}", candidate.runtime.external_runtime_id),
-    );
-    progress.completed(
-        DeploymentStep::ObserveContainer,
-        format!(
-            "state Running, expected endpoint {}",
-            candidate.runtime.expected_endpoint.socket_addr()
-        ),
-    );
-    progress.completed(
-        DeploymentStep::RegisterCandidate,
-        format!("runtime {}", candidate.runtime.id),
-    );
+    let candidate = start_candidate(input, events)?;
     wait_for_test_gate("deployment.starting-registered")
         .map_err(|source| candidate.failed_execution(DeploymentFailureCode::TestGate, source))?;
-    progress.state_changed(deployment_id.as_str(), DeploymentStatus::Verifying);
+    events.state_changed(deployment_id, DeploymentStatus::Verifying);
     wait_for_test_gate("deployment.verifying")
         .map_err(|source| candidate.failed_execution(DeploymentFailureCode::TestGate, source))?;
 
@@ -230,10 +166,10 @@ fn execute_deployment(
             specification,
             &candidate,
             public_configuration,
-            progress,
+            events,
         )?,
         Visibility::Internal => {
-            finish_internal_deployment(connection, specification, &candidate, progress)?
+            finish_internal_deployment(connection, specification, &candidate, events)?
         }
     };
 
@@ -241,6 +177,7 @@ fn execute_deployment(
         connection,
         &specification.application_name,
         previous_runtime.as_ref(),
+        events,
     );
 
     Ok(execution)
@@ -253,7 +190,7 @@ fn finish_public_deployment(
     specification: &ApplicationDeploymentSpecification,
     candidate: &StartedCandidate,
     public_configuration: Option<&PublicDeploymentConfiguration>,
-    progress: &mut ProgressReporter<'_>,
+    events: &mut EventReporter<'_>,
 ) -> Result<CompletedDeploymentExecution, FailedExecution> {
     let Some(public_configuration) = public_configuration else {
         return Err(candidate.failed_execution(
@@ -273,7 +210,7 @@ fn finish_public_deployment(
         caddyfile_path: &public_configuration.caddyfile_path,
         unit_name: &candidate.unit_name,
     };
-    let promoted = activate_public_candidate(input, progress)?;
+    let promoted = activate_public_candidate(input, events)?;
 
     Ok(CompletedDeploymentExecution {
         runtime_id: candidate.runtime.id.clone(),
@@ -288,33 +225,25 @@ fn finish_internal_deployment(
     connection: &mut Connection,
     specification: &ApplicationDeploymentSpecification,
     candidate: &StartedCandidate,
-    progress: &mut ProgressReporter<'_>,
+    events: &mut EventReporter<'_>,
 ) -> Result<CompletedDeploymentExecution, FailedExecution> {
     let health_check = specification.runtime.health_check();
-    progress.started(
-        DeploymentStep::HealthCheckAndPromotion,
-        format!(
-            "runtime {}, path {}, expected status {}",
-            candidate.runtime.id,
-            health_check.path().as_str(),
-            health_check.expected_status().get()
-        ),
-    );
-    let promoted = promote_internal_candidate(connection, &candidate.runtime.id, health_check)
-        .map_err(|error| {
-            internal_promotion_failure(
-                error,
-                &candidate.runtime.external_runtime_id,
-                &candidate.runtime.id,
-                &candidate.unit_name,
-            )
-        })?;
-    progress.completed(
-        DeploymentStep::HealthCheckAndPromotion,
-        format!("runtime {} promoted to Current", candidate.runtime.id),
-    );
-    progress.state_changed(
-        candidate.runtime.deployment_id.as_str(),
+    let promoted = promote_internal_candidate_reporting(
+        connection,
+        &candidate.runtime.id,
+        health_check,
+        events,
+    )
+    .map_err(|error| {
+        internal_promotion_failure(
+            error,
+            &candidate.runtime.external_runtime_id,
+            &candidate.runtime.id,
+            &candidate.unit_name,
+        )
+    })?;
+    events.state_changed(
+        &candidate.runtime.deployment_id,
         DeploymentStatus::Succeeded,
     );
 
