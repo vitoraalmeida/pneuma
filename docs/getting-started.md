@@ -428,7 +428,8 @@ In an Application detail view, use `s` to start, `x` to stop, `c` to reconcile,
 `p` to set public visibility, or `i` to set internal visibility. Each action
 opens a confirmation: Enter or `y` executes it; Esc or `n` cancels it. The TUI
 shows the existing error class and diagnostic when an action fails, then refreshes
-the affected data before accepting another action.
+the affected data. A new confirmed action replaces queued refresh reads and runs
+after the active command, without leaving the detail view.
 
 ### Manifest
 

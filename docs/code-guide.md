@@ -57,7 +57,9 @@ command, while Esc or `n` cancels without execution. Worker failures pass
 through `CliError::from_control` before presentation, so the visible diagnostic
 retains its `Failure`, `Not found`, `Conflict`, or `External` class. After an
 action succeeds or fails, the TUI serializes the required catalog and detail
-refreshes before accepting further actions.
+refreshes. A confirmed follow-up action discards queued refresh reads and runs
+after the one active command, so the operator need not leave and reopen the
+detail view.
 
 ## Shared Invocation Path
 

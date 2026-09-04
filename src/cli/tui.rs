@@ -437,18 +437,18 @@ impl Session {
             self.quit_after_completion = true;
             return Ok(());
         }
-        if self.is_busy() {
-            return Ok(());
-        }
-
         match (self.route, event.code) {
-            (Route::Catalog, KeyCode::Down | KeyCode::Char('j')) => self.select_next(),
-            (Route::Catalog, KeyCode::Up | KeyCode::Char('k')) => self.select_previous(),
-            (Route::Catalog, KeyCode::Enter) => self.open_details(),
-            (Route::Catalog, KeyCode::Char('r')) => self.refresh_catalog(),
-            (Route::Catalog, KeyCode::Esc) => self.quit_after_completion = true,
-            (Route::Details, KeyCode::Esc) => self.route = Route::Catalog,
-            (Route::Details, KeyCode::Char('r')) => self.refresh_details(),
+            (Route::Catalog, KeyCode::Down | KeyCode::Char('j')) if !self.is_busy() => {
+                self.select_next()
+            }
+            (Route::Catalog, KeyCode::Up | KeyCode::Char('k')) if !self.is_busy() => {
+                self.select_previous()
+            }
+            (Route::Catalog, KeyCode::Enter) if !self.is_busy() => self.open_details(),
+            (Route::Catalog, KeyCode::Char('r')) if !self.is_busy() => self.refresh_catalog(),
+            (Route::Catalog, KeyCode::Esc) if !self.is_busy() => self.quit_after_completion = true,
+            (Route::Details, KeyCode::Esc) if !self.is_busy() => self.route = Route::Catalog,
+            (Route::Details, KeyCode::Char('r')) if !self.is_busy() => self.refresh_details(),
             (Route::Details, KeyCode::Char('s')) => {
                 if let Some(application_name) = self.detail_application.clone() {
                     self.confirm(PendingAction::Start { application_name });
@@ -498,7 +498,7 @@ impl Session {
     }
 
     fn confirm(&mut self, action: PendingAction) {
-        if self.is_busy() {
+        if self.action_is_pending() {
             return;
         }
         self.error = None;
@@ -509,7 +509,23 @@ impl Session {
     fn execute_action(&mut self, action: PendingAction) {
         self.error = None;
         self.outcome = None;
+        self.queued.retain(|request| {
+            !matches!(
+                request,
+                Request::Catalog | Request::Deployments { .. } | Request::Status { .. }
+            )
+        });
         self.enqueue(Request::Action(action));
+    }
+
+    fn action_is_pending(&self) -> bool {
+        self.active
+            .as_ref()
+            .is_some_and(|(_, request)| matches!(request, Request::Action(_)))
+            || self
+                .queued
+                .iter()
+                .any(|request| matches!(request, Request::Action(_)))
     }
 
     fn refresh_catalog(&mut self) {
@@ -940,7 +956,7 @@ fn draw_footer(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, sess
     let message = if session.quit_after_completion && session.is_busy() {
         "Finishing the current refresh before quitting...".to_owned()
     } else if session.is_busy() {
-        "Working... actions and navigation are disabled until completion.".to_owned()
+        "Refreshing... a confirmed action will run next; navigation is disabled.".to_owned()
     } else if let Some(error) = &session.error {
         format!("Error: {error}")
     } else if let Some(outcome) = &session.outcome {
@@ -1152,6 +1168,41 @@ mod tests {
                 visibility: Visibility::Internal,
             }
         );
+    }
+
+    #[test]
+    fn confirmed_action_replaces_pending_refreshes_without_leaving_the_detail_view() {
+        let mut session = detail_session();
+        session.active = Some((
+            41,
+            Request::Status {
+                application_name: "atlas".to_owned(),
+            },
+        ));
+        session.queued.push_back(Request::Catalog);
+        session.queued.push_back(Request::Deployments {
+            application_name: "atlas".to_owned(),
+        });
+
+        session
+            .handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE))
+            .unwrap();
+        session
+            .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .unwrap();
+
+        assert!(matches!(session.route, Route::Details));
+        assert_eq!(
+            session
+                .queued
+                .iter()
+                .map(Request::command)
+                .collect::<Vec<_>>(),
+            vec![Command::ApplicationStart {
+                application_name: "atlas".to_owned(),
+            }]
+        );
+        session.shutdown().unwrap();
     }
 
     #[test]

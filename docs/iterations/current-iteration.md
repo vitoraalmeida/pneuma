@@ -75,7 +75,8 @@ domain, use-case, persistence, or external-effect decisions.
     - Result: Application details expose explicit confirmations for lifecycle,
       reconciliation, and public/internal visibility requests. The worker maps
       each control error through the existing CLI classification before display,
-      and the session refreshes affected projections after success or failure.
+      and the session refreshes affected projections after success or failure;
+      a confirmed follow-up action supersedes queued refresh reads.
 4. [ ] Deployment and rollback interaction
    - Add branch and digest deployment forms plus rollback confirmation; render
      semantic deployment events and final typed results without changing
