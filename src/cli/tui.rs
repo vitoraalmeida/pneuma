@@ -261,6 +261,61 @@ struct ActionOutcome {
     message: String,
 }
 
+// A deployment log is session-only state: it is created when a deployment
+// action dispatches, accumulates its semantic events, and is retained after
+// the command finishes so the operator can still read what happened.
+enum DeploymentLogState {
+    Running,
+    Completed,
+    Failed(String),
+}
+
+struct DeploymentLog {
+    application_name: String,
+    lines: Vec<String>,
+    state: DeploymentLogState,
+    scroll: u16,
+    tail_follow: bool,
+}
+
+const DEPLOYMENT_LOG_VIEWPORT_ROWS: usize = 6;
+
+impl DeploymentLog {
+    fn new(application_name: String) -> Self {
+        Self {
+            application_name,
+            lines: Vec::new(),
+            state: DeploymentLogState::Running,
+            scroll: 0,
+            tail_follow: true,
+        }
+    }
+
+    fn record_event(&mut self, event: &DeploymentEvent) {
+        self.lines.push(deployment_event_line(event));
+    }
+
+    fn finish(&mut self, result: &Result<CommandResult, WorkerError>) {
+        self.state = match result {
+            Ok(_) => DeploymentLogState::Completed,
+            Err(error) => DeploymentLogState::Failed(error.display()),
+        };
+    }
+
+    // The tail follows the newest rows until scrolling moves away from the
+    // bottom; a detached scroll shows the window that starts at `scroll`.
+    fn visible_lines(&self) -> &[String] {
+        let skip = if self.tail_follow {
+            self.lines
+                .len()
+                .saturating_sub(DEPLOYMENT_LOG_VIEWPORT_ROWS)
+        } else {
+            (self.scroll as usize).min(self.lines.len())
+        };
+        &self.lines[skip..]
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 enum PendingAction {
     SystemCreate {
@@ -882,7 +937,7 @@ struct Session {
     mode: Mode,
     error: Option<String>,
     outcome: Option<ActionOutcome>,
-    progress: Option<Vec<String>>,
+    deployment_log: Option<DeploymentLog>,
     quit_after_completion: bool,
 }
 
@@ -907,7 +962,7 @@ impl Session {
             mode: Mode::Normal,
             error: None,
             outcome: None,
-            progress: None,
+            deployment_log: None,
             quit_after_completion: false,
         };
         session.enqueue(Request::Catalog);
@@ -943,12 +998,41 @@ impl Session {
         let command = request.command();
         self.worker.execute(id, command)?;
         self.active = Some((id, request));
-        if self.active.as_ref().is_some_and(
-            |(_, request)| matches!(request, Request::Action(action) if action.is_deployment()),
-        ) {
-            self.progress = Some(Vec::new());
-        }
+        self.dispatch_deployment_log();
         Ok(())
+    }
+
+    fn dispatch_deployment_log(&mut self) {
+        let Some((_, Request::Action(action))) = self.active.as_ref() else {
+            return;
+        };
+        let Some(application_name) = action.application_name().filter(|_| action.is_deployment())
+        else {
+            return;
+        };
+        self.deployment_log = Some(DeploymentLog::new(application_name.to_owned()));
+    }
+
+    // Retention: the finished log keeps its lines and records the classified
+    // outcome; only a new deployment replaces it.
+    fn finish_deployment_log(
+        &mut self,
+        request: &Request,
+        result: &Result<CommandResult, WorkerError>,
+    ) {
+        let Request::Action(action) = request else {
+            return;
+        };
+        if !action.is_deployment() {
+            return;
+        }
+        let Some(log) = self.deployment_log.as_mut() else {
+            return;
+        };
+        if Some(log.application_name.as_str()) != action.application_name() {
+            return;
+        }
+        log.finish(result);
     }
 
     fn drain_replies(&mut self) -> io::Result<()> {
@@ -962,8 +1046,15 @@ impl Session {
                     if id != *active_id {
                         return Err(io::Error::other("TUI worker reply order changed"));
                     }
-                    if let Some(lines) = self.progress.as_mut() {
-                        lines.push(deployment_event_line(&event));
+                    let deployment_active = self.active.as_ref().is_some_and(|(_, request)| {
+                        request
+                            .action()
+                            .is_some_and(|action| action.is_deployment())
+                    });
+                    if deployment_active {
+                        if let Some(log) = self.deployment_log.as_mut() {
+                            log.record_event(&event);
+                        }
                     }
                 }
                 Ok(WorkerReply::Finished { id, result }) => {
@@ -973,7 +1064,9 @@ impl Session {
                     if id != active_id {
                         return Err(io::Error::other("TUI worker reply order changed"));
                     }
-                    self.progress = None;
+                    // Retention: the finished log keeps its lines and records
+                    // the classified outcome; only a new deployment replaces it.
+                    self.finish_deployment_log(&request, &result);
                     self.apply_result(request, result);
                     self.dispatch_next()?;
                 }
@@ -1694,14 +1787,9 @@ impl Session {
         (details.system.name.as_str() == outcome.scope).then_some(outcome.message.as_str())
     }
 
-    fn deployment_progress_for_detail(&self) -> Option<&[String]> {
-        let lines = self.progress.as_ref()?;
-        let action = self
-            .active
-            .as_ref()
-            .and_then(|(_, request)| request.action().filter(|action| action.is_deployment()))?;
-        let application_name = action.application_name()?;
-        (self.selected_application.as_deref() == Some(application_name)).then_some(lines.as_slice())
+    fn deployment_log_for_detail(&self) -> Option<&DeploymentLog> {
+        let log = self.deployment_log.as_ref()?;
+        (self.selected_application.as_deref() == Some(log.application_name.as_str())).then_some(log)
     }
 }
 
@@ -2110,13 +2198,17 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, sess
         return;
     }
 
-    let progress_active = session.deployment_progress_for_detail().is_some();
+    let log = session.deployment_log_for_detail();
     let detail_areas = Layout::default()
         .direction(Direction::Vertical)
-        .constraints(if progress_active {
-            [Constraint::Percentage(40), Constraint::Min(9)]
+        .constraints(if log.is_some() {
+            vec![
+                Constraint::Percentage(35),
+                Constraint::Min(9),
+                Constraint::Length(4),
+            ]
         } else {
-            [Constraint::Percentage(70), Constraint::Length(4)]
+            vec![Constraint::Percentage(70), Constraint::Length(4)]
         })
         .split(area);
     let summary_areas = Layout::default()
@@ -2153,35 +2245,63 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, sess
             ),
         summary_areas[1],
     );
-    let action_title;
-    let action_text = match session.deployment_progress_for_detail() {
-        Some(lines) => {
-            action_title = Line::styled(
+    let log_area;
+    let action_area = if let Some(log) = log {
+        let (log_area_split, remaining) = detail_areas[1..].split_at(1);
+        log_area = log_area_split[0];
+        let (title, title_style) = match &log.state {
+            DeploymentLogState::Running => (
                 " Deployment progress ",
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
-            );
-            let skipped = lines.len().saturating_sub(6);
-            lines
-                .iter()
-                .skip(skipped)
-                .map(|line| Line::from(line.as_str().to_owned()))
-                .collect::<Vec<_>>()
+            ),
+            DeploymentLogState::Completed => (
+                " Deployment log (completed) ",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            DeploymentLogState::Failed(_) => (
+                " Deployment log (failed) ",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
+        };
+        let mut log_lines = log
+            .visible_lines()
+            .iter()
+            .map(|line| Line::from(line.as_str().to_owned()))
+            .collect::<Vec<_>>();
+        if let DeploymentLogState::Failed(error) = &log.state {
+            log_lines.push(Line::styled(
+                format!("Deployment failed: {error}"),
+                Style::default().fg(Color::Red),
+            ));
         }
-        None => {
-            action_title = Line::styled(" Last action ", title_style());
-            match session.outcome_for_detail() {
-                Some(message) => vec![Line::from(message.to_owned())],
-                None => vec![Line::from("No action has completed for this application.")],
-            }
-        }
+        frame.render_widget(
+            Paragraph::new(log_lines).wrap(Wrap { trim: true }).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(Line::styled(title, title_style)),
+            ),
+            log_area,
+        );
+        let (action_area_split, _) = remaining.split_at(1);
+        action_area_split[0]
+    } else {
+        detail_areas[1]
+    };
+    let action_text = match session.outcome_for_detail() {
+        Some(message) => vec![Line::from(message.to_owned())],
+        None => vec![Line::from("No action has completed for this application.")],
     };
     frame.render_widget(
-        Paragraph::new(action_text)
-            .wrap(Wrap { trim: true })
-            .block(Block::default().borders(Borders::ALL).title(action_title)),
-        detail_areas[1],
+        Paragraph::new(action_text).wrap(Wrap { trim: true }).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(Line::styled(" Last action ", title_style())),
+        ),
+        action_area,
     );
 }
 
@@ -3143,7 +3263,7 @@ mod tests {
     }
 
     #[test]
-    fn deployment_progress_is_scoped_to_its_application_detail() {
+    fn deployment_log_is_scoped_to_its_application_detail() {
         let mut session = detail_session();
         session.catalog = QueryState::Ready(vec![entry("atlas"), entry("beacon")]);
         session.active = Some((
@@ -3153,21 +3273,177 @@ mod tests {
                 branch: "main".to_owned(),
             }),
         ));
-        session.progress = Some(vec![
+        session.deployment_log = Some(deployment_log(vec![
             "Deploying atlas...".to_owned(),
             "pull image: started".to_owned(),
-        ]);
+        ]));
 
         assert_eq!(
             session
-                .deployment_progress_for_detail()
-                .map(<[String]>::len),
+                .deployment_log_for_detail()
+                .map(|log| log.lines.len()),
             Some(2)
         );
 
-        // Selecting another application scopes the progress panel away.
+        // Selecting another application scopes the log panel away, but the
+        // log itself is retained for its own application.
         session.selected_application = Some("beacon".to_owned());
-        assert_eq!(session.deployment_progress_for_detail(), None);
+        assert!(session.deployment_log_for_detail().is_none());
+        assert_eq!(
+            session.deployment_log.as_ref().map(|log| log.lines.len()),
+            Some(2)
+        );
+        session.shutdown().unwrap();
+    }
+
+    fn deployment_log(lines: Vec<String>) -> DeploymentLog {
+        let mut log = DeploymentLog::new("atlas".to_owned());
+        log.lines = lines;
+        log
+    }
+
+    #[test]
+    fn deployment_log_survives_a_successful_finish_and_refreshes() {
+        let mut session = detail_session();
+        session.deployment_log = Some(deployment_log(vec![
+            "Deploying atlas...".to_owned(),
+            "state changed to Succeeded".to_owned(),
+        ]));
+
+        session.finish_deployment_log(
+            &Request::Action(PendingAction::DeployBranch {
+                application_name: "atlas".to_owned(),
+                branch: "main".to_owned(),
+            }),
+            &Ok(CommandResult::ApplicationDeployed {
+                application_name: ApplicationName::new("atlas").unwrap(),
+                deployment: deployment_result(),
+            }),
+        );
+        session.refresh_details();
+
+        let log = session
+            .deployment_log
+            .as_ref()
+            .expect("a finished deployment log must be retained");
+        assert!(matches!(log.state, DeploymentLogState::Completed));
+        assert_eq!(log.lines.len(), 2);
+        assert!(log.tail_follow);
+        session.shutdown().unwrap();
+    }
+
+    #[test]
+    fn deployment_failure_before_any_event_is_recorded_in_the_log() {
+        let mut session = detail_session();
+        session.deployment_log = Some(DeploymentLog::new("atlas".to_owned()));
+
+        session.finish_deployment_log(
+            &Request::Action(PendingAction::Rollback {
+                application_name: "atlas".to_owned(),
+            }),
+            &Err(WorkerError {
+                class: CliErrorClass::Conflict,
+                message: "already has an operation in progress".to_owned(),
+            }),
+        );
+
+        let log = session
+            .deployment_log
+            .as_ref()
+            .expect("a failed deployment log must be retained");
+        assert!(matches!(
+            &log.state,
+            DeploymentLogState::Failed(error)
+                if error == "Conflict: already has an operation in progress"
+        ));
+        assert!(log.lines.is_empty());
+        session.shutdown().unwrap();
+    }
+
+    #[test]
+    fn non_deployment_actions_and_new_dispatches_treat_the_log_correctly() {
+        let mut session = detail_session();
+        session.deployment_log = Some(deployment_log(vec!["Deploying atlas...".to_owned()]));
+
+        // Confirming a deployment only queues it: the previous log stays.
+        session.execute_action(PendingAction::DeployBranch {
+            application_name: "atlas".to_owned(),
+            branch: "feature".to_owned(),
+        });
+        assert!(session.deployment_log.as_ref().is_some_and(|log| {
+            log.lines
+                .first()
+                .is_some_and(|line| line == "Deploying atlas...")
+        }));
+
+        // The queued deployment replaces the log only when it dispatches.
+        session.active = Some((
+            42,
+            Request::Action(PendingAction::DeployBranch {
+                application_name: "atlas".to_owned(),
+                branch: "feature".to_owned(),
+            }),
+        ));
+        session.dispatch_deployment_log();
+        let log = session
+            .deployment_log
+            .as_ref()
+            .expect("a dispatched deployment must open a new log");
+        assert_eq!(log.application_name, "atlas");
+        assert!(matches!(log.state, DeploymentLogState::Running));
+        assert!(log.lines.is_empty());
+
+        // A completed non-deployment action keeps the log untouched.
+        session.apply_success(
+            Request::Action(PendingAction::Start {
+                application_name: "atlas".to_owned(),
+            }),
+            CommandResult::ApplicationStarted {
+                application_name: ApplicationName::new("atlas").unwrap(),
+                observation: runtime_observation(),
+            },
+        );
+        let log = session
+            .deployment_log
+            .as_ref()
+            .expect("a non-deployment action must not clear the log");
+        assert!(matches!(log.state, DeploymentLogState::Running));
+        session.shutdown().unwrap();
+    }
+
+    #[test]
+    fn the_retained_log_renders_with_its_state_and_keeps_the_last_action() {
+        let mut session = detail_session();
+        session.deployment_log = Some(deployment_log(vec![
+            "Deploying atlas...".to_owned(),
+            "pull image: started".to_owned(),
+        ]));
+        session.outcome = Some(ActionOutcome {
+            scope: "atlas".to_owned(),
+            message: "Deployed atlas: deployment 1 promoted".to_owned(),
+        });
+
+        let rendered = rendered_shell(&session);
+        assert!(rendered.contains("Deployment progress"), "{rendered:?}");
+        assert!(rendered.contains("Deploying atlas..."), "{rendered:?}");
+        assert!(rendered.contains("pull image: started"), "{rendered:?}");
+        assert!(
+            rendered.contains("Deployed atlas: deployment 1 promoted"),
+            "{rendered:?}"
+        );
+
+        if let Some(log) = session.deployment_log.as_mut() {
+            log.finish(&Ok(CommandResult::ApplicationDeployed {
+                application_name: ApplicationName::new("atlas").unwrap(),
+                deployment: deployment_result(),
+            }));
+        }
+        let rendered = rendered_shell(&session);
+        assert!(
+            rendered.contains("Deployment log (completed)"),
+            "{rendered:?}"
+        );
+        assert!(rendered.contains("pull image: started"), "{rendered:?}");
         session.shutdown().unwrap();
     }
 

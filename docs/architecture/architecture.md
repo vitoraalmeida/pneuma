@@ -164,7 +164,9 @@ commands,
 system creation and application import submit the exact `SystemCreate` and
 `ImportApplication` commands with locally validated form values, and rollback
 requires a confirmation; deployment commands run through the event
-observer so their semantic progress is presentation-only, and every action
+observer so their semantic progress is presentation-only, the interface retains
+the finished deployment log with its classified outcome for the session, and
+every action
 retains the existing CLI error class with its diagnostic message in the
 interface.
 Completed actions are shown only in the corresponding detail view.

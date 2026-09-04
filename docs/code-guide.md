@@ -80,7 +80,9 @@ never reaches the worker, and submit directly because the Enter press itself is
 the explicit submission. The worker executes deployment commands with
 `execute_with_events` and forwards semantic `DeploymentEvent` values to the
 presentation thread; the interface renders them as best-effort progress lines
-that can never change command execution, compensation, or persistence. Worker
+that can never change command execution, compensation, or persistence, and the
+session retains the finished log with its classified outcome until another
+deployment dispatches. Worker
 failures pass
 through `CliError::from_control` before presentation, so the visible diagnostic
 retains its `Failure`, `Not found`, `Conflict`, or `External` class. After an

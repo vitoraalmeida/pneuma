@@ -449,8 +449,13 @@ digest-pinned image source, the terminal cursor marks the exact edit position
 of the highlighted field, and Enter submits it to the existing deploy command.
 Use `b` to roll
 back to the previous successful release after confirming. While a deployment or
-rollback runs, its semantic steps stream into a `Deployment progress` panel and
-the final typed result lands in the `Last action` panel. Key hints in the footer
+rollback runs, its semantic steps stream into a `Deployment progress` panel;
+when the command finishes the panel is retained for the session as
+`Deployment log (completed)` or `Deployment log (failed)` with the classified
+error, so the recorded steps stay readable, and the final typed result lands in
+the `Last action` panel. Only a newly dispatched deployment replaces the
+retained log; refreshes and non-deployment actions never clear it. Key hints in
+the footer
 carry background badges, and state values use color: green for succeeded and
 running, red for failed and missing, yellow for nonterminal transitions. The TUI
 shows the existing error class and diagnostic when an action fails, then refreshes
