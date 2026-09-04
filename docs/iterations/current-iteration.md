@@ -34,10 +34,10 @@ domain, use-case, persistence, or external-effect decisions.
 7. Mutating actions require an explicit in-TUI confirmation. Deployment and
    rollback show the existing semantic deployment events while the command is
    executing; terminal cleanup runs on success, command failure, and TUI error.
-8. The initial TUI covers application catalog, application details and
-   deployment history, runtime status, start, stop, reconcile, visibility,
-   deploy by branch or digest, and rollback. Import, system administration,
-   doctor, backup, restore, and restricted CI dispatch remain CLI-only.
+8. The TUI covers system catalog and creation; application import, catalog, and
+   details; deployment history; runtime status; start, stop, reconcile,
+   visibility, deploy by branch or digest, and rollback. Doctor, backup,
+   restore, and restricted CI dispatch remain CLI-only.
 
 ## Non-goals
 
@@ -106,7 +106,13 @@ domain, use-case, persistence, or external-effect decisions.
       the selection automatically: the first item's details load without an
       explicit request, selection movement reloads them, and Enter only moves
       the keyboard focus to the details column.
-6. [ ] Operational regression and closure
+6. [ ] Application operational visibility and retained deployment logs
+   - Render the selected Application's on-demand runtime observation directly
+     in its details, without presenting it as live polling.
+   - Retain the selected Application's semantic deployment log after completion
+     and allow keyboard focus, scrolling, paging, and tail-following without
+     adding raw container logs or persistence.
+7. [ ] Operational regression and closure
    - Synchronize implemented documentation and run the required Rust, markdown,
      shell, and applicable disposable-VM regression ladder.
 
@@ -121,6 +127,9 @@ domain, use-case, persistence, or external-effect decisions.
   command execution.
 - Deployment and rollback progress is rendered from semantic events, and a TUI
   rendering failure cannot alter deployment success, failure, or compensation.
+- The Applications detail view shows its matching on-demand runtime observation,
+  and deployment logs remain readable and scrollable for the session after the
+  command completes without becoming persistent authority.
 - Focused adapter tests and the full required CI gates pass. Disposable-VM
   regression and environment-dependent checks are recorded as PASS, FAIL, or
   SKIP with their actual prerequisites.
@@ -149,4 +158,4 @@ None.
   `cargo fmt --check`, clippy with `-D warnings`, all-feature tests, the
   release build, markdown links, and `git diff --check` are green.
 - Rootless Podman OCI tests: SKIP (3 ignored tests require a configured
-  rootless Podman host). Disposable-VM regression is deferred to checkpoint 5.
+  rootless Podman host). Disposable-VM regression is deferred to checkpoint 7.

@@ -225,7 +225,11 @@ path.
 - [x] Establish the `pneuma tui` command and safe terminal lifecycle.
 - [x] Add catalog, application detail, deployment history, and status views.
 - [x] Add confirmed lifecycle, reconciliation, and visibility actions.
-- [ ] Add branch/digest deployment and confirmed rollback actions.
+- [x] Add branch/digest deployment and confirmed rollback actions.
+- [x] Organize Systems, Applications, and Deployments into tabbed list/detail
+  navigation with automatic detail loading.
+- [ ] Show runtime observations in Application details and retain scrollable
+  semantic deployment logs for the session.
 - [ ] Complete operational regression and documentation synchronization.
 
 ## v0.6 - Observed State / Host Observation
