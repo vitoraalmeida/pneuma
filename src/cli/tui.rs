@@ -2674,13 +2674,11 @@ fn draw_footer(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, sess
         Line::from(spans)
     };
     frame.render_widget(
-        Paragraph::new(line)
-            .style(Style::default().bg(Color::DarkGray).fg(Color::Gray))
-            .block(
-                Block::default()
-                    .borders(Borders::TOP)
-                    .border_style(Style::default().fg(Color::DarkGray)),
-            ),
+        Paragraph::new(line).block(
+            Block::default()
+                .borders(Borders::TOP)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        ),
         area,
     );
 }
@@ -4020,6 +4018,14 @@ mod tests {
                 .bg,
             Some(Color::Cyan),
             "key badges must carry a background color"
+        );
+        // The hint bar itself has no background; untouched cells keep the
+        // terminal default while only each badge is colored.
+        let tail_cell = terminal.backend().buffer()[(119, footer_row)].style().bg;
+        assert_eq!(
+            tail_cell,
+            Some(Color::Reset),
+            "the footer bar must have no background color"
         );
         session.shutdown().unwrap();
     }
