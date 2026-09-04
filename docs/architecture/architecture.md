@@ -150,8 +150,12 @@ restoration, keyboard input, and presentation; one worker owns a
 intent and whether an Application has a successful deployment without claiming
 it is running. Opening an Application loads deployment history and obtains a
 runtime observation on demand through the existing control boundary. Start,
-stop, reconcile, and visibility requests require a TUI confirmation and retain
-the existing CLI error class with their diagnostic message in the interface.
+stop, reconcile, and visibility requests require a TUI confirmation, deploy
+forms submit a branch or digest-pinned image as the existing deploy commands,
+and rollback requires a confirmation; deployment commands run through the event
+observer so their semantic progress is presentation-only, and every action
+retains
+the existing CLI error class with its diagnostic message in the interface.
 Completed actions are shown only in the corresponding Application detail view.
 Process bootstrap
 (`src/host_environment.rs`) validates and applies the host environment file

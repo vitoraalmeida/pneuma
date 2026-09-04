@@ -79,10 +79,17 @@ domain, use-case, persistence, or external-effect decisions.
       a confirmed follow-up action queues behind the active command and
       supersedes queued refresh reads. Completed action feedback is scoped to
       the matching detail view and remains visible in its `Last action` panel.
-4. [ ] Deployment and rollback interaction
+4. [x] Deployment and rollback interaction
    - Add branch and digest deployment forms plus rollback confirmation; render
      semantic deployment events and final typed results without changing
      deployment execution or compensation.
+   - Result: The TUI deploy form submits the exact `DeployBranch` or
+     `DeployImage` command and `b` confirms `Rollback`. The worker forwards
+     semantic deployment events as presentation-only progress lines, the typed
+     promoted result lands in the detail view's `Last action` panel, and
+     success or failure refreshes the catalog and history. A PTY regression
+     deploys the current branch through the form and verifies the rendered
+     result and terminal restoration.
 5. [ ] Operational regression and closure
    - Synchronize implemented documentation and run the required Rust, markdown,
      shell, and applicable disposable-VM regression ladder.
@@ -117,5 +124,9 @@ None.
 - Checkpoint 3: focused confirmation, action routing, typed-error, lifecycle,
   and exposure tests, `cargo fmt --check`, clippy with `-D warnings`, all-feature
   tests, the release build, markdown links, and `git diff --check` are green.
+- Checkpoint 4: focused TUI form, event, typed-result, and refresh tests, the
+  PTY branch-deploy regression, `cargo fmt --check`, clippy with `-D warnings`,
+  all-feature tests, the release build, markdown links, and `git diff --check`
+  are green.
 - Rootless Podman OCI tests: SKIP (3 ignored tests require a configured
   rootless Podman host). Disposable-VM regression is deferred to checkpoint 5.

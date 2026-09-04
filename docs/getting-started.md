@@ -426,7 +426,13 @@ the session.
 
 In an Application detail view, use `s` to start, `x` to stop, `c` to reconcile,
 `p` to set public visibility, or `i` to set internal visibility. Each action
-opens a confirmation: Enter or `y` executes it; Esc or `n` cancels it. The TUI
+opens a confirmation: Enter or `y` executes it; Esc or `n` cancels it. Use `d`
+to open the deployment form: Tab switches between the branch and the
+digest-pinned image source, the typed value is edited with printable keys and
+Backspace, and Enter submits it to the existing deploy command. Use `b` to roll
+back to the previous successful release after confirming. While a deployment or
+rollback runs, its semantic steps stream into a `Deployment progress` panel and
+the final typed result lands in the `Last action` panel. The TUI
 shows the existing error class and diagnostic when an action fails, then refreshes
 the affected data. Its `Last action` panel shows a completed action only for the
 Application being inspected. A new confirmed action replaces queued refresh reads

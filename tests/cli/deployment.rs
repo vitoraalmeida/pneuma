@@ -752,3 +752,276 @@ fn rollback_without_previous_deployment_exits_with_code_four() {
         "unexpected stderr: {stderr}"
     );
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn tui_deploys_from_a_branch_form_and_restores_the_pseudo_terminal() {
+    use std::fs::File;
+    use std::io::Read;
+    use std::mem::MaybeUninit;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::time::Instant;
+
+    fn duplicate(file: &File) -> File {
+        let descriptor = unsafe { libc::dup(file.as_raw_fd()) };
+        assert_ne!(descriptor, -1, "failed to duplicate pseudo-terminal");
+        unsafe { File::from_raw_fd(descriptor) }
+    }
+
+    fn local_flags(file: &File) -> libc::tcflag_t {
+        let mut attributes = MaybeUninit::<libc::termios>::uninit();
+        let result = unsafe { libc::tcgetattr(file.as_raw_fd(), attributes.as_mut_ptr()) };
+        assert_eq!(result, 0, "failed to inspect pseudo-terminal mode");
+        unsafe { attributes.assume_init().c_lflag }
+    }
+
+    fn wait_for_succeeded_deployment(database_path: &std::path::Path) {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let deployments = database::open(database_path).ok().and_then(|connection| {
+                connection
+                    .query_row(
+                        "SELECT COUNT(*) FROM deployments
+                         WHERE type = 'deploy' AND status = 'succeeded'",
+                        [],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .ok()
+            });
+            if deployments == Some(1) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for the succeeded branch deployment"
+            );
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    // Removes cursor-control sequences so words that were first drawn onto a
+    // blank row appear contiguously in the remaining text stream.
+    fn strip_escape_sequences(stream: &str) -> String {
+        let mut text = String::new();
+        let mut characters = stream.chars();
+        while let Some(character) = characters.next() {
+            if character != '\u{1b}' {
+                text.push(character);
+                continue;
+            }
+            if characters.next() == Some('[') {
+                for escaped in characters.by_ref() {
+                    if ('@'..='~').contains(&escaped) {
+                        break;
+                    }
+                }
+            }
+        }
+        text
+    }
+
+    // Replays the diff stream onto a virtual grid so the final screen state can
+    // be asserted as plain text regardless of which cells each frame redraws.
+    fn final_screen_text(stream: &str) -> String {
+        const ROWS: usize = 40;
+        const COLUMNS: usize = 120;
+        let mut grid = vec![vec![' '; COLUMNS]; ROWS];
+        let (mut row, mut column) = (0usize, 0usize);
+        let mut characters = stream.chars();
+        while let Some(character) = characters.next() {
+            if character != '\u{1b}' {
+                if character != '\n' && character != '\r' {
+                    if row < ROWS && column < COLUMNS {
+                        grid[row][column] = character;
+                    }
+                    column += 1;
+                }
+                continue;
+            }
+            if characters.next() != Some('[') {
+                continue;
+            }
+            let mut parameters = String::new();
+            let final_byte = loop {
+                match characters.next() {
+                    Some(c) if c.is_ascii_digit() || c == ';' || c == '?' => parameters.push(c),
+                    Some(c) => break c,
+                    None => panic!("unterminated escape sequence"),
+                }
+            };
+            if final_byte == 'H' {
+                let mut parts = parameters.split(';');
+                let line = parts
+                    .next()
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .unwrap_or(1);
+                let next_column = parts
+                    .next()
+                    .and_then(|value| value.parse::<usize>().ok())
+                    .unwrap_or(1);
+                row = line.saturating_sub(1);
+                column = next_column.saturating_sub(1);
+            }
+        }
+        grid.into_iter()
+            .map(|line| line.into_iter().collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || respond_once(&listener, 200));
+
+    let mut master = -1;
+    let mut slave = -1;
+    let window_size = libc::winsize {
+        ws_row: 40,
+        ws_col: 120,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    let opened = unsafe {
+        libc::openpty(
+            &mut master,
+            &mut slave,
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            &window_size,
+        )
+    };
+    assert_eq!(opened, 0, "failed to open pseudo-terminal");
+
+    let mut input = unsafe { File::from_raw_fd(master) };
+    let terminal = unsafe { File::from_raw_fd(slave) };
+    let original_flags = local_flags(&terminal);
+    let output_reader = duplicate(&input);
+    let collected = thread::spawn(move || {
+        let mut reader = output_reader;
+        let mut bytes = Vec::new();
+        let mut chunk = [0u8; 4096];
+        loop {
+            match reader.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => bytes.extend_from_slice(&chunk[..read]),
+            }
+        }
+        bytes
+    });
+
+    let digest = format!("sha256:{}", "a".repeat(64));
+    let mut child = Command::new(env!("CARGO_BIN_EXE_pneuma"))
+        .env("PNEUMA_DATABASE_PATH", &environment.database_path)
+        .env("PNEUMA_WORKSPACE_PATH", &environment.workspace_path)
+        .env(
+            "PNEUMA_CADDY_MANAGED_PATH",
+            &environment.managed_caddy_directory,
+        )
+        .env("PNEUMA_CADDYFILE_PATH", &environment.caddyfile_path)
+        .env("PNEUMA_QUADLET_DIR", environment.root.join("quadlets"))
+        .env("PATH", executable_path(&environment.fake_bin))
+        .env("PNEUMA_FAKE_PORT", port.to_string())
+        .env("PNEUMA_RUNTIME_PORT_RANGE", format!("{port}-{port}"))
+        .env(
+            "PNEUMA_FAKE_PODMAN_COUNT",
+            environment.root.join("podman-count"),
+        )
+        .env(
+            "PNEUMA_FAKE_PODMAN_LOG",
+            environment.root.join("podman.log"),
+        )
+        .env("PNEUMA_FAKE_CURL_LOG", environment.root.join("curl.log"))
+        .env("PNEUMA_FAKE_CURL_STATUS", "200")
+        .env("PNEUMA_FAKE_PODMAN_DIGEST", digest)
+        .env("PNEUMA_ASSERT_CLOSED_DATABASE", &environment.database_path)
+        .args(["tui"])
+        .stdin(Stdio::from(duplicate(&terminal)))
+        .stdout(Stdio::from(duplicate(&terminal)))
+        .stderr(Stdio::from(duplicate(&terminal)))
+        .spawn()
+        .unwrap();
+
+    let ready_deadline = Instant::now() + Duration::from_secs(5);
+    while local_flags(&terminal) == original_flags {
+        assert!(
+            Instant::now() < ready_deadline,
+            "TUI did not enter raw mode"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    // Open the application details once the initial catalog has loaded.
+    for _ in 0..10 {
+        input.write_all(b"\r").unwrap();
+        input.flush().unwrap();
+        thread::sleep(Duration::from_millis(100));
+    }
+    thread::sleep(Duration::from_millis(300));
+
+    // Open the deploy form and submit the current branch.
+    input.write_all(b"d").unwrap();
+    input.flush().unwrap();
+    thread::sleep(Duration::from_millis(100));
+    input.write_all(b"main").unwrap();
+    input.flush().unwrap();
+    thread::sleep(Duration::from_millis(100));
+    input.write_all(b"\r").unwrap();
+    input.flush().unwrap();
+
+    wait_for_succeeded_deployment(&environment.database_path);
+    // Let the deployment command finish and its typed result frame render
+    // before quitting, so the settled screen carries the final outcome.
+    thread::sleep(Duration::from_secs(2));
+
+    input.write_all(b"q").unwrap();
+    input.flush().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            assert!(status.success(), "TUI did not exit successfully: {status}");
+            break;
+        }
+        assert!(Instant::now() < deadline, "TUI did not exit after q");
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(local_flags(&terminal), original_flags);
+    drop(terminal);
+    drop(child);
+    let screen = String::from_utf8_lossy(&collected.join().unwrap()).to_string();
+    // Semantic deployment events render with the shared CLI step vocabulary;
+    // each step is first drawn onto a blank progress row, so its words survive
+    // the diff stream contiguously after stripping cursor-control sequences.
+    let text = strip_escape_sequences(&screen);
+    assert!(
+        text.contains("pullimage:started"),
+        "expected semantic deployment progress on screen: {screen:?}"
+    );
+    // The typed final result stays visible in the detail view, so replay the
+    // stream onto a grid and assert the settled screen contents.
+    let settled = final_screen_text(&screen);
+    assert!(
+        settled.contains("Deployed another-site: deployment"),
+        "expected the typed deploy result on the final screen: {settled:?}"
+    );
+    assert!(
+        settled.contains("promoted"),
+        "expected the promoted artifact summary on the final screen: {settled:?}"
+    );
+    server.join().unwrap();
+
+    let connection = database::open(&environment.database_path).unwrap();
+    let source_revision: Option<String> = connection
+        .query_row(
+            "SELECT source_revision FROM deployments WHERE type = 'deploy' AND status = 'succeeded'",
+            [],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .unwrap();
+    assert!(
+        source_revision.is_some(),
+        "branch deploy must record its revision"
+    );
+}

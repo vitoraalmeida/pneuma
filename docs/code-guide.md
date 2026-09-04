@@ -53,7 +53,14 @@ usable for refresh or quit.
 In an Application detail view, `s` starts, `x` stops, `c` reconciles, `p` sets
 public visibility, and `i` sets internal visibility. Each action first opens a
 concrete confirmation modal; only Enter or `y` submits its existing control
-command, while Esc or `n` cancels without execution. Worker failures pass
+command, while Esc or `n` cancels without execution. `d` opens a deployment
+form whose typed branch or digest-pinned image value becomes the exact
+`Command::DeployBranch` or `Command::DeployImage`, and `b` confirms a
+`Command::Rollback`. The worker executes deployment commands with
+`execute_with_events` and forwards semantic `DeploymentEvent` values to the
+presentation thread; the interface renders them as best-effort progress lines
+that can never change command execution, compensation, or persistence. Worker
+failures pass
 through `CliError::from_control` before presentation, so the visible diagnostic
 retains its `Failure`, `Not found`, `Conflict`, or `External` class. After an
 action succeeds or fails, the TUI serializes the required catalog and detail

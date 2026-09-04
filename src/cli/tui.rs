@@ -10,9 +10,11 @@ use crossterm::{
     execute, terminal,
 };
 use pneuma::control::{Command, CommandResult, ControlExecutor};
+use pneuma::domain::application::ApplicationName;
 use pneuma::domain::deployment::DeploymentHistory;
 use pneuma::domain::exposure::Visibility;
 use pneuma::use_cases::application::{ApplicationCatalogEntry, RuntimeObservation};
+use pneuma::use_cases::deployment::{DeploymentEvent, DeploymentResult};
 use ratatui::{
     Terminal,
     backend::CrosstermBackend,
@@ -155,6 +157,17 @@ enum PendingAction {
         application_name: String,
         visibility: Visibility,
     },
+    DeployBranch {
+        application_name: String,
+        branch: String,
+    },
+    DeployImage {
+        application_name: String,
+        image_reference: String,
+    },
+    Rollback {
+        application_name: String,
+    },
 }
 
 impl PendingAction {
@@ -165,7 +178,14 @@ impl PendingAction {
             | Self::Reconcile { application_name }
             | Self::SetVisibility {
                 application_name, ..
-            } => application_name,
+            }
+            | Self::DeployBranch {
+                application_name, ..
+            }
+            | Self::DeployImage {
+                application_name, ..
+            }
+            | Self::Rollback { application_name } => application_name,
         }
     }
 
@@ -186,6 +206,23 @@ impl PendingAction {
             } => Command::VisibilitySet {
                 application_name: application_name.clone(),
                 visibility: *visibility,
+            },
+            Self::DeployBranch {
+                application_name,
+                branch,
+            } => Command::DeployBranch {
+                application_name: application_name.clone(),
+                branch: branch.clone(),
+            },
+            Self::DeployImage {
+                application_name,
+                image_reference,
+            } => Command::DeployImage {
+                application_name: application_name.clone(),
+                image_reference: image_reference.clone(),
+            },
+            Self::Rollback { application_name } => Command::Rollback {
+                application_name: application_name.clone(),
             },
         }
     }
@@ -212,6 +249,116 @@ impl PendingAction {
                 "Set {application_name} visibility to {}? This may change Caddy exposure.",
                 output::visibility_label(*visibility)
             ),
+            Self::DeployBranch {
+                application_name,
+                branch,
+            } => format!(
+                "Deploy {application_name} from branch {branch}? This resolves and deploys its current artifact."
+            ),
+            Self::DeployImage {
+                application_name,
+                image_reference,
+            } => format!(
+                "Deploy {application_name} from image {image_reference}? This deploys the digest-pinned artifact."
+            ),
+            Self::Rollback { application_name } => format!(
+                "Roll back {application_name} to its previous successful release? This deploys a new rollback deployment."
+            ),
+        }
+    }
+
+    fn is_deployment(&self) -> bool {
+        matches!(
+            self,
+            Self::DeployBranch { .. } | Self::DeployImage { .. } | Self::Rollback { .. }
+        )
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DeploySource {
+    Branch,
+    Image,
+}
+
+struct DeployForm {
+    application_name: String,
+    branch: String,
+    image: String,
+    source: DeploySource,
+    error: Option<String>,
+}
+
+impl DeployForm {
+    fn new(application_name: String) -> Self {
+        Self {
+            application_name,
+            branch: String::new(),
+            image: String::new(),
+            source: DeploySource::Branch,
+            error: None,
+        }
+    }
+
+    fn toggle_source(&mut self) {
+        self.error = None;
+        self.source = match self.source {
+            DeploySource::Branch => DeploySource::Image,
+            DeploySource::Image => DeploySource::Branch,
+        };
+    }
+
+    fn push(&mut self, character: char) {
+        self.error = None;
+        match self.source {
+            DeploySource::Branch => self.branch.push(character),
+            DeploySource::Image => self.image.push(character),
+        }
+    }
+
+    fn backspace(&mut self) {
+        self.error = None;
+        match self.source {
+            DeploySource::Branch => {
+                self.branch.pop();
+            }
+            DeploySource::Image => {
+                self.image.pop();
+            }
+        }
+    }
+
+    fn value(&self) -> &str {
+        match self.source {
+            DeploySource::Branch => &self.branch,
+            DeploySource::Image => &self.image,
+        }
+    }
+
+    fn submit(&mut self) -> Option<PendingAction> {
+        match self.source {
+            DeploySource::Branch => {
+                if self.branch.is_empty() {
+                    self.error = Some("Enter a branch or tag to deploy.".to_owned());
+                    None
+                } else {
+                    Some(PendingAction::DeployBranch {
+                        application_name: self.application_name.clone(),
+                        branch: self.branch.clone(),
+                    })
+                }
+            }
+            DeploySource::Image => {
+                if self.image.is_empty() {
+                    self.error = Some("Enter a digest-pinned image reference.".to_owned());
+                    None
+                } else {
+                    Some(PendingAction::DeployImage {
+                        application_name: self.application_name.clone(),
+                        image_reference: self.image.clone(),
+                    })
+                }
+            }
         }
     }
 }
@@ -219,6 +366,7 @@ impl PendingAction {
 enum Mode {
     Normal,
     Confirm(PendingAction),
+    Form(DeployForm),
 }
 
 enum Request {
@@ -278,6 +426,10 @@ enum WorkerRequest {
 }
 
 enum WorkerReply {
+    Event {
+        id: u64,
+        event: DeploymentEvent,
+    },
     Finished {
         id: u64,
         result: Result<CommandResult, WorkerError>,
@@ -328,7 +480,21 @@ fn run_worker(requests: Receiver<WorkerRequest>, replies: Sender<WorkerReply>) {
     while let Ok(request) = requests.recv() {
         match request {
             WorkerRequest::Execute { id, command } => {
-                let result = executor.execute(command).map_err(WorkerError::from_control);
+                let result = match &command {
+                    Command::DeployImage { .. }
+                    | Command::DeployBranch { .. }
+                    | Command::Rollback { .. } => {
+                        let events = replies.clone();
+                        executor
+                            .execute_with_events(command, &mut |event| {
+                                // Event delivery is observational: a disconnected
+                                // interface never changes command execution.
+                                let _ = events.send(WorkerReply::Event { id, event });
+                            })
+                            .map_err(WorkerError::from_control)
+                    }
+                    _ => executor.execute(command).map_err(WorkerError::from_control),
+                };
                 if replies.send(WorkerReply::Finished { id, result }).is_err() {
                     return;
                 }
@@ -352,6 +518,7 @@ struct Session {
     mode: Mode,
     error: Option<String>,
     outcome: Option<ActionOutcome>,
+    progress: Option<Vec<String>>,
     quit_after_completion: bool,
 }
 
@@ -371,6 +538,7 @@ impl Session {
             mode: Mode::Normal,
             error: None,
             outcome: None,
+            progress: None,
             quit_after_completion: false,
         };
         session.enqueue(Request::Catalog);
@@ -405,6 +573,11 @@ impl Session {
         let command = request.command();
         self.worker.execute(id, command)?;
         self.active = Some((id, request));
+        if self.active.as_ref().is_some_and(
+            |(_, request)| matches!(request, Request::Action(action) if action.is_deployment()),
+        ) {
+            self.progress = Some(Vec::new());
+        }
         Ok(())
     }
 
@@ -412,6 +585,17 @@ impl Session {
         self.dispatch_next()?;
         loop {
             match self.worker.replies.try_recv() {
+                Ok(WorkerReply::Event { id, event }) => {
+                    let Some((active_id, _)) = self.active.as_ref() else {
+                        return Err(io::Error::other("TUI received an unexpected worker reply"));
+                    };
+                    if id != *active_id {
+                        return Err(io::Error::other("TUI worker reply order changed"));
+                    }
+                    if let Some(lines) = self.progress.as_mut() {
+                        lines.push(deployment_event_line(&event));
+                    }
+                }
                 Ok(WorkerReply::Finished { id, result }) => {
                     let Some((active_id, request)) = self.active.take() else {
                         return Err(io::Error::other("TUI received an unexpected worker reply"));
@@ -419,6 +603,7 @@ impl Session {
                     if id != active_id {
                         return Err(io::Error::other("TUI worker reply order changed"));
                     }
+                    self.progress = None;
                     self.apply_result(request, result);
                     self.dispatch_next()?;
                 }
@@ -431,6 +616,9 @@ impl Session {
     }
 
     fn handle_key(&mut self, event: KeyEvent) -> io::Result<()> {
+        if let Mode::Form(_) = self.mode {
+            return self.handle_form_key(event);
+        }
         if let Mode::Confirm(action) = &self.mode {
             return self.handle_confirmation(event, action.clone());
         }
@@ -438,8 +626,7 @@ impl Session {
         if event.code == KeyCode::Char('q')
             || (event.code == KeyCode::Char('c') && event.modifiers.contains(KeyModifiers::CONTROL))
         {
-            self.queued.clear();
-            self.quit_after_completion = true;
+            self.request_quit();
             return Ok(());
         }
         match (self.route, event.code) {
@@ -451,7 +638,7 @@ impl Session {
             }
             (Route::Catalog, KeyCode::Enter) if !self.is_busy() => self.open_details(),
             (Route::Catalog, KeyCode::Char('r')) if !self.is_busy() => self.refresh_catalog(),
-            (Route::Catalog, KeyCode::Esc) if !self.is_busy() => self.quit_after_completion = true,
+            (Route::Catalog, KeyCode::Esc) if !self.is_busy() => self.request_quit(),
             (Route::Details, KeyCode::Esc) if !self.is_busy() => self.route = Route::Catalog,
             (Route::Details, KeyCode::Char('r')) if !self.is_busy() => self.refresh_details(),
             (Route::Details, KeyCode::Char('s')) => {
@@ -467,6 +654,16 @@ impl Session {
             (Route::Details, KeyCode::Char('c')) => {
                 if let Some(application_name) = self.detail_application.clone() {
                     self.confirm(PendingAction::Reconcile { application_name });
+                }
+            }
+            (Route::Details, KeyCode::Char('d')) => {
+                if let Some(application_name) = self.detail_application.clone() {
+                    self.open_deploy_form(application_name);
+                }
+            }
+            (Route::Details, KeyCode::Char('b')) => {
+                if let Some(application_name) = self.detail_application.clone() {
+                    self.confirm(PendingAction::Rollback { application_name });
                 }
             }
             (Route::Details, KeyCode::Char('p')) => {
@@ -490,6 +687,37 @@ impl Session {
         Ok(())
     }
 
+    fn handle_form_key(&mut self, event: KeyEvent) -> io::Result<()> {
+        let Mode::Form(mut form) = std::mem::replace(&mut self.mode, Mode::Normal) else {
+            return Ok(());
+        };
+        if event.code == KeyCode::Char('c') && event.modifiers.contains(KeyModifiers::CONTROL) {
+            self.request_quit();
+            return Ok(());
+        }
+        match event.code {
+            KeyCode::Esc => {}
+            KeyCode::Enter => match form.submit() {
+                Some(action) => self.execute_action(action),
+                None => self.mode = Mode::Form(form),
+            },
+            KeyCode::Backspace => {
+                form.backspace();
+                self.mode = Mode::Form(form);
+            }
+            KeyCode::Tab | KeyCode::Left | KeyCode::Right => {
+                form.toggle_source();
+                self.mode = Mode::Form(form);
+            }
+            KeyCode::Char(character) => {
+                form.push(character);
+                self.mode = Mode::Form(form);
+            }
+            _ => self.mode = Mode::Form(form),
+        }
+        Ok(())
+    }
+
     fn handle_confirmation(&mut self, event: KeyEvent, action: PendingAction) -> io::Result<()> {
         match event.code {
             KeyCode::Enter | KeyCode::Char('y') => {
@@ -502,10 +730,21 @@ impl Session {
         Ok(())
     }
 
+    fn request_quit(&mut self) {
+        self.queued.clear();
+        self.quit_after_completion = true;
+    }
+
     fn confirm(&mut self, action: PendingAction) {
         self.error = None;
         self.outcome = None;
         self.mode = Mode::Confirm(action);
+    }
+
+    fn open_deploy_form(&mut self, application_name: String) {
+        self.error = None;
+        self.outcome = None;
+        self.mode = Mode::Form(DeployForm::new(application_name));
     }
 
     fn execute_action(&mut self, action: PendingAction) {
@@ -668,6 +907,35 @@ impl Session {
                 });
                 self.refresh_after_action(&action);
             }
+            (
+                Request::Action(
+                    action @ (PendingAction::DeployBranch { .. }
+                    | PendingAction::DeployImage { .. }),
+                ),
+                CommandResult::ApplicationDeployed {
+                    application_name: result_name,
+                    deployment,
+                },
+            ) if action.application_name() == result_name.as_str() => {
+                self.outcome = Some(ActionOutcome {
+                    application_name: result_name.as_str().to_owned(),
+                    message: deployment_result_message("Deployed", &result_name, &deployment),
+                });
+                self.refresh_after_action(&action);
+            }
+            (
+                Request::Action(action @ PendingAction::Rollback { .. }),
+                CommandResult::ApplicationRolledBack {
+                    application_name: result_name,
+                    deployment,
+                },
+            ) if action.application_name() == result_name.as_str() => {
+                self.outcome = Some(ActionOutcome {
+                    application_name: result_name.as_str().to_owned(),
+                    message: deployment_result_message("Rolled back", &result_name, &deployment),
+                });
+                self.refresh_after_action(&action);
+            }
             (request, _) => self.apply_error(
                 request,
                 "TUI received an unexpected control result".to_owned(),
@@ -702,7 +970,14 @@ impl Session {
                     application_name: application_name.clone(),
                 });
             }
-            PendingAction::Reconcile { application_name } => {
+            PendingAction::Reconcile { application_name }
+            | PendingAction::DeployBranch {
+                application_name, ..
+            }
+            | PendingAction::DeployImage {
+                application_name, ..
+            }
+            | PendingAction::Rollback { application_name } => {
                 self.deployments = QueryState::Loading;
                 self.runtime = QueryState::Loading;
                 self.enqueue(Request::Deployments {
@@ -735,6 +1010,40 @@ impl Session {
         let outcome = self.outcome.as_ref()?;
         (self.detail_application.as_deref() == Some(outcome.application_name.as_str()))
             .then_some(outcome.message.as_str())
+    }
+
+    fn deployment_progress_for_detail(&self) -> Option<&[String]> {
+        let lines = self.progress.as_ref()?;
+        let action = self
+            .active
+            .as_ref()
+            .and_then(|(_, request)| match request {
+                Request::Action(action) if action.is_deployment() => Some(action),
+                _ => None,
+            })?;
+        (self.detail_application.as_deref() == Some(action.application_name()))
+            .then_some(lines.as_slice())
+    }
+}
+
+fn deployment_result_message(
+    verb: &str,
+    application_name: &ApplicationName,
+    deployment: &DeploymentResult,
+) -> String {
+    format!(
+        "{verb} {application_name}: deployment {} promoted ({})",
+        deployment.deployment_id,
+        deployment.artifact.reference()
+    )
+}
+
+fn deployment_event_line(event: &DeploymentEvent) -> String {
+    match event {
+        DeploymentEvent::DeploymentRequested { application_name } => {
+            format!("Deploying {application_name}...")
+        }
+        event => super::progress::render_deployment_event(event),
     }
 }
 
@@ -789,8 +1098,10 @@ fn draw_shell(frame: &mut ratatui::Frame<'_>, session: &Session) {
     draw_catalog(frame, content[0], session);
     draw_detail(frame, content[1], session);
     draw_footer(frame, areas[1], session);
-    if let Mode::Confirm(action) = &session.mode {
-        draw_confirmation(frame, action);
+    match &session.mode {
+        Mode::Confirm(action) => draw_confirmation(frame, action),
+        Mode::Form(form) => draw_form(frame, form),
+        Mode::Normal => {}
     }
 }
 
@@ -872,14 +1183,24 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, sess
         return;
     }
 
+    let progress_active = session.deployment_progress_for_detail().is_some();
     let detail_areas = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage(30),
-            Constraint::Percentage(25),
-            Constraint::Min(4),
-            Constraint::Length(4),
-        ])
+        .constraints(if progress_active {
+            [
+                Constraint::Percentage(30),
+                Constraint::Percentage(20),
+                Constraint::Min(4),
+                Constraint::Length(9),
+            ]
+        } else {
+            [
+                Constraint::Percentage(30),
+                Constraint::Percentage(25),
+                Constraint::Min(4),
+                Constraint::Length(4),
+            ]
+        })
         .split(area);
     let details = session.selected_entry().map_or_else(
         || "The selected application is no longer in the catalog.".to_owned(),
@@ -913,18 +1234,30 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, sess
             ),
         detail_areas[2],
     );
-    frame.render_widget(
-        Paragraph::new(
+    let action_title;
+    let action_text = match session.deployment_progress_for_detail() {
+        Some(lines) => {
+            action_title = " Deployment progress ";
+            let skipped = lines.len().saturating_sub(6);
+            lines
+                .iter()
+                .skip(skipped)
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+        None => {
+            action_title = " Last action ";
             session
                 .outcome_for_detail()
-                .unwrap_or("No action has completed for this application."),
-        )
-        .wrap(Wrap { trim: true })
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Last action "),
-        ),
+                .unwrap_or("No action has completed for this application.")
+                .to_owned()
+        }
+    };
+    frame.render_widget(
+        Paragraph::new(action_text)
+            .wrap(Wrap { trim: true })
+            .block(Block::default().borders(Borders::ALL).title(action_title)),
         detail_areas[3],
     );
 }
@@ -994,7 +1327,7 @@ fn draw_footer(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, sess
     } else if let Some(error) = &session.error {
         format!("Error: {error}")
     } else if session.route == Route::Details {
-        "s: start  x: stop  c: reconcile  p: public  i: internal  Esc: catalog  r: refresh  q: quit"
+        "s: start  x: stop  c: reconcile  d: deploy  b: rollback  p: public  i: internal  Esc: catalog  r: refresh  q: quit"
             .to_owned()
     } else {
         "Up/Down or j/k: select  Enter: details  r: refresh  q: quit".to_owned()
@@ -1035,6 +1368,49 @@ fn draw_confirmation(frame: &mut ratatui::Frame<'_>, action: &PendingAction) {
             Block::default()
                 .borders(Borders::ALL)
                 .title(" Confirm action "),
+        ),
+        popup,
+    );
+}
+
+fn draw_form(frame: &mut ratatui::Frame<'_>, form: &DeployForm) {
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(30),
+            Constraint::Length(9),
+            Constraint::Percentage(30),
+        ])
+        .split(frame.area());
+    let popup = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(20),
+            Constraint::Percentage(60),
+            Constraint::Percentage(20),
+        ])
+        .split(vertical[1])[1];
+    frame.render_widget(Clear, popup);
+    let (source_label, other_source_label, value_label) = match form.source {
+        DeploySource::Branch => ("branch", "image", "Branch or tag"),
+        DeploySource::Image => ("image", "branch", "Image reference"),
+    };
+    let error_line = form
+        .error
+        .as_deref()
+        .map(|error| format!("\n{error}"))
+        .unwrap_or_default();
+    frame.render_widget(
+        Paragraph::new(format!(
+            "Deploy {}\n\nSource: {source_label} (press Tab to switch to {other_source_label})\n{value_label}: {}{error_line}\n\nEnter: deploy  Backspace: edit  Esc: cancel",
+            form.application_name,
+            form.value()
+        ))
+        .wrap(Wrap { trim: true })
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Deploy application "),
         ),
         popup,
     );
@@ -1331,5 +1707,329 @@ mod tests {
             ]
         );
         session.shutdown().unwrap();
+    }
+
+    #[test]
+    fn deploy_form_edits_text_and_submits_the_exact_branch_command() {
+        let mut session = detail_session();
+
+        session
+            .handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE))
+            .unwrap();
+        assert!(matches!(session.mode, Mode::Form(_)));
+
+        for character in "main".chars() {
+            session
+                .handle_key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE))
+                .unwrap();
+        }
+        // The form owns printable text: `q` edits instead of quitting.
+        session
+            .handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE))
+            .unwrap();
+        assert!(matches!(session.mode, Mode::Form(_)));
+        assert!(!session.quit_after_completion);
+        session
+            .handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE))
+            .unwrap();
+
+        session
+            .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .unwrap();
+        assert!(matches!(session.mode, Mode::Normal));
+        assert_eq!(
+            session.queued.front().map(Request::command),
+            Some(Command::DeployBranch {
+                application_name: "atlas".to_owned(),
+                branch: "main".to_owned(),
+            })
+        );
+        session.shutdown().unwrap();
+    }
+
+    #[test]
+    fn deploy_form_switches_to_the_image_source_and_submits_the_exact_image_command() {
+        let mut session = detail_session();
+
+        session
+            .handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE))
+            .unwrap();
+        session
+            .handle_key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE))
+            .unwrap();
+        session
+            .handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .unwrap();
+        session
+            .handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE))
+            .unwrap();
+        let reference = "registry.example/team/service@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        for character in reference.chars() {
+            session
+                .handle_key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE))
+                .unwrap();
+        }
+        session
+            .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .unwrap();
+
+        assert!(matches!(session.mode, Mode::Normal));
+        assert_eq!(
+            session.queued.front().map(Request::command),
+            Some(Command::DeployImage {
+                application_name: "atlas".to_owned(),
+                image_reference: reference.to_owned(),
+            })
+        );
+        session.shutdown().unwrap();
+    }
+
+    #[test]
+    fn deploy_form_rejects_an_empty_source_without_dispatching() {
+        let mut session = detail_session();
+
+        session
+            .handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE))
+            .unwrap();
+        session
+            .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .unwrap();
+
+        assert!(matches!(session.mode, Mode::Form(_)));
+        assert!(session.queued.is_empty());
+        let Mode::Form(form) = &session.mode else {
+            panic!("deploy form must stay open");
+        };
+        assert_eq!(
+            form.error.as_deref(),
+            Some("Enter a branch or tag to deploy.")
+        );
+
+        session
+            .handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .unwrap();
+        assert!(matches!(session.mode, Mode::Normal));
+        assert!(session.queued.is_empty());
+        session.shutdown().unwrap();
+    }
+
+    #[test]
+    fn rollback_requires_confirmation_and_maps_to_the_existing_command() {
+        let mut session = detail_session();
+
+        session
+            .handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE))
+            .unwrap();
+        assert!(matches!(
+            &session.mode,
+            Mode::Confirm(PendingAction::Rollback { application_name }) if application_name == "atlas"
+        ));
+        session
+            .handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .unwrap();
+        assert!(matches!(session.mode, Mode::Normal));
+        assert!(session.queued.is_empty());
+
+        session
+            .handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE))
+            .unwrap();
+        session
+            .handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE))
+            .unwrap();
+        assert!(matches!(session.mode, Mode::Normal));
+        assert_eq!(
+            session.queued.front().map(Request::command),
+            Some(Command::Rollback {
+                application_name: "atlas".to_owned(),
+            })
+        );
+        session.shutdown().unwrap();
+    }
+
+    #[test]
+    fn deployment_events_render_with_the_shared_progress_vocabulary() {
+        assert_eq!(
+            deployment_event_line(&DeploymentEvent::DeploymentRequested {
+                application_name: ApplicationName::new("atlas").unwrap(),
+            }),
+            "Deploying atlas..."
+        );
+        assert_eq!(
+            deployment_event_line(&DeploymentEvent::StepStarted {
+                step: pneuma::use_cases::deployment::DeploymentStep::PullImage,
+            }),
+            "pull image: started"
+        );
+    }
+
+    #[test]
+    fn deployment_progress_is_scoped_to_its_application_detail() {
+        let mut session = detail_session();
+        session.catalog = QueryState::Ready(vec![entry("atlas"), entry("beacon")]);
+        session.active = Some((
+            41,
+            Request::Action(PendingAction::DeployBranch {
+                application_name: "atlas".to_owned(),
+                branch: "main".to_owned(),
+            }),
+        ));
+        session.progress = Some(vec![
+            "Deploying atlas...".to_owned(),
+            "pull image: started".to_owned(),
+        ]);
+
+        assert_eq!(
+            session
+                .deployment_progress_for_detail()
+                .map(<[String]>::len),
+            Some(2)
+        );
+
+        session.detail_application = Some("beacon".to_owned());
+        assert_eq!(session.deployment_progress_for_detail(), None);
+        session.shutdown().unwrap();
+    }
+
+    #[test]
+    fn deploy_success_renders_the_typed_result_and_refreshes_history() {
+        let mut session = detail_session();
+        let action = PendingAction::DeployBranch {
+            application_name: "atlas".to_owned(),
+            branch: "main".to_owned(),
+        };
+
+        session.apply_success(
+            Request::Action(action.clone()),
+            CommandResult::ApplicationDeployed {
+                application_name: ApplicationName::new("atlas").unwrap(),
+                deployment: deployment_result(),
+            },
+        );
+
+        let outcome = session
+            .outcome
+            .as_ref()
+            .expect("deploy success must set an outcome");
+        assert_eq!(outcome.application_name, "atlas");
+        assert_eq!(
+            outcome.message,
+            "Deployed atlas: deployment 0f8d3a2c41b64d7e9a0c5b6e1f2d3a4b promoted (registry.example/team/service@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)"
+        );
+        assert_eq!(
+            session
+                .queued
+                .iter()
+                .map(Request::command)
+                .collect::<Vec<_>>(),
+            vec![
+                Command::ListApplications,
+                Command::ListDeployments {
+                    application_name: "atlas".to_owned(),
+                },
+                Command::ApplicationStatus {
+                    application_name: "atlas".to_owned(),
+                },
+            ]
+        );
+        assert_eq!(action.application_name(), "atlas");
+        session.shutdown().unwrap();
+    }
+
+    #[test]
+    fn rollback_success_renders_the_typed_result_and_refreshes_history() {
+        let mut session = detail_session();
+
+        session.apply_success(
+            Request::Action(PendingAction::Rollback {
+                application_name: "atlas".to_owned(),
+            }),
+            CommandResult::ApplicationRolledBack {
+                application_name: ApplicationName::new("atlas").unwrap(),
+                deployment: deployment_result(),
+            },
+        );
+
+        let outcome = session
+            .outcome
+            .as_ref()
+            .expect("rollback success must set an outcome");
+        assert_eq!(
+            outcome.message,
+            "Rolled back atlas: deployment 0f8d3a2c41b64d7e9a0c5b6e1f2d3a4b promoted (registry.example/team/service@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)"
+        );
+        assert_eq!(
+            session
+                .queued
+                .iter()
+                .map(Request::command)
+                .collect::<Vec<_>>(),
+            vec![
+                Command::ListApplications,
+                Command::ListDeployments {
+                    application_name: "atlas".to_owned(),
+                },
+                Command::ApplicationStatus {
+                    application_name: "atlas".to_owned(),
+                },
+            ]
+        );
+        session.shutdown().unwrap();
+    }
+
+    #[test]
+    fn deploy_failure_keeps_the_class_and_refreshes_history_after_persisted_evidence() {
+        let mut session = detail_session();
+
+        session.apply_error(
+            Request::Action(PendingAction::DeployBranch {
+                application_name: "atlas".to_owned(),
+                branch: "main".to_owned(),
+            }),
+            WorkerError {
+                class: CliErrorClass::External,
+                message: "deployment failed".to_owned(),
+            }
+            .display(),
+        );
+
+        assert_eq!(
+            session.error.as_deref(),
+            Some("External: deployment failed")
+        );
+        assert!(matches!(session.deployments, QueryState::Loading));
+        assert_eq!(
+            session
+                .queued
+                .iter()
+                .map(Request::command)
+                .collect::<Vec<_>>(),
+            vec![
+                Command::ListApplications,
+                Command::ListDeployments {
+                    application_name: "atlas".to_owned(),
+                },
+                Command::ApplicationStatus {
+                    application_name: "atlas".to_owned(),
+                },
+            ]
+        );
+        session.shutdown().unwrap();
+    }
+
+    fn deployment_result() -> pneuma::use_cases::deployment::DeploymentResult {
+        use pneuma::domain::identity::{DeploymentId, RuntimeInstanceId};
+        use pneuma::domain::release::OciArtifact;
+
+        pneuma::use_cases::deployment::DeploymentResult {
+            deployment_id: DeploymentId::new("0f8d3a2c41b64d7e9a0c5b6e1f2d3a4b").unwrap(),
+            runtime_id: RuntimeInstanceId::new("11111111111111111111111111111111").unwrap(),
+            container_name: "system-atlas".to_owned(),
+            artifact: OciArtifact::parse(
+                "registry.example/team/service@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            )
+            .unwrap(),
+            source_revision: None,
+            finished_at: "2026-09-04 12:00:00".to_owned(),
+        }
     }
 }
