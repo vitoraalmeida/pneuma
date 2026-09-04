@@ -126,9 +126,18 @@ domain, use-case, persistence, or external-effect decisions.
      tests cover retention, scoping, scroll bounds, and rendering, and the PTY
      deploy regression asserts the retained semantic log and the typed result
      on the settled screen simultaneously.
-7. [ ] Operational regression and closure
+7. [x] Operational regression and closure
    - Synchronize implemented documentation and run the required Rust, markdown,
      shell, and applicable disposable-VM regression ladder.
+   - Result: architecture, code guide, and getting-started documentation were
+     synchronized inside the implementing commits through `a4b4b60`. The four
+     Rust gates pass on the final code commit, all 33 suites are green with the
+     PTY regressions included, markdown links and `git diff --check` pass, and
+     the disposable-VM battery with `PNEUMA_VM_RECONCILIATION=1` passes on the
+     same code: 45 E2E checks and 21 reconciliation drift checks, 0 failed,
+     0 skipped. The 3 ignored OCI tests remain SKIP pending a rootless Podman
+     host. No tracked shell script changed in the iteration, so no shell gate
+     applies.
 
 ## Acceptance criteria
 
