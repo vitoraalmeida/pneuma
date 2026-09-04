@@ -152,18 +152,21 @@ and a details column, and the Left arrow returns from the details column to its
 listing. Every details column follows the listing selection: the first item's
 details load without an explicit request and selection movement reloads them,
 while Enter only moves the keyboard focus to the details column. The catalog
-names persisted
-intent and whether an Application has a successful deployment without claiming
-it is running. Selecting an Application loads deployment history and obtains a
-runtime observation on demand through the existing control boundary. Start,
-stop, reconcile, and visibility requests require a TUI confirmation, deploy
-forms submit a branch or digest-pinned image as the existing deploy commands,
+names persisted intent and whether an Application has a successful deployment
+without claiming it is running. Selecting an Application loads deployment
+history and obtains a runtime observation on demand through the existing
+control boundary. The Applications detail view renders that observation in a
+dedicated runtime panel only when it belongs to the current selection; it never
+presents the observation as live polling or reuses another Application's data.
+Start, stop, reconcile, and visibility requests require a TUI confirmation,
+deploy forms submit a branch or digest-pinned image as the existing deploy
+commands,
 system creation and application import submit the exact `SystemCreate` and
 `ImportApplication` commands with locally validated form values, and rollback
 requires a confirmation; deployment commands run through the event
 observer so their semantic progress is presentation-only, and every action
-retains
-the existing CLI error class with its diagnostic message in the interface.
+retains the existing CLI error class with its diagnostic message in the
+interface.
 Completed actions are shown only in the corresponding detail view.
 Process bootstrap
 (`src/host_environment.rs`) validates and applies the host environment file

@@ -1675,6 +1675,11 @@ impl Session {
             .find(|entry| entry.summary.name.as_str() == selected_name)
     }
 
+    fn runtime_for_detail(&self) -> Option<&QueryState<RuntimeObservation>> {
+        let selected = self.selected_application.as_deref()?;
+        (self.observations_application.as_deref() == Some(selected)).then_some(&self.runtime)
+    }
+
     fn outcome_for_detail(&self) -> Option<&str> {
         let outcome = self.outcome.as_ref()?;
         (self.selected_application.as_deref() == Some(outcome.scope.as_str()))
@@ -2114,6 +2119,10 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, sess
             [Constraint::Percentage(70), Constraint::Length(4)]
         })
         .split(area);
+    let summary_areas = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(detail_areas[0]);
     let details = session.selected_entry().map_or_else(
         || {
             vec![Line::from(
@@ -2129,7 +2138,20 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, sess
                 .title(" Application details ")
                 .title_style(title_style()),
         ),
-        detail_areas[0],
+        summary_areas[0],
+    );
+    let idle_runtime = QueryState::Idle;
+    let runtime = session.runtime_for_detail().unwrap_or(&idle_runtime);
+    frame.render_widget(
+        Paragraph::new(runtime_lines(runtime))
+            .wrap(Wrap { trim: true })
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Runtime status ")
+                    .title_style(title_style()),
+            ),
+        summary_areas[1],
     );
     let action_title;
     let action_text = match session.deployment_progress_for_detail() {
@@ -2596,7 +2618,8 @@ fn draw_deploy_form(frame: &mut ratatui::Frame<'_>, form: &DeployForm) {
 mod tests {
     use super::*;
     use pneuma::domain::application::{ApplicationName, ApplicationSummary, DesiredRuntimeState};
-    use pneuma::domain::identity::{ApplicationId, SystemId};
+    use pneuma::domain::identity::{ApplicationId, RuntimeInstanceId, SystemId};
+    use pneuma::domain::runtime::ContainerId;
 
     fn entry(name: &str) -> ApplicationCatalogEntry {
         ApplicationCatalogEntry {
@@ -2622,6 +2645,31 @@ mod tests {
         session.tab = Tab::Applications;
         session.focus = Focus::Details;
         session
+    }
+
+    fn runtime_observation() -> RuntimeObservation {
+        RuntimeObservation {
+            desired_runtime_state: DesiredRuntimeState::Running,
+            observed_runtime_state: ObservedRuntimeState::Running,
+            runtime_id: RuntimeInstanceId::new("33333333333333333333333333333333").unwrap(),
+            container_id: ContainerId::from("abcdef123456"),
+            observed_endpoint: Some("127.0.0.1:30000".parse().unwrap()),
+        }
+    }
+
+    fn rendered_shell(session: &Session) -> String {
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30))
+            .expect("test backend must initialize");
+        terminal
+            .draw(|frame| draw_shell(frame, session))
+            .expect("TUI render must succeed");
+        terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol().to_owned())
+            .collect()
     }
 
     #[test]
@@ -2670,6 +2718,52 @@ mod tests {
         assert!(rendered.contains("Desired runtime state: Running"));
         assert!(rendered.contains("Has successful deployment: no"));
         assert!(rendered.contains("Active deployment ID: None"));
+    }
+
+    #[test]
+    fn application_details_render_each_matching_runtime_query_state() {
+        let cases: [(QueryState<RuntimeObservation>, &str); 4] = [
+            (QueryState::Idle, "The runtime status was not requested"),
+            (QueryState::Loading, "Loading runtime status..."),
+            (
+                QueryState::Failed("External: podman unavailable".to_owned()),
+                "External: podman unavailable",
+            ),
+            (
+                QueryState::Ready(runtime_observation()),
+                "Observed runtime state: Running",
+            ),
+        ];
+
+        for (runtime, expected) in cases {
+            let mut session = detail_session();
+            session.runtime = runtime;
+
+            let rendered = rendered_shell(&session);
+
+            assert!(rendered.contains("Runtime status"), "{rendered:?}");
+            assert!(rendered.contains(expected), "{rendered:?}");
+            session.shutdown().unwrap();
+        }
+    }
+
+    #[test]
+    fn application_details_never_render_another_applications_runtime() {
+        let mut session = detail_session();
+        session.catalog = QueryState::Ready(vec![entry("atlas"), entry("beacon")]);
+        session.selected_application = Some("beacon".to_owned());
+        session.observations_application = Some("atlas".to_owned());
+        session.runtime = QueryState::Ready(runtime_observation());
+
+        let rendered = rendered_shell(&session);
+
+        assert!(rendered.contains("Application: beacon"), "{rendered:?}");
+        assert!(
+            rendered.contains("The runtime status was not requested"),
+            "{rendered:?}"
+        );
+        assert!(!rendered.contains("Observed runtime state: Running"));
+        session.shutdown().unwrap();
     }
 
     #[test]
@@ -3854,7 +3948,8 @@ mod tests {
             .map(|cell| cell.symbol().to_owned())
             .collect::<String>();
         assert!(
-            screen.contains("Repository: https://example.test/atlas.git"),
+            screen.contains("Application: atlas")
+                && screen.contains("https://example.test/atlas.git"),
             "the selected application details must render without Enter: {screen:?}"
         );
         session.shutdown().unwrap();

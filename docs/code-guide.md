@@ -56,9 +56,12 @@ keyboard focus to the details column. The Applications tab uses
 whether an Application has a successful deployment; neither label asserts that
 the Application is currently running. Selecting an Application loads
 `Command::ListDeployments` and requests `Command::ApplicationStatus` on demand.
-The Deployments tab shows that history and the observed runtime state for the
-selected Application; the detail screens display errors in place, leaving the
-session usable for refresh or quit. The Systems tab lists Systems with
+The Applications detail view shows the matching on-demand observation in a
+`Runtime status` panel, while the Deployments tab shows that observation beside
+deployment history. A cached observation is rendered only when it belongs to
+the current selection; the detail screens display loading, absence, and errors
+in place, leaving the session usable for refresh or quit. The Systems tab lists
+Systems with
 `Command::SystemList`, follows the selection to their persisted grouping and
 member Applications through `Command::SystemShow`, creates Systems through the
 exact `Command::SystemCreate`, and adds Applications to a System through the

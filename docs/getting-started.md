@@ -437,7 +437,10 @@ command, so the Application is registered inside that System.
 The Applications tab lists registered Applications and whether each has a
 successful deployment; it does not claim that an Application is running. Press
 `n` to import a new Application from a form: it takes a remote Git repository,
-an optional System name, and an optional manifest path.
+an optional System name, and an optional manifest path. Its detail column shows
+the selected Application's matching on-demand observation in a `Runtime status`
+panel, including loading, not yet requested, and error states; this is not live
+polling, and an observation from another selection is never reused.
 In an Application detail view, use `s` to start, `x` to stop, `c` to reconcile,
 `p` to set public visibility, or `i` to set internal visibility. Each action
 opens a confirmation: Enter or `y` executes it; Esc or `n` cancels it. Use `d`
