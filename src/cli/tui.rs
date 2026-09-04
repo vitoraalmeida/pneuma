@@ -245,6 +245,7 @@ impl Tab {
 enum Focus {
     Listing,
     Details,
+    Log,
 }
 
 enum QueryState<T> {
@@ -276,9 +277,11 @@ struct DeploymentLog {
     state: DeploymentLogState,
     scroll: u16,
     tail_follow: bool,
+    // Viewport metrics recorded by the last render: the wrapped row count of
+    // the whole log and the visible row count of the log panel interior.
+    total_rows: u16,
+    viewport_rows: u16,
 }
-
-const DEPLOYMENT_LOG_VIEWPORT_ROWS: usize = 6;
 
 impl DeploymentLog {
     fn new(application_name: String) -> Self {
@@ -288,6 +291,8 @@ impl DeploymentLog {
             state: DeploymentLogState::Running,
             scroll: 0,
             tail_follow: true,
+            total_rows: 0,
+            viewport_rows: 0,
         }
     }
 
@@ -303,16 +308,49 @@ impl DeploymentLog {
     }
 
     // The tail follows the newest rows until scrolling moves away from the
-    // bottom; a detached scroll shows the window that starts at `scroll`.
-    fn visible_lines(&self) -> &[String] {
-        let skip = if self.tail_follow {
-            self.lines
-                .len()
-                .saturating_sub(DEPLOYMENT_LOG_VIEWPORT_ROWS)
+    // bottom; a detached view anchors on `scroll` and incoming events append
+    // below it without moving the visible rows.
+    fn max_scroll(&self) -> u16 {
+        self.total_rows.saturating_sub(self.viewport_rows)
+    }
+
+    fn render_offset(&self) -> u16 {
+        if self.tail_follow {
+            self.max_scroll()
         } else {
-            (self.scroll as usize).min(self.lines.len())
+            self.scroll.min(self.max_scroll())
+        }
+    }
+
+    fn scroll_up(&mut self, rows: u16) {
+        let anchored = if self.tail_follow {
+            self.max_scroll()
+        } else {
+            self.scroll
         };
-        &self.lines[skip..]
+        self.tail_follow = false;
+        self.scroll = anchored.saturating_sub(rows);
+    }
+
+    fn scroll_down(&mut self, rows: u16) {
+        if self.tail_follow {
+            return;
+        }
+        self.scroll = self.scroll.saturating_add(rows);
+        if self.scroll >= self.max_scroll() {
+            self.scroll = self.max_scroll();
+            self.tail_follow = true;
+        }
+    }
+
+    fn scroll_to_start(&mut self) {
+        self.tail_follow = false;
+        self.scroll = 0;
+    }
+
+    fn scroll_to_end(&mut self) {
+        self.tail_follow = true;
+        self.scroll = self.max_scroll();
     }
 }
 
@@ -1108,8 +1146,18 @@ impl Session {
         // can reach the details column or return to the listing even while a
         // load or action is running.
         match (self.focus, event.code) {
+            (Focus::Log, KeyCode::Left | KeyCode::Esc) => {
+                self.focus = Focus::Details;
+                return Ok(());
+            }
             (Focus::Details, KeyCode::Left | KeyCode::Esc) => {
                 self.focus = Focus::Listing;
+                return Ok(());
+            }
+            // Enter descends into the deployment log when one exists for the
+            // selected application; focus moves never start work.
+            (Focus::Details, KeyCode::Enter) if self.deployment_log_for_detail().is_some() => {
+                self.focus = Focus::Log;
                 return Ok(());
             }
             (Focus::Listing, KeyCode::Enter) => {
@@ -1147,6 +1195,7 @@ impl Session {
                 KeyCode::Char('r') if !self.is_busy() => self.refresh_system_details(),
                 _ => {}
             },
+            (Tab::Systems, Focus::Log) | (Tab::Deployments, Focus::Log) => {}
             (Tab::Applications, Focus::Listing) => match event.code {
                 KeyCode::Down | KeyCode::Char('j') if !self.is_busy() => self.select_next(),
                 KeyCode::Up | KeyCode::Char('k') if !self.is_busy() => self.select_previous(),
@@ -1197,6 +1246,25 @@ impl Session {
                             application_name,
                             visibility: Visibility::Internal,
                         });
+                    }
+                }
+                _ => {}
+            },
+            // The log pane scrolls without changing the selection and without
+            // issuing commands, so it stays enabled while a command runs.
+            (Tab::Applications, Focus::Log) => match event.code {
+                KeyCode::Up | KeyCode::Char('k') => self.scroll_deployment_log_up(1),
+                KeyCode::Down | KeyCode::Char('j') => self.scroll_deployment_log_down(1),
+                KeyCode::PageUp => self.scroll_deployment_log_up(self.log_page_rows()),
+                KeyCode::PageDown => self.scroll_deployment_log_down(self.log_page_rows()),
+                KeyCode::Home => {
+                    if let Some(log) = self.deployment_log_for_detail_mut() {
+                        log.scroll_to_start();
+                    }
+                }
+                KeyCode::End => {
+                    if let Some(log) = self.deployment_log_for_detail_mut() {
+                        log.scroll_to_end();
                     }
                 }
                 _ => {}
@@ -1791,6 +1859,51 @@ impl Session {
         let log = self.deployment_log.as_ref()?;
         (self.selected_application.as_deref() == Some(log.application_name.as_str())).then_some(log)
     }
+
+    fn deployment_log_for_detail_mut(&mut self) -> Option<&mut DeploymentLog> {
+        let selected = self.selected_application.clone()?;
+        let log = self.deployment_log.as_mut()?;
+        (log.application_name == selected).then_some(log)
+    }
+
+    fn scroll_deployment_log_up(&mut self, rows: u16) {
+        if let Some(log) = self.deployment_log_for_detail_mut() {
+            log.scroll_up(rows);
+        }
+    }
+
+    fn scroll_deployment_log_down(&mut self, rows: u16) {
+        if let Some(log) = self.deployment_log_for_detail_mut() {
+            log.scroll_down(rows);
+        }
+    }
+
+    fn log_page_rows(&self) -> u16 {
+        self.deployment_log_for_detail()
+            .map(|log| log.viewport_rows.max(1))
+            .unwrap_or(1)
+    }
+
+    // Records the wrapped row count and visible height of the log panel so
+    // scrolling keys can clamp against real rendered bounds.
+    fn update_deployment_log_metrics(&mut self, log_area: ratatui::layout::Rect) {
+        let Some(log) = self.deployment_log_for_detail_mut() else {
+            return;
+        };
+        let width = log_area.width.saturating_sub(2);
+        log.viewport_rows = log_area.height.saturating_sub(2);
+        let text = deployment_log_text(log);
+        log.total_rows = if width < 1 {
+            u16::try_from(text.len()).unwrap_or(u16::MAX)
+        } else {
+            u16::try_from(
+                Paragraph::new(text)
+                    .wrap(Wrap { trim: true })
+                    .line_count(width),
+            )
+            .unwrap_or(u16::MAX)
+        };
+    }
 }
 
 fn deployment_result_message(
@@ -1812,6 +1925,99 @@ fn deployment_event_line(event: &DeploymentEvent) -> String {
         }
         event => super::progress::render_deployment_event(event),
     }
+}
+
+fn deployment_log_text(log: &DeploymentLog) -> Vec<Line<'static>> {
+    let mut lines = log
+        .lines
+        .iter()
+        .map(|line| Line::from(line.clone()))
+        .collect::<Vec<_>>();
+    if let DeploymentLogState::Failed(error) = &log.state {
+        lines.push(Line::styled(
+            format!("Deployment failed: {error}"),
+            Style::default().fg(Color::Red),
+        ));
+    }
+    lines
+}
+
+fn deployment_log_state_label(state: &DeploymentLogState) -> &'static str {
+    match state {
+        DeploymentLogState::Running => "running",
+        DeploymentLogState::Completed => "completed",
+        DeploymentLogState::Failed(_) => "failed",
+    }
+}
+
+fn render_deployment_log_panel(
+    frame: &mut ratatui::Frame<'_>,
+    area: ratatui::layout::Rect,
+    log: &DeploymentLog,
+    focused: bool,
+) {
+    let (title, title_style) = if focused {
+        let state = deployment_log_state_label(&log.state);
+        let offset = log.render_offset();
+        let start = log.total_rows.min(offset.saturating_add(1));
+        let end = log.total_rows.min(offset.saturating_add(log.viewport_rows));
+        (
+            Line::styled(
+                format!(
+                    " Deployment log · {} · {state} · rows {start}–{end} of {} ",
+                    log.application_name, log.total_rows
+                ),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        match &log.state {
+            DeploymentLogState::Running => (
+                Line::styled(
+                    " Deployment progress ",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Style::default(),
+            ),
+            DeploymentLogState::Completed => (
+                Line::styled(
+                    " Deployment log (completed) ",
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Style::default(),
+            ),
+            DeploymentLogState::Failed(_) => (
+                Line::styled(
+                    " Deployment log (failed) ",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ),
+                Style::default(),
+            ),
+        }
+    };
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .title_style(title_style);
+    if focused {
+        block = block.border_style(Style::default().fg(Color::Cyan));
+    }
+    frame.render_widget(
+        Paragraph::new(deployment_log_text(log))
+            .wrap(Wrap { trim: true })
+            .scroll((log.render_offset(), 0))
+            .block(block),
+        area,
+    );
 }
 
 fn application_entry_name(entry: &ApplicationCatalogEntry) -> &str {
@@ -1851,7 +2057,7 @@ fn next_selection<T>(
     Some(name(&entries[next_index]).to_owned())
 }
 
-fn draw_shell(frame: &mut ratatui::Frame<'_>, session: &Session) {
+fn draw_shell(frame: &mut ratatui::Frame<'_>, session: &mut Session) {
     let areas = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -2186,7 +2392,7 @@ fn draw_catalog(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, ses
     }
 }
 
-fn draw_detail(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, session: &Session) {
+fn draw_detail(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, session: &mut Session) {
     if session.selected_application.is_none() {
         frame.render_widget(
             Paragraph::new("No application is selected.")
@@ -2198,10 +2404,20 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, sess
         return;
     }
 
-    let log = session.deployment_log_for_detail();
+    let log_available = session.deployment_log_for_detail().is_some();
+    // While the log pane owns the focus it takes the whole details column with
+    // a highlighted border; the summary panels return when focus leaves it.
+    if session.focus == Focus::Log && log_available {
+        session.update_deployment_log_metrics(area);
+        if let Some(log) = session.deployment_log_for_detail() {
+            render_deployment_log_panel(frame, area, log, true);
+        }
+        return;
+    }
+
     let detail_areas = Layout::default()
         .direction(Direction::Vertical)
-        .constraints(if log.is_some() {
+        .constraints(if log_available {
             vec![
                 Constraint::Percentage(35),
                 Constraint::Min(9),
@@ -2246,46 +2462,13 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, sess
         summary_areas[1],
     );
     let log_area;
-    let action_area = if let Some(log) = log {
+    let action_area = if log_available {
+        session.update_deployment_log_metrics(detail_areas[1]);
         let (log_area_split, remaining) = detail_areas[1..].split_at(1);
         log_area = log_area_split[0];
-        let (title, title_style) = match &log.state {
-            DeploymentLogState::Running => (
-                " Deployment progress ",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            DeploymentLogState::Completed => (
-                " Deployment log (completed) ",
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            DeploymentLogState::Failed(_) => (
-                " Deployment log (failed) ",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-            ),
-        };
-        let mut log_lines = log
-            .visible_lines()
-            .iter()
-            .map(|line| Line::from(line.as_str().to_owned()))
-            .collect::<Vec<_>>();
-        if let DeploymentLogState::Failed(error) = &log.state {
-            log_lines.push(Line::styled(
-                format!("Deployment failed: {error}"),
-                Style::default().fg(Color::Red),
-            ));
+        if let Some(log) = session.deployment_log_for_detail() {
+            render_deployment_log_panel(frame, log_area, log, false);
         }
-        frame.render_widget(
-            Paragraph::new(log_lines).wrap(Wrap { trim: true }).block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(Line::styled(title, title_style)),
-            ),
-            log_area,
-        );
         let (action_area_split, _) = remaining.split_at(1);
         action_area_split[0]
     } else {
@@ -2458,6 +2641,18 @@ fn draw_footer(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, sess
             badge("error", Color::Red),
             Span::styled(format!(" {error}"), Style::default().fg(Color::Red)),
         ])
+    } else if session.tab == Tab::Applications && session.focus == Focus::Log {
+        let mut spans = Vec::new();
+        for (key, description) in [
+            ("Up/Down or j/k", "line"),
+            ("PgUp/PgDn", "page"),
+            ("Home/End", "oldest/newest"),
+            ("Esc", "details"),
+            ("q", "quit"),
+        ] {
+            spans.extend(key_hint(key, description));
+        }
+        Line::from(spans)
     } else if session.tab == Tab::Applications && session.focus == Focus::Details {
         let mut spans = Vec::new();
         for (key, description) in [
@@ -2468,10 +2663,13 @@ fn draw_footer(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, sess
             ("b", "rollback"),
             ("p", "public"),
             ("i", "internal"),
-            ("Esc", "catalog"),
-            ("r", "refresh"),
-            ("q", "quit"),
         ] {
+            spans.extend(key_hint(key, description));
+        }
+        if session.deployment_log_for_detail().is_some() {
+            spans.extend(key_hint("Enter", "log"));
+        }
+        for (key, description) in [("Esc", "catalog"), ("r", "refresh"), ("q", "quit")] {
             spans.extend(key_hint(key, description));
         }
         Line::from(spans)
@@ -2777,7 +2975,7 @@ mod tests {
         }
     }
 
-    fn rendered_shell(session: &Session) -> String {
+    fn rendered_shell(session: &mut Session) -> String {
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30))
             .expect("test backend must initialize");
         terminal
@@ -2859,7 +3057,7 @@ mod tests {
             let mut session = detail_session();
             session.runtime = runtime;
 
-            let rendered = rendered_shell(&session);
+            let rendered = rendered_shell(&mut session);
 
             assert!(rendered.contains("Runtime status"), "{rendered:?}");
             assert!(rendered.contains(expected), "{rendered:?}");
@@ -2875,7 +3073,7 @@ mod tests {
         session.observations_application = Some("atlas".to_owned());
         session.runtime = QueryState::Ready(runtime_observation());
 
-        let rendered = rendered_shell(&session);
+        let rendered = rendered_shell(&mut session);
 
         assert!(rendered.contains("Application: beacon"), "{rendered:?}");
         assert!(
@@ -3423,7 +3621,7 @@ mod tests {
             message: "Deployed atlas: deployment 1 promoted".to_owned(),
         });
 
-        let rendered = rendered_shell(&session);
+        let rendered = rendered_shell(&mut session);
         assert!(rendered.contains("Deployment progress"), "{rendered:?}");
         assert!(rendered.contains("Deploying atlas..."), "{rendered:?}");
         assert!(rendered.contains("pull image: started"), "{rendered:?}");
@@ -3438,12 +3636,201 @@ mod tests {
                 deployment: deployment_result(),
             }));
         }
-        let rendered = rendered_shell(&session);
+        let rendered = rendered_shell(&mut session);
         assert!(
             rendered.contains("Deployment log (completed)"),
             "{rendered:?}"
         );
         assert!(rendered.contains("pull image: started"), "{rendered:?}");
+        session.shutdown().unwrap();
+    }
+
+    #[test]
+    fn focus_descends_to_the_log_only_when_a_log_exists() {
+        let mut session = detail_session();
+
+        // Without a log, Enter keeps the focus in the details column.
+        session
+            .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .unwrap();
+        assert!(matches!(session.focus, Focus::Details));
+
+        session.deployment_log = Some(DeploymentLog::new("atlas".to_owned()));
+        session
+            .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .unwrap();
+        assert!(matches!(session.focus, Focus::Log));
+
+        session
+            .handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .unwrap();
+        assert!(matches!(session.focus, Focus::Details));
+        session
+            .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .unwrap();
+        assert!(matches!(session.focus, Focus::Log));
+        session
+            .handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE))
+            .unwrap();
+        assert!(matches!(session.focus, Focus::Details));
+        session
+            .handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE))
+            .unwrap();
+        assert!(matches!(session.focus, Focus::Listing));
+        session.shutdown().unwrap();
+    }
+
+    fn scrollable_log() -> DeploymentLog {
+        let mut log = deployment_log((0..10).map(|row| format!("event row {row}")).collect());
+        log.total_rows = 10;
+        log.viewport_rows = 4;
+        log
+    }
+
+    fn log_focus_session() -> Session {
+        let mut session = detail_session();
+        session.deployment_log = Some(scrollable_log());
+        session
+            .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .unwrap();
+        session
+    }
+
+    #[test]
+    fn log_scrolling_clamps_at_both_bounds_and_resumes_tail_following() {
+        let mut session = log_focus_session();
+
+        // Scrolling up from the tail anchors one row above the bottom and
+        // never goes past the oldest row.
+        session
+            .handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE))
+            .unwrap();
+        let log = session.deployment_log_for_detail().expect("log is present");
+        assert!(!log.tail_follow);
+        assert_eq!(log.scroll, 5);
+        for _ in 0..10 {
+            session
+                .handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE))
+                .unwrap();
+        }
+        let log = session.deployment_log_for_detail().expect("log is present");
+        assert_eq!(log.scroll, 0);
+
+        // Scrolling back down clamps at the bottom and resumes tail-following.
+        for _ in 0..10 {
+            session
+                .handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+                .unwrap();
+        }
+        let log = session.deployment_log_for_detail().expect("log is present");
+        assert!(log.tail_follow);
+
+        // Selection never changes while scrolling, and scrolling works while
+        // a command is active because it never issues one.
+        assert_eq!(session.selected_application.as_deref(), Some("atlas"));
+        session.active = Some((
+            7,
+            Request::Action(PendingAction::DeployBranch {
+                application_name: "atlas".to_owned(),
+                branch: "main".to_owned(),
+            }),
+        ));
+        session
+            .handle_key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE))
+            .unwrap();
+        let log = session.deployment_log_for_detail().expect("log is present");
+        assert_eq!(log.scroll, 0);
+        assert!(!log.tail_follow);
+        session
+            .handle_key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE))
+            .unwrap();
+        let log = session.deployment_log_for_detail().expect("log is present");
+        assert!(log.tail_follow);
+        assert_eq!(log.scroll, log.max_scroll());
+        session.shutdown().unwrap();
+    }
+
+    #[test]
+    fn log_paging_uses_the_recorded_viewport() {
+        let mut session = log_focus_session();
+
+        session
+            .handle_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE))
+            .unwrap();
+        let log = session.deployment_log_for_detail().expect("log is present");
+        assert!(!log.tail_follow);
+        assert_eq!(log.scroll, 2);
+
+        session
+            .handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE))
+            .unwrap();
+        let log = session.deployment_log_for_detail().expect("log is present");
+        assert!(log.tail_follow);
+        session.shutdown().unwrap();
+    }
+
+    #[test]
+    fn incoming_events_never_move_a_detached_log_view() {
+        let mut log = scrollable_log();
+        log.tail_follow = false;
+        log.scroll = 2;
+
+        log.record_event(&DeploymentEvent::StepStarted {
+            step: pneuma::use_cases::deployment::DeploymentStep::PullImage,
+        });
+        log.total_rows += 1;
+
+        assert_eq!(log.scroll, 2);
+        assert!(!log.tail_follow);
+        assert_eq!(log.render_offset(), 2);
+    }
+
+    #[test]
+    fn the_focused_log_takes_the_details_column_with_state_and_scroll_title() {
+        let mut session = detail_session();
+        session.deployment_log = Some(deployment_log(vec![
+            "Deploying atlas...".to_owned(),
+            "pull image: started".to_owned(),
+        ]));
+        session
+            .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .unwrap();
+
+        let rendered = rendered_shell(&mut session);
+        assert!(
+            rendered.contains("Deployment log · atlas · running · rows 1–2 of 2"),
+            "{rendered:?}"
+        );
+        // The focused log replaces the summary panels of the details column.
+        assert!(!rendered.contains("Application details"), "{rendered:?}");
+        assert!(!rendered.contains("Last action"), "{rendered:?}");
+        // Both log rows render inside the focused pane.
+        assert!(rendered.contains("Deploying atlas..."), "{rendered:?}");
+        assert!(rendered.contains("pull image: started"), "{rendered:?}");
+        session.shutdown().unwrap();
+    }
+
+    #[test]
+    fn the_footer_advertises_log_scrolling_when_the_log_is_focused() {
+        let mut session = detail_session();
+        session.deployment_log = Some(DeploymentLog::new("atlas".to_owned()));
+
+        session
+            .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .unwrap();
+        let rendered = rendered_shell(&mut session);
+        assert!(rendered.contains("oldest/newest"), "{rendered:?}");
+        assert!(
+            rendered.contains("oldest") || rendered.contains("PgUp"),
+            "{rendered:?}"
+        );
+
+        session
+            .handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .unwrap();
+        let rendered = rendered_shell(&mut session);
+        assert!(rendered.contains("Enter"), "{rendered:?}");
+        assert!(rendered.contains(" log"), "{rendered:?}");
         session.shutdown().unwrap();
     }
 
@@ -3590,7 +3977,7 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 24))
             .expect("test backend must initialize");
         terminal
-            .draw(|frame| draw_shell(frame, &session))
+            .draw(|frame| draw_shell(frame, &mut session))
             .expect("form render must succeed");
         let before = terminal
             .backend_mut()
@@ -3601,7 +3988,7 @@ mod tests {
             .handle_key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE))
             .unwrap();
         terminal
-            .draw(|frame| draw_shell(frame, &session))
+            .draw(|frame| draw_shell(frame, &mut session))
             .expect("form render must succeed");
         let after_push = terminal
             .backend_mut()
@@ -3614,7 +4001,7 @@ mod tests {
             .handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE))
             .unwrap();
         terminal
-            .draw(|frame| draw_shell(frame, &session))
+            .draw(|frame| draw_shell(frame, &mut session))
             .expect("form render must succeed");
         let after_pop = terminal
             .backend_mut()
@@ -3630,7 +4017,7 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30))
             .expect("test backend must initialize");
         terminal
-            .draw(|frame| draw_shell(frame, &session))
+            .draw(|frame| draw_shell(frame, &mut session))
             .expect("footer render must succeed");
 
         let footer_row = 29;
@@ -4054,7 +4441,7 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 24))
             .expect("test backend must initialize");
         terminal
-            .draw(|frame| draw_shell(frame, &session))
+            .draw(|frame| draw_shell(frame, &mut session))
             .expect("form render must succeed");
         let before = terminal
             .backend_mut()
@@ -4065,7 +4452,7 @@ mod tests {
             .handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
             .unwrap();
         terminal
-            .draw(|frame| draw_shell(frame, &session))
+            .draw(|frame| draw_shell(frame, &mut session))
             .expect("form render must succeed");
         let after = terminal
             .backend_mut()
@@ -4077,7 +4464,7 @@ mod tests {
             .handle_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE))
             .unwrap();
         terminal
-            .draw(|frame| draw_shell(frame, &session))
+            .draw(|frame| draw_shell(frame, &mut session))
             .expect("form render must succeed");
         let after_push = terminal
             .backend_mut()
@@ -4214,7 +4601,7 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 24))
             .expect("test backend must initialize");
         terminal
-            .draw(|frame| draw_shell(frame, &session))
+            .draw(|frame| draw_shell(frame, &mut session))
             .expect("application tab render must succeed");
         let screen = terminal
             .backend()

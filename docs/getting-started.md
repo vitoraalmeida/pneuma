@@ -454,8 +454,17 @@ when the command finishes the panel is retained for the session as
 `Deployment log (completed)` or `Deployment log (failed)` with the classified
 error, so the recorded steps stay readable, and the final typed result lands in
 the `Last action` panel. Only a newly dispatched deployment replaces the
-retained log; refreshes and non-deployment actions never clear it. Key hints in
-the footer
+retained log; refreshes and non-deployment actions never clear it. When the
+detail view shows a log, Enter descends into it: the log pane then takes the
+whole details column with a highlighted border whose title carries the
+Application, the log state, and the scroll position, while `Up`/`Down` or
+`j`/`k` scroll one rendered row, `PgUp`/`PgDn` page, `Home` jumps to the oldest
+row, and `End` jumps to the newest row and resumes tail-following. The view
+tail-follows the newest rows while it sits at the bottom; scrolling up anchors
+it, and streaming events append below the anchored rows without moving them.
+Scrolling never changes the selection and never issues commands, so it stays
+available while a deployment runs. `Esc` or `Left` returns to the details
+panels. Key hints in the footer
 carry background badges, and state values use color: green for succeeded and
 running, red for failed and missing, yellow for nonterminal transitions. The TUI
 shows the existing error class and diagnostic when an action fails, then refreshes
