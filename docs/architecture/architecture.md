@@ -149,9 +149,12 @@ restoration, keyboard input, and presentation; one worker owns a
 `ControlExecutor` and serializes commands. The interface is organized into
 Systems, Applications, and Deployments tabs; every tab renders a listing column
 and a details column, and the Left arrow returns from the details column to its
-listing. The catalog names persisted
+listing. Every details column follows the listing selection: the first item's
+details load without an explicit request and selection movement reloads them,
+while Enter only moves the keyboard focus to the details column. The catalog
+names persisted
 intent and whether an Application has a successful deployment without claiming
-it is running. Opening an Application loads deployment history and obtains a
+it is running. Selecting an Application loads deployment history and obtains a
 runtime observation on demand through the existing control boundary. Start,
 stop, reconcile, and visibility requests require a TUI confirmation, deploy
 forms submit a branch or digest-pinned image as the existing deploy commands,

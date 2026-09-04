@@ -872,11 +872,11 @@ struct Session {
     focus: Focus,
     systems: QueryState<Vec<System>>,
     selected_system: Option<String>,
-    detail_system: Option<String>,
+    system_details_target: Option<String>,
     system_details: QueryState<SystemDetails>,
     catalog: QueryState<Vec<ApplicationCatalogEntry>>,
     selected_application: Option<String>,
-    detail_application: Option<String>,
+    observations_application: Option<String>,
     deployments: QueryState<Vec<DeploymentHistory>>,
     runtime: QueryState<RuntimeObservation>,
     mode: Mode,
@@ -897,11 +897,11 @@ impl Session {
             focus: Focus::Listing,
             systems: QueryState::Loading,
             selected_system: None,
-            detail_system: None,
+            system_details_target: None,
             system_details: QueryState::Idle,
             catalog: QueryState::Loading,
             selected_application: None,
-            detail_application: None,
+            observations_application: None,
             deployments: QueryState::Idle,
             runtime: QueryState::Idle,
             mode: Mode::Normal,
@@ -1011,24 +1011,27 @@ impl Session {
             _ => {}
         }
 
-        // The left arrow always returns from the details column to its
-        // listing; from the listing it moves to the previous tab.
-        if !self.is_busy() {
-            match (self.focus, event.code) {
-                (Focus::Details, KeyCode::Left | KeyCode::Esc) => {
-                    self.focus = Focus::Listing;
-                    return Ok(());
-                }
-                (Focus::Listing, KeyCode::Left) => {
-                    self.switch_tab(self.tab.previous());
-                    return Ok(());
-                }
-                (Focus::Listing, KeyCode::Right) => {
-                    self.switch_tab(self.tab.next());
-                    return Ok(());
-                }
-                _ => {}
+        // Focus moves are always safe: they never start work, so an operator
+        // can reach the details column or return to the listing even while a
+        // load or action is running.
+        match (self.focus, event.code) {
+            (Focus::Details, KeyCode::Left | KeyCode::Esc) => {
+                self.focus = Focus::Listing;
+                return Ok(());
             }
+            (Focus::Listing, KeyCode::Enter) => {
+                self.focus = Focus::Details;
+                return Ok(());
+            }
+            (Focus::Listing, KeyCode::Left) if !self.is_busy() => {
+                self.switch_tab(self.tab.previous());
+                return Ok(());
+            }
+            (Focus::Listing, KeyCode::Right) if !self.is_busy() => {
+                self.switch_tab(self.tab.next());
+                return Ok(());
+            }
+            _ => {}
         }
 
         match (self.tab, self.focus) {
@@ -1037,54 +1040,58 @@ impl Session {
                 KeyCode::Up | KeyCode::Char('k') if !self.is_busy() => {
                     self.select_previous_system()
                 }
-                KeyCode::Enter if !self.is_busy() => self.open_system_details(),
                 KeyCode::Char('n') if !self.is_busy() => self.open_system_create_form(),
                 KeyCode::Char('a') if !self.is_busy() => self.add_application_to_selected_system(),
                 KeyCode::Char('r') if !self.is_busy() => self.refresh_systems(),
                 _ => {}
             },
             (Tab::Systems, Focus::Details) => match event.code {
-                KeyCode::Char('a') if !self.is_busy() => self.add_application_to_detail_system(),
+                KeyCode::Down | KeyCode::Char('j') if !self.is_busy() => self.select_next_system(),
+                KeyCode::Up | KeyCode::Char('k') if !self.is_busy() => {
+                    self.select_previous_system()
+                }
+                KeyCode::Char('a') if !self.is_busy() => self.add_application_to_selected_system(),
                 KeyCode::Char('r') if !self.is_busy() => self.refresh_system_details(),
                 _ => {}
             },
             (Tab::Applications, Focus::Listing) => match event.code {
                 KeyCode::Down | KeyCode::Char('j') if !self.is_busy() => self.select_next(),
                 KeyCode::Up | KeyCode::Char('k') if !self.is_busy() => self.select_previous(),
-                KeyCode::Enter if !self.is_busy() => self.open_details(),
                 KeyCode::Char('n') if !self.is_busy() => self.open_application_import_form(),
                 KeyCode::Char('r') if !self.is_busy() => self.refresh_catalog(),
                 _ => {}
             },
             (Tab::Applications, Focus::Details) => match event.code {
+                KeyCode::Down | KeyCode::Char('j') if !self.is_busy() => self.select_next(),
+                KeyCode::Up | KeyCode::Char('k') if !self.is_busy() => self.select_previous(),
                 KeyCode::Char('r') if !self.is_busy() => self.refresh_details(),
                 KeyCode::Char('s') => {
-                    if let Some(application_name) = self.detail_application.clone() {
+                    if let Some(application_name) = self.selected_application.clone() {
                         self.confirm(PendingAction::Start { application_name });
                     }
                 }
                 KeyCode::Char('x') => {
-                    if let Some(application_name) = self.detail_application.clone() {
+                    if let Some(application_name) = self.selected_application.clone() {
                         self.confirm(PendingAction::Stop { application_name });
                     }
                 }
                 KeyCode::Char('c') => {
-                    if let Some(application_name) = self.detail_application.clone() {
+                    if let Some(application_name) = self.selected_application.clone() {
                         self.confirm(PendingAction::Reconcile { application_name });
                     }
                 }
                 KeyCode::Char('d') => {
-                    if let Some(application_name) = self.detail_application.clone() {
+                    if let Some(application_name) = self.selected_application.clone() {
                         self.open_deploy_form(application_name);
                     }
                 }
                 KeyCode::Char('b') => {
-                    if let Some(application_name) = self.detail_application.clone() {
+                    if let Some(application_name) = self.selected_application.clone() {
                         self.confirm(PendingAction::Rollback { application_name });
                     }
                 }
                 KeyCode::Char('p') => {
-                    if let Some(application_name) = self.detail_application.clone() {
+                    if let Some(application_name) = self.selected_application.clone() {
                         self.confirm(PendingAction::SetVisibility {
                             application_name,
                             visibility: Visibility::Public,
@@ -1092,7 +1099,7 @@ impl Session {
                     }
                 }
                 KeyCode::Char('i') => {
-                    if let Some(application_name) = self.detail_application.clone() {
+                    if let Some(application_name) = self.selected_application.clone() {
                         self.confirm(PendingAction::SetVisibility {
                             application_name,
                             visibility: Visibility::Internal,
@@ -1104,11 +1111,12 @@ impl Session {
             (Tab::Deployments, Focus::Listing) => match event.code {
                 KeyCode::Down | KeyCode::Char('j') if !self.is_busy() => self.select_next(),
                 KeyCode::Up | KeyCode::Char('k') if !self.is_busy() => self.select_previous(),
-                KeyCode::Enter if !self.is_busy() => self.open_details(),
                 KeyCode::Char('r') if !self.is_busy() => self.refresh_catalog(),
                 _ => {}
             },
             (Tab::Deployments, Focus::Details) => match event.code {
+                KeyCode::Down | KeyCode::Char('j') if !self.is_busy() => self.select_next(),
+                KeyCode::Up | KeyCode::Char('k') if !self.is_busy() => self.select_previous(),
                 KeyCode::Char('r') if !self.is_busy() => self.refresh_details(),
                 _ => {}
             },
@@ -1217,6 +1225,13 @@ impl Session {
         }
         self.tab = tab;
         self.focus = Focus::Listing;
+        // The details columns follow the selection, so entering a tab makes
+        // sure the data for the current selection is present or loading.
+        match tab {
+            Tab::Systems => self.ensure_system_details_loaded(),
+            Tab::Deployments => self.ensure_observations_loaded(),
+            Tab::Applications => {}
+        }
     }
 
     fn refresh_systems(&mut self) {
@@ -1228,30 +1243,68 @@ impl Session {
         self.enqueue(Request::Systems);
     }
 
-    fn open_system_details(&mut self) {
+    // The details columns follow the selection automatically: loading is
+    // deduplicated against the target recorded with each request group.
+    fn ensure_system_details_loaded(&mut self) {
         if self.is_busy() {
             return;
         }
-        let Some(system_name) = self.selected_system.clone() else {
+        let Some(selected) = self.selected_system.clone() else {
             return;
         };
-        self.focus = Focus::Details;
-        self.detail_system = Some(system_name.clone());
+        let matches_selection = match &self.system_details {
+            QueryState::Ready(details) => details.system.name.as_str() == selected,
+            QueryState::Loading => self.system_details_target.as_deref() == Some(selected.as_str()),
+            QueryState::Idle | QueryState::Failed(_) => false,
+        };
+        if matches_selection {
+            return;
+        }
         self.system_details = QueryState::Loading;
+        self.system_details_target = Some(selected.clone());
         self.error = None;
-        self.enqueue(Request::SystemShow { system_name });
+        self.enqueue(Request::SystemShow {
+            system_name: selected,
+        });
+    }
+
+    fn ensure_observations_loaded(&mut self) {
+        if self.is_busy() {
+            return;
+        }
+        let Some(selected) = self.selected_application.clone() else {
+            return;
+        };
+        if self.observations_application.as_deref() == Some(selected.as_str()) {
+            return;
+        }
+        self.load_observations(selected);
     }
 
     fn refresh_system_details(&mut self) {
         if self.is_busy() {
             return;
         }
-        let Some(system_name) = self.detail_system.clone() else {
+        let Some(selected) = self.selected_system.clone() else {
             return;
         };
         self.system_details = QueryState::Loading;
+        self.system_details_target = Some(selected);
         self.error = None;
-        self.enqueue(Request::SystemShow { system_name });
+        self.enqueue(Request::SystemShow {
+            system_name: self.system_details_target.clone().expect("target was set"),
+        });
+    }
+
+    fn load_observations(&mut self, application_name: String) {
+        self.observations_application = Some(application_name.clone());
+        self.deployments = QueryState::Loading;
+        self.runtime = QueryState::Loading;
+        self.error = None;
+        self.enqueue(Request::Deployments {
+            application_name: application_name.clone(),
+        });
+        self.enqueue(Request::Status { application_name });
     }
 
     fn open_system_create_form(&mut self) {
@@ -1263,15 +1316,6 @@ impl Session {
     fn add_application_to_selected_system(&mut self) {
         let Some(system_name) = self.selected_system.clone() else {
             self.error = Some("Select a system before adding an application.".to_owned());
-            return;
-        };
-        self.error = None;
-        self.outcome = None;
-        self.mode = Mode::Form(Form::import_into_system(system_name));
-    }
-
-    fn add_application_to_detail_system(&mut self) {
-        let Some(system_name) = self.detail_system.clone() else {
             return;
         };
         self.error = None;
@@ -1291,6 +1335,7 @@ impl Session {
         };
         self.selected_system =
             next_selection(systems, self.selected_system.as_deref(), 1, system_name);
+        self.ensure_system_details_loaded();
     }
 
     fn select_previous_system(&mut self) {
@@ -1299,6 +1344,7 @@ impl Session {
         };
         self.selected_system =
             next_selection(systems, self.selected_system.as_deref(), -1, system_name);
+        self.ensure_system_details_loaded();
     }
 
     fn execute_action(&mut self, action: PendingAction) {
@@ -1327,32 +1373,14 @@ impl Session {
         self.enqueue(Request::Catalog);
     }
 
-    fn open_details(&mut self) {
+    fn refresh_details(&mut self) {
         if self.is_busy() {
             return;
         }
         let Some(application_name) = self.selected_application.clone() else {
             return;
         };
-        self.focus = Focus::Details;
-        self.detail_application = Some(application_name);
-        self.refresh_details();
-    }
-
-    fn refresh_details(&mut self) {
-        if self.is_busy() {
-            return;
-        }
-        let Some(application_name) = self.detail_application.clone() else {
-            return;
-        };
-        self.deployments = QueryState::Loading;
-        self.runtime = QueryState::Loading;
-        self.error = None;
-        self.enqueue(Request::Deployments {
-            application_name: application_name.clone(),
-        });
-        self.enqueue(Request::Status { application_name });
+        self.load_observations(application_name);
     }
 
     fn select_next(&mut self) {
@@ -1365,6 +1393,7 @@ impl Session {
             1,
             application_entry_name,
         );
+        self.ensure_observations_loaded();
     }
 
     fn select_previous(&mut self) {
@@ -1377,6 +1406,7 @@ impl Session {
             -1,
             application_entry_name,
         );
+        self.ensure_observations_loaded();
     }
 
     fn apply_result(&mut self, request: Request, result: Result<CommandResult, WorkerError>) {
@@ -1620,6 +1650,9 @@ impl Session {
         self.selected_system =
             preserved_selection(&systems, self.selected_system.take(), system_name);
         self.systems = QueryState::Ready(systems);
+        // The first (or preserved) system's details load without an explicit
+        // request so the details column is never empty behind a selection.
+        self.ensure_system_details_loaded();
     }
 
     fn apply_catalog(&mut self, entries: Vec<ApplicationCatalogEntry>) {
@@ -1629,6 +1662,7 @@ impl Session {
             application_entry_name,
         );
         self.catalog = QueryState::Ready(entries);
+        self.ensure_observations_loaded();
     }
 
     fn selected_entry(&self) -> Option<&ApplicationCatalogEntry> {
@@ -1643,7 +1677,7 @@ impl Session {
 
     fn outcome_for_detail(&self) -> Option<&str> {
         let outcome = self.outcome.as_ref()?;
-        (self.detail_application.as_deref() == Some(outcome.scope.as_str()))
+        (self.selected_application.as_deref() == Some(outcome.scope.as_str()))
             .then_some(outcome.message.as_str())
     }
 
@@ -1662,7 +1696,7 @@ impl Session {
             .as_ref()
             .and_then(|(_, request)| request.action().filter(|action| action.is_deployment()))?;
         let application_name = action.application_name()?;
-        (self.detail_application.as_deref() == Some(application_name)).then_some(lines.as_slice())
+        (self.selected_application.as_deref() == Some(application_name)).then_some(lines.as_slice())
     }
 }
 
@@ -1844,9 +1878,9 @@ fn draw_system_details(
     area: ratatui::layout::Rect,
     session: &Session,
 ) {
-    if session.focus == Focus::Listing {
+    if session.selected_system.is_none() {
         frame.render_widget(
-            Paragraph::new("Select a system and press Enter to inspect its applications.")
+            Paragraph::new("No system is selected.")
                 .alignment(Alignment::Center)
                 .wrap(Wrap { trim: true })
                 .block(
@@ -1946,19 +1980,17 @@ fn draw_runtime_details(
     area: ratatui::layout::Rect,
     session: &Session,
 ) {
-    if session.focus == Focus::Listing {
+    if session.selected_application.is_none() {
         frame.render_widget(
-            Paragraph::new(
-                "Select an application and press Enter to inspect its runtime and deployments.",
-            )
-            .alignment(Alignment::Center)
-            .wrap(Wrap { trim: true })
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Runtime and deployments ")
-                    .title_style(title_style()),
-            ),
+            Paragraph::new("No application is selected.")
+                .alignment(Alignment::Center)
+                .wrap(Wrap { trim: true })
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(" Runtime and deployments ")
+                        .title_style(title_style()),
+                ),
             area,
         );
         return;
@@ -2062,9 +2094,9 @@ fn draw_catalog(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, ses
 }
 
 fn draw_detail(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, session: &Session) {
-    if session.focus == Focus::Listing {
+    if session.selected_application.is_none() {
         frame.render_widget(
-            Paragraph::new("Select an application and press Enter to inspect it.")
+            Paragraph::new("No application is selected.")
                 .alignment(Alignment::Center)
                 .wrap(Wrap { trim: true })
                 .block(Block::default().borders(Borders::ALL).title(" Details ")),
@@ -2183,7 +2215,7 @@ fn application_details_lines(entry: &ApplicationCatalogEntry) -> Vec<Line<'stati
 fn runtime_lines(state: &QueryState<RuntimeObservation>) -> Vec<Line<'static>> {
     match state {
         QueryState::Idle => vec![Line::from(
-            "Select an application and press Enter to load runtime status.",
+            "The runtime status was not requested yet. Press r to load it.",
         )],
         QueryState::Loading => vec![Line::from("Loading runtime status...")],
         QueryState::Failed(error) => vec![
@@ -2228,7 +2260,7 @@ fn runtime_lines(state: &QueryState<RuntimeObservation>) -> Vec<Line<'static>> {
 fn deployment_history_lines(state: &QueryState<Vec<DeploymentHistory>>) -> Vec<Line<'static>> {
     match state {
         QueryState::Idle => vec![Line::from(
-            "Select an application and press Enter to load deployment history.",
+            "The deployment history was not requested yet. Press r to load it.",
         )],
         QueryState::Loading => vec![Line::from("Loading deployment history...")],
         QueryState::Failed(error) => vec![
@@ -2586,7 +2618,7 @@ mod tests {
         session.queued.clear();
         session.catalog = QueryState::Ready(vec![entry("atlas")]);
         session.selected_application = Some("atlas".to_owned());
-        session.detail_application = Some("atlas".to_owned());
+        session.observations_application = Some("atlas".to_owned());
         session.tab = Tab::Applications;
         session.focus = Focus::Details;
         session
@@ -3039,7 +3071,8 @@ mod tests {
             Some(2)
         );
 
-        session.detail_application = Some("beacon".to_owned());
+        // Selecting another application scopes the progress panel away.
+        session.selected_application = Some("beacon".to_owned());
         assert_eq!(session.deployment_progress_for_detail(), None);
         session.shutdown().unwrap();
     }
@@ -3302,7 +3335,7 @@ mod tests {
         assert!(matches!(session.focus, Focus::Listing));
         assert!(matches!(session.tab, Tab::Applications));
         // The detail target stays selected so returning is cheap.
-        assert_eq!(session.detail_application.as_deref(), Some("atlas"));
+        assert_eq!(session.observations_application.as_deref(), Some("atlas"));
 
         session
             .handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE))
@@ -3682,6 +3715,148 @@ mod tests {
             .expect("form must position the cursor");
         assert_eq!(after_push.y, after.y);
         assert_eq!(after_push.x, after.x + 1);
+        session.shutdown().unwrap();
+    }
+
+    #[test]
+    fn first_system_details_load_without_an_explicit_request() {
+        let mut session = Session::new();
+        session.queued.clear();
+
+        session.apply_systems(vec![system_fixture("forge"), system_fixture("atelier")]);
+
+        assert_eq!(session.selected_system.as_deref(), Some("forge"));
+        assert!(matches!(session.system_details, QueryState::Loading));
+        assert_eq!(
+            session
+                .queued
+                .iter()
+                .map(Request::command)
+                .collect::<Vec<_>>(),
+            vec![Command::SystemShow {
+                name: "forge".to_owned(),
+            }]
+        );
+        session.shutdown().unwrap();
+    }
+
+    #[test]
+    fn system_selection_follows_the_arrows_and_reloads_the_details() {
+        let mut session = Session::new();
+        session.queued.clear();
+        session.tab = Tab::Systems;
+        session.apply_systems(vec![system_fixture("forge"), system_fixture("atelier")]);
+        session.queued.clear();
+        session.system_details = QueryState::Ready(pneuma::use_cases::system::SystemDetails {
+            system: system_fixture("forge"),
+            applications: Vec::new(),
+        });
+
+        session
+            .handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+            .unwrap();
+
+        assert_eq!(session.selected_system.as_deref(), Some("atelier"));
+        assert!(matches!(session.system_details, QueryState::Loading));
+        assert_eq!(
+            session
+                .queued
+                .iter()
+                .map(Request::command)
+                .collect::<Vec<_>>(),
+            vec![Command::SystemShow {
+                name: "atelier".to_owned(),
+            }]
+        );
+        session.shutdown().unwrap();
+    }
+
+    #[test]
+    fn entering_the_deployments_tab_loads_the_selection_observations() {
+        let mut session = Session::new();
+        session.queued.clear();
+        session.catalog = QueryState::Ready(vec![entry("atlas")]);
+        session.selected_application = Some("atlas".to_owned());
+        session.observations_application = None;
+
+        session
+            .handle_key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE))
+            .unwrap();
+
+        assert!(matches!(session.tab, Tab::Deployments));
+        assert_eq!(
+            session
+                .queued
+                .iter()
+                .map(Request::command)
+                .collect::<Vec<_>>(),
+            vec![
+                Command::ListDeployments {
+                    application_name: "atlas".to_owned(),
+                },
+                Command::ApplicationStatus {
+                    application_name: "atlas".to_owned(),
+                },
+            ]
+        );
+        session.shutdown().unwrap();
+    }
+
+    #[test]
+    fn observation_requests_follow_each_selection_change() {
+        let mut session = Session::new();
+        session.queued.clear();
+        session.tab = Tab::Deployments;
+        session.catalog = QueryState::Ready(vec![entry("atlas"), entry("beacon")]);
+        session.selected_application = Some("atlas".to_owned());
+        session.observations_application = Some("atlas".to_owned());
+
+        session
+            .handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+            .unwrap();
+
+        assert_eq!(session.selected_application.as_deref(), Some("beacon"));
+        assert_eq!(
+            session
+                .queued
+                .iter()
+                .map(Request::command)
+                .collect::<Vec<_>>(),
+            vec![
+                Command::ListDeployments {
+                    application_name: "beacon".to_owned(),
+                },
+                Command::ApplicationStatus {
+                    application_name: "beacon".to_owned(),
+                },
+            ]
+        );
+        session.shutdown().unwrap();
+    }
+
+    #[test]
+    fn details_render_for_the_first_selection_without_pressing_enter() {
+        let mut session = Session::new();
+        session.queued.clear();
+        session.catalog = QueryState::Ready(vec![entry("atlas")]);
+        session.selected_application = Some("atlas".to_owned());
+
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 24))
+            .expect("test backend must initialize");
+        terminal
+            .draw(|frame| draw_shell(frame, &session))
+            .expect("application tab render must succeed");
+        let screen = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol().to_owned())
+            .collect::<String>();
+        assert!(
+            screen.contains("Repository: https://example.test/atlas.git"),
+            "the selected application details must render without Enter: {screen:?}"
+        );
         session.shutdown().unwrap();
     }
 

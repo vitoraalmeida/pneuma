@@ -102,7 +102,10 @@ domain, use-case, persistence, or external-effect decisions.
       `ImportApplication` commands from locally validated multi-field forms
       that bind the selected system; the Deployments tab loads history and
       status on demand, and Left returns from any details column to its
-      listing without touching the control boundary.
+      listing without touching the control boundary. Detail columns now follow
+      the selection automatically: the first item's details load without an
+      explicit request, selection movement reloads them, and Enter only moves
+      the keyboard focus to the details column.
 6. [ ] Operational regression and closure
    - Synchronize implemented documentation and run the required Rust, markdown,
      shell, and applicable disposable-VM regression ladder.

@@ -48,18 +48,21 @@ terminal cursor that marks the edit position of the focused deploy-form field
 The opening view is organized into three tabs that group the command
 vocabulary: Systems, Applications (the opening tab), and Deployments. Digit
 keys and Tab/Shift+Tab or Left/Right switch tabs; the Left arrow returns from a
-details column to its listing. The Applications tab uses
+details column to its listing. Every details column follows the selection: the
+first item's details render as soon as the listing is ready, and selection
+movement reloads them without an explicit request, so Enter only moves the
+keyboard focus to the details column. The Applications tab uses
 `Command::ListApplications` and labels the persisted desired runtime state and
 whether an Application has a successful deployment; neither label asserts that
-the Application is currently running. Selecting an Application and pressing
-Enter loads `Command::ListDeployments` and requests `Command::ApplicationStatus`
-on demand. The Deployments tab shows that history and the observed runtime
-state for the selected Application; the detail screens display errors in place,
-leaving the session usable for refresh or quit. The Systems tab lists Systems
-with `Command::SystemList`, opens their persisted grouping and member
-Applications with `Command::SystemShow`, creates Systems through the exact
-`Command::SystemCreate`, and adds Applications to a System through the exact
-`Command::ImportApplication` with the system name bound in the form.
+the Application is currently running. Selecting an Application loads
+`Command::ListDeployments` and requests `Command::ApplicationStatus` on demand.
+The Deployments tab shows that history and the observed runtime state for the
+selected Application; the detail screens display errors in place, leaving the
+session usable for refresh or quit. The Systems tab lists Systems with
+`Command::SystemList`, follows the selection to their persisted grouping and
+member Applications through `Command::SystemShow`, creates Systems through the
+exact `Command::SystemCreate`, and adds Applications to a System through the
+exact `Command::ImportApplication` with the system name bound in the form.
 
 In an Application detail view, `s` starts, `x` stops, `c` reconciles, `p` sets
 public visibility, and `i` sets internal visibility. Each action first opens a
