@@ -4,6 +4,7 @@ mod error;
 mod output;
 mod progress;
 mod shared;
+mod tui;
 
 use pneuma::control::{Command, CommandResult, ControlError, ControlExecutor};
 
@@ -22,6 +23,7 @@ pub(crate) fn run(invocation: Invocation) -> Result<(), CliError> {
             run_version();
             return Ok(());
         }
+        InvocationTarget::Tui => return tui::run(),
         InvocationTarget::CiDispatch => {
             return ci::run_ci_dispatch(&ControlExecutor::from_environment(), verbose);
         }

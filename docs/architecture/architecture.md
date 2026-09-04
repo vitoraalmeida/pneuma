@@ -90,7 +90,7 @@ runtime path without the Caddy traffic path.
 
 | Layer | Owns | Does not own |
 |---|---|---|
-| `src/main.rs` and `src/cli/` | Process bootstrap (`src/main.rs`), CLI definition (`src/cli/args.rs`), argument-to-command mapping, result/event rendering, and error classification with message and exit-code mapping (`src/cli/error.rs`) | Domain decisions, database connections and locks, persistence rules, or external effects |
+| `src/main.rs` and `src/cli/` | Process bootstrap (`src/main.rs`), CLI definition (`src/cli/args.rs`), argument-to-command mapping, result/event rendering, TUI terminal lifecycle, and error classification with message and exit-code mapping (`src/cli/error.rs`) | Domain decisions, database connections and locks, persistence rules, or external effects |
 | `src/control/` | Immutable host configuration, synchronous typed command execution, database-wide lock and connection lifetime, typed results/errors, and observational deployment-event delivery | Terminal output, TTY detection, CLI parsing, process exit codes, or workflow policy |
 | `src/domain/` | Domain entities, closed state sets, and value invariants | External effects, SQL, or external file formats |
 | `src/use_cases/` | Business decisions, effect ordering, short transaction boundaries, and compensation | SQL mapping or process invocation details |
@@ -142,7 +142,10 @@ optional observer; event delivery cannot change command execution.
 
 **CLI** (`src/main.rs` and `src/cli/`) owns process bootstrap, argument parsing,
 mapping arguments onto control commands, output rendering (including TTY-only
-deployment animation), and exit-code classification. Process bootstrap
+deployment animation), the TUI terminal lifecycle, and exit-code classification.
+`pneuma tui` rejects non-interactive stdin or stdout before constructing host
+configuration or opening SQLite; its initial shell owns raw-mode and alternate-
+screen restoration but executes no host command. Process bootstrap
 (`src/host_environment.rs`) validates and applies the host environment file
 strictly and fail-fast — a missing file boots, any other read or parse failure
 exits 1 with one contextual `error:` line before argument parsing — and derives

@@ -408,6 +408,7 @@ automatically.
 | `pneuma database backup <path>` | Create a consistent SQLite backup. |
 | `pneuma database restore <path>` | Validate a current-schema SQLite backup and restore it atomically; rejects incompatible backups. |
 | `pneuma ci dispatch` | Restricted SSH dispatcher; not for direct interactive use. |
+| `pneuma tui` | Open the interactive terminal shell; requires interactive stdin and stdout. |
 | `pneuma version` | Print version without opening the database. |
 | `pneuma doctor` | Verify host prerequisites. |
 

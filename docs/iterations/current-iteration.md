@@ -1,44 +1,95 @@
 # Current Iteration
 
-**Status:** concluída em 2026-09-03
+**Status:** em andamento
 
-**Base:** `19447d4` (`Update ci`)
+**Version:** v0.5.5 - Terminal User Interface
 
-**Authorization:** single maintenance checkpoint authorized directly by the
-repository owner on 2026-09-02; no product behavior changes.
+**Base:** `2c1f47e` (`docs: close VM E2E readiness iteration`)
 
-## Iteration - VM E2E post-reboot readiness (maintenance)
+**Authorization:** approved directly by the repository owner on 2026-09-03.
 
-Objective: remove the boot-timing race in the E2E battery's post-reboot
-verification without weakening the automatic-recovery requirement. The PR
-E2E run of `19447d4` failed at Step 9 of `scripts/dev-vm/e2e.sh` about seven
-seconds after the guest returned from reboot, while the immediately prior
-full E2E run of the same product code passed; SSH recovers before Quadlet
-and Podman finish regenerating and starting the application unit.
+## Objective
+
+Provide an interactive terminal interface for inspecting and operating one
+Pneuma host. The TUI is a Ratatui adapter over the existing synchronous
+`ControlExecutor`; it does not create a resident control plane or duplicate
+domain, use-case, persistence, or external-effect decisions.
+
+## Fixed Decisions
+
+1. `pneuma tui` is a new explicit interactive command. Existing CLI commands,
+   syntax, stdout, stderr, and exit-code behavior remain unchanged.
+2. The TUI uses Ratatui with Crossterm as its terminal backend. It is the only
+   new interface dependency introduced by this iteration.
+3. The TUI is available only on an interactive terminal. When stdin or stdout
+   is not a terminal, it fails before opening the database or invoking an
+   external command with a usage-class diagnostic.
+4. The TUI owns terminal setup, restoration, keyboard handling, screen layout,
+   presentation labels, and transient interaction state. `src/control/` stays
+   terminal-neutral and synchronous.
+5. Every host action maps to an existing typed `control::Command`; no TUI-only
+   business operation or second command vocabulary is introduced.
+6. Read screens refresh by issuing new control commands on demand. A refresh
+   never keeps a SQLite connection or database lock between renders.
+7. Mutating actions require an explicit in-TUI confirmation. Deployment and
+   rollback show the existing semantic deployment events while the command is
+   executing; terminal cleanup runs on success, command failure, and TUI error.
+8. The initial TUI covers application catalog, application details and
+   deployment history, runtime status, start, stop, reconcile, visibility,
+   deploy by branch or digest, and rollback. Import, system administration,
+   doctor, backup, restore, and restricted CI dispatch remain CLI-only.
+
+## Non-goals
+
+- No daemon, HTTP API, remote TUI, web interface, authentication, transport,
+  multi-host operation, background refresh worker, async runtime, or new
+  persistence.
+- No changes to deployment, reconciliation, SQLite locking, runtime, Caddy, or
+  CI-dispatch semantics.
+- No mouse support, configurable themes, saved UI state, shell command runner,
+  text editor, or generic terminal abstraction.
+- No v0.6 observed-state model or observation-based reconciliation work.
 
 ## Checkpoints
 
-1. [x] Bounded post-reboot readiness in `scripts/dev-vm/e2e.sh`
-   - Wait boundedly for the pneuma user manager, the healthy-http Quadlet
-     service, and its container after the guest reboot, polling instead of
-     asserting once; on timeout, print unit, Quadlet source, user-journal,
-     and Podman diagnostics before failing.
-   - The automatic-boot assertion stays intact: `pneuma reconcile` only runs
-     after the generated service and container are confirmed active, so the
-     step still proves Quadlet boot recovery and not reconciliation repair.
-   - Result: Step 9 now polls each readiness boundary (user manager 60s,
-     Quadlet service 120s, container 60s) and reports the listed diagnostics
-     before failing; the immediate post-SSH assertions were the only change,
-     and the reconciliation/status/HTTP checks after the waits are unchanged.
+1. [x] Establish the TUI command and terminal lifecycle
+   - Add `pneuma tui`, Ratatui/Crossterm dependencies, terminal capability
+     validation, and a minimal full-screen application shell that always
+     restores the terminal.
+   - Result: `pneuma tui` now rejects non-interactive streams before host
+     configuration, opens a Ratatui/Crossterm shell, and restores raw/alternate
+     terminal state through explicit cleanup and `Drop`. Argument, non-TTY, and
+     pseudo-terminal normal-exit regressions avoid ANSI-byte assertions.
+2. [ ] Read-only catalog and application inspection
+   - Render the application catalog, selected application detail, deployment
+     history, and on-demand runtime status from typed control results.
+   - Define deterministic empty, loading, error, selection, refresh, and quit
+     states with keyboard-only navigation.
+3. [ ] Confirmed lifecycle and exposure actions
+   - Add confirmation flows for start, stop, reconcile, and visibility changes,
+     preserving typed control-error classification in user-visible TUI errors.
+4. [ ] Deployment and rollback interaction
+   - Add branch and digest deployment forms plus rollback confirmation; render
+     semantic deployment events and final typed results without changing
+     deployment execution or compensation.
+5. [ ] Operational regression and closure
+   - Synchronize implemented documentation and run the required Rust, markdown,
+     shell, and applicable disposable-VM regression ladder.
 
 ## Acceptance criteria
 
-- Step 9 passes on a slow or loaded guest and fails with actionable
-  diagnostics on a genuinely broken boot.
-- `bash -n`, ShellCheck 0.10.0, and shfmt 3.10.0 pass over all tracked shell
-  scripts (the CI `shell` job gates, with the same pinned versions).
-- The full disposable-VM regression (`scripts/vm/run-e2e.sh` with the
-  reconciliation drift catalog, matching the PR E2E job) passes locally.
+- `pneuma tui` opens only on an interactive terminal, restores terminal state
+  after every exit path, and leaves the existing CLI contract unchanged.
+- An operator can navigate the defined catalog and detail views, refresh data,
+  inspect status and history, and see actionable typed errors without a panic.
+- Every supported mutation has a visible confirmation step and executes through
+  the existing control boundary; no SQLite transaction or lock outlives one
+  command execution.
+- Deployment and rollback progress is rendered from semantic events, and a TUI
+  rendering failure cannot alter deployment success, failure, or compensation.
+- Focused adapter tests and the full required CI gates pass. Disposable-VM
+  regression and environment-dependent checks are recorded as PASS, FAIL, or
+  SKIP with their actual prerequisites.
 
 ## Blockers
 
@@ -46,11 +97,8 @@ None.
 
 ## Validation evidence
 
-- Shell gates: `bash -n`, ShellCheck 0.10.0, shfmt 3.10.0 over all tracked
-  scripts — clean.
-- Full local disposable-VM regression: `scripts/vm/run-e2e.sh` with
-  `PNEUMA_VM_RECONCILIATION=1` on the KVM host — battery passed including
-  the reboot Step 9 wait path, and the reconciliation drift catalog passed
-  21/21 including the R6/R7 reboot cases.
-- Rust CI gates re-run for the checkpoint: `cargo fmt --check`, clippy
-  `-D warnings`, `cargo test --all-features`, release build — green.
+- Checkpoint 1: `cargo fmt --check`, clippy with `-D warnings`, all-feature
+  tests, and the release build are green; markdown links and focused TUI
+  invocation tests are green.
+- Rootless Podman OCI tests: SKIP (3 ignored tests require a configured
+  rootless Podman host). Disposable-VM regression is deferred to checkpoint 5.

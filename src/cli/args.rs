@@ -49,6 +49,8 @@ enum Commands {
     Doctor,
     /// Reconcile an application with its persisted intent
     Reconcile { application_name: String },
+    /// Open the interactive terminal interface
+    Tui,
     /// CI dispatch (internal, via SSH)
     Ci {
         #[command(subcommand)]
@@ -231,6 +233,7 @@ impl TryFrom<Commands> for InvocationTarget {
             Commands::Reconcile { application_name } => {
                 Self::Control(ControlCommand::Reconcile { application_name })
             }
+            Commands::Tui => Self::Tui,
             Commands::Ci {
                 command: CiCommands::Dispatch,
             } => Self::CiDispatch,
@@ -249,6 +252,7 @@ pub(crate) struct Invocation {
 pub(crate) enum InvocationTarget {
     Control(ControlCommand),
     Version,
+    Tui,
     CiDispatch,
 }
 
@@ -445,6 +449,10 @@ mod tests {
         assert_eq!(
             InvocationTarget::try_from(Commands::Version).expect("version input must normalize"),
             InvocationTarget::Version
+        );
+        assert_eq!(
+            InvocationTarget::try_from(Commands::Tui).expect("TUI input must normalize"),
+            InvocationTarget::Tui
         );
         assert_eq!(
             InvocationTarget::try_from(Commands::Ci {
