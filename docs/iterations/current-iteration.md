@@ -1,11 +1,11 @@
 # Current Iteration
 
-**Status:** em andamento
+**Status:** concluída em 2026-09-03
 
 **Base:** `19447d4` (`Update ci`)
 
-**Approved design:** none. Single maintenance checkpoint authorized directly by
-the repository owner on 2026-09-02; no product behavior changes.
+**Authorization:** single maintenance checkpoint authorized directly by the
+repository owner on 2026-09-02; no product behavior changes.
 
 ## Iteration - VM E2E post-reboot readiness (maintenance)
 
