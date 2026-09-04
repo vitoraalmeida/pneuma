@@ -60,11 +60,15 @@ domain, use-case, persistence, or external-effect decisions.
      configuration, opens a Ratatui/Crossterm shell, and restores raw/alternate
      terminal state through explicit cleanup and `Drop`. Argument, non-TTY, and
      pseudo-terminal normal-exit regressions avoid ANSI-byte assertions.
-2. [ ] Read-only catalog and application inspection
-   - Render the application catalog, selected application detail, deployment
-     history, and on-demand runtime status from typed control results.
-   - Define deterministic empty, loading, error, selection, refresh, and quit
-     states with keyboard-only navigation.
+2. [x] Read-only catalog and application inspection
+    - Render the application catalog, selected application detail, deployment
+      history, and on-demand runtime status from typed control results.
+    - Define deterministic empty, loading, error, selection, refresh, and quit
+      states with keyboard-only navigation.
+    - Result: `pneuma tui` serializes typed catalog, deployment-history, and
+      runtime-status queries through one worker. It preserves catalog selection
+      across refresh, displays query errors without ending the session, and
+      keeps deployment and observed-runtime labels distinct from current intent.
 3. [ ] Confirmed lifecycle and exposure actions
    - Add confirmation flows for start, stop, reconcile, and visibility changes,
      preserving typed control-error classification in user-visible TUI errors.
@@ -100,5 +104,8 @@ None.
 - Checkpoint 1: `cargo fmt --check`, clippy with `-D warnings`, all-feature
   tests, and the release build are green; markdown links and focused TUI
   invocation tests are green.
+- Checkpoint 2: focused TUI state and PTY tests, `cargo fmt --check`, clippy
+  with `-D warnings`, all-feature tests, the release build, markdown links, and
+  `git diff --check` are green.
 - Rootless Podman OCI tests: SKIP (3 ignored tests require a configured
   rootless Podman host). Disposable-VM regression is deferred to checkpoint 5.

@@ -408,11 +408,21 @@ automatically.
 | `pneuma database backup <path>` | Create a consistent SQLite backup. |
 | `pneuma database restore <path>` | Validate a current-schema SQLite backup and restore it atomically; rejects incompatible backups. |
 | `pneuma ci dispatch` | Restricted SSH dispatcher; not for direct interactive use. |
-| `pneuma tui` | Open the interactive terminal shell; requires interactive stdin and stdout. |
+| `pneuma tui` | Open the interactive application catalog; requires interactive stdin and stdout. |
 | `pneuma version` | Print version without opening the database. |
 | `pneuma doctor` | Verify host prerequisites. |
 
 Place `--verbose` before the command for step-by-step progress.
+
+### Terminal Interface
+
+Run `pneuma tui` from an interactive terminal. The opening catalog lists
+registered Applications and whether each has a successful deployment; it does
+not claim that an Application is running. Use Up/Down or `j`/`k` to select an
+Application, Enter to inspect its persisted details, deployment history, and an
+on-demand runtime observation. Use `r` to refresh, Esc to return to the catalog,
+and `q` to quit. A failed read stays visible in the interface and does not end
+the session.
 
 ### Manifest
 

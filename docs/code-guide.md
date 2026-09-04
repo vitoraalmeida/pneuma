@@ -20,7 +20,7 @@ Deeper reference material lives in [`architecture/architecture.md`](architecture
 src/main.rs                  process bootstrap and composition root only
 src/host_environment.rs      host environment file validation, application, and uid-scoped runtime derivation
 src/config.rs                documented PNEUMA_* path variables, path resolution, verbose logging
-src/cli/                     argument tree, dispatch, output, progress, error classes
+src/cli/                     argument tree, dispatch, output, progress, error classes, Ratatui TUI
 src/control/                 interface-neutral execution boundary (`ControlExecutor`, typed commands/results/errors)
 src/use_cases/<capability>/  workflow ordering and external-effect orchestration
 src/domain/                  value objects, entities, transitions, pure policy
@@ -32,6 +32,23 @@ tests/                       integration and binary-level CLI tests (tests/cli.r
 One crate: a library (`src/lib.rs`) plus a thin binary entrypoint. There is no
 async; every external command integration is a child process except SQLite,
 filesystem work, and internal TCP health checks.
+
+## Terminal Interface
+
+`pneuma tui` first requires interactive stdin and stdout, then lets
+`src/cli/tui.rs` own raw mode, alternate-screen restoration, keyboard handling,
+and the Ratatui layout. It runs one worker thread containing a
+`ControlExecutor`; the worker serializes typed read commands and returns their
+results to the presentation thread without retaining a database connection
+between commands.
+
+The opening catalog uses `Command::ListApplications`. It labels the persisted
+desired runtime state and whether an Application has a successful deployment;
+neither label asserts that the Application is currently running. Selecting an
+Application and pressing Enter loads `Command::ListDeployments` and requests
+`Command::ApplicationStatus` on demand. The detail screen labels that result as
+an observed runtime state and displays errors in place, leaving the session
+usable for refresh or quit.
 
 ## Shared Invocation Path
 

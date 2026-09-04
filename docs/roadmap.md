@@ -223,7 +223,7 @@ daemon, persistence, remote transport, or an alternative business-operation
 path.
 
 - [x] Establish the `pneuma tui` command and safe terminal lifecycle.
-- [ ] Add catalog, application detail, deployment history, and status views.
+- [x] Add catalog, application detail, deployment history, and status views.
 - [ ] Add confirmed lifecycle, visibility, deployment, and rollback actions.
 - [ ] Complete operational regression and documentation synchronization.
 

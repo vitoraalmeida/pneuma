@@ -144,8 +144,12 @@ optional observer; event delivery cannot change command execution.
 mapping arguments onto control commands, output rendering (including TTY-only
 deployment animation), the TUI terminal lifecycle, and exit-code classification.
 `pneuma tui` rejects non-interactive stdin or stdout before constructing host
-configuration or opening SQLite; its initial shell owns raw-mode and alternate-
-screen restoration but executes no host command. Process bootstrap
+configuration or opening SQLite. Its main thread owns raw-mode, alternate-screen
+restoration, keyboard input, and presentation; one worker owns a
+`ControlExecutor` and serializes read commands. The catalog names persisted
+intent and whether an Application has a successful deployment without claiming
+it is running. Opening an Application loads deployment history and obtains a
+runtime observation on demand through the existing control boundary. Process bootstrap
 (`src/host_environment.rs`) validates and applies the host environment file
 strictly and fail-fast — a missing file boots, any other read or parse failure
 exits 1 with one contextual `error:` line before argument parsing — and derives

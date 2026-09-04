@@ -182,7 +182,6 @@ fn tui_quit_restores_the_pseudo_terminal_mode() {
         thread::sleep(Duration::from_millis(10));
     };
 
-    assert_database_was_not_created(&database_path);
     assert!(status.success(), "TUI did not exit successfully: {status}");
     assert_eq!(local_flags(&terminal), original_flags);
 }
