@@ -38,7 +38,7 @@ filesystem work, and internal TCP health checks.
 `pneuma tui` first requires interactive stdin and stdout, then lets
 `src/cli/tui.rs` own raw mode, alternate-screen restoration, keyboard handling,
 and the Ratatui layout. It runs one worker thread containing a
-`ControlExecutor`; the worker serializes typed read commands and returns their
+`ControlExecutor`; the worker serializes typed commands and returns their
 results to the presentation thread without retaining a database connection
 between commands.
 
@@ -49,6 +49,15 @@ Application and pressing Enter loads `Command::ListDeployments` and requests
 `Command::ApplicationStatus` on demand. The detail screen labels that result as
 an observed runtime state and displays errors in place, leaving the session
 usable for refresh or quit.
+
+In an Application detail view, `s` starts, `x` stops, `c` reconciles, `p` sets
+public visibility, and `i` sets internal visibility. Each action first opens a
+concrete confirmation modal; only Enter or `y` submits its existing control
+command, while Esc or `n` cancels without execution. Worker failures pass
+through `CliError::from_control` before presentation, so the visible diagnostic
+retains its `Failure`, `Not found`, `Conflict`, or `External` class. After an
+action succeeds or fails, the TUI serializes the required catalog and detail
+refreshes before accepting further actions.
 
 ## Shared Invocation Path
 

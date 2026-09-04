@@ -224,7 +224,8 @@ path.
 
 - [x] Establish the `pneuma tui` command and safe terminal lifecycle.
 - [x] Add catalog, application detail, deployment history, and status views.
-- [ ] Add confirmed lifecycle, visibility, deployment, and rollback actions.
+- [x] Add confirmed lifecycle, reconciliation, and visibility actions.
+- [ ] Add branch/digest deployment and confirmed rollback actions.
 - [ ] Complete operational regression and documentation synchronization.
 
 ## v0.6 - Observed State / Host Observation

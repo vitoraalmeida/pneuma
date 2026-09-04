@@ -424,6 +424,12 @@ on-demand runtime observation. Use `r` to refresh, Esc to return to the catalog,
 and `q` to quit. A failed read stays visible in the interface and does not end
 the session.
 
+In an Application detail view, use `s` to start, `x` to stop, `c` to reconcile,
+`p` to set public visibility, or `i` to set internal visibility. Each action
+opens a confirmation: Enter or `y` executes it; Esc or `n` cancels it. The TUI
+shows the existing error class and diagnostic when an action fails, then refreshes
+the affected data before accepting another action.
+
 ### Manifest
 
 The manifest convention is `deploy/<environment>/pneuma.toml` in the application

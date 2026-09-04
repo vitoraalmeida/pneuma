@@ -69,9 +69,13 @@ domain, use-case, persistence, or external-effect decisions.
       runtime-status queries through one worker. It preserves catalog selection
       across refresh, displays query errors without ending the session, and
       keeps deployment and observed-runtime labels distinct from current intent.
-3. [ ] Confirmed lifecycle and exposure actions
-   - Add confirmation flows for start, stop, reconcile, and visibility changes,
-     preserving typed control-error classification in user-visible TUI errors.
+3. [x] Confirmed lifecycle and exposure actions
+    - Add confirmation flows for start, stop, reconcile, and visibility changes,
+      preserving typed control-error classification in user-visible TUI errors.
+    - Result: Application details expose explicit confirmations for lifecycle,
+      reconciliation, and public/internal visibility requests. The worker maps
+      each control error through the existing CLI classification before display,
+      and the session refreshes affected projections after success or failure.
 4. [ ] Deployment and rollback interaction
    - Add branch and digest deployment forms plus rollback confirmation; render
      semantic deployment events and final typed results without changing
@@ -107,5 +111,8 @@ None.
 - Checkpoint 2: focused TUI state and PTY tests, `cargo fmt --check`, clippy
   with `-D warnings`, all-feature tests, the release build, markdown links, and
   `git diff --check` are green.
+- Checkpoint 3: focused confirmation, action routing, typed-error, lifecycle,
+  and exposure tests, `cargo fmt --check`, clippy with `-D warnings`, all-feature
+  tests, the release build, markdown links, and `git diff --check` are green.
 - Rootless Podman OCI tests: SKIP (3 ignored tests require a configured
   rootless Podman host). Disposable-VM regression is deferred to checkpoint 5.

@@ -11,16 +11,20 @@ use crossterm::{
 };
 use pneuma::control::{Command, CommandResult, ControlExecutor};
 use pneuma::domain::deployment::DeploymentHistory;
+use pneuma::domain::exposure::Visibility;
 use pneuma::use_cases::application::{ApplicationCatalogEntry, RuntimeObservation};
 use ratatui::{
     Terminal,
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Modifier, Style},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 
-use super::{error::CliError, output};
+use super::{
+    error::{CliError, CliErrorClass},
+    output,
+};
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
@@ -131,13 +135,95 @@ enum QueryState<T> {
     Failed(String),
 }
 
-enum ReadRequest {
+#[derive(Clone, PartialEq, Eq)]
+enum PendingAction {
+    Start {
+        application_name: String,
+    },
+    Stop {
+        application_name: String,
+    },
+    Reconcile {
+        application_name: String,
+    },
+    SetVisibility {
+        application_name: String,
+        visibility: Visibility,
+    },
+}
+
+impl PendingAction {
+    fn application_name(&self) -> &str {
+        match self {
+            Self::Start { application_name }
+            | Self::Stop { application_name }
+            | Self::Reconcile { application_name }
+            | Self::SetVisibility {
+                application_name, ..
+            } => application_name,
+        }
+    }
+
+    fn command(&self) -> Command {
+        match self {
+            Self::Start { application_name } => Command::ApplicationStart {
+                application_name: application_name.clone(),
+            },
+            Self::Stop { application_name } => Command::ApplicationStop {
+                application_name: application_name.clone(),
+            },
+            Self::Reconcile { application_name } => Command::Reconcile {
+                application_name: application_name.clone(),
+            },
+            Self::SetVisibility {
+                application_name,
+                visibility,
+            } => Command::VisibilitySet {
+                application_name: application_name.clone(),
+                visibility: *visibility,
+            },
+        }
+    }
+
+    fn targets_visibility(&self, visibility: Visibility) -> bool {
+        matches!(self, Self::SetVisibility { visibility: target, .. } if *target == visibility)
+    }
+
+    fn confirmation_text(&self) -> String {
+        match self {
+            Self::Start { application_name } => format!(
+                "Start {application_name}? This changes the desired runtime intent and may control the runtime."
+            ),
+            Self::Stop { application_name } => format!(
+                "Stop {application_name}? This changes the desired runtime intent and may control the runtime."
+            ),
+            Self::Reconcile { application_name } => format!(
+                "Reconcile {application_name}? This may repair persisted runtime or route drift."
+            ),
+            Self::SetVisibility {
+                application_name,
+                visibility,
+            } => format!(
+                "Set {application_name} visibility to {}? This may change Caddy exposure.",
+                output::visibility_label(*visibility)
+            ),
+        }
+    }
+}
+
+enum Mode {
+    Normal,
+    Confirm(PendingAction),
+}
+
+enum Request {
     Catalog,
     Deployments { application_name: String },
     Status { application_name: String },
+    Action(PendingAction),
 }
 
-impl ReadRequest {
+impl Request {
     fn command(&self) -> Command {
         match self {
             Self::Catalog => Command::ListApplications,
@@ -147,7 +233,37 @@ impl ReadRequest {
             Self::Status { application_name } => Command::ApplicationStatus {
                 application_name: application_name.clone(),
             },
+            Self::Action(action) => action.command(),
         }
+    }
+}
+
+struct WorkerError {
+    class: CliErrorClass,
+    message: String,
+}
+
+impl WorkerError {
+    fn from_control(error: pneuma::control::ControlError) -> Self {
+        let error = CliError::from_control(error);
+        Self {
+            class: error.class(),
+            message: error.to_string(),
+        }
+    }
+
+    fn display(&self) -> String {
+        format!("{}: {}", error_class_label(self.class), self.message)
+    }
+}
+
+fn error_class_label(class: CliErrorClass) -> &'static str {
+    match class {
+        CliErrorClass::Failure => "Failure",
+        CliErrorClass::Usage => "Usage",
+        CliErrorClass::NotFound => "Not found",
+        CliErrorClass::Conflict => "Conflict",
+        CliErrorClass::External => "External",
     }
 }
 
@@ -159,7 +275,7 @@ enum WorkerRequest {
 enum WorkerReply {
     Finished {
         id: u64,
-        result: Result<CommandResult, String>,
+        result: Result<CommandResult, WorkerError>,
     },
 }
 
@@ -207,7 +323,7 @@ fn run_worker(requests: Receiver<WorkerRequest>, replies: Sender<WorkerReply>) {
     while let Ok(request) = requests.recv() {
         match request {
             WorkerRequest::Execute { id, command } => {
-                let result = executor.execute(command).map_err(|error| error.to_string());
+                let result = executor.execute(command).map_err(WorkerError::from_control);
                 if replies.send(WorkerReply::Finished { id, result }).is_err() {
                     return;
                 }
@@ -220,15 +336,17 @@ fn run_worker(requests: Receiver<WorkerRequest>, replies: Sender<WorkerReply>) {
 struct Session {
     worker: Worker,
     next_request_id: u64,
-    active: Option<(u64, ReadRequest)>,
-    queued: VecDeque<ReadRequest>,
+    active: Option<(u64, Request)>,
+    queued: VecDeque<Request>,
     catalog: QueryState<Vec<ApplicationCatalogEntry>>,
     selected_application: Option<String>,
     detail_application: Option<String>,
     deployments: QueryState<Vec<DeploymentHistory>>,
     runtime: QueryState<RuntimeObservation>,
     route: Route,
+    mode: Mode,
     error: Option<String>,
+    outcome: Option<String>,
     quit_after_completion: bool,
 }
 
@@ -245,10 +363,12 @@ impl Session {
             deployments: QueryState::Idle,
             runtime: QueryState::Idle,
             route: Route::Catalog,
+            mode: Mode::Normal,
             error: None,
+            outcome: None,
             quit_after_completion: false,
         };
-        session.enqueue(ReadRequest::Catalog);
+        session.enqueue(Request::Catalog);
         session
     }
 
@@ -264,7 +384,7 @@ impl Session {
         self.quit_after_completion && !self.is_busy()
     }
 
-    fn enqueue(&mut self, request: ReadRequest) {
+    fn enqueue(&mut self, request: Request) {
         self.queued.push_back(request);
     }
 
@@ -306,11 +426,18 @@ impl Session {
     }
 
     fn handle_key(&mut self, event: KeyEvent) -> io::Result<()> {
+        if let Mode::Confirm(action) = &self.mode {
+            return self.handle_confirmation(event, action.clone());
+        }
+
         if event.code == KeyCode::Char('q')
             || (event.code == KeyCode::Char('c') && event.modifiers.contains(KeyModifiers::CONTROL))
         {
             self.queued.clear();
             self.quit_after_completion = true;
+            return Ok(());
+        }
+        if self.is_busy() {
             return Ok(());
         }
 
@@ -322,9 +449,67 @@ impl Session {
             (Route::Catalog, KeyCode::Esc) => self.quit_after_completion = true,
             (Route::Details, KeyCode::Esc) => self.route = Route::Catalog,
             (Route::Details, KeyCode::Char('r')) => self.refresh_details(),
+            (Route::Details, KeyCode::Char('s')) => {
+                if let Some(application_name) = self.detail_application.clone() {
+                    self.confirm(PendingAction::Start { application_name });
+                }
+            }
+            (Route::Details, KeyCode::Char('x')) => {
+                if let Some(application_name) = self.detail_application.clone() {
+                    self.confirm(PendingAction::Stop { application_name });
+                }
+            }
+            (Route::Details, KeyCode::Char('c')) => {
+                if let Some(application_name) = self.detail_application.clone() {
+                    self.confirm(PendingAction::Reconcile { application_name });
+                }
+            }
+            (Route::Details, KeyCode::Char('p')) => {
+                if let Some(application_name) = self.detail_application.clone() {
+                    self.confirm(PendingAction::SetVisibility {
+                        application_name,
+                        visibility: Visibility::Public,
+                    });
+                }
+            }
+            (Route::Details, KeyCode::Char('i')) => {
+                if let Some(application_name) = self.detail_application.clone() {
+                    self.confirm(PendingAction::SetVisibility {
+                        application_name,
+                        visibility: Visibility::Internal,
+                    });
+                }
+            }
             _ => {}
         }
         Ok(())
+    }
+
+    fn handle_confirmation(&mut self, event: KeyEvent, action: PendingAction) -> io::Result<()> {
+        match event.code {
+            KeyCode::Enter | KeyCode::Char('y') => {
+                self.mode = Mode::Normal;
+                self.execute_action(action);
+            }
+            KeyCode::Esc | KeyCode::Char('n') => self.mode = Mode::Normal,
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn confirm(&mut self, action: PendingAction) {
+        if self.is_busy() {
+            return;
+        }
+        self.error = None;
+        self.outcome = None;
+        self.mode = Mode::Confirm(action);
+    }
+
+    fn execute_action(&mut self, action: PendingAction) {
+        self.error = None;
+        self.outcome = None;
+        self.enqueue(Request::Action(action));
     }
 
     fn refresh_catalog(&mut self) {
@@ -333,7 +518,7 @@ impl Session {
         }
         self.catalog = QueryState::Loading;
         self.error = None;
-        self.enqueue(ReadRequest::Catalog);
+        self.enqueue(Request::Catalog);
     }
 
     fn open_details(&mut self) {
@@ -358,10 +543,10 @@ impl Session {
         self.deployments = QueryState::Loading;
         self.runtime = QueryState::Loading;
         self.error = None;
-        self.enqueue(ReadRequest::Deployments {
+        self.enqueue(Request::Deployments {
             application_name: application_name.clone(),
         });
-        self.enqueue(ReadRequest::Status { application_name });
+        self.enqueue(Request::Status { application_name });
     }
 
     fn select_next(&mut self) {
@@ -380,20 +565,20 @@ impl Session {
             next_selection(entries, self.selected_application.as_deref(), -1);
     }
 
-    fn apply_result(&mut self, request: ReadRequest, result: Result<CommandResult, String>) {
+    fn apply_result(&mut self, request: Request, result: Result<CommandResult, WorkerError>) {
         match result {
             Ok(result) => self.apply_success(request, result),
-            Err(error) => self.apply_error(request, error),
+            Err(error) => self.apply_error(request, error.display()),
         }
     }
 
-    fn apply_success(&mut self, request: ReadRequest, result: CommandResult) {
+    fn apply_success(&mut self, request: Request, result: CommandResult) {
         match (request, result) {
-            (ReadRequest::Catalog, CommandResult::Applications(entries)) => {
+            (Request::Catalog, CommandResult::Applications(entries)) => {
                 self.apply_catalog(entries);
             }
             (
-                ReadRequest::Deployments { application_name },
+                Request::Deployments { application_name },
                 CommandResult::ApplicationDeployments {
                     application_name: result_name,
                     deployments,
@@ -402,13 +587,57 @@ impl Session {
                 self.deployments = QueryState::Ready(deployments);
             }
             (
-                ReadRequest::Status { application_name },
+                Request::Status { application_name },
                 CommandResult::ApplicationStatus {
                     application_name: result_name,
                     observation,
                 },
             ) if application_name == result_name.as_str() => {
                 self.runtime = QueryState::Ready(observation);
+            }
+            (
+                Request::Action(PendingAction::Start { application_name }),
+                CommandResult::ApplicationStarted {
+                    application_name: result_name,
+                    observation,
+                },
+            ) if application_name == result_name.as_str() => {
+                self.runtime = QueryState::Ready(observation);
+                self.outcome = Some(format!("Started {result_name}"));
+                self.refresh_after_action(&PendingAction::Start { application_name });
+            }
+            (
+                Request::Action(PendingAction::Stop { application_name }),
+                CommandResult::ApplicationStopped {
+                    application_name: result_name,
+                    observation,
+                },
+            ) if application_name == result_name.as_str() => {
+                self.runtime = QueryState::Ready(observation);
+                self.outcome = Some(format!("Stopped {result_name}"));
+                self.refresh_after_action(&PendingAction::Stop { application_name });
+            }
+            (
+                Request::Action(action @ PendingAction::Reconcile { .. }),
+                CommandResult::Reconciled {
+                    application_name: result_name,
+                    result,
+                },
+            ) if action.application_name() == result_name.as_str() => {
+                self.outcome = Some(output::reconciliation_result(&result_name, &result));
+                self.refresh_after_action(&action);
+            }
+            (
+                Request::Action(action @ PendingAction::SetVisibility { .. }),
+                CommandResult::ExposureChanged {
+                    application_name: result_name,
+                    change,
+                },
+            ) if action.application_name() == result_name.as_str()
+                && action.targets_visibility(change.visibility) =>
+            {
+                self.outcome = Some(output::visibility_change(&result_name, &change));
+                self.refresh_after_action(&action);
             }
             (request, _) => self.apply_error(
                 request,
@@ -417,16 +646,45 @@ impl Session {
         }
     }
 
-    fn apply_error(&mut self, request: ReadRequest, error: String) {
+    fn apply_error(&mut self, request: Request, error: String) {
         match request {
-            ReadRequest::Catalog => {
+            Request::Catalog => {
                 self.catalog = QueryState::Failed(error.clone());
                 self.selected_application = None;
             }
-            ReadRequest::Deployments { .. } => self.deployments = QueryState::Failed(error.clone()),
-            ReadRequest::Status { .. } => self.runtime = QueryState::Failed(error.clone()),
+            Request::Deployments { .. } => self.deployments = QueryState::Failed(error.clone()),
+            Request::Status { .. } => self.runtime = QueryState::Failed(error.clone()),
+            Request::Action(action) => self.refresh_after_action(&action),
         }
         self.error = Some(error);
+    }
+
+    fn refresh_after_action(&mut self, action: &PendingAction) {
+        if self.quit_after_completion {
+            return;
+        }
+        self.catalog = QueryState::Loading;
+        self.enqueue(Request::Catalog);
+        match action {
+            PendingAction::Start { application_name }
+            | PendingAction::Stop { application_name } => {
+                self.runtime = QueryState::Loading;
+                self.enqueue(Request::Status {
+                    application_name: application_name.clone(),
+                });
+            }
+            PendingAction::Reconcile { application_name } => {
+                self.deployments = QueryState::Loading;
+                self.runtime = QueryState::Loading;
+                self.enqueue(Request::Deployments {
+                    application_name: application_name.clone(),
+                });
+                self.enqueue(Request::Status {
+                    application_name: application_name.clone(),
+                });
+            }
+            PendingAction::SetVisibility { .. } => {}
+        }
     }
 
     fn apply_catalog(&mut self, entries: Vec<ApplicationCatalogEntry>) {
@@ -496,6 +754,9 @@ fn draw_shell(frame: &mut ratatui::Frame<'_>, session: &Session) {
     draw_catalog(frame, content[0], session);
     draw_detail(frame, content[1], session);
     draw_footer(frame, areas[1], session);
+    if let Mode::Confirm(action) = &session.mode {
+        draw_confirmation(frame, action);
+    }
 }
 
 fn draw_catalog(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, session: &Session) {
@@ -678,10 +939,15 @@ fn deployment_history_text(state: &QueryState<Vec<DeploymentHistory>>) -> String
 fn draw_footer(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, session: &Session) {
     let message = if session.quit_after_completion && session.is_busy() {
         "Finishing the current refresh before quitting...".to_owned()
+    } else if session.is_busy() {
+        "Working... actions and navigation are disabled until completion.".to_owned()
     } else if let Some(error) = &session.error {
         format!("Error: {error}")
+    } else if let Some(outcome) = &session.outcome {
+        outcome.clone()
     } else if session.route == Route::Details {
-        "Esc: catalog  r: refresh  q: quit".to_owned()
+        "s: start  x: stop  c: reconcile  p: public  i: internal  Esc: catalog  r: refresh  q: quit"
+            .to_owned()
     } else {
         "Up/Down or j/k: select  Enter: details  r: refresh  q: quit".to_owned()
     };
@@ -690,6 +956,39 @@ fn draw_footer(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, sess
             .wrap(Wrap { trim: true })
             .block(Block::default().borders(Borders::TOP)),
         area,
+    );
+}
+
+fn draw_confirmation(frame: &mut ratatui::Frame<'_>, action: &PendingAction) {
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(30),
+            Constraint::Length(8),
+            Constraint::Percentage(30),
+        ])
+        .split(frame.area());
+    let popup = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(20),
+            Constraint::Percentage(60),
+            Constraint::Percentage(20),
+        ])
+        .split(vertical[1])[1];
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(format!(
+            "{}\n\nEnter/y: confirm  Esc/n: cancel",
+            action.confirmation_text()
+        ))
+        .wrap(Wrap { trim: true })
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Confirm action "),
+        ),
+        popup,
     );
 }
 
@@ -712,6 +1011,16 @@ mod tests {
             },
             deployed: false,
         }
+    }
+
+    fn detail_session() -> Session {
+        let mut session = Session::new();
+        session.queued.clear();
+        session.catalog = QueryState::Ready(vec![entry("atlas")]);
+        session.selected_application = Some("atlas".to_owned());
+        session.detail_application = Some("atlas".to_owned());
+        session.route = Route::Details;
+        session
     }
 
     #[test]
@@ -751,5 +1060,135 @@ mod tests {
         assert!(rendered.contains("Desired runtime state: Running"));
         assert!(rendered.contains("Has successful deployment: no"));
         assert!(rendered.contains("Active deployment ID: None"));
+    }
+
+    #[test]
+    fn confirmation_owns_keys_until_the_operator_cancels_or_confirms() {
+        let mut session = detail_session();
+
+        session
+            .handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE))
+            .unwrap();
+        assert!(matches!(
+            &session.mode,
+            Mode::Confirm(PendingAction::Start { application_name }) if application_name == "atlas"
+        ));
+
+        session
+            .handle_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE))
+            .unwrap();
+        assert!(matches!(&session.mode, Mode::Confirm(_)));
+        assert!(!session.quit_after_completion);
+
+        session
+            .handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE))
+            .unwrap();
+        assert!(matches!(session.mode, Mode::Normal));
+        assert!(session.queued.is_empty());
+        session.shutdown().unwrap();
+    }
+
+    #[test]
+    fn confirmation_enqueues_the_exact_existing_control_command() {
+        let mut session = detail_session();
+
+        session
+            .handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE))
+            .unwrap();
+        session
+            .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .unwrap();
+
+        assert!(matches!(session.mode, Mode::Normal));
+        assert_eq!(
+            session.queued.front().map(Request::command),
+            Some(Command::VisibilitySet {
+                application_name: "atlas".to_owned(),
+                visibility: Visibility::Public,
+            })
+        );
+        session.shutdown().unwrap();
+    }
+
+    #[test]
+    fn lifecycle_and_reconcile_actions_map_to_the_existing_commands() {
+        let application_name = "atlas".to_owned();
+
+        assert_eq!(
+            PendingAction::Start {
+                application_name: application_name.clone(),
+            }
+            .command(),
+            Command::ApplicationStart {
+                application_name: application_name.clone(),
+            }
+        );
+        assert_eq!(
+            PendingAction::Stop {
+                application_name: application_name.clone(),
+            }
+            .command(),
+            Command::ApplicationStop {
+                application_name: application_name.clone(),
+            }
+        );
+        assert_eq!(
+            PendingAction::Reconcile {
+                application_name: application_name.clone(),
+            }
+            .command(),
+            Command::Reconcile {
+                application_name: application_name.clone(),
+            }
+        );
+        assert_eq!(
+            PendingAction::SetVisibility {
+                application_name: application_name.clone(),
+                visibility: Visibility::Internal,
+            }
+            .command(),
+            Command::VisibilitySet {
+                application_name,
+                visibility: Visibility::Internal,
+            }
+        );
+    }
+
+    #[test]
+    fn action_failures_keep_their_class_and_schedule_a_refresh() {
+        let mut session = detail_session();
+        let action = PendingAction::Stop {
+            application_name: "atlas".to_owned(),
+        };
+
+        session.apply_error(
+            Request::Action(action),
+            WorkerError {
+                class: CliErrorClass::Conflict,
+                message: "application is busy".to_owned(),
+            }
+            .display(),
+        );
+
+        assert_eq!(
+            session.error.as_deref(),
+            Some("Conflict: application is busy")
+        );
+        assert!(matches!(session.catalog, QueryState::Loading));
+        assert!(matches!(session.runtime, QueryState::Loading));
+        assert_eq!(
+            session
+                .queued
+                .iter()
+                .map(Request::command)
+                .collect::<Vec<_>>(),
+            vec![
+                Command::ListApplications,
+                Command::ApplicationStatus {
+                    application_name: "atlas".to_owned(),
+                },
+            ]
+        );
+        session.shutdown().unwrap();
     }
 }
