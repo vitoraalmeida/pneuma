@@ -77,7 +77,8 @@ domain, use-case, persistence, or external-effect decisions.
       each control error through the existing CLI classification before display,
       and the session refreshes affected projections after success or failure;
       a confirmed follow-up action queues behind the active command and
-      supersedes queued refresh reads.
+      supersedes queued refresh reads. Completed action feedback is scoped to
+      the matching detail view and remains visible in its `Last action` panel.
 4. [ ] Deployment and rollback interaction
    - Add branch and digest deployment forms plus rollback confirmation; render
      semantic deployment events and final typed results without changing

@@ -152,6 +152,7 @@ it is running. Opening an Application loads deployment history and obtains a
 runtime observation on demand through the existing control boundary. Start,
 stop, reconcile, and visibility requests require a TUI confirmation and retain
 the existing CLI error class with their diagnostic message in the interface.
+Completed actions are shown only in the corresponding Application detail view.
 Process bootstrap
 (`src/host_environment.rs`) validates and applies the host environment file
 strictly and fail-fast — a missing file boots, any other read or parse failure

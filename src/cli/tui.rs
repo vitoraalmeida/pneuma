@@ -135,6 +135,11 @@ enum QueryState<T> {
     Failed(String),
 }
 
+struct ActionOutcome {
+    application_name: String,
+    message: String,
+}
+
 #[derive(Clone, PartialEq, Eq)]
 enum PendingAction {
     Start {
@@ -346,7 +351,7 @@ struct Session {
     route: Route,
     mode: Mode,
     error: Option<String>,
-    outcome: Option<String>,
+    outcome: Option<ActionOutcome>,
     quit_after_completion: bool,
 }
 
@@ -611,8 +616,13 @@ impl Session {
                 },
             ) if application_name == result_name.as_str() => {
                 self.runtime = QueryState::Ready(observation);
-                self.outcome = Some(format!("Started {result_name}"));
-                self.refresh_after_action(&PendingAction::Start { application_name });
+                self.outcome = Some(ActionOutcome {
+                    application_name,
+                    message: format!("Started {result_name}"),
+                });
+                self.refresh_after_action(&PendingAction::Start {
+                    application_name: result_name.as_str().to_owned(),
+                });
             }
             (
                 Request::Action(PendingAction::Stop { application_name }),
@@ -622,8 +632,13 @@ impl Session {
                 },
             ) if application_name == result_name.as_str() => {
                 self.runtime = QueryState::Ready(observation);
-                self.outcome = Some(format!("Stopped {result_name}"));
-                self.refresh_after_action(&PendingAction::Stop { application_name });
+                self.outcome = Some(ActionOutcome {
+                    application_name,
+                    message: format!("Stopped {result_name}"),
+                });
+                self.refresh_after_action(&PendingAction::Stop {
+                    application_name: result_name.as_str().to_owned(),
+                });
             }
             (
                 Request::Action(action @ PendingAction::Reconcile { .. }),
@@ -632,7 +647,10 @@ impl Session {
                     result,
                 },
             ) if action.application_name() == result_name.as_str() => {
-                self.outcome = Some(output::reconciliation_result(&result_name, &result));
+                self.outcome = Some(ActionOutcome {
+                    application_name: result_name.as_str().to_owned(),
+                    message: output::reconciliation_result(&result_name, &result),
+                });
                 self.refresh_after_action(&action);
             }
             (
@@ -644,7 +662,10 @@ impl Session {
             ) if action.application_name() == result_name.as_str()
                 && action.targets_visibility(change.visibility) =>
             {
-                self.outcome = Some(output::visibility_change(&result_name, &change));
+                self.outcome = Some(ActionOutcome {
+                    application_name: result_name.as_str().to_owned(),
+                    message: output::visibility_change(&result_name, &change),
+                });
                 self.refresh_after_action(&action);
             }
             (request, _) => self.apply_error(
@@ -708,6 +729,12 @@ impl Session {
         entries
             .iter()
             .find(|entry| entry.summary.name.as_str() == selected_name)
+    }
+
+    fn outcome_for_detail(&self) -> Option<&str> {
+        let outcome = self.outcome.as_ref()?;
+        (self.detail_application.as_deref() == Some(outcome.application_name.as_str()))
+            .then_some(outcome.message.as_str())
     }
 }
 
@@ -848,9 +875,10 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, sess
     let detail_areas = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Percentage(35),
             Constraint::Percentage(30),
-            Constraint::Percentage(35),
+            Constraint::Percentage(25),
+            Constraint::Min(4),
+            Constraint::Length(4),
         ])
         .split(area);
     let details = session.selected_entry().map_or_else(
@@ -884,6 +912,20 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, sess
                     .title(" Deployment history "),
             ),
         detail_areas[2],
+    );
+    frame.render_widget(
+        Paragraph::new(
+            session
+                .outcome_for_detail()
+                .unwrap_or("No action has completed for this application."),
+        )
+        .wrap(Wrap { trim: true })
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Last action "),
+        ),
+        detail_areas[3],
     );
 }
 
@@ -951,8 +993,6 @@ fn draw_footer(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, sess
         "Refreshing... a confirmed action will run next; navigation is disabled.".to_owned()
     } else if let Some(error) = &session.error {
         format!("Error: {error}")
-    } else if let Some(outcome) = &session.outcome {
-        outcome.clone()
     } else if session.route == Route::Details {
         "s: start  x: stop  c: reconcile  p: public  i: internal  Esc: catalog  r: refresh  q: quit"
             .to_owned()
@@ -1068,6 +1108,31 @@ mod tests {
         assert!(rendered.contains("Desired runtime state: Running"));
         assert!(rendered.contains("Has successful deployment: no"));
         assert!(rendered.contains("Active deployment ID: None"));
+    }
+
+    #[test]
+    fn action_outcome_is_shown_only_for_its_application_detail() {
+        let mut session = detail_session();
+        session.catalog = QueryState::Ready(vec![entry("atlas"), entry("beacon")]);
+        session.outcome = Some(ActionOutcome {
+            application_name: "atlas".to_owned(),
+            message: "Started atlas".to_owned(),
+        });
+
+        assert_eq!(session.outcome_for_detail(), Some("Started atlas"));
+
+        session
+            .handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .unwrap();
+        session
+            .handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+            .unwrap();
+        session
+            .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .unwrap();
+
+        assert_eq!(session.outcome_for_detail(), None);
+        session.shutdown().unwrap();
     }
 
     #[test]
