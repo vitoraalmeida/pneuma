@@ -47,11 +47,11 @@ terminal cursor that marks the edit position of the focused deploy-form field
 
 The opening view is organized into three tabs that group the command
 vocabulary: Systems, Applications (the opening tab), and Deployments. Digit
-keys and Tab/Shift+Tab or Left/Right switch tabs; the Left arrow returns from a
-details column to its listing. Every details column follows the selection: the
-first item's details render as soon as the listing is ready, and selection
-movement reloads them without an explicit request, so Enter only moves the
-keyboard focus to the details column. The Applications tab uses
+keys and Tab/Shift+Tab or Left/Right switch tabs. Every details column follows
+the selection without a focus step: the first item's details render as soon as
+the listing is ready, and selection
+movement reloads them without an explicit request. Enter is reserved for the
+deployment log pane. The Applications tab uses
 `Command::ListApplications` and labels the persisted desired runtime state and
 whether an Application has a successful deployment; neither label asserts that
 the Application is currently running. Selecting an Application loads
@@ -67,7 +67,7 @@ member Applications through `Command::SystemShow`, creates Systems through the
 exact `Command::SystemCreate`, and adds Applications to a System through the
 exact `Command::ImportApplication` with the system name bound in the form.
 
-In an Application detail view, `s` starts, `x` stops, `c` reconciles, `p` sets
+In the Applications listing, `s` starts, `x` stops, `c` reconciles, `p` sets
 public visibility, and `i` sets internal visibility. Each action first opens a
 concrete confirmation modal; only Enter or `y` submits its existing control
 command, while Esc or `n` cancels without execution. `d` opens a deployment

@@ -244,7 +244,6 @@ impl Tab {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Focus {
     Listing,
-    Details,
     Log,
 }
 
@@ -1143,25 +1142,18 @@ impl Session {
         }
 
         // Focus moves are always safe: they never start work, so an operator
-        // can reach the details column or return to the listing even while a
-        // load or action is running.
+        // can open the deployment log or return to the listing even while a
+        // load or action is running. The details columns follow the selection,
+        // so Enter only opens the log pane.
         match (self.focus, event.code) {
             (Focus::Log, KeyCode::Left | KeyCode::Esc) => {
-                self.focus = Focus::Details;
-                return Ok(());
-            }
-            (Focus::Details, KeyCode::Left | KeyCode::Esc) => {
                 self.focus = Focus::Listing;
                 return Ok(());
             }
-            // Enter descends into the deployment log when one exists for the
-            // selected application; focus moves never start work.
-            (Focus::Details, KeyCode::Enter) if self.deployment_log_for_detail().is_some() => {
+            (Focus::Listing, KeyCode::Enter)
+                if self.tab == Tab::Applications && self.deployment_log_for_detail().is_some() =>
+            {
                 self.focus = Focus::Log;
-                return Ok(());
-            }
-            (Focus::Listing, KeyCode::Enter) => {
-                self.focus = Focus::Details;
                 return Ok(());
             }
             (Focus::Listing, KeyCode::Left) if !self.is_busy() => {
@@ -1176,6 +1168,8 @@ impl Session {
         }
 
         match (self.tab, self.focus) {
+            // With a single listing focus per tab, the details columns follow
+            // the selection, so every tab-level key lives in the listing arm.
             (Tab::Systems, Focus::Listing) => match event.code {
                 KeyCode::Down | KeyCode::Char('j') if !self.is_busy() => self.select_next_system(),
                 KeyCode::Up | KeyCode::Char('k') if !self.is_busy() => {
@@ -1183,16 +1177,10 @@ impl Session {
                 }
                 KeyCode::Char('n') if !self.is_busy() => self.open_system_create_form(),
                 KeyCode::Char('a') if !self.is_busy() => self.add_application_to_selected_system(),
-                KeyCode::Char('r') if !self.is_busy() => self.refresh_systems(),
-                _ => {}
-            },
-            (Tab::Systems, Focus::Details) => match event.code {
-                KeyCode::Down | KeyCode::Char('j') if !self.is_busy() => self.select_next_system(),
-                KeyCode::Up | KeyCode::Char('k') if !self.is_busy() => {
-                    self.select_previous_system()
+                KeyCode::Char('r') if !self.is_busy() => {
+                    self.refresh_systems();
+                    self.refresh_system_details();
                 }
-                KeyCode::Char('a') if !self.is_busy() => self.add_application_to_selected_system(),
-                KeyCode::Char('r') if !self.is_busy() => self.refresh_system_details(),
                 _ => {}
             },
             (Tab::Systems, Focus::Log) | (Tab::Deployments, Focus::Log) => {}
@@ -1200,13 +1188,10 @@ impl Session {
                 KeyCode::Down | KeyCode::Char('j') if !self.is_busy() => self.select_next(),
                 KeyCode::Up | KeyCode::Char('k') if !self.is_busy() => self.select_previous(),
                 KeyCode::Char('n') if !self.is_busy() => self.open_application_import_form(),
-                KeyCode::Char('r') if !self.is_busy() => self.refresh_catalog(),
-                _ => {}
-            },
-            (Tab::Applications, Focus::Details) => match event.code {
-                KeyCode::Down | KeyCode::Char('j') if !self.is_busy() => self.select_next(),
-                KeyCode::Up | KeyCode::Char('k') if !self.is_busy() => self.select_previous(),
-                KeyCode::Char('r') if !self.is_busy() => self.refresh_details(),
+                KeyCode::Char('r') if !self.is_busy() => {
+                    self.refresh_catalog();
+                    self.refresh_details();
+                }
                 KeyCode::Char('s') => {
                     if let Some(application_name) = self.selected_application.clone() {
                         self.confirm(PendingAction::Start { application_name });
@@ -1272,13 +1257,10 @@ impl Session {
             (Tab::Deployments, Focus::Listing) => match event.code {
                 KeyCode::Down | KeyCode::Char('j') if !self.is_busy() => self.select_next(),
                 KeyCode::Up | KeyCode::Char('k') if !self.is_busy() => self.select_previous(),
-                KeyCode::Char('r') if !self.is_busy() => self.refresh_catalog(),
-                _ => {}
-            },
-            (Tab::Deployments, Focus::Details) => match event.code {
-                KeyCode::Down | KeyCode::Char('j') if !self.is_busy() => self.select_next(),
-                KeyCode::Up | KeyCode::Char('k') if !self.is_busy() => self.select_previous(),
-                KeyCode::Char('r') if !self.is_busy() => self.refresh_details(),
+                KeyCode::Char('r') if !self.is_busy() => {
+                    self.refresh_catalog();
+                    self.refresh_details();
+                }
                 _ => {}
             },
         }
@@ -2647,13 +2629,15 @@ fn draw_footer(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, sess
             ("Up/Down or j/k", "line"),
             ("PgUp/PgDn", "page"),
             ("Home/End", "oldest/newest"),
-            ("Esc", "details"),
+            ("Esc", "listing"),
             ("q", "quit"),
         ] {
             spans.extend(key_hint(key, description));
         }
         Line::from(spans)
-    } else if session.tab == Tab::Applications && session.focus == Focus::Details {
+    } else if session.tab == Tab::Applications {
+        // The details columns always follow the selection, so the action keys
+        // live in the listing focus itself.
         let mut spans = Vec::new();
         for (key, description) in [
             ("s", "start"),
@@ -2669,7 +2653,7 @@ fn draw_footer(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, sess
         if session.deployment_log_for_detail().is_some() {
             spans.extend(key_hint("Enter", "log"));
         }
-        for (key, description) in [("Esc", "catalog"), ("r", "refresh"), ("q", "quit")] {
+        for (key, description) in [("r", "refresh"), ("q", "quit")] {
             spans.extend(key_hint(key, description));
         }
         Line::from(spans)
@@ -2678,17 +2662,14 @@ fn draw_footer(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, sess
         for (key, description) in [
             ("1/2/3 or Left/Right", "tab"),
             ("Up/Down or j/k", "select"),
-            ("Enter", "details"),
             ("r", "refresh"),
             ("q", "quit"),
         ] {
             spans.extend(key_hint(key, description));
         }
-        if session.tab == Tab::Systems && session.focus == Focus::Listing {
+        if session.tab == Tab::Systems {
             spans.extend(key_hint("n", "new system"));
             spans.extend(key_hint("a", "add application"));
-        } else if session.tab == Tab::Applications && session.focus == Focus::Listing {
-            spans.extend(key_hint("n", "import"));
         }
         Line::from(spans)
     };
@@ -2961,7 +2942,7 @@ mod tests {
         session.selected_application = Some("atlas".to_owned());
         session.observations_application = Some("atlas".to_owned());
         session.tab = Tab::Applications;
-        session.focus = Focus::Details;
+        session.focus = Focus::Listing;
         session
     }
 
@@ -3222,7 +3203,9 @@ mod tests {
             .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
             .unwrap();
 
-        assert!(matches!(session.focus, Focus::Details));
+        // The confirmation runs from the listing focus; details follow the
+        // selection, so no focus move is required to act.
+        assert!(matches!(session.focus, Focus::Listing));
         assert_eq!(
             session
                 .queued
@@ -3646,14 +3629,15 @@ mod tests {
     }
 
     #[test]
-    fn focus_descends_to_the_log_only_when_a_log_exists() {
+    fn enter_opens_the_log_directly_from_the_listing() {
         let mut session = detail_session();
 
-        // Without a log, Enter keeps the focus in the details column.
+        // Without a log, Enter does nothing: the details already follow the
+        // selection, so only the log pane is behind Enter.
         session
             .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
             .unwrap();
-        assert!(matches!(session.focus, Focus::Details));
+        assert!(matches!(session.focus, Focus::Listing));
 
         session.deployment_log = Some(DeploymentLog::new("atlas".to_owned()));
         session
@@ -3664,15 +3648,11 @@ mod tests {
         session
             .handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
             .unwrap();
-        assert!(matches!(session.focus, Focus::Details));
+        assert!(matches!(session.focus, Focus::Listing));
         session
             .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
             .unwrap();
         assert!(matches!(session.focus, Focus::Log));
-        session
-            .handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE))
-            .unwrap();
-        assert!(matches!(session.focus, Focus::Details));
         session
             .handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE))
             .unwrap();
@@ -4083,8 +4063,13 @@ mod tests {
     }
 
     #[test]
-    fn left_arrow_returns_from_details_to_the_listing_and_then_switches_tabs() {
+    fn left_arrow_returns_from_the_log_to_the_listing_and_then_switches_tabs() {
         let mut session = detail_session();
+        session.deployment_log = Some(DeploymentLog::new("atlas".to_owned()));
+        session
+            .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .unwrap();
+        assert!(matches!(session.focus, Focus::Log));
 
         session
             .handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE))
@@ -4366,7 +4351,7 @@ mod tests {
     }
 
     #[test]
-    fn deployments_tab_enter_loads_history_and_status_for_the_selection() {
+    fn deployments_tab_selection_loads_history_and_status_without_enter() {
         let mut session = Session::new();
         session.queued.clear();
         session.catalog = QueryState::Ready(vec![entry("atlas")]);
@@ -4375,11 +4360,10 @@ mod tests {
         session
             .handle_key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE))
             .unwrap();
-        session
-            .handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-            .unwrap();
 
-        assert!(matches!(session.focus, Focus::Details));
+        // Entering the tab loads the selection's details on its own; Enter is
+        // reserved for the deployment log.
+        assert!(matches!(session.focus, Focus::Listing));
         assert_eq!(
             session
                 .queued

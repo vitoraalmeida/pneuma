@@ -148,10 +148,10 @@ configuration or opening SQLite. Its main thread owns raw-mode, alternate-screen
 restoration, keyboard input, and presentation; one worker owns a
 `ControlExecutor` and serializes commands. The interface is organized into
 Systems, Applications, and Deployments tabs; every tab renders a listing column
-and a details column, and the Left arrow returns from the details column to its
-listing. Every details column follows the listing selection: the first item's
-details load without an explicit request and selection movement reloads them,
-while Enter only moves the keyboard focus to the details column. The catalog
+and a details column that always follows the listing selection: the first
+item's details load without an explicit request and selection movement reloads
+them, with no separate details focus. Enter is reserved for the deployment log
+pane. The catalog
 names persisted intent and whether an Application has a successful deployment
 without claiming it is running. Selecting an Application loads deployment
 history and obtains a runtime observation on demand through the existing

@@ -419,12 +419,11 @@ Place `--verbose` before the command for step-by-step progress.
 Run `pneuma tui` from an interactive terminal. The interface is organized into
 three tabs for the command groups: `1` Systems, `2` Applications (the opening
 tab), and `3` Deployments. Use `Tab`/`Shift+Tab` or Left/Right to move between
-tabs; each tab renders a listing column and a details column, and the Left
-arrow returns from the details column to its listing. The details column
-always describes the current selection: the first item's details are shown as
-soon as the listing loads, and moving with Up/Down or `j`/`k` updates the
-details immediately, including from the details column. Enter moves the focus
-to the details column; `r` refreshes. Use `q` to quit. A failed read stays
+tabs; each tab renders a listing column and a details column. The details
+column always describes the current selection without a separate focus step:
+the first item's details are shown as soon as the listing loads, and moving
+with Up/Down or `j`/`k` updates the details immediately. `r` refreshes. Use
+`q` to quit. A failed read stays
 visible in the interface and does not end the session.
 
 The Systems tab lists registered Systems and their descriptions. Press `n` to
@@ -455,7 +454,8 @@ when the command finishes the panel is retained for the session as
 error, so the recorded steps stay readable, and the final typed result lands in
 the `Last action` panel. Only a newly dispatched deployment replaces the
 retained log; refreshes and non-deployment actions never clear it. When the
-detail view shows a log, Enter descends into it: the log pane then takes the
+application has a log, Enter opens it directly from the listing: the log pane
+then takes the
 whole details column with a highlighted border whose title carries the
 Application, the log state, and the scroll position, while `Up`/`Down` or
 `j`/`k` scroll one rendered row, `PgUp`/`PgDn` page, `Home` jumps to the oldest
@@ -463,8 +463,8 @@ row, and `End` jumps to the newest row and resumes tail-following. The view
 tail-follows the newest rows while it sits at the bottom; scrolling up anchors
 it, and streaming events append below the anchored rows without moving them.
 Scrolling never changes the selection and never issues commands, so it stays
-available while a deployment runs. `Esc` or `Left` returns to the details
-panels. Key hints in the footer
+available while a deployment runs. `Esc` or `Left` returns to the listing.
+Key hints in the footer
 carry background badges, and state values use color: green for succeeded and
 running, red for failed and missing, yellow for nonterminal transitions. The TUI
 shows the existing error class and diagnostic when an action fails, then refreshes
