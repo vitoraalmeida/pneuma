@@ -146,17 +146,22 @@ deployment animation), the TUI terminal lifecycle, and exit-code classification.
 `pneuma tui` rejects non-interactive stdin or stdout before constructing host
 configuration or opening SQLite. Its main thread owns raw-mode, alternate-screen
 restoration, keyboard input, and presentation; one worker owns a
-`ControlExecutor` and serializes commands. The catalog names persisted
+`ControlExecutor` and serializes commands. The interface is organized into
+Systems, Applications, and Deployments tabs; every tab renders a listing column
+and a details column, and the Left arrow returns from the details column to its
+listing. The catalog names persisted
 intent and whether an Application has a successful deployment without claiming
 it is running. Opening an Application loads deployment history and obtains a
 runtime observation on demand through the existing control boundary. Start,
 stop, reconcile, and visibility requests require a TUI confirmation, deploy
 forms submit a branch or digest-pinned image as the existing deploy commands,
-and rollback requires a confirmation; deployment commands run through the event
+system creation and application import submit the exact `SystemCreate` and
+`ImportApplication` commands with locally validated form values, and rollback
+requires a confirmation; deployment commands run through the event
 observer so their semantic progress is presentation-only, and every action
 retains
 the existing CLI error class with its diagnostic message in the interface.
-Completed actions are shown only in the corresponding Application detail view.
+Completed actions are shown only in the corresponding detail view.
 Process bootstrap
 (`src/host_environment.rs`) validates and applies the host environment file
 strictly and fail-fast — a missing file boots, any other read or parse failure

@@ -90,7 +90,20 @@ domain, use-case, persistence, or external-effect decisions.
      success or failure refreshes the catalog and history. A PTY regression
      deploys the current branch through the form and verifies the rendered
      result and terminal restoration.
-5. [ ] Operational regression and closure
+5. [x] Tabbed navigation by command group
+    - Organize the interface into Systems, Applications, and Deployments tabs.
+      The Systems tab creates systems and imports applications into a selected
+      system; the Applications tab lists, imports, and operates on
+      applications; the Deployments tab inspects deployment history and runtime
+      status. The left arrow returns from the details column to its listing.
+    - Result: The TUI now renders a tab bar for Systems, Applications, and
+      Deployments with digit, Tab-cycle, and arrow navigation. Systems
+      creation and application import submit the exact `SystemCreate` and
+      `ImportApplication` commands from locally validated multi-field forms
+      that bind the selected system; the Deployments tab loads history and
+      status on demand, and Left returns from any details column to its
+      listing without touching the control boundary.
+6. [ ] Operational regression and closure
    - Synchronize implemented documentation and run the required Rust, markdown,
      shell, and applicable disposable-VM regression ladder.
 
@@ -128,5 +141,9 @@ None.
   PTY branch-deploy regression, `cargo fmt --check`, clippy with `-D warnings`,
   all-feature tests, the release build, markdown links, and `git diff --check`
   are green.
+- Checkpoint 5: 33 focused TUI tests (tabs, focus, system create, import
+  binding, refresh matrix, form cursor), the non-TTY and PTY regressions,
+  `cargo fmt --check`, clippy with `-D warnings`, all-feature tests, the
+  release build, markdown links, and `git diff --check` are green.
 - Rootless Podman OCI tests: SKIP (3 ignored tests require a configured
   rootless Podman host). Disposable-VM regression is deferred to checkpoint 5.

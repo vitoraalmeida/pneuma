@@ -29,7 +29,7 @@ impl SystemName {
         Ok(Self(value.to_owned()))
     }
 
-    pub(crate) fn as_str(&self) -> &str {
+    pub fn as_str(&self) -> &str {
         &self.0
     }
 }

@@ -408,7 +408,7 @@ automatically.
 | `pneuma database backup <path>` | Create a consistent SQLite backup. |
 | `pneuma database restore <path>` | Validate a current-schema SQLite backup and restore it atomically; rejects incompatible backups. |
 | `pneuma ci dispatch` | Restricted SSH dispatcher; not for direct interactive use. |
-| `pneuma tui` | Open the interactive application catalog; requires interactive stdin and stdout. |
+| `pneuma tui` | Open the interactive tabbed interface for Systems, Applications, and Deployments; requires interactive stdin and stdout. |
 | `pneuma version` | Print version without opening the database. |
 | `pneuma doctor` | Verify host prerequisites. |
 
@@ -416,14 +416,26 @@ Place `--verbose` before the command for step-by-step progress.
 
 ### Terminal Interface
 
-Run `pneuma tui` from an interactive terminal. The opening catalog lists
-registered Applications and whether each has a successful deployment; it does
-not claim that an Application is running. Use Up/Down or `j`/`k` to select an
-Application, Enter to inspect its persisted details, deployment history, and an
-on-demand runtime observation. Use `r` to refresh, Esc to return to the catalog,
-and `q` to quit. A failed read stays visible in the interface and does not end
-the session.
+Run `pneuma tui` from an interactive terminal. The interface is organized into
+three tabs for the command groups: `1` Systems, `2` Applications (the opening
+tab), and `3` Deployments. Use `Tab`/`Shift+Tab` or Left/Right to move between
+tabs; each tab renders a listing column and a details column, and the Left
+arrow always returns from the details column to its listing. Use `r` to
+refresh, and `q` to quit. A failed read stays visible in the interface and does
+not end the session.
 
+The Systems tab lists registered Systems and their descriptions. Press `n` to
+create a System from a form (name plus optional description), and Enter to
+inspect a System's persisted grouping and member Applications. Press `a` to add
+an Application to the selected or inspected System: the form takes a remote Git
+repository and an optional manifest path and submits the existing import
+command, so the Application is registered inside that System.
+
+The Applications tab lists registered Applications and whether each has a
+successful deployment; it does not claim that an Application is running. Use
+Up/Down or `j`/`k` to select an Application, and Enter to inspect its persisted
+details. Press `n` to import a new Application from a form: it takes a remote
+Git repository, an optional System name, and an optional manifest path.
 In an Application detail view, use `s` to start, `x` to stop, `c` to reconcile,
 `p` to set public visibility, or `i` to set internal visibility. Each action
 opens a confirmation: Enter or `y` executes it; Esc or `n` cancels it. Use `d`
@@ -440,6 +452,10 @@ shows the existing error class and diagnostic when an action fails, then refresh
 the affected data. Its `Last action` panel shows a completed action only for the
 Application being inspected. A new confirmed action replaces queued refresh reads
 and runs after the active command, without leaving the detail view.
+
+The Deployments tab lists the Applications and, after Enter, shows the selected
+Application's on-demand runtime observation and its complete Deployment
+history, including the active marker.
 
 ### Manifest
 

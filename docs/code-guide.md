@@ -45,13 +45,21 @@ background-badged key hints in the footer, green/red/yellow state values, and a
 terminal cursor that marks the edit position of the focused deploy-form field
 (the field scrolls horizontally so long image references stay editable).
 
-The opening catalog uses `Command::ListApplications`. It labels the persisted
-desired runtime state and whether an Application has a successful deployment;
-neither label asserts that the Application is currently running. Selecting an
-Application and pressing Enter loads `Command::ListDeployments` and requests
-`Command::ApplicationStatus` on demand. The detail screen labels that result as
-an observed runtime state and displays errors in place, leaving the session
-usable for refresh or quit.
+The opening view is organized into three tabs that group the command
+vocabulary: Systems, Applications (the opening tab), and Deployments. Digit
+keys and Tab/Shift+Tab or Left/Right switch tabs; the Left arrow returns from a
+details column to its listing. The Applications tab uses
+`Command::ListApplications` and labels the persisted desired runtime state and
+whether an Application has a successful deployment; neither label asserts that
+the Application is currently running. Selecting an Application and pressing
+Enter loads `Command::ListDeployments` and requests `Command::ApplicationStatus`
+on demand. The Deployments tab shows that history and the observed runtime
+state for the selected Application; the detail screens display errors in place,
+leaving the session usable for refresh or quit. The Systems tab lists Systems
+with `Command::SystemList`, opens their persisted grouping and member
+Applications with `Command::SystemShow`, creates Systems through the exact
+`Command::SystemCreate`, and adds Applications to a System through the exact
+`Command::ImportApplication` with the system name bound in the form.
 
 In an Application detail view, `s` starts, `x` stops, `c` reconciles, `p` sets
 public visibility, and `i` sets internal visibility. Each action first opens a
@@ -59,7 +67,11 @@ concrete confirmation modal; only Enter or `y` submits its existing control
 command, while Esc or `n` cancels without execution. `d` opens a deployment
 form whose typed branch or digest-pinned image value becomes the exact
 `Command::DeployBranch` or `Command::DeployImage`, and `b` confirms a
-`Command::Rollback`. The worker executes deployment commands with
+`Command::Rollback`. The multi-field import and system-creation forms validate
+locally with the same public boundaries the control layer enforces
+(`SystemName`, remote Git locations, `RelativeManifestPath`), so invalid input
+never reaches the worker, and submit directly because the Enter press itself is
+the explicit submission. The worker executes deployment commands with
 `execute_with_events` and forwards semantic `DeploymentEvent` values to the
 presentation thread; the interface renders them as best-effort progress lines
 that can never change command execution, compensation, or persistence. Worker
@@ -67,7 +79,8 @@ failures pass
 through `CliError::from_control` before presentation, so the visible diagnostic
 retains its `Failure`, `Not found`, `Conflict`, or `External` class. After an
 action succeeds or fails, the TUI serializes the required catalog and detail
-refreshes. Successful actions remain in the matching detail screen's `Last
+refreshes, including the Systems and member listings affected by imports.
+Successful actions remain in the matching detail screen's `Last
 action` panel rather than the global footer. A confirmed follow-up action discards
 queued refresh reads and runs after the one active command, so the operator need
 not leave and reopen the detail view.
