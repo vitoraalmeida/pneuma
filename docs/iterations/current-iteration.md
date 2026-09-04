@@ -76,7 +76,8 @@ domain, use-case, persistence, or external-effect decisions.
       reconciliation, and public/internal visibility requests. The worker maps
       each control error through the existing CLI classification before display,
       and the session refreshes affected projections after success or failure;
-      a confirmed follow-up action supersedes queued refresh reads.
+      a confirmed follow-up action queues behind the active command and
+      supersedes queued refresh reads.
 4. [ ] Deployment and rollback interaction
    - Add branch and digest deployment forms plus rollback confirmation; render
      semantic deployment events and final typed results without changing

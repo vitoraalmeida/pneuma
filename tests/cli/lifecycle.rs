@@ -1,14 +1,17 @@
 use std::ffi::OsStr;
 use std::fs;
+use std::io::Write;
 use std::net::{Ipv4Addr, TcpListener};
+use std::process::{Command, Stdio};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use pneuma::adapters::database;
 
 use rusqlite::OptionalExtension;
 
 use crate::support::{
-    DeploymentEnvironment, assert_command_succeeded, respond_once, run_pneuma,
+    DeploymentEnvironment, assert_command_succeeded, executable_path, respond_once, run_pneuma,
     temporary_database_path,
 };
 
@@ -70,6 +73,135 @@ fn stop_and_start_are_idempotent_and_persist_desired_and_observed_states() {
         (desired, observed),
         ("running".to_owned(), "running".to_owned())
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn tui_starts_an_application_after_stopping_it_without_leaving_details() {
+    use std::fs::File;
+    use std::mem::MaybeUninit;
+    use std::os::fd::{AsRawFd, FromRawFd};
+
+    fn duplicate(file: &File) -> File {
+        let descriptor = unsafe { libc::dup(file.as_raw_fd()) };
+        assert_ne!(descriptor, -1, "failed to duplicate pseudo-terminal");
+        unsafe { File::from_raw_fd(descriptor) }
+    }
+
+    fn local_flags(file: &File) -> libc::tcflag_t {
+        let mut attributes = MaybeUninit::<libc::termios>::uninit();
+        let result = unsafe { libc::tcgetattr(file.as_raw_fd(), attributes.as_mut_ptr()) };
+        assert_eq!(result, 0, "failed to inspect pseudo-terminal mode");
+        unsafe { attributes.assume_init().c_lflag }
+    }
+
+    fn wait_for_desired_state(database_path: &std::path::Path, expected: &str) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let state = database::open(database_path).ok().and_then(|connection| {
+                connection
+                    .query_row(
+                        "SELECT desired_runtime_state FROM applications LIMIT 1",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()
+                    .ok()
+                    .flatten()
+            });
+            if state.as_deref() == Some(expected) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for desired state `{expected}`, got {state:?}"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    let environment = DeploymentEnvironment::new();
+    assert_command_succeeded(&environment.import());
+    environment.deploy_current_revision();
+
+    let mut master = -1;
+    let mut slave = -1;
+    let opened = unsafe {
+        libc::openpty(
+            &mut master,
+            &mut slave,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    assert_eq!(opened, 0, "failed to open pseudo-terminal");
+
+    let mut input = unsafe { File::from_raw_fd(master) };
+    let terminal = unsafe { File::from_raw_fd(slave) };
+    let original_flags = local_flags(&terminal);
+    let mut child = Command::new(env!("CARGO_BIN_EXE_pneuma"))
+        .env("PNEUMA_DATABASE_PATH", &environment.database_path)
+        .env("PNEUMA_WORKSPACE_PATH", &environment.workspace_path)
+        .env("PNEUMA_QUADLET_DIR", environment.root.join("quadlets"))
+        .env("PATH", executable_path(&environment.fake_bin))
+        .env("PNEUMA_FAKE_PORT", "30000")
+        .env(
+            "PNEUMA_FAKE_CONTAINER_STATE",
+            environment.root.join("container-state"),
+        )
+        .env(
+            "PNEUMA_FAKE_PODMAN_LOG",
+            environment.root.join("podman.log"),
+        )
+        .env("PNEUMA_ASSERT_CLOSED_DATABASE", &environment.database_path)
+        .args(["tui"])
+        .stdin(Stdio::from(duplicate(&terminal)))
+        .stdout(Stdio::from(duplicate(&terminal)))
+        .stderr(Stdio::from(duplicate(&terminal)))
+        .spawn()
+        .unwrap();
+
+    let ready_deadline = Instant::now() + Duration::from_secs(5);
+    while local_flags(&terminal) == original_flags {
+        assert!(
+            Instant::now() < ready_deadline,
+            "TUI did not enter raw mode"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    for _ in 0..10 {
+        input.write_all(b"\r").unwrap();
+        input.flush().unwrap();
+        thread::sleep(Duration::from_millis(100));
+    }
+    input.write_all(b"x").unwrap();
+    input.flush().unwrap();
+    thread::sleep(Duration::from_millis(50));
+    input.write_all(b"y").unwrap();
+    input.flush().unwrap();
+    wait_for_desired_state(&environment.database_path, "stopped");
+
+    input.write_all(b"s").unwrap();
+    input.flush().unwrap();
+    thread::sleep(Duration::from_millis(50));
+    input.write_all(b"y").unwrap();
+    input.flush().unwrap();
+    wait_for_desired_state(&environment.database_path, "running");
+
+    input.write_all(b"q").unwrap();
+    input.flush().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            assert!(status.success(), "TUI did not exit successfully: {status}");
+            break;
+        }
+        assert!(Instant::now() < deadline, "TUI did not exit after q");
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(local_flags(&terminal), original_flags);
 }
 
 #[test]

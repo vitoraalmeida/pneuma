@@ -498,9 +498,6 @@ impl Session {
     }
 
     fn confirm(&mut self, action: PendingAction) {
-        if self.action_is_pending() {
-            return;
-        }
         self.error = None;
         self.outcome = None;
         self.mode = Mode::Confirm(action);
@@ -509,12 +506,7 @@ impl Session {
     fn execute_action(&mut self, action: PendingAction) {
         self.error = None;
         self.outcome = None;
-        self.queued.retain(|request| {
-            !matches!(
-                request,
-                Request::Catalog | Request::Deployments { .. } | Request::Status { .. }
-            )
-        });
+        self.queued.clear();
         self.enqueue(Request::Action(action));
     }
 
@@ -676,7 +668,7 @@ impl Session {
     }
 
     fn refresh_after_action(&mut self, action: &PendingAction) {
-        if self.quit_after_completion {
+        if self.quit_after_completion || self.action_is_pending() {
             return;
         }
         self.catalog = QueryState::Loading;
@@ -1192,6 +1184,39 @@ mod tests {
             .unwrap();
 
         assert!(matches!(session.route, Route::Details));
+        assert_eq!(
+            session
+                .queued
+                .iter()
+                .map(Request::command)
+                .collect::<Vec<_>>(),
+            vec![Command::ApplicationStart {
+                application_name: "atlas".to_owned(),
+            }]
+        );
+        session.shutdown().unwrap();
+    }
+
+    #[test]
+    fn confirmed_successor_action_suppresses_the_previous_action_refresh() {
+        let mut session = detail_session();
+        session.active = Some((
+            41,
+            Request::Action(PendingAction::Stop {
+                application_name: "atlas".to_owned(),
+            }),
+        ));
+
+        session
+            .handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE))
+            .unwrap();
+        session
+            .handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE))
+            .unwrap();
+        session.refresh_after_action(&PendingAction::Stop {
+            application_name: "atlas".to_owned(),
+        });
+
         assert_eq!(
             session
                 .queued
