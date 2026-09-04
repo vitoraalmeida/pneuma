@@ -90,6 +90,10 @@ pub(crate) enum CliError {
     Doctor,
     #[error("either --image or --branch must be specified")]
     MissingDeployOption,
+    #[error("the terminal interface requires interactive stdin and stdout")]
+    TuiRequiresTerminal,
+    #[error("terminal interface failed: {source}")]
+    TuiTerminal { source: std::io::Error },
 }
 
 impl CliError {
@@ -133,7 +137,9 @@ impl CliError {
     /// Classifies the failure for message/exit-code presentation without erasing context.
     pub(crate) fn class(&self) -> CliErrorClass {
         match self {
-            Self::InvalidOciArtifact { .. } | Self::MissingDeployOption => CliErrorClass::Usage,
+            Self::InvalidOciArtifact { .. }
+            | Self::MissingDeployOption
+            | Self::TuiRequiresTerminal => CliErrorClass::Usage,
             Self::ApplicationNotFound { .. } => CliErrorClass::NotFound,
             Self::Import { source } => classify_remote_import(source),
             Self::InvalidSystemName { .. } => CliErrorClass::Usage,
@@ -171,7 +177,8 @@ impl CliError {
             | Self::ListDeployments { .. }
             | Self::SystemCreate { .. }
             | Self::SystemList { .. }
-            | Self::Doctor => CliErrorClass::Failure,
+            | Self::Doctor
+            | Self::TuiTerminal { .. } => CliErrorClass::Failure,
         }
     }
 }

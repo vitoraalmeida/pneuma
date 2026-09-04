@@ -2,11 +2,11 @@
 
 **Status:** planning reminder, not an execution tracker.
 
-**Target:** v0.6 - Observed State / Host Observation. Queued behind the
-concluded v0.5.4 iteration and the current VM E2E maintenance checkpoint.
+**Target:** v0.6 - Observed State / Host Observation. Queued behind the active
+v0.5.5 Terminal User Interface iteration.
 
-Do not implement this work until an approved design exists and this tracker is
-promoted to `current-iteration.md`.
+Do not implement this work until this tracker is promoted to
+`current-iteration.md`.
 
 ## Objective
 
@@ -35,7 +35,7 @@ and observed state (what actually exists now).
 - Repair/recovery robustness (idempotent operations, crash recovery, retry
   policy) belongs to v0.7; v0.6 only observes and reports divergence.
 - Multi-service applications belong to v0.8.
-- No new product features beyond this scope before an approved design defines
+- No new product features beyond this scope before the promoted tracker defines
   entities, persistence, runtime behavior, and acceptance scenarios.
 
 See [`../roadmap.md`](../roadmap.md) for the authoritative v0.6 scope.

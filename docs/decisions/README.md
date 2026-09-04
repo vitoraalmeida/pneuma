@@ -3,7 +3,7 @@
 This directory is a curated account of Pneuma's current architectural rationale,
 not an immutable historical archive. Superseded decisions are rewritten or
 removed; Git history retains their context. Architecture documents describe
-implemented behavior, while approved designs define work not yet implemented.
+implemented behavior.
 
 1. [ADR-0001 — Single-host runtime](0001-single-host-runtime.md)
 2. [ADR-0002 — Immutable OCI delivery](0002-immutable-oci-delivery.md)

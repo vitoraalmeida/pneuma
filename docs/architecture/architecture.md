@@ -90,7 +90,7 @@ runtime path without the Caddy traffic path.
 
 | Layer | Owns | Does not own |
 |---|---|---|
-| `src/main.rs` and `src/cli/` | Process bootstrap (`src/main.rs`), CLI definition (`src/cli/args.rs`), argument-to-command mapping, result/event rendering, and error classification with message and exit-code mapping (`src/cli/error.rs`) | Domain decisions, database connections and locks, persistence rules, or external effects |
+| `src/main.rs` and `src/cli/` | Process bootstrap (`src/main.rs`), CLI definition (`src/cli/args.rs`), argument-to-command mapping, result/event rendering, TUI terminal lifecycle, and error classification with message and exit-code mapping (`src/cli/error.rs`) | Domain decisions, database connections and locks, persistence rules, or external effects |
 | `src/control/` | Immutable host configuration, synchronous typed command execution, database-wide lock and connection lifetime, typed results/errors, and observational deployment-event delivery | Terminal output, TTY detection, CLI parsing, process exit codes, or workflow policy |
 | `src/domain/` | Domain entities, closed state sets, and value invariants | External effects, SQL, or external file formats |
 | `src/use_cases/` | Business decisions, effect ordering, short transaction boundaries, and compensation | SQL mapping or process invocation details |
@@ -142,7 +142,36 @@ optional observer; event delivery cannot change command execution.
 
 **CLI** (`src/main.rs` and `src/cli/`) owns process bootstrap, argument parsing,
 mapping arguments onto control commands, output rendering (including TTY-only
-deployment animation), and exit-code classification. Process bootstrap
+deployment animation), the TUI terminal lifecycle, and exit-code classification.
+`pneuma tui` rejects non-interactive stdin or stdout before constructing host
+configuration or opening SQLite. Its main thread owns raw-mode, alternate-screen
+restoration, keyboard input, and presentation; one worker owns a
+`ControlExecutor` and serializes commands. The interface is organized into
+Systems, Applications, and Deployments tabs; every tab renders a listing column
+and a details column that always follows the listing selection: the first
+item's details load without an explicit request and selection movement reloads
+them, with no separate details focus. Enter is reserved for the deployment log
+pane. The catalog
+names persisted intent and whether an Application has a successful deployment
+without claiming it is running. Selecting an Application loads deployment
+history and obtains a runtime observation on demand through the existing
+control boundary. The Applications detail view renders that observation in a
+dedicated runtime panel only when it belongs to the current selection; it never
+presents the observation as live polling or reuses another Application's data.
+Start, stop, reconcile, and visibility requests require a TUI confirmation,
+deploy forms submit a branch or digest-pinned image as the existing deploy
+commands,
+system creation and application import submit the exact `SystemCreate` and
+`ImportApplication` commands with locally validated form values, and rollback
+requires a confirmation; deployment commands run through the event
+observer so their semantic progress is presentation-only, the interface retains
+the finished deployment log with its classified outcome for the session and
+exposes it as a scrollable, tail-following log pane entered from the
+Application details, and every action
+retains the existing CLI error class with its diagnostic message in the
+interface.
+Completed actions are shown only in the corresponding detail view.
+Process bootstrap
 (`src/host_environment.rs`) validates and applies the host environment file
 strictly and fail-fast — a missing file boots, any other read or parse failure
 exits 1 with one contextual `error:` line before argument parsing — and derives

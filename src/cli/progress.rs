@@ -180,8 +180,10 @@ fn clear_progress<W: Write>(sink: &mut W, visible: &mut bool) {
     *visible = false;
 }
 
-// Renders use-case events with the CLI's stable text vocabulary.
-fn render_deployment_event(event: &DeploymentEvent) -> String {
+// Renders use-case events with the CLI's stable text vocabulary. Deployment
+// requests are rendered by each interface separately because their progress
+// vocabulary differs.
+pub(super) fn render_deployment_event(event: &DeploymentEvent) -> String {
     match event {
         DeploymentEvent::DeploymentRequested { .. } => {
             unreachable!("deployment requests are rendered separately")

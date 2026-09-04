@@ -175,22 +175,19 @@ daemon, HTTP server, or TUI was added.
 
 ### v0.5.2 - CLI Adapter Consolidation
 
-**Status:** completed on 2026-09-01. Approved design:
-[`designs/cli-adapter-consolidation.md`](designs/cli-adapter-consolidation.md).
+**Status:** completed on 2026-09-01.
 
 The CLI adapter removed its duplicated command vocabulary and repetitive
 per-command execution handlers, retaining all established command syntax,
 output, progress, error, and exit-code behavior.
 
-- [x] Approved design; activate the execution tracker after the design commit.
 - [x] Map parsed interactive input directly to control commands.
 - [x] Consolidate control execution, result rendering, deployment progress, and
   restricted CI routing.
 
 ### v0.5.3 - CLI Adapter Integrity
 
-**Status:** completed on 2026-09-02. Approved design:
-[`designs/cli-adapter-integrity.md`](designs/cli-adapter-integrity.md).
+**Status:** completed on 2026-09-02.
 
 This maintenance iteration corrected internal CLI adapter imprecision without
 changing the released CLI or operational contract.
@@ -201,13 +198,11 @@ changing the released CLI or operational contract.
 
 ### v0.5.4 - CLI Operational Robustness
 
-**Status:** delivered (2026-09-03). Approved design:
-[`designs/cli-operational-robustness.md`](designs/cli-operational-robustness.md).
+**Status:** delivered (2026-09-03).
 
 This maintenance iteration corrects all CLI robustness, error-classification,
 presentation, bootstrap, and test-organization issues found in the post-v0.5.3
-review. Approved observable corrections are enumerated in the design's
-behavior-change table.
+review.
 
 - [x] Make progress output best effort and presentation labels explicit.
 - [x] Preserve doctor diagnostics and total rendering.
@@ -216,10 +211,30 @@ behavior-change table.
 - [x] Validate the host environment contract before startup.
 - [x] Reorganize CLI integration tests into capability modules.
 
+### v0.5.5 - Terminal User Interface
+
+**Status:** in progress. The active execution tracker is
+[`iterations/current-iteration.md`](iterations/current-iteration.md).
+
+Pneuma gains an interactive Ratatui terminal interface over its existing
+synchronous control boundary. The TUI is a local, on-demand adapter for
+application inspection and selected operational actions; it does not add a
+daemon, persistence, remote transport, or an alternative business-operation
+path.
+
+- [x] Establish the `pneuma tui` command and safe terminal lifecycle.
+- [x] Add catalog, application detail, deployment history, and status views.
+- [x] Add confirmed lifecycle, reconciliation, and visibility actions.
+- [x] Add branch/digest deployment and confirmed rollback actions.
+- [x] Organize Systems, Applications, and Deployments into tabbed list/detail
+  navigation with automatic detail loading.
+- [ ] Show runtime observations in Application details and retain scrollable
+  semantic deployment logs for the session.
+- [ ] Complete operational regression and documentation synchronization.
+
 ## v0.6 - Observed State / Host Observation
 
-**Status:** planned; not started. No approved design yet. Queued behind
-v0.5.4.
+**Status:** planned; not started. Queued behind v0.5.5.
 
 Objective: stop depending predominantly on the state Pneuma itself recorded and
 start explicitly observing the real state of the host. This version establishes
@@ -420,8 +435,11 @@ v0.5.3  CLI Adapter Integrity       "precise adapter boundaries"
     │
     ▼
 v0.5.4  CLI Operational Robustness  "a CLI that fails honestly"
-    │
-    ▼
+     │
+     ▼
+v0.5.5  Terminal User Interface    "an interactive control adapter"
+     │
+     ▼
 v0.6    Observed State            "what is really happening?"
    │
    ▼

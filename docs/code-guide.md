@@ -20,7 +20,7 @@ Deeper reference material lives in [`architecture/architecture.md`](architecture
 src/main.rs                  process bootstrap and composition root only
 src/host_environment.rs      host environment file validation, application, and uid-scoped runtime derivation
 src/config.rs                documented PNEUMA_* path variables, path resolution, verbose logging
-src/cli/                     argument tree, dispatch, output, progress, error classes
+src/cli/                     argument tree, dispatch, output, progress, error classes, Ratatui TUI
 src/control/                 interface-neutral execution boundary (`ControlExecutor`, typed commands/results/errors)
 src/use_cases/<capability>/  workflow ordering and external-effect orchestration
 src/domain/                  value objects, entities, transitions, pure policy
@@ -32,6 +32,70 @@ tests/                       integration and binary-level CLI tests (tests/cli.r
 One crate: a library (`src/lib.rs`) plus a thin binary entrypoint. There is no
 async; every external command integration is a child process except SQLite,
 filesystem work, and internal TCP health checks.
+
+## Terminal Interface
+
+`pneuma tui` first requires interactive stdin and stdout, then lets
+`src/cli/tui.rs` own raw mode, alternate-screen restoration, keyboard handling,
+and the Ratatui layout. It runs one worker thread containing a
+`ControlExecutor`; the worker serializes typed commands and returns their
+results to the presentation thread without retaining a database connection
+between commands. Presentation uses one color vocabulary: cyan panel titles,
+background-badged key hints in the footer, green/red/yellow state values, and a
+terminal cursor that marks the edit position of the focused deploy-form field
+(the field scrolls horizontally so long image references stay editable).
+
+The opening view is organized into three tabs that group the command
+vocabulary: Systems, Applications (the opening tab), and Deployments. Digit
+keys and Tab/Shift+Tab or Left/Right switch tabs. Every details column follows
+the selection without a focus step: the first item's details render as soon as
+the listing is ready, and selection
+movement reloads them without an explicit request. Enter is reserved for the
+deployment log pane. The Applications tab uses
+`Command::ListApplications` and labels the persisted desired runtime state and
+whether an Application has a successful deployment; neither label asserts that
+the Application is currently running. Selecting an Application loads
+`Command::ListDeployments` and requests `Command::ApplicationStatus` on demand.
+The Applications detail view shows the matching on-demand observation in a
+`Runtime status` panel, while the Deployments tab shows that observation beside
+deployment history. A cached observation is rendered only when it belongs to
+the current selection; the detail screens display loading, absence, and errors
+in place, leaving the session usable for refresh or quit. The Systems tab lists
+Systems with
+`Command::SystemList`, follows the selection to their persisted grouping and
+member Applications through `Command::SystemShow`, creates Systems through the
+exact `Command::SystemCreate`, and adds Applications to a System through the
+exact `Command::ImportApplication` with the system name bound in the form.
+
+In the Applications listing, `s` starts, `x` stops, `c` reconciles, `p` sets
+public visibility, and `i` sets internal visibility. Each action first opens a
+concrete confirmation modal; only Enter or `y` submits its existing control
+command, while Esc or `n` cancels without execution. `d` opens a deployment
+form whose typed branch or digest-pinned image value becomes the exact
+`Command::DeployBranch` or `Command::DeployImage`, and `b` confirms a
+`Command::Rollback`. The multi-field import and system-creation forms validate
+locally with the same public boundaries the control layer enforces
+(`SystemName`, remote Git locations, `RelativeManifestPath`), so invalid input
+never reaches the worker, and submit directly because the Enter press itself is
+the explicit submission. The worker executes deployment commands with
+`execute_with_events` and forwards semantic `DeploymentEvent` values to the
+presentation thread; the interface renders them as best-effort progress lines
+that can never change command execution, compensation, or persistence, and the
+session retains the finished log with its classified outcome until another
+deployment dispatches. The retained log owns its scroll state: each render
+records the wrapped row count and visible height through
+`Paragraph::line_count` over the panel interior, the log pane follows the tail
+while it sits at the bottom, anchored scrolling survives streaming events, and
+scroll keys never issue commands. Worker
+failures pass
+through `CliError::from_control` before presentation, so the visible diagnostic
+retains its `Failure`, `Not found`, `Conflict`, or `External` class. After an
+action succeeds or fails, the TUI serializes the required catalog and detail
+refreshes, including the Systems and member listings affected by imports.
+Successful actions remain in the matching detail screen's `Last
+action` panel rather than the global footer. A confirmed follow-up action discards
+queued refresh reads and runs after the one active command, so the operator need
+not leave and reopen the detail view.
 
 ## Shared Invocation Path
 

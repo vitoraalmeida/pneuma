@@ -408,10 +408,73 @@ automatically.
 | `pneuma database backup <path>` | Create a consistent SQLite backup. |
 | `pneuma database restore <path>` | Validate a current-schema SQLite backup and restore it atomically; rejects incompatible backups. |
 | `pneuma ci dispatch` | Restricted SSH dispatcher; not for direct interactive use. |
+| `pneuma tui` | Open the interactive tabbed interface for Systems, Applications, and Deployments; requires interactive stdin and stdout. |
 | `pneuma version` | Print version without opening the database. |
 | `pneuma doctor` | Verify host prerequisites. |
 
 Place `--verbose` before the command for step-by-step progress.
+
+### Terminal Interface
+
+Run `pneuma tui` from an interactive terminal. The interface is organized into
+three tabs for the command groups: `1` Systems, `2` Applications (the opening
+tab), and `3` Deployments. Use `Tab`/`Shift+Tab` or Left/Right to move between
+tabs; each tab renders a listing column and a details column. The details
+column always describes the current selection without a separate focus step:
+the first item's details are shown as soon as the listing loads, and moving
+with Up/Down or `j`/`k` updates the details immediately. `r` refreshes. Use
+`q` to quit. A failed read stays
+visible in the interface and does not end the session.
+
+The Systems tab lists registered Systems and their descriptions. Press `n` to
+create a System from a form (name plus optional description). The selected
+System's persisted grouping and member Applications load automatically. Press
+`a` to add an Application to the selected System: the form takes a remote Git
+repository and an optional manifest path and submits the existing import
+command, so the Application is registered inside that System.
+
+The Applications tab lists registered Applications and whether each has a
+successful deployment; it does not claim that an Application is running. Press
+`n` to import a new Application from a form: it takes a remote Git repository,
+an optional System name, and an optional manifest path. Its detail column shows
+the selected Application's matching on-demand observation in a `Runtime status`
+panel, including loading, not yet requested, and error states; this is not live
+polling, and an observation from another selection is never reused.
+In an Application detail view, use `s` to start, `x` to stop, `c` to reconcile,
+`p` to set public visibility, or `i` to set internal visibility. Each action
+opens a confirmation: Enter or `y` executes it; Esc or `n` cancels it. Use `d`
+to open the deployment form: Tab switches between the branch and the
+digest-pinned image source, the terminal cursor marks the exact edit position
+of the highlighted field, and Enter submits it to the existing deploy command.
+Use `b` to roll
+back to the previous successful release after confirming. While a deployment or
+rollback runs, its semantic steps stream into a `Deployment progress` panel;
+when the command finishes the panel is retained for the session as
+`Deployment log (completed)` or `Deployment log (failed)` with the classified
+error, so the recorded steps stay readable, and the final typed result lands in
+the `Last action` panel. Only a newly dispatched deployment replaces the
+retained log; refreshes and non-deployment actions never clear it. When the
+application has a log, Enter opens it directly from the listing: the log pane
+then takes the
+whole details column with a highlighted border whose title carries the
+Application, the log state, and the scroll position, while `Up`/`Down` or
+`j`/`k` scroll one rendered row, `PgUp`/`PgDn` page, `Home` jumps to the oldest
+row, and `End` jumps to the newest row and resumes tail-following. The view
+tail-follows the newest rows while it sits at the bottom; scrolling up anchors
+it, and streaming events append below the anchored rows without moving them.
+Scrolling never changes the selection and never issues commands, so it stays
+available while a deployment runs. `Esc` or `Left` returns to the listing.
+Key hints in the footer
+carry background badges, and state values use color: green for succeeded and
+running, red for failed and missing, yellow for nonterminal transitions. The TUI
+shows the existing error class and diagnostic when an action fails, then refreshes
+the affected data. Its `Last action` panel shows a completed action only for the
+Application being inspected. A new confirmed action replaces queued refresh reads
+and runs after the active command, without leaving the detail view.
+
+The Deployments tab lists the Applications and shows the selected
+Application's on-demand runtime observation and its complete Deployment
+history, including the active marker; both load with the selection.
 
 ### Manifest
 
