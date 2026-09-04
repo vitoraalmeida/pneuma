@@ -1000,8 +1000,13 @@ fn tui_deploys_from_a_branch_form_and_restores_the_pseudo_terminal() {
         "expected semantic deployment progress on screen: {screen:?}"
     );
     // The typed final result stays visible in the detail view, so replay the
-    // stream onto a grid and assert the settled screen contents.
+    // stream onto a grid and assert the settled screen contents: the retained
+    // deployment log and the typed result must be visible simultaneously.
     let settled = final_screen_text(&screen);
+    assert!(
+        settled.contains("state changed to Succeeded"),
+        "expected the retained semantic log on the final screen: {settled:?}"
+    );
     assert!(
         settled.contains("Deployed another-site: deployment"),
         "expected the typed deploy result on the final screen: {settled:?}"

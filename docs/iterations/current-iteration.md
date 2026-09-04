@@ -106,12 +106,26 @@ domain, use-case, persistence, or external-effect decisions.
       the selection automatically: the first item's details load without an
       explicit request, selection movement reloads them, and Enter only moves
       the keyboard focus to the details column.
-6. [ ] Application operational visibility and retained deployment logs
+6. [x] Application operational visibility and retained deployment logs
    - Render the selected Application's on-demand runtime observation directly
      in its details, without presenting it as live polling.
    - Retain the selected Application's semantic deployment log after completion
      and allow keyboard focus, scrolling, paging, and tail-following without
      adding raw container logs or persistence.
+   - Result: The Applications detail view renders the matching on-demand
+     runtime observation inline for every query state, never reusing another
+     selection's data. A session-retained deployment log opens when a
+     deployment dispatches, survives completion, failure, refreshes, tab
+     switches, and non-deployment actions, and is replaced only by a newly
+     dispatched deployment; it records the classified error when the command
+     fails. The details columns follow the selection without a focus step, and
+     Enter opens the log pane directly: it takes the whole details column with
+     a highlighted border, scrolls by row and page with `Home`/`End` bounds,
+     tail-follows while at the bottom, and anchors under streaming events. The
+     footer advertises the scroll keys with per-hint badges only. Focused unit
+     tests cover retention, scoping, scroll bounds, and rendering, and the PTY
+     deploy regression asserts the retained semantic log and the typed result
+     on the settled screen simultaneously.
 7. [ ] Operational regression and closure
    - Synchronize implemented documentation and run the required Rust, markdown,
      shell, and applicable disposable-VM regression ladder.

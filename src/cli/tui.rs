@@ -3442,6 +3442,57 @@ mod tests {
     }
 
     #[test]
+    fn switching_tabs_preserves_the_retained_log() {
+        let mut session = detail_session();
+        session.deployment_log = Some(deployment_log(vec![
+            "Deploying atlas...".to_owned(),
+            "pull image: started".to_owned(),
+        ]));
+
+        session
+            .handle_key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE))
+            .unwrap();
+        session
+            .handle_key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE))
+            .unwrap();
+
+        let log = session
+            .deployment_log
+            .as_ref()
+            .expect("a tab switch must not clear the retained log");
+        assert_eq!(log.application_name, "atlas");
+        assert_eq!(log.lines.len(), 2);
+        assert!(matches!(log.state, DeploymentLogState::Running));
+        session.shutdown().unwrap();
+    }
+
+    #[test]
+    fn a_failed_log_renders_its_classified_error_while_retaining_the_steps() {
+        let mut session = detail_session();
+        session.deployment_log = Some(deployment_log(vec![
+            "Deploying atlas...".to_owned(),
+            "pull image: started".to_owned(),
+        ]));
+        session
+            .deployment_log
+            .as_mut()
+            .unwrap()
+            .finish(&Err(WorkerError {
+                class: CliErrorClass::External,
+                message: "podman unavailable".to_owned(),
+            }));
+
+        let rendered = rendered_shell(&mut session);
+        assert!(rendered.contains("Deployment log (failed)"), "{rendered:?}");
+        assert!(
+            rendered.contains("Deployment failed: External: podman unavailable"),
+            "{rendered:?}"
+        );
+        assert!(rendered.contains("pull image: started"), "{rendered:?}");
+        session.shutdown().unwrap();
+    }
+
+    #[test]
     fn deployment_log_is_scoped_to_its_application_detail() {
         let mut session = detail_session();
         session.catalog = QueryState::Ready(vec![entry("atlas"), entry("beacon")]);
