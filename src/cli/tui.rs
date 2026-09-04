@@ -10,16 +10,18 @@ use crossterm::{
     execute, terminal,
 };
 use pneuma::control::{Command, CommandResult, ControlExecutor};
-use pneuma::domain::application::ApplicationName;
-use pneuma::domain::deployment::DeploymentHistory;
+use pneuma::domain::application::{ApplicationName, DesiredRuntimeState};
+use pneuma::domain::deployment::{DeploymentHistory, DeploymentStatus};
 use pneuma::domain::exposure::Visibility;
+use pneuma::domain::runtime::ObservedRuntimeState;
 use pneuma::use_cases::application::{ApplicationCatalogEntry, RuntimeObservation};
 use pneuma::use_cases::deployment::{DeploymentEvent, DeploymentResult};
 use ratatui::{
     Terminal,
     backend::CrosstermBackend,
-    layout::{Alignment, Constraint, Direction, Layout},
-    style::{Modifier, Style},
+    layout::{Alignment, Constraint, Direction, Layout, Position},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 
@@ -29,6 +31,77 @@ use super::{
 };
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+// Shared presentation palette: panel titles, key badges, and state values use
+// one vocabulary so every screen reads the same way.
+fn title_style() -> Style {
+    Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD)
+}
+
+fn field_style() -> Style {
+    Style::default().bg(Color::Black).fg(Color::White)
+}
+
+fn label_span(label: &str) -> Span<'static> {
+    Span::styled(format!("{label}: "), Style::default().fg(Color::DarkGray))
+}
+
+fn value_span(value: String) -> Span<'static> {
+    Span::raw(value)
+}
+
+fn absent_span() -> Span<'static> {
+    Span::styled("None", Style::default().fg(Color::DarkGray))
+}
+
+fn key_hint(key: &str, description: &str) -> Vec<Span<'static>> {
+    vec![
+        Span::styled(
+            format!(" {key} "),
+            Style::default().fg(Color::Black).bg(Color::Cyan),
+        ),
+        Span::raw(format!(" {description}  ")),
+    ]
+}
+
+fn badge(text: &str, background: Color) -> Span<'static> {
+    Span::styled(
+        format!(" {text} "),
+        Style::default().fg(Color::Black).bg(background),
+    )
+}
+
+fn desired_state_color(state: DesiredRuntimeState) -> Color {
+    match state {
+        DesiredRuntimeState::Running => Color::Green,
+        DesiredRuntimeState::Stopped => Color::Gray,
+    }
+}
+
+fn observed_state_color(state: &ObservedRuntimeState) -> Color {
+    match state {
+        ObservedRuntimeState::Running => Color::Green,
+        ObservedRuntimeState::Stopped => Color::Gray,
+        ObservedRuntimeState::Missing | ObservedRuntimeState::Failed => Color::Red,
+        ObservedRuntimeState::Created
+        | ObservedRuntimeState::Starting
+        | ObservedRuntimeState::Stopping
+        | ObservedRuntimeState::Unknown { .. } => Color::Yellow,
+    }
+}
+
+fn deployment_status_color(status: DeploymentStatus) -> Color {
+    match status {
+        DeploymentStatus::Succeeded => Color::Green,
+        DeploymentStatus::Failed => Color::Red,
+        DeploymentStatus::Pending
+        | DeploymentStatus::Starting
+        | DeploymentStatus::Verifying
+        | DeploymentStatus::Activating => Color::Yellow,
+    }
+}
 
 // Runs the TUI adapter without constructing host configuration or opening the database.
 pub(super) fn run() -> Result<(), CliError> {
@@ -1106,39 +1179,30 @@ fn draw_shell(frame: &mut ratatui::Frame<'_>, session: &Session) {
 }
 
 fn draw_catalog(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, session: &Session) {
+    let block = || {
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Applications ")
+            .title_style(title_style())
+    };
     match &session.catalog {
         QueryState::Idle => frame.render_widget(
-            Paragraph::new("Refresh to load applications.").block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Applications "),
-            ),
+            Paragraph::new("Refresh to load applications.").block(block()),
             area,
         ),
         QueryState::Loading => frame.render_widget(
-            Paragraph::new("Loading applications...").block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Applications "),
-            ),
+            Paragraph::new("Loading applications...").block(block()),
             area,
         ),
         QueryState::Failed(error) => frame.render_widget(
             Paragraph::new(format!("Could not load applications:\n{error}"))
+                .style(Style::default().fg(Color::Red))
                 .wrap(Wrap { trim: true })
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .title(" Applications "),
-                ),
+                .block(block()),
             area,
         ),
         QueryState::Ready(entries) if entries.is_empty() => frame.render_widget(
-            Paragraph::new("No applications are registered.").block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Applications "),
-            ),
+            Paragraph::new("No applications are registered.").block(block()),
             area,
         ),
         QueryState::Ready(entries) => {
@@ -1146,20 +1210,32 @@ fn draw_catalog(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, ses
                 .iter()
                 .map(|entry| {
                     let deployment = if entry.deployed {
-                        "Has successful deployment"
+                        Span::styled(
+                            "Has successful deployment",
+                            Style::default().fg(Color::Green),
+                        )
                     } else {
-                        "No successful deployment"
+                        Span::styled(
+                            "No successful deployment",
+                            Style::default().fg(Color::DarkGray),
+                        )
                     };
-                    ListItem::new(format!("{}\n  {deployment}", entry.summary.name))
+                    ListItem::new(vec![
+                        Line::from(Span::styled(
+                            entry.summary.name.as_str().to_owned(),
+                            Style::default()
+                                .fg(Color::White)
+                                .add_modifier(Modifier::BOLD),
+                        )),
+                        Line::from(vec![Span::raw("  "), deployment]),
+                    ])
                 })
                 .collect::<Vec<_>>();
-            let list = List::new(items)
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .title(" Applications "),
-                )
-                .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+            let list = List::new(items).block(block()).highlight_style(
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::REVERSED),
+            );
             let mut state = ListState::default();
             state.select(session.selected_application.as_deref().and_then(|name| {
                 entries
@@ -1203,55 +1279,66 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, sess
         })
         .split(area);
     let details = session.selected_entry().map_or_else(
-        || "The selected application is no longer in the catalog.".to_owned(),
-        application_details_text,
+        || {
+            vec![Line::from(
+                "The selected application is no longer in the catalog.",
+            )]
+        },
+        application_details_lines,
     );
     frame.render_widget(
         Paragraph::new(details).wrap(Wrap { trim: true }).block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Application details "),
+                .title(" Application details ")
+                .title_style(title_style()),
         ),
         detail_areas[0],
     );
     frame.render_widget(
-        Paragraph::new(runtime_text(&session.runtime))
+        Paragraph::new(runtime_lines(&session.runtime))
             .wrap(Wrap { trim: true })
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(" Runtime status "),
+                    .title(" Runtime status ")
+                    .title_style(title_style()),
             ),
         detail_areas[1],
     );
     frame.render_widget(
-        Paragraph::new(deployment_history_text(&session.deployments))
+        Paragraph::new(deployment_history_lines(&session.deployments))
             .wrap(Wrap { trim: true })
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(" Deployment history "),
+                    .title(" Deployment history ")
+                    .title_style(title_style()),
             ),
         detail_areas[2],
     );
     let action_title;
     let action_text = match session.deployment_progress_for_detail() {
         Some(lines) => {
-            action_title = " Deployment progress ";
+            action_title = Line::styled(
+                " Deployment progress ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            );
             let skipped = lines.len().saturating_sub(6);
             lines
                 .iter()
                 .skip(skipped)
-                .map(String::as_str)
+                .map(|line| Line::from(line.as_str().to_owned()))
                 .collect::<Vec<_>>()
-                .join("\n")
         }
         None => {
-            action_title = " Last action ";
-            session
-                .outcome_for_detail()
-                .unwrap_or("No action has completed for this application.")
-                .to_owned()
+            action_title = Line::styled(" Last action ", title_style());
+            match session.outcome_for_detail() {
+                Some(message) => vec![Line::from(message.to_owned())],
+                None => vec![Line::from("No action has completed for this application.")],
+            }
         }
     };
     frame.render_widget(
@@ -1262,80 +1349,196 @@ fn draw_detail(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, sess
     );
 }
 
-fn application_details_text(entry: &ApplicationCatalogEntry) -> String {
-    format!(
-        "Application: {}\nRepository: {}\nDefault branch: {}\nDesired runtime state: {}\nHas successful deployment: {}\nActive deployment ID: {}",
-        entry.summary.name,
-        entry.summary.repository,
-        entry.summary.default_branch.as_deref().unwrap_or("None"),
-        output::desired_runtime_state_label(entry.summary.desired_runtime_state),
-        if entry.deployed { "yes" } else { "no" },
-        entry
-            .summary
-            .active_deployment_id
-            .as_ref()
-            .map_or_else(|| "None".to_owned(), ToString::to_string)
-    )
+fn application_details_lines(entry: &ApplicationCatalogEntry) -> Vec<Line<'static>> {
+    vec![
+        Line::from(vec![
+            label_span("Application"),
+            Span::styled(
+                entry.summary.name.as_str().to_owned(),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(vec![
+            label_span("Repository"),
+            value_span(entry.summary.repository.clone()),
+        ]),
+        Line::from(vec![
+            label_span("Default branch"),
+            entry
+                .summary
+                .default_branch
+                .clone()
+                .map_or_else(absent_span, value_span),
+        ]),
+        Line::from(vec![
+            label_span("Desired runtime state"),
+            Span::styled(
+                output::desired_runtime_state_label(entry.summary.desired_runtime_state).to_owned(),
+                Style::default().fg(desired_state_color(entry.summary.desired_runtime_state)),
+            ),
+        ]),
+        Line::from(vec![
+            label_span("Has successful deployment"),
+            if entry.deployed {
+                Span::styled("yes", Style::default().fg(Color::Green))
+            } else {
+                Span::styled("no", Style::default().fg(Color::DarkGray))
+            },
+        ]),
+        Line::from(vec![
+            label_span("Active deployment ID"),
+            entry
+                .summary
+                .active_deployment_id
+                .as_ref()
+                .map_or_else(absent_span, |id| value_span(id.to_string())),
+        ]),
+    ]
 }
 
-fn runtime_text(state: &QueryState<RuntimeObservation>) -> String {
+fn runtime_lines(state: &QueryState<RuntimeObservation>) -> Vec<Line<'static>> {
     match state {
-        QueryState::Idle => "Open application details to load runtime status.".to_owned(),
-        QueryState::Loading => "Loading runtime status...".to_owned(),
-        QueryState::Failed(error) => format!("Could not load runtime status:\n{error}"),
-        QueryState::Ready(observation) => format!(
-            "Desired runtime state: {}\nObserved runtime state: {}\nRuntime ID: {}\nContainer ID: {}\nObserved endpoint: {}",
-            output::desired_runtime_state_label(observation.desired_runtime_state),
-            output::observed_runtime_state_label(&observation.observed_runtime_state),
-            observation.runtime_id,
-            observation.container_id,
-            observation
-                .observed_endpoint
-                .map_or_else(|| "None".to_owned(), |endpoint| endpoint.to_string())
-        ),
+        QueryState::Idle => vec![Line::from(
+            "Open application details to load runtime status.",
+        )],
+        QueryState::Loading => vec![Line::from("Loading runtime status...")],
+        QueryState::Failed(error) => vec![
+            Line::from("Could not load runtime status:"),
+            Line::styled(error.clone(), Style::default().fg(Color::Red)),
+        ],
+        QueryState::Ready(observation) => vec![
+            Line::from(vec![
+                label_span("Desired runtime state"),
+                Span::styled(
+                    output::desired_runtime_state_label(observation.desired_runtime_state)
+                        .to_owned(),
+                    Style::default().fg(desired_state_color(observation.desired_runtime_state)),
+                ),
+            ]),
+            Line::from(vec![
+                label_span("Observed runtime state"),
+                Span::styled(
+                    output::observed_runtime_state_label(&observation.observed_runtime_state),
+                    Style::default().fg(observed_state_color(&observation.observed_runtime_state)),
+                ),
+            ]),
+            Line::from(vec![
+                label_span("Runtime ID"),
+                value_span(observation.runtime_id.to_string()),
+            ]),
+            Line::from(vec![
+                label_span("Container ID"),
+                value_span(observation.container_id.to_string()),
+            ]),
+            Line::from(vec![
+                label_span("Observed endpoint"),
+                observation
+                    .observed_endpoint
+                    .as_ref()
+                    .map_or_else(absent_span, |endpoint| value_span(endpoint.to_string())),
+            ]),
+        ],
     }
 }
 
-fn deployment_history_text(state: &QueryState<Vec<DeploymentHistory>>) -> String {
+fn deployment_history_lines(state: &QueryState<Vec<DeploymentHistory>>) -> Vec<Line<'static>> {
     match state {
-        QueryState::Idle => "Open application details to load deployment history.".to_owned(),
-        QueryState::Loading => "Loading deployment history...".to_owned(),
-        QueryState::Failed(error) => format!("Could not load deployment history:\n{error}"),
-        QueryState::Ready(deployments) if deployments.is_empty() => "No deployments.".to_owned(),
+        QueryState::Idle => vec![Line::from(
+            "Open application details to load deployment history.",
+        )],
+        QueryState::Loading => vec![Line::from("Loading deployment history...")],
+        QueryState::Failed(error) => vec![
+            Line::from("Could not load deployment history:"),
+            Line::styled(error.clone(), Style::default().fg(Color::Red)),
+        ],
+        QueryState::Ready(deployments) if deployments.is_empty() => {
+            vec![Line::from("No deployments.")]
+        }
         QueryState::Ready(deployments) => deployments
             .iter()
             .map(|history| {
-                format!(
-                    "{} | {} | {} | {}{}",
-                    history.deployment.id,
-                    output::deployment_type_label(history.deployment.deployment_type),
-                    output::deployment_status_label(history.deployment.status()),
-                    history.release.artifact.reference(),
-                    if history.is_active { " | active" } else { "" }
-                )
+                let mut line = vec![
+                    Span::styled(
+                        history.deployment.id.to_string(),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::raw(" | "),
+                    Span::raw(
+                        output::deployment_type_label(history.deployment.deployment_type)
+                            .to_owned(),
+                    ),
+                    Span::raw(" | "),
+                    Span::styled(
+                        output::deployment_status_label(history.deployment.status()).to_owned(),
+                        Style::default().fg(deployment_status_color(history.deployment.status())),
+                    ),
+                    Span::raw(" | "),
+                    Span::raw(history.release.artifact.reference().to_owned()),
+                ];
+                if history.is_active {
+                    line.push(Span::styled(" | active", Style::default().fg(Color::Green)));
+                }
+                Line::from(line)
             })
-            .collect::<Vec<_>>()
-            .join("\n"),
+            .collect(),
     }
 }
 
 fn draw_footer(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect, session: &Session) {
-    let message = if session.quit_after_completion && session.is_busy() {
-        "Finishing the current refresh before quitting...".to_owned()
+    let line = if session.quit_after_completion && session.is_busy() {
+        Line::from(vec![
+            badge("quitting", Color::Yellow),
+            Span::raw(" Finishing the current refresh before quitting..."),
+        ])
     } else if session.is_busy() {
-        "Refreshing... a confirmed action will run next; navigation is disabled.".to_owned()
+        Line::from(vec![
+            badge("busy", Color::Yellow),
+            Span::raw(" Refreshing... a confirmed action will run next; navigation is disabled."),
+        ])
     } else if let Some(error) = &session.error {
-        format!("Error: {error}")
+        Line::from(vec![
+            badge("error", Color::Red),
+            Span::styled(format!(" {error}"), Style::default().fg(Color::Red)),
+        ])
     } else if session.route == Route::Details {
-        "s: start  x: stop  c: reconcile  d: deploy  b: rollback  p: public  i: internal  Esc: catalog  r: refresh  q: quit"
-            .to_owned()
+        let mut spans = Vec::new();
+        for (key, description) in [
+            ("s", "start"),
+            ("x", "stop"),
+            ("c", "reconcile"),
+            ("d", "deploy"),
+            ("b", "rollback"),
+            ("p", "public"),
+            ("i", "internal"),
+            ("Esc", "catalog"),
+            ("r", "refresh"),
+            ("q", "quit"),
+        ] {
+            spans.extend(key_hint(key, description));
+        }
+        Line::from(spans)
     } else {
-        "Up/Down or j/k: select  Enter: details  r: refresh  q: quit".to_owned()
+        let mut spans = Vec::new();
+        for (key, description) in [
+            ("Up/Down or j/k", "select"),
+            ("Enter", "details"),
+            ("r", "refresh"),
+            ("q", "quit"),
+        ] {
+            spans.extend(key_hint(key, description));
+        }
+        Line::from(spans)
     };
     frame.render_widget(
-        Paragraph::new(message)
-            .wrap(Wrap { trim: true })
-            .block(Block::default().borders(Borders::TOP)),
+        Paragraph::new(line)
+            .style(Style::default().bg(Color::DarkGray).fg(Color::Gray))
+            .block(
+                Block::default()
+                    .borders(Borders::TOP)
+                    .border_style(Style::default().fg(Color::DarkGray)),
+            ),
         area,
     );
 }
@@ -1359,15 +1562,22 @@ fn draw_confirmation(frame: &mut ratatui::Frame<'_>, action: &PendingAction) {
         .split(vertical[1])[1];
     frame.render_widget(Clear, popup);
     frame.render_widget(
-        Paragraph::new(format!(
-            "{}\n\nEnter/y: confirm  Esc/n: cancel",
-            action.confirmation_text()
-        ))
+        Paragraph::new(vec![
+            Line::from(action.confirmation_text()),
+            Line::default(),
+            Line::from(vec![
+                badge("Enter/y", Color::Green),
+                Span::raw(" confirm   "),
+                badge("Esc/n", Color::Red),
+                Span::raw(" cancel"),
+            ]),
+        ])
         .wrap(Wrap { trim: true })
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Confirm action "),
+                .title(" Confirm action ")
+                .title_style(title_style()),
         ),
         popup,
     );
@@ -1395,25 +1605,74 @@ fn draw_form(frame: &mut ratatui::Frame<'_>, form: &DeployForm) {
         DeploySource::Branch => ("branch", "image", "Branch or tag"),
         DeploySource::Image => ("image", "branch", "Image reference"),
     };
-    let error_line = form
-        .error
-        .as_deref()
-        .map(|error| format!("\n{error}"))
-        .unwrap_or_default();
+
+    // The editable field sits on a fixed row: the value scrolls horizontally so
+    // the terminal cursor always marks the exact edit position.
+    let prefix = format!("{value_label}: ");
+    let interior_x = popup.x + 1;
+    let interior_y = popup.y + 1;
+    let interior_width = usize::from(popup.width.saturating_sub(2));
+    let prefix_width = prefix.chars().count();
+    let available = interior_width.saturating_sub(prefix_width + 1).max(1);
+    let value = form.value().chars().collect::<Vec<_>>();
+    let visible: String = if value.len() > available {
+        value[value.len() - available..].iter().collect()
+    } else {
+        value.iter().collect()
+    };
+    let field_pad = available.saturating_sub(visible.chars().count());
+
+    let mut lines = vec![
+        Line::from(vec![
+            Span::raw("Deploy "),
+            Span::styled(
+                form.application_name.clone(),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::default(),
+        Line::from(vec![
+            Span::raw("Source: "),
+            badge(source_label, Color::Cyan),
+            Span::raw(format!(" Tab switches to {other_source_label}")),
+        ]),
+        Line::from(vec![
+            label_span(value_label),
+            Span::styled(visible.clone(), field_style()),
+            Span::styled(" ".repeat(field_pad), field_style()),
+        ]),
+    ];
+    if let Some(error) = &form.error {
+        lines.push(Line::styled(error.clone(), Style::default().fg(Color::Red)));
+    }
+    lines.push(Line::default());
+    lines.push(Line::from(vec![
+        badge("Enter", Color::Green),
+        Span::raw(" deploy  "),
+        badge("Tab", Color::Cyan),
+        Span::raw(" switch source  "),
+        badge("Backspace", Color::Cyan),
+        Span::raw(" edit  "),
+        badge("Esc", Color::DarkGray),
+        Span::raw(" cancel"),
+    ]));
+
     frame.render_widget(
-        Paragraph::new(format!(
-            "Deploy {}\n\nSource: {source_label} (press Tab to switch to {other_source_label})\n{value_label}: {}{error_line}\n\nEnter: deploy  Backspace: edit  Esc: cancel",
-            form.application_name,
-            form.value()
-        ))
-        .wrap(Wrap { trim: true })
-        .block(
+        Paragraph::new(lines).block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Deploy application "),
+                .title(" Deploy application ")
+                .title_style(title_style()),
         ),
         popup,
     );
+    let cursor_column = interior_x + prefix_width as u16 + visible.chars().count() as u16;
+    frame.set_cursor_position(Position {
+        x: cursor_column,
+        y: interior_y + 3,
+    });
 }
 
 #[cfg(test)]
@@ -1479,7 +1738,11 @@ mod tests {
 
     #[test]
     fn application_details_use_persisted_and_not_runtime_labels() {
-        let rendered = application_details_text(&entry("atlas"));
+        let rendered = application_details_lines(&entry("atlas"))
+            .iter()
+            .map(Line::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
 
         assert!(rendered.contains("Desired runtime state: Running"));
         assert!(rendered.contains("Has successful deployment: no"));
@@ -2012,6 +2275,90 @@ mod tests {
                     application_name: "atlas".to_owned(),
                 },
             ]
+        );
+        session.shutdown().unwrap();
+    }
+
+    #[test]
+    fn the_deploy_form_cursor_tracks_the_edited_field() {
+        use ratatui::backend::Backend as _;
+
+        let mut session = detail_session();
+        session
+            .handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE))
+            .unwrap();
+        for character in "main".chars() {
+            session
+                .handle_key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE))
+                .unwrap();
+        }
+
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 24))
+            .expect("test backend must initialize");
+        terminal
+            .draw(|frame| draw_shell(frame, &session))
+            .expect("form render must succeed");
+        let before = terminal
+            .backend_mut()
+            .get_cursor_position()
+            .expect("form must position the cursor");
+
+        session
+            .handle_key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE))
+            .unwrap();
+        terminal
+            .draw(|frame| draw_shell(frame, &session))
+            .expect("form render must succeed");
+        let after_push = terminal
+            .backend_mut()
+            .get_cursor_position()
+            .expect("form must position the cursor");
+        assert_eq!(after_push.y, before.y);
+        assert_eq!(after_push.x, before.x + 1);
+
+        session
+            .handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE))
+            .unwrap();
+        terminal
+            .draw(|frame| draw_shell(frame, &session))
+            .expect("form render must succeed");
+        let after_pop = terminal
+            .backend_mut()
+            .get_cursor_position()
+            .expect("form must position the cursor");
+        assert_eq!(after_pop, before);
+        session.shutdown().unwrap();
+    }
+
+    #[test]
+    fn footer_key_hints_render_with_background_badges() {
+        let mut session = detail_session();
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30))
+            .expect("test backend must initialize");
+        terminal
+            .draw(|frame| draw_shell(frame, &session))
+            .expect("footer render must succeed");
+
+        let footer_row = 29;
+        let footer = (0..120u16)
+            .map(|column| {
+                terminal.backend().buffer()[(column, footer_row)]
+                    .symbol()
+                    .to_owned()
+            })
+            .collect::<String>();
+        assert!(footer.contains(" start "), "{footer:?}");
+        assert!(footer.contains(" rollback "), "{footer:?}");
+        let badge_column = footer
+            .find(" s ")
+            .map(|index| index as u16)
+            .expect("start badge must render");
+        assert_eq!(
+            terminal.backend().buffer()[(badge_column, footer_row)]
+                .style()
+                .bg,
+            Some(Color::Cyan),
+            "key badges must carry a background color"
         );
         session.shutdown().unwrap();
     }

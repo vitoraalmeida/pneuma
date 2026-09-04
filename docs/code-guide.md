@@ -40,7 +40,10 @@ filesystem work, and internal TCP health checks.
 and the Ratatui layout. It runs one worker thread containing a
 `ControlExecutor`; the worker serializes typed commands and returns their
 results to the presentation thread without retaining a database connection
-between commands.
+between commands. Presentation uses one color vocabulary: cyan panel titles,
+background-badged key hints in the footer, green/red/yellow state values, and a
+terminal cursor that marks the edit position of the focused deploy-form field
+(the field scrolls horizontally so long image references stay editable).
 
 The opening catalog uses `Command::ListApplications`. It labels the persisted
 desired runtime state and whether an Application has a successful deployment;
